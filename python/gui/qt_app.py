@@ -2254,6 +2254,7 @@ class FrpWindow(QMainWindow):
         self.nav = NavRail(
             [
                 ("samsung", "◉", "Samsung"),
+                ("quick", "⚡", "Quick Actions"),
                 ("mtk", "▣", "MTK Tools"),
                 ("qc", "◈", "Qualcomm"),
                 ("spd", "✦", "SPD / Unisoc"),
@@ -2277,6 +2278,7 @@ class FrpWindow(QMainWindow):
         dash_lay.addWidget(self._build_right(), 1)
         self._stack.addWidget(dash)
 
+        self._stack.addWidget(self._build_quick_page())
         self._stack.addWidget(self._build_mtk_page())
         self._stack.addWidget(self._build_qc_page())
         self._stack.addWidget(self._build_spd_page())
@@ -2409,7 +2411,6 @@ class FrpWindow(QMainWindow):
         # instead of one congested scrollable column.
         self.samsung_tabs = SamsungSubTabs(
             [
-                ("quick", "QUICK"),
                 ("flash", "FLASH"),
                 ("frp", "FRP"),
                 ("lock", "SCREEN LOCK"),
@@ -2443,9 +2444,6 @@ class FrpWindow(QMainWindow):
         fp_lay.addWidget(flash_scroll)
         self.samsung_stack.addWidget(flash_page)
 
-        quick_page = self._build_quick_page()
-        self.samsung_stack.addWidget(quick_page)
-
         frp_page = self._build_ops_flow_page(["FRP bypass"])
         self.samsung_stack.addWidget(frp_page)
 
@@ -2474,23 +2472,35 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _on_samsung_tab(self, key):
-        index = {"quick": 1, "flash": 0, "frp": 2, "lock": 3, "mdm": 4, "tools": 5}.get(key, 0)
+        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3, "tools": 4}.get(key, 0)
         self.samsung_stack.setCurrentIndex(index)
 
     def _build_quick_page(self):
-        """TFT-style QUICK tab: one-tap Factory reset / Reboot / ADB / Fastboot
+        """TFT-style QUICK page: one-tap Factory reset / Reboot / ADB / Fastboot
         actions without hunting through mode dropdowns."""
-        page = QWidget()
-        page.setStyleSheet("background: transparent;")
-        v = QVBoxLayout(page)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        panel = QFrame()
+        panel.setObjectName("card")
+        panel.setStyleSheet(
+            _card_qss()
+        )
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(0, 0, 0, 0)
+        panel_lay.setSpacing(0)
         scroll = self._ops_scroll_area()
         host = QWidget()
         host.setStyleSheet("background: transparent;")
         hv = QVBoxLayout(host)
-        hv.setContentsMargins(0, 0, 0, 0)
-        hv.setSpacing(10)
+        hv.setContentsMargins(16, 14, 16, 14)
+        hv.setSpacing(12)
+
+        hv.addWidget(SectionTitle("QUICK ACTIONS"))
+        info = QLabel(
+            "One-tap ADB & Fastboot actions - reboot destinations and factory "
+            "reset without hunting through the mode dropdowns."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
+        hv.addWidget(info)
 
         # --- Factory reset (ADB + recovery fallback) ---
         hv.addWidget(SectionTitle("FACTORY RESET"))
@@ -2520,8 +2530,8 @@ class FrpWindow(QMainWindow):
 
         hv.addStretch(1)
         scroll.setWidget(host)
-        v.addWidget(scroll)
-        return page
+        panel_lay.addWidget(scroll)
+        return panel
 
     def _ops_scroll_area(self):
         scroll = QScrollArea()
@@ -2896,8 +2906,8 @@ class FrpWindow(QMainWindow):
 
     # ----------------------------- section switching ----------------------
     def _on_section(self, key):
-        order = {"samsung": 0, "mtk": 1, "qc": 2, "spd": 3, "battery": 4,
-                 "network": 5, "settings": 6}
+        order = {"samsung": 0, "quick": 1, "mtk": 2, "qc": 3, "spd": 4,
+                 "battery": 5, "network": 6, "settings": 7}
         idx = order.get(key, 0)
         self._stack.setCurrentIndex(idx)
         self.nav.select(key)
