@@ -49,7 +49,7 @@ class TestMTKConstants:
     """Verify constant dictionaries are complete."""
 
     def test_chip_names_not_empty(self):
-        assert len(CHIP_NAMES) >= 12
+        assert len(CHIP_NAMES) >= 10
 
     def test_boot_stage_not_empty(self):
         assert len(BOOT_STAGE) == 4

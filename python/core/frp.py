@@ -43,8 +43,6 @@ class Step:
             raise FlowCancelled(f"cancelled before step {self.name}")
         log(f"[step] {self.name}")
         result = self.func(ctx, log)
-        if cancel_requested():
-            raise FlowCancelled(f"cancelled during step {self.name}")
         log(f"[done] {self.name}")
         return result
 

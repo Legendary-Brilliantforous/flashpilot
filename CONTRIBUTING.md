@@ -23,10 +23,10 @@ help.
 
 ## Code of conduct
 
-Be respectful, assume good intent, and keep discussions technical and helpful.
-This is a hobbyist-turned-serious project: we welcome beginners and veterans
-alike. Harassment, gatekeeping, or pushing proprietary "secret sauce" into the
-repo will not be tolerated.
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Be respectful, assume good intent,
+and keep discussions technical and helpful. This is a hobbyist-turned-serious
+project: we welcome beginners and veterans alike. Harassment, gatekeeping, or
+pushing proprietary "secret sauce" into the repo will not be tolerated.
 
 ---
 
@@ -55,8 +55,11 @@ No coding? No problem:
 - **Firmware / DA / combo archives** — pointers to legitimate, freely available binaries.
 - **Translations & themes** — the GUI is themable; new accent packs are easy wins.
 - **UI/UX** — mockups, accessibility passes, keyboard-shortcut design.
-- **Bug reports** — detailed steps, logs, `brilliant-bridge detect` output, device model + firmware version.
+- **Bug reports** — use the [bug report template](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=bug&template=bug_report.yml): steps, logs, `brilliant-bridge detect` output, device model + firmware version.
 - **Code** — see below.
+
+> 💡 **New here?** Look for the **`good first issue`** label on the issue tracker —
+> curated, beginner-friendly tasks that are fully scoped and safe to pick up.
 
 ---
 
@@ -222,6 +225,20 @@ We'd love contributors to champion any of these:
 - **New sections:** IMEI repair, TEE/keyboard FRP, carrier (de-bloating) profiles, EDL-only utilities.
 - **Community:** translations, a device-compatibility wiki, reproducible firmware-archive catalog.
 - **Safety:** dry-run mode, automatic pre-flash backup, brick-recovery docs.
+
+---
+
+## Contributors
+
+Everyone who helps — code, docs, device reports, or a tested combo — is listed
+here and celebrated. Open a PR adding yourself (alphabetical by username, one
+link line):
+
+```md
+- [@your-github](https://github.com/your-github) — what you did
+```
+
+The first contributors to this project made it real. Be next.
 
 ---
 

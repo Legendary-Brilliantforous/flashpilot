@@ -3,10 +3,13 @@
 > **The open-source, cross-platform-grade flashing & repair workbench for Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC devices — powered by a native Rust core and a polished PyQt6 studio.**
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)](https://www.python.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org)
 [![PyQt6](https://img.shields.io/badge/UI-PyQt6-41cd52)](https://www.riverbankcomputing.com/software/pyqt/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![CI](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/actions)
+[![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/brilliant-flashing-tool/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+[![Contributors](https://img.shields.io/github/contributors/Legendary-Brilliantforous/brilliant-flashing-tool)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/graphs/contributors)
 
 **What is this?** A Linux-native equivalent of the paid Windows flashing suites — one unified tool that talks straight to the bootloader of **Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC** phones. No Windows VM, no crack, no gray-market server: everything runs on your own machine.
 
@@ -159,6 +162,8 @@ brilliant/
 **This project only gets better with you.** We want maintainers, protocol hackers, GUI designers, doc writers, and testers.
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — everything you need to start.
+- **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
+- Use the **[bug report](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=enhancement&template=feature_request.yml)** templates; every PR gets a review.
 - **Beginner-friendly tasks** — every `flow_*` function in `python/core/frp.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
 - **No prior flashing experience required.** The flow framework (`python/core/frp.py`) is dead simple — a new method is ~5 lines:
 

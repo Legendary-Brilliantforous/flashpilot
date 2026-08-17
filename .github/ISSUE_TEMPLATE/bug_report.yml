@@ -1,0 +1,37 @@
+---
+name: 🐛 Bug report
+about: Report a crash, incorrect behaviour, or flow failure
+title: "[Bug] "
+labels: bug
+assignees: ""
+---
+
+**Describe the bug**
+A clear and concise description of what went wrong.
+
+**Steps to reproduce**
+1. Go to section …
+2. Select job / mode / method …
+3. Attach device …
+4. See error
+
+**Expected behaviour**
+What should have happened instead.
+
+**Diagnostics (run these and paste the output)**
+```
+./target/release/brilliant-bridge detect
+./target/release/brilliant-bridge <affected command> ...
+```
+
+- **Device:** model + firmware/Android version
+- **Mode:** ADB / Download / BROM / EDL / BSL / MTP
+- **Bridge version:** `./target/release/brilliant-bridge --version` (or `cargo` rev)
+
+**Environment**
+- OS / distro:
+- Rust + Python versions:
+- GUI theme / resolution if visual:
+
+**Additional context**
+Console log, screenshots, or a stack trace (if the GUI crashed) — anything helps.

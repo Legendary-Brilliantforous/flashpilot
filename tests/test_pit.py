@@ -10,7 +10,7 @@ class TestPITParsing:
         """Model string extraction matches Odin behavior."""
         raw = bytes.fromhex(
             "7698341239000000"  # magic + count=57
-            "434f4d5f544152324d544b363736350000000000000000"  # COM_TAR2MTK6765
+            "434f4d5f544152324d544b36373635000000000000000000"  # COM_TAR2MTK6765 (16 + 8 nulls = 24B)
         )
         model = parse_model(raw)
         assert model == "COM_TAR2MTK6765"
@@ -60,12 +60,13 @@ class TestPITParsing:
 
     def test_pit_entry_size_bytes(self):
         """Entry size calculation matches block_size * block_count."""
-        # Create minimal valid entry: 8 u32 header + name + flash_filename + fota_filename
+        # Create minimal valid entry: 8 u32 header + name + flash_filename + fota_filename + file_size
         import struct
         data = struct.pack("<8I", 1, 0x50, 0x100, 1, 1, 512, 10, 0)  # block_size=512, block_count=10
         data += b"test\0" + b"\0" * 28  # name (32 bytes)
         data += b"test.img\0" + b"\0" * 24  # flash_filename (32 bytes)
         data += b"\0" * 32  # fota_filename (32 bytes)
+        data += struct.pack("<I", 0)  # file_size (4 bytes) -> 132 total
         entry = PitEntry(data, 0)
         assert entry.size_bytes() == 5120
 
@@ -76,6 +77,7 @@ class TestPITParsing:
         data += b"\0" * 32  # empty name
         data += b"test.img\0" + b"\0" * 24
         data += b"\0" * 32
+        data += struct.pack("<I", 0)  # file_size (4 bytes) -> 132 total
         entry = PitEntry(data, 0)
         assert not entry.is_flashable()
 
