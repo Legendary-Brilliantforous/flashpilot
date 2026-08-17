@@ -1096,6 +1096,51 @@ def flow_reboot_bootloader():
     )
 
 
+def flow_factory_reset():
+    """Factory reset via ADB when possible, with a guided recovery fallback.
+
+    Tries `adb shell recovery --wipe_data` first (works when USB debugging is
+    authorized), then falls back to on-screen recovery-menu instructions.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("FACTORY RESET")
+        log("=" * 60)
+        try:
+            up = any(d["state"] == "device" for d in bridge.adb_status())
+        except bridge.BridgeError:
+            up = False
+        if up:
+            log("  ADB authorized - sending: adb shell recovery --wipe_data")
+            try:
+                out = bridge.adb_shell("recovery --wipe_data", timeout=30)
+                log(f"  response: {out[:160] or 'ok'}")
+                log("  The phone is wiping /data and will restart.")
+                return
+            except bridge.BridgeError as e:
+                log(f"  adb wipe failed: {e} (falling back to recovery menu)")
+        else:
+            log("  no authorized ADB - using the guided recovery menu.")
+        log("")
+        log("  Manual recovery reset:")
+        log("  1. Power the phone off completely.")
+        log("  2. Hold Volume Up + Power together.")
+        log("  3. Keep holding until the Samsung logo appears; release Power but")
+        log("     KEEP holding Volume Up until the recovery menu appears.")
+        log("     (If you see 'No command', hold Power and press Volume Up once.)")
+        log("  4. Volume keys: highlight 'Wipe data/factory reset' -> Power.")
+        log("  5. Highlight 'Factory data reset' -> Power.")
+        log("  6. Highlight 'Reboot system now' -> Power.")
+        log("")
+        log("  WARNING: if a Google account was on the phone it will stop at")
+        log("  'Verify your account' (Google FRP). That is expected; then use")
+        log("  the FRP bypass tab to clear it.")
+
+    steps = [Step("factory_reset", _run)]
+    return Flow("factory reset", steps)
+
+
 def flow_setup_wizard():
     """Classic ADB-based bypass for Samsung devices on older Android versions.
 
@@ -5531,6 +5576,7 @@ FLOWS = {
     "reboot_normal": flow_reboot_normal,
     "reboot_edl": flow_reboot_edl,
     "reboot_bootloader": flow_reboot_bootloader,
+    "factory_reset": flow_factory_reset,
     "setup_wizard": flow_setup_wizard,
     "test_mode": flow_test_mode,
     "at_info": flow_at_info,

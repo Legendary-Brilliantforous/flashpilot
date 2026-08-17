@@ -2409,6 +2409,7 @@ class FrpWindow(QMainWindow):
         # instead of one congested scrollable column.
         self.samsung_tabs = SamsungSubTabs(
             [
+                ("quick", "QUICK"),
                 ("flash", "FLASH"),
                 ("frp", "FRP"),
                 ("lock", "SCREEN LOCK"),
@@ -2442,6 +2443,9 @@ class FrpWindow(QMainWindow):
         fp_lay.addWidget(flash_scroll)
         self.samsung_stack.addWidget(flash_page)
 
+        quick_page = self._build_quick_page()
+        self.samsung_stack.addWidget(quick_page)
+
         frp_page = self._build_ops_flow_page(["FRP bypass"])
         self.samsung_stack.addWidget(frp_page)
 
@@ -2470,8 +2474,54 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _on_samsung_tab(self, key):
-        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3, "tools": 4}.get(key, 0)
+        index = {"quick": 1, "flash": 0, "frp": 2, "lock": 3, "mdm": 4, "tools": 5}.get(key, 0)
         self.samsung_stack.setCurrentIndex(index)
+
+    def _build_quick_page(self):
+        """TFT-style QUICK tab: one-tap Factory reset / Reboot / ADB / Fastboot
+        actions without hunting through mode dropdowns."""
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        scroll = self._ops_scroll_area()
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        hv = QVBoxLayout(host)
+        hv.setContentsMargins(0, 0, 0, 0)
+        hv.setSpacing(10)
+
+        # --- Factory reset (ADB + recovery fallback) ---
+        hv.addWidget(SectionTitle("FACTORY RESET"))
+        fr_row = QHBoxLayout()
+        fr_row.setSpacing(8)
+        fr_btn = QPushButton("Factory reset")
+        fr_btn.setStyleSheet(_btn_primary())
+        fr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fr_btn.setToolTip("ADB wipe /data when authorized, else guided recovery reset")
+        fr_btn.clicked.connect(
+            lambda: self._run_ops_flow(
+                "FRP bypass", "ADB", "factory_reset",
+                frp.FLOWS["factory_reset"]().name,
+            )
+        )
+        fr_row.addWidget(fr_btn)
+        fr_row.addStretch(1)
+        hv.addLayout(fr_row)
+
+        # --- ADB: one-tap reboot destinations ---
+        hv.addWidget(SectionTitle("ADB / USB DEBUGGING"))
+        self._add_job_flows(hv, ["Reboot device"], modes=["ADB"])
+
+        # --- Fastboot: reboot out of / within bootloader mode ---
+        hv.addWidget(SectionTitle("FASTBOOT"))
+        self._add_job_flows(hv, ["Reboot device"], modes=["FASTBOOT"])
+
+        hv.addStretch(1)
+        scroll.setWidget(host)
+        v.addWidget(scroll)
+        return page
 
     def _ops_scroll_area(self):
         scroll = QScrollArea()
