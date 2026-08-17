@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/brilliant-tools/brilliant-flashing-tool"
-Repository = "https://github.com/brilliant-tools/brilliant-flashing-tool"
+Homepage = "https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool"
+Repository = "https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool"
 
 [tool.setuptools]
 packages = ["python"]
