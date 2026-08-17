@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brilliant-flashing-tool"
+version = "1.2.0"
+description = "Open-source FRP reset and firmware flashing toolbox for Samsung, MediaTek, Qualcomm and UNISOC devices"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.5",
+    "segno>=1.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/brilliant-tools/brilliant-flashing-tool"
+Repository = "https://github.com/brilliant-tools/brilliant-flashing-tool"
+
+[tool.setuptools]
+packages = ["python"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

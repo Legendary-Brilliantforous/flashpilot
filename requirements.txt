@@ -1,0 +1,5 @@
+# Native GUI: PyQt6
+PyQt6>=6.5
+
+# MDM provisioning QR generation (used by the MDM/QR flow)
+segno>=1.6

@@ -1,0 +1,34 @@
+# Rust
+/target/
+
+# Python virtualenv
+.venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime / user data
+/cache/
+/odin4.log
+/efs_backups/
+
+# Local device artifacts
+*.pit
+*.bin
+*.tar
+*.tar.md5
+*.img
+*.lz4
+/mdm_qr/*.png
+/mdm_qr/*.json
+
+# Proprietary tools fetched at setup time (see scripts/fetch-odin4.sh)
+/root/tools/odin4
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
