@@ -2123,44 +2123,128 @@ def flow_odin_enable_adb():
     return Flow("enable adb (download mode - combo firmware)", steps)
 
 
+# SHA-256 of the known-good bundled Samsung odin4 Linux binary (root/tools/odin4).
+# odin4 is a leaked proprietary binary fetched from public mirrors, so every
+# execution is gated on this digest: a binary that does not match it (or is not
+# explicitly trusted via ODIN4_SKIP_HASH=1) is refused before it can talk to a
+# phone. Keep this in sync with scripts/fetch-odin4.sh.
+ODIN4_SHA256 = "a35199f8a3f1b07c79eaf1f0f675e94f45a5edc9e75c79a1e45b01d423ac9644"
+
+
+def _odin4_hash_ok(path):
+    """True if `path` is the known-good odin4 (by SHA-256), or the user has
+    explicitly trusted an alternate binary with ODIN4_SKIP_HASH=1."""
+    if os.environ.get("ODIN4_SKIP_HASH", "0").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    try:
+        with open(path, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        return False
+    return digest == ODIN4_SHA256
+
+
+def _verified_odin4(path):
+    """Return `path` once it passes the odin4 integrity check, else raise.
+
+    This binary is about to be executed with direct access to the phone's
+    storage, so a checksum failure is fatal unless the user opts out."""
+    if _odin4_hash_ok(path):
+        return path
+    raise RuntimeError(
+        f"odin4 binary at {path} failed SHA-256 verification "
+        f"(expected {ODIN4_SHA256[:16]}...). Refusing to execute it. "
+        f"Re-run scripts/fetch-odin4.sh to restore the known-good binary, "
+        f"or set ODIN4_SKIP_HASH=1 to trust this copy explicitly."
+    )
+
+
 def _find_odin4():
-    """Locate the leaked Samsung Odin v4 for Linux binary (odin4/odin)."""
+    """Locate and verify the leaked Samsung Odin v4 for Linux binary (odin4/odin).
+
+    The located binary is verified against ODIN4_SHA256 before it is returned;
+    an unverifiable binary raises instead of silently running."""
     env = os.environ.get("ODIN4_BIN")
     if env and os.path.isfile(env):
-        return env
+        return _verified_odin4(env)
     exe = shutil.which("odin4") or shutil.which("odin")
     if exe:
-        return exe
+        return _verified_odin4(exe)
     # bundled copy ships inside the repo (root/tools/odin4)
     bundled = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "root", "tools", "odin4",
     )
     if os.path.isfile(bundled) and os.access(bundled, os.X_OK):
-        return bundled
+        return _verified_odin4(bundled)
     for cand in (
         "/usr/local/bin/odin4", "/usr/local/bin/odin",
         "/usr/bin/odin4", "/usr/bin/odin",
         os.path.expanduser("~/odin4"), os.path.expanduser("~/odin"),
         os.path.expanduser("~/bin/odin4"), os.path.expanduser("~/bin/odin"),
+        os.path.expanduser("~/.local/bin/odin4"),
         os.path.expanduser("~/Downloads/ABDM/Compressed/odin/odin4"),
     ):
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
+            return _verified_odin4(cand)
     return ""
 
 
 def _odin4_allow_unknown():
-    """Return ['--allow-unknown'] unless the user disabled it via env var.
+    """Return ['--allow-unknown'] only when explicitly enabled (ODIN4_ALLOW_UNKNOWN=1).
 
     odin4's default PIT check aborts the flash ('check failure pit') when any
-    archive entry has no matching partition in the device PIT. Unofficial /
-    custom firmware and region variants commonly hit this, so it is enabled by
-    default; the GUI checkbox (ODIN4_ALLOW_UNKNOWN=0) turns it off.
-    """
-    if os.environ.get("ODIN4_ALLOW_UNKNOWN", "1").strip().lower() in ("0", "false", "no", "off"):
-        return []
-    return ["--allow-unknown"]
+    archive entry has no matching partition in the device PIT. That check is the
+    guard that stops mismatched firmware from being written, so it stays ON
+    unless the user explicitly opts out via the GUI checkbox or the env var."""
+    if os.environ.get("ODIN4_ALLOW_UNKNOWN", "0").strip().lower() in ("1", "true", "yes", "on"):
+        return ["--allow-unknown"]
+    return []
+
+
+def _odin4_reboot():
+    """Return ['--reboot'] only when explicitly requested (ODIN4_REBOOT=1).
+
+    Rebooting automatically after a flash hides a failed write behind a phone
+    that no longer answers, so it is off unless the user opts in."""
+    if os.environ.get("ODIN4_REBOOT", "0").strip().lower() in ("1", "true", "yes", "on"):
+        return ["--reboot"]
+    return []
+
+
+def _odin4_redownload():
+    """Return ['--redownload'] only when explicitly requested (ODIN4_REDOWNLOAD=1).
+
+    odin4 sends the Redownload command after flashing so the phone re-enters
+    download mode instead of rebooting - the reliable way to chain a second
+    flash (e.g. an NVRAM erase) without physically rebooting the phone."""
+    if os.environ.get("ODIN4_REDOWNLOAD", "0").strip().lower() in ("1", "true", "yes", "on"):
+        return ["--redownload"]
+    return []
+
+
+def _odin4_verbose():
+    """Return ['--verbose'] only when explicitly requested (ODIN4_VERBOSE=1)."""
+    if os.environ.get("ODIN4_VERBOSE", "0").strip().lower() in ("1", "true", "yes", "on"):
+        return ["--verbose"]
+    return []
+
+
+def _reboot_redownload_flags(log):
+    """Resolve the mutually-exclusive --reboot / --redownload flags into a list."""
+    reboot = _odin4_reboot()
+    redownload = _odin4_redownload()
+    if reboot and redownload:
+        raise RuntimeError(
+            "'Auto-reboot' and 'Re-download' are mutually exclusive - enable only one."
+        )
+    flags = reboot or redownload
+    if not flags:
+        log("  Auto-reboot DISABLED (opt-in). The phone will stay in download mode -")
+        log("  verify the flash finished before manually rebooting.")
+    elif "--redownload" in flags:
+        log("  Re-download enabled: the phone will re-enter download mode after flashing.")
+    return flags
 
 
 def _explain_odin4_failure(out):
@@ -2228,9 +2312,25 @@ def flow_odin_flash_tar():
         
         log(f"odin4: {odin4}")
         log(f"archive: {tar} ({os.path.getsize(tar) >> 20} MB)")
+
+        log("")
+        log("Running safety checks before flashing...")
+        _require_preflight(ctx, log)
+        _require_recent_efs_backup(ctx, log)
+        _enforce_flash_gates(ctx, log, d)
+
+        if _env_flag("ODIN4_CHECK_ONLY"):
+            _run_odin4_check_only(log, odin4, {"AP": tar})
+
         log("Flashing firmware via odin4... DO NOT unplug!")
-        
-        cmd = [odin4, "-a", tar, *_odin4_allow_unknown(), "--reboot"]
+        cmd = [odin4, "-a", tar, *_odin4_allow_unknown()]
+        cmd.extend(_reboot_redownload_flags(log))
+        cmd.extend(_odin4_verbose())
+        if _env_flag("ODIN4_ERASE_NV") and "--reboot" in cmd:
+            raise RuntimeError(
+                "'Erase NVRAM' runs after the flash and needs the phone to stay in "
+                "download mode - disable Auto-reboot (or enable Re-download) and retry."
+            )
         log("> " + " ".join(cmd))
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -2239,7 +2339,15 @@ def flow_odin_flash_tar():
         if proc.returncode != 0:
             hint = _explain_odin4_failure(out)
             raise RuntimeError(f"odin4 flashing failed (rc={proc.returncode}). {hint}")
-        log("Firmware flashed successfully! Device is rebooting.")
+        log("Firmware flashed successfully!")
+        if _env_flag("ODIN4_ERASE_NV"):
+            _erase_nvram(ctx, log, d)
+        if "--reboot" in cmd:
+            log("  Device is rebooting.")
+        elif "--redownload" in cmd:
+            log("  Device re-entering download mode - ready for the next step.")
+        else:
+            log("  Device stays in download mode - power off / reboot manually when ready.")
         return True
 
     return Flow("Flash firmware tar (odin4)", [Step("odin_flash_tar", _run)])
@@ -2388,6 +2496,17 @@ def flow_odin_advanced_flash():
         if not ap and not bl and not cp and not csc:
             raise RuntimeError("No firmware slot archives (AP, BL, CP, CSC) found in ~/Downloads or current directory.")
 
+        log("")
+        log("Running safety checks before flashing...")
+        _require_preflight(ctx, log)
+        _require_recent_efs_backup(ctx, log)
+        _enforce_flash_gates(ctx, log, d)
+
+        if _env_flag("ODIN4_CHECK_ONLY"):
+            _run_odin4_check_only(log, odin4, {
+                "AP": ap, "BL": bl, "CP": cp, "CSC": csc, "USERDATA": userdata,
+            })
+
         cmd = [odin4]
         for slot_key, slot_path, opt in [
             ("AP", ap, "-a"),
@@ -2405,23 +2524,16 @@ def flow_odin_advanced_flash():
 
         # Advanced flags
         cmd.extend(_odin4_allow_unknown())
-        cmd.append("--reboot")
+        cmd.extend(_reboot_redownload_flags(log))
+        cmd.extend(_odin4_verbose())
+        if _env_flag("ODIN4_ERASE_NV") and "--reboot" in cmd:
+            raise RuntimeError(
+                "'Erase NVRAM' runs after the flash and needs the phone to stay in "
+                "download mode - disable Auto-reboot (or enable Re-download) and retry."
+            )
         if "--allow-unknown" in cmd:
             log("  [PIT check bypass enabled] archive entries without a device PIT match")
             log("  will be skipped instead of aborting ('check failure pit').")
-
-        # Warn about BL revision vs device bootloader version (can cause brick).
-        if bl:
-            bl_rev = _bl_rev_from_name(os.path.basename(bl))
-            dev_rev = ctx.get("bl_rev")
-            if bl_rev and dev_rev and bl_rev < dev_rev:
-                log("")
-                log(f"  !!! WARNING: firmware BL REV{bl_rev:02d} is NEWER than the device's")
-                log(f"      current bootloader REV{dev_rev:02d}. Flashing a BL revision lower")
-                log("      than the device's can hard-brick it. Use BL REV >= "
-                     f"REV{dev_rev:02d} or remove the BL slot.")
-            elif bl_rev and not dev_rev:
-                log(f"  BL revision: REV{bl_rev:02d} (device bootloader version unknown)")
 
         log("")
         log(f"Executing: {' '.join(cmd)}")
@@ -2434,7 +2546,15 @@ def flow_odin_advanced_flash():
         if proc.returncode != 0:
             hint = _explain_odin4_failure(out)
             raise RuntimeError(f"Advanced flash failed (rc={proc.returncode}). {hint}")
-        log("Advanced flash completed successfully! Device is rebooting.")
+        log("Advanced flash completed successfully!")
+        if _env_flag("ODIN4_ERASE_NV"):
+            _erase_nvram(ctx, log, d)
+        if "--reboot" in cmd:
+            log("  Device is rebooting.")
+        elif "--redownload" in cmd:
+            log("  Device re-entering download mode - ready for the next step.")
+        else:
+            log("  Device stays in download mode - power off / reboot manually when ready.")
         return True
 
     return Flow("Advanced flash (AP/BL/CP/CSC + Unofficial)", [Step("odin_advanced_flash", _run)])
@@ -2543,6 +2663,608 @@ def _detect_mode(samsung):
     if 0x685c in pids:
         return "BROM"
     return "NORMAL"
+
+
+def _normalize_model(s):
+    """Canonical form of a Samsung model string for comparison: strips the
+    SM- prefix and any punctuation, upper-cases. 'SM-A145P' == 'a145p'."""
+    return re.sub(r"[^A-Z0-9]", "", (s or "").upper().replace("SM-", "").replace("SM_", ""))
+
+
+def _bl_rev_from_bootloader(value):
+    """Best-effort parse of the Samsung SW-revision digit out of a bootloader
+    version string (ro.bootloader). e.g. 'A145PXXU1BWB1' -> 1. Returns int/None."""
+    m = re.search(r"U(\d)", value or "")
+    return int(m.group(1)) if m else None
+
+
+def _get_device_bl_rev(ctx, log):
+    """Try to learn the device's current bootloader revision: prefers a value
+    already discovered (ctx['bl_rev']), then a live ADB read of ro.bootloader
+    (best-effort, requires a booted + authorized device). Returns int or None."""
+    val = ctx.get("bl_rev")
+    if val is not None:
+        return int(val) if str(val).isdigit() else None
+    try:
+        out = bridge.adb_shell("getprop ro.bootloader", timeout=10).strip()
+    except Exception:
+        return None
+    rev = _bl_rev_from_bootloader(out)
+    if rev is not None:
+        log(f"  Device bootloader rev (ro.bootloader '{out}'): REV{rev}")
+        ctx["bl_rev"] = rev
+    return rev
+
+
+def _enforce_flash_gates(ctx, log, d):
+    """Hard safety gates before an odin4 flash.
+
+    - Firmware model (from the archive name) must match the device model read
+      over the Odin protocol; a mismatch blocks the flash.
+    - A BL archive must not be a lower bootloader revision than the device's.
+
+    Both gates can be overridden explicitly (ODIN4_FORCE_MODEL=1 /
+    ODIN4_FORCE_BL=1) - overrides log a prominent warning first."""
+    target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+    fw = _find_slot_tar("AP") or _find_firmware_tar()
+    fw_model = _model_from_firmware_name(os.path.basename(fw)) if fw else ""
+    dev_model = ""
+    try:
+        info = bridge.odin_model(target, timeout=40)
+        dev_model = (info or {}).get("model", "") or ""
+    except bridge.BridgeError as e:
+        log(f"  (device model probe skipped: {e})")
+
+    if fw_model and dev_model:
+        if _normalize_model(fw_model) == _normalize_model(dev_model):
+            log(f"  Model check: firmware '{fw_model}' vs device '{dev_model}' - MATCH")
+        elif os.environ.get("ODIN4_FORCE_MODEL", "0").strip().lower() in ("1", "true", "yes", "on"):
+            log(f"  !!! MODEL MISMATCH OVERRIDDEN (ODIN4_FORCE_MODEL=1): firmware "
+                f"'{fw_model}' vs device '{dev_model}' - proceeding at your own risk.")
+        else:
+            raise RuntimeError(
+                f"MODEL MISMATCH: firmware targets '{fw_model}' but the device is "
+                f"'{dev_model}'. Flashing mismatched firmware can hard-brick the "
+                f"device. Use the exact model's firmware, or set "
+                f"ODIN4_FORCE_MODEL=1 to proceed anyway."
+            )
+    elif fw_model:
+        log(f"  Model check: firmware '{fw_model}' (device model unavailable - skipped)")
+
+    bl = _find_slot_tar("BL")
+    if bl:
+        fw_rev = _bl_rev_from_name(os.path.basename(bl))
+        dev_rev = _get_device_bl_rev(ctx, log)
+        if fw_rev is not None and dev_rev is not None:
+            if fw_rev >= dev_rev:
+                log(f"  BL check: REV{fw_rev:02d} >= device REV{dev_rev:02d} - OK")
+            elif os.environ.get("ODIN4_FORCE_BL", "0").strip().lower() in ("1", "true", "yes", "on"):
+                log(f"  !!! BL DOWNGRADE OVERRIDDEN (ODIN4_FORCE_BL=1): flashing REV{fw_rev:02d} "
+                    f"on a REV{dev_rev:02d} device - at your own risk.")
+            else:
+                raise RuntimeError(
+                    f"BLOCKED: firmware BL REV{fw_rev:02d} is LOWER than the device's "
+                    f"REV{dev_rev:02d}. Flashing a lower bootloader revision can "
+                    f"hard-brick the device. Use a newer firmware, remove the BL "
+                    f"slot, or set ODIN4_FORCE_BL=1 to proceed anyway."
+                )
+        elif fw_rev is not None:
+            log(f"  BL revision: REV{fw_rev:02d} (device rev unknown - downgrade check skipped)")
+
+
+def _require_preflight(ctx, log):
+    """Run the pre-flight validation suite as a hard gate before flashing.
+    Raises on any failed check (corrupt archive, cross-slot model mismatch)."""
+    flow_preflight().steps[0].run(ctx, log)
+
+
+def _require_recent_efs_backup(ctx, log, max_age_days=30):
+    """Require a recent EFS backup before flashing. If a booted, authorized ADB
+    device is present, backs EFS up automatically; otherwise accepts a backup
+    made within the last `max_age_days` days. Can be skipped explicitly
+    (ODIN4_SKIP_BACKUP=1)."""
+    if os.environ.get("ODIN4_SKIP_BACKUP", "0").strip().lower() in ("1", "true", "yes", "on"):
+        log("  SKIPPING EFS backup requirement (ODIN4_SKIP_BACKUP=1).")
+        return
+    backup_dir = os.path.expanduser("~/brilliant/efs_backups")
+    cands = []
+    if os.path.isdir(backup_dir):
+        cands = sorted(
+            glob.glob(os.path.join(backup_dir, "efs_*.tar")),
+            key=os.path.getmtime, reverse=True,
+        )
+    if cands:
+        age_days = (time.time() - os.path.getmtime(cands[0])) / 86400
+        if age_days <= max_age_days:
+            log(f"  Recent EFS backup found: {os.path.basename(cands[0])} ({age_days:.0f}d old)")
+            ctx["efs_backup"] = cands[0]
+            return
+        log(f"  EFS backup too old ({age_days:.0f}d) - re-backing up if possible...")
+    try:
+        if any(d.get("state") == "device" for d in bridge.adb_status()):
+            log("  Attempting automatic EFS backup via ADB before flashing...")
+            flow_efs_backup().steps[0].run(ctx, log)
+            return
+    except Exception:
+        pass
+    raise RuntimeError(
+        "No recent EFS backup found. Before flashing, boot the phone normally, "
+        "connect with USB debugging, and run the EFS backup flow (or set "
+        "ODIN4_SKIP_BACKUP=1 to skip - NOT recommended)."
+    )
+
+
+def _is_nv_partition(name):
+    """True when a PIT partition is an NVRAM/NVDATA (network calibration)
+    partition. Matches the well-known Samsung MediaTek names (nvram, nvdata,
+    nvcfg, nvbackup, ...) by the 'nv' prefix, bounded so 'vendor' etc. never
+    match."""
+    n = (name or "").strip().lower()
+    return n in ("nvram", "nvdata") or (n.startswith("nv") and 3 <= len(n) <= 12)
+
+
+def _write_zeroes(f, size, chunk=1 << 20):
+    """Write exactly `size` zero bytes to the open binary file `f`, streaming
+    in `chunk`-sized blocks so huge partitions never get buffered in memory."""
+    block = b"\0" * chunk
+    remaining = size
+    while remaining > 0:
+        n = chunk if remaining >= chunk else remaining
+        f.write(block[:n])
+        remaining -= n
+
+
+def _erase_nvram(ctx, log, d):
+    """Zero-fill every NVRAM/NVDATA partition listed in the device's own PIT.
+
+    Uses the native Odin flash path (odin-flash) with the device-dumped PIT, so
+    on Odin-protocol (Exynos/Qualcomm download mode) devices this reliably
+    wipes the network-calibration area - the standard fix for IMEI/network and
+    a common FRP-adjacent step. MTK download-agent devices do not answer the
+    ODIN handshake, so they must use the MediaTek workbench instead."""
+    target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+    with tempfile.TemporaryDirectory(prefix="nv_erase_") as td:
+        pit_path = os.path.join(td, "device.pit")
+        bridge.odin_pit(target, pit_path, timeout=120)
+        with open(pit_path, "rb") as pf:
+            entries = pit.parse_pit(pf.read())
+        names = sorted({e.name for e in entries if _is_nv_partition(e.name)})
+        if not names:
+            log("  No NVRAM/NVDATA partitions in the device PIT - nothing to erase.")
+            return
+        log(f"  Erasing NVRAM/NVDATA: {', '.join(names)}")
+        for name in names:
+            entry = next(e for e in entries if e.name == name)
+            size = entry.size_bytes()
+            log(f"    {name}: {size >> 20} MB -> zero-fill via native Odin flash...")
+            img = os.path.join(td, f"{name}.img")
+            with open(img, "wb") as f:
+                _write_zeroes(f, size)
+            res = bridge._run(["odin-flash", target, pit_path, name, img], timeout=1800)
+            log(f"    {res}")
+        log("  NVRAM erase complete.")
+
+
+def _run_odin4_check_only(log, odin4, archives):
+    """Validate firmware archives with odin4 --check-only before flashing.
+    Raises on any failure so a corrupt/mismatched archive is never flashed."""
+    log("  Pre-flash validation (odin4 --check-only)...")
+    cmd = [odin4, "--check-only", *_odin4_allow_unknown()]
+    for opt, path in (("-a", archives.get("AP")), ("-b", archives.get("BL")),
+                      ("-c", archives.get("CP")), ("-s", archives.get("CSC")),
+                      ("-u", archives.get("USERDATA"))):
+        if path:
+            cmd.extend([opt, path])
+    log("  > " + " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        hint = _explain_odin4_failure(out)
+        raise RuntimeError(
+            f"Pre-flash validation FAILED (rc={proc.returncode}). {hint}\n{out[-1200:]}"
+        )
+    log("  Pre-flash validation passed.")
+
+
+def _env_flag(name):
+    """Read an opt-in boolean env flag (ODIN4_*) - True only when explicitly on."""
+    return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# Carrier / SIM-lock workbench
+#
+# Layer 1 is a read-only, vendor-agnostic lock-status detector (works over ADB
+# on any Android). Layer 2 is the MediaTek modem-NVRAM read/backup/analyze path
+# (A05/A06). The patch step is RECIPE-GATED: it only writes when a validated
+# recipe exists AND the expected locked signature is present - it never guesses
+# on modem NV data.
+# ---------------------------------------------------------------------------
+
+# Android `gsm.sim.state` values that mean the device itself is carrier-locked.
+_SIM_STATE_LOCKED = {
+    "NETWORK_LOCKED", "PERSO_LOCKED", "CORPORATE_LOCKED",
+    "NETWORK_PERSO_LOCKED", "SIM_LOCKED",
+}
+
+# Properties probed by the status detector (all read-only).
+_SIM_LOCK_PROPS = (
+    "gsm.sim.state", "gsm.sim.state.2", "ril.sim.state",
+    "gsm.sim.operator.alpha", "gsm.sim.operator.numeric",
+    "gsm.network.type", "gsm.version.baseband",
+    "ro.product.model", "ro.product.name", "ro.product.device",
+    "ro.csc.sales_code", "ro.boot.carrierid", "ro.boot.carrier", "ro.carrier",
+    "persist.radio.simlock_status",
+)
+
+# MTK modem-NVRAM SimLock record markers. The lock lives in the modem NVRAM
+# files (MP0B001_*) inside nvdata; these strings identify the record headers.
+_MTK_SIMLOCK_MARKERS = (
+    b"SIMLOCK", b"SIM_LOCK", b"SIM LOCK", b"simlock",
+    b"MP0B001_003", b"MP0B001", b"NVD_IMAG",
+)
+
+# Partitions that can hold MTK modem NVRAM, probed in order.
+_MTK_NV_PARTITIONS = ("nvdata", "nvram", "protect1", "protect2")
+
+# SimLock patch recipes, keyed by normalized model. The pipeline only writes
+# when a recipe matches AND its `lock_bytes` are found at `offset` in the
+# read-back image. Entries are added ONLY after the offsets are validated on a
+# real device - an unvalidated entry here can kill IMEI / RF calibration.
+_MTK_SIMLOCK_RECIPES = {
+    # "SM-A055F": {
+    #     "partition": "nvdata",
+    #     "offset": 0x00000000,
+    #     "lock_bytes": bytes.fromhex("..."),
+    #     "unlocked_bytes": bytes.fromhex("..."),
+    # },
+    # "SM-A065F": {
+    #     "partition": "nvdata",
+    #     "offset": 0x00000000,
+    #     "lock_bytes": bytes.fromhex("..."),
+    #     "unlocked_bytes": bytes.fromhex("..."),
+    # },
+}
+
+
+def _carrier_sim_state():
+    """Collect every read-only carrier / SIM-lock signal a device exposes over
+    ADB. Pure read - never writes anything. Returns a dict with 'props'
+    (property -> value) and 'dumps' (service name -> list of matching lines)."""
+    props = {k: _adb_getprop(k) for k in _SIM_LOCK_PROPS}
+    dumps = {}
+    checks = (
+        ("phone", "dumpsys phone 2>/dev/null",
+         r"(?i)network[ _-]?lock|perso|sim[ _-]?lock|corporate|carrier[ _-]?lock"),
+        ("telephony.registry", "dumpsys telephony.registry 2>/dev/null",
+         r"(?i)(sim|lock|perso)"),
+        ("carrier_config", "dumpsys carrier_config 2>/dev/null",
+         r"(?i)lock"),
+    )
+    for name, cmd, pat in checks:
+        try:
+            out = bridge.adb_shell(cmd, timeout=25)
+        except bridge.BridgeError:
+            out = ""
+        hits = []
+        for line in out.splitlines():
+            s = line.strip()
+            if s and re.search(pat, s):
+                hits.append(s[:160])
+                if len(hits) >= 12:
+                    break
+        dumps[name] = hits
+    return {"props": props, "dumps": dumps}
+
+
+def _carrier_lock_verdict(info):
+    """Classify the carrier-lock state from collected signals (read-only).
+    Returns (verdict, evidence): verdict is one of
+    LOCKED / UNLOCKED / PIN-LOCKED / NO-SIM / SIM-ERROR / UNKNOWN."""
+    props = info["props"]
+    states = {s.upper()
+              for k in ("gsm.sim.state", "gsm.sim.state.2", "ril.sim.state")
+              for s in [props.get(k, "")] if s}
+    evidence = []
+    locked = sorted(states & _SIM_STATE_LOCKED)
+    if locked:
+        evidence.append(f"sim state reports {', '.join(locked)}")
+    for name, hits in info["dumps"].items():
+        for h in hits:
+            evidence.append(f"{name}: {h}")
+    if locked:
+        return "LOCKED", evidence
+    # Strong lock wording from the phone service (never guesses on generic
+    # registry noise like 'mSimState=READY').
+    for h in evidence:
+        if re.search(r"(?i)(network[ _-]?lock|perso[ _-]?lock|sim[ _-]?lock|carrier[ _-]?lock)", h):
+            return "LOCKED", evidence
+    if states & {"PIN_REQUIRED", "PUK_REQUIRED"}:
+        return "PIN-LOCKED", evidence
+    if states and states <= {"ABSENT"}:
+        return "NO-SIM", evidence
+    if "READY" in states:
+        return "UNLOCKED", evidence
+    if states & {"UNKNOWN", "NOT_READY", "RESTRICTED", "PERM_DISABLED"}:
+        return "SIM-ERROR", evidence
+    return "UNKNOWN", evidence
+
+
+def _locate_simlock(data):
+    """Scan a partition image for MTK modem-NVRAM SimLock record markers.
+    Returns [(offset, marker_bytes), ...] - the longest marker at each hit."""
+    best = {}
+    for marker in _MTK_SIMLOCK_MARKERS:
+        start = 0
+        while True:
+            i = data.find(marker, start)
+            if i < 0:
+                break
+            prev = best.get(i)
+            if prev is None or len(marker) > len(prev):
+                best[i] = marker
+            start = i + 1
+    return sorted((off, m) for off, m in best.items())
+
+
+def _hex_dump(data, off, length=48):
+    """Render up to `length` bytes at `off` as a hex + ascii block for logs."""
+    lines = []
+    chunk = data[off:off + length]
+    for i in range(0, len(chunk), 16):
+        row = chunk[i:i + 16]
+        hexs = " ".join(f"{b:02x}" for b in row)
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+        lines.append(f"        {off + i:08x}  {hexs:<47}  |{asc}|")
+    return "\n".join(lines)
+
+
+def _da_in_dirs(candidates):
+    """First MediaTek DA-named .bin in any of the given directories."""
+    for d in candidates:
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            low = name.lower()
+            if low.endswith(".bin") and ("da" in low or "download" in low):
+                p = os.path.join(d, name)
+                if os.path.isfile(p):
+                    return p
+    return ""
+
+
+def _find_mtk_da():
+    """Locate a MediaTek Download Agent binary: the MTK_DA env var first (set
+    by the MTK workbench file picker), then common locations."""
+    env = os.environ.get("MTK_DA", "").strip()
+    if env and os.path.isfile(env):
+        return env
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    candidates = [
+        os.path.join(root, "root", "tools"),
+        os.path.expanduser("~/Downloads"),
+        "/tmp",
+    ]
+    return _da_in_dirs(candidates)
+
+
+def _mtk_analyze_nvdata(log, part, img):
+    """Scan a dumped MTK partition image for modem-NVRAM SimLock markers.
+    Logs a report and returns the offsets of the lock-record markers."""
+    with open(img, "rb") as f:
+        data = f.read()
+    found = _locate_simlock(data)
+    if not found:
+        log(f"  '{part}': no known SimLock markers "
+            f"({len(data) >> 20} MB scanned, read-only).")
+        return []
+    log(f"  '{part}': {len(found)} SimLock marker(s) found:")
+    for off, marker in found:
+        label = marker.decode("ascii", "replace")
+        log(f"    offset 0x{off:x}  marker '{label}'")
+        log(_hex_dump(data, off, 32))
+    return [off for off, _ in found]
+
+
+def _mtk_simlock_patch(ctx, log, da, target, backups):
+    """Recipe-gated SimLock patch. Refuses to write unless a validated recipe
+    matches AND the expected locked signature is present AND the user opted in
+    with MTK_SIMLOCK_PATCH=1. It never guesses on modem NV data."""
+    model = (ctx.get("model") or os.environ.get("ODIN4_FORCE_MODEL") or "").upper()
+    recipe = _MTK_SIMLOCK_RECIPES.get(model) or _MTK_SIMLOCK_RECIPES.get("*")
+    if not recipe:
+        log("")
+        log("  PATCH: no validated recipe for this model - refusing to write.")
+        log("  The read / backup / analysis above is complete and safe. The")
+        log("  recipe table (_MTK_SIMLOCK_RECIPES in frp.py) only gains an")
+        log("  entry once the offsets are validated on a real device.")
+        return
+    part = recipe["partition"]
+    img = next((i for p, i in backups if p == part), None)
+    if not img:
+        log(f"  PATCH: recipe needs partition '{part}' but it was not read.")
+        return
+    if not _env_flag("MTK_SIMLOCK_PATCH"):
+        log("")
+        log("  PATCH: recipe matches but MTK_SIMLOCK_PATCH=1 is not set -")
+        log("  refusing to write. Set the env flag to opt in.")
+        return
+    with open(img, "rb") as f:
+        data = f.read()
+    off = recipe["offset"]
+    lock = recipe["lock_bytes"]
+    unlock = recipe["unlocked_bytes"]
+    if data[off:off + len(lock)] != lock:
+        log("")
+        log(f"  PATCH: locked signature NOT at offset 0x{off:x} "
+            f"(got {data[off:off + len(lock)].hex()}) - refusing to guess.")
+        return
+    log("")
+    log(f"  PATCH: locked signature confirmed at 0x{off:x} -> applying unlock...")
+    patched = bytearray(data)
+    patched[off:off + len(unlock)] = unlock
+    out = f"{img}.patched"
+    with open(out, "wb") as f:
+        f.write(bytes(patched))
+    log(f"  PATCH: writing patched '{part}' back through the DA...")
+    res = bridge._run(["mtk-flash-part", target, da, f"{part}={out}"], timeout=1800)
+    log(f"    {res}")
+    log("")
+    log("  DONE. Insert the locked SIM and re-run 'Carrier lock status' (ADB)")
+    log("  to confirm the verdict is now UNLOCKED.")
+
+
+def flow_carrier_lock_status():
+    """Read-only carrier / SIM-lock status check on ANY connected Android
+    device over ADB (Samsung, MediaTek, Qualcomm, UNISOC - vendor-agnostic).
+    Never writes anything; reports the verdict + evidence + next steps."""
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("CARRIER / SIM-LOCK STATUS CHECK (read-only)")
+        log("=" * 60)
+        log("  Safe on every device - this step only READS state. It never")
+        log("  writes, patches or unlocks anything.")
+        log("")
+        if not _wait_for_adb(ctx, log, timeout=45):
+            raise RuntimeError("no adb device appeared - enable USB debugging first")
+        info = _carrier_sim_state()
+        verdict, evidence = _carrier_lock_verdict(info)
+        props = info["props"]
+        model = props.get("ro.product.model") or props.get("ro.product.name")
+        log(f"  Device  : {model or 'unknown'}")
+        sales = props.get("ro.csc.sales_code") or props.get("ro.boot.carrierid")
+        if sales:
+            log(f"  Carrier : {sales}")
+        op = props.get("gsm.sim.operator.alpha") or props.get("gsm.sim.operator.numeric")
+        if op:
+            log(f"  SIM     : {op}")
+        bb = props.get("gsm.version.baseband")
+        if bb:
+            log(f"  Baseband: {bb}")
+        log("")
+        labels = {
+            "LOCKED": "SIM / NETWORK LOCKED",
+            "UNLOCKED": "UNLOCKED (SIM accepted)",
+            "PIN-LOCKED": "SIM PIN / PUK locked (user code, not carrier)",
+            "NO-SIM": "No SIM detected",
+            "SIM-ERROR": "SIM error state (modem not ready)",
+            "UNKNOWN": "State not exposed by this build",
+        }
+        log(f"  VERDICT: {labels.get(verdict, verdict)}")
+        log("")
+        if evidence:
+            log("  Evidence:")
+            for line in evidence:
+                log(f"    - {line}")
+        log("")
+        log("  Guidance:")
+        if verdict == "LOCKED":
+            log("    This unit reports a carrier/network lock. Options:")
+            log("      * Insert the carrier SIM that the phone was sold with (or")
+            log("        a same-network brand) and test again - many locked units")
+            log("        accept the home-network SIM.")
+            log("      * Samsung: Settings -> Connections -> SIM manager ->")
+            log("        'Network lock' -> Unlock, or dial *#7465625# to view.")
+            log("      * MTK A05/A06 stuck with no network on any SIM: use")
+            log("        'Carrier lock' -> 'MTK NVRAM SimLock' (BROM mode) to read")
+            log("        and back up the modem lock record.")
+        elif verdict == "UNLOCKED":
+            log("    No active network lock detected for the inserted SIM.")
+        elif verdict == "PIN-LOCKED":
+            log("    This is a SIM PIN/PUK state (user code), not a carrier lock.")
+            log("    Enter the PIN on the phone, or get the PUK from the carrier.")
+        elif verdict == "NO-SIM":
+            log("    Insert a SIM to evaluate the lock state.")
+        else:
+            log("    This build does not expose the lock state over ADB. See the")
+            log("    Network Repair page for radio status.")
+
+    steps = [Step("carrier_lock_status", _run)]
+    return Flow("carrier lock status (read-only)", steps)
+
+
+def flow_carrier_lock_mtk():
+    """MediaTek (A05/A06) modem SimLock read-back, backup and analysis over the
+    low-level DA. Reports where the lock record lives and its state. The patch
+    step is recipe-gated: it only writes when a validated recipe matches AND the
+    expected locked signature is present - it never guesses on modem NV data."""
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MTK MODEM SIMLOCK - READ / BACKUP / ANALYZE (A05 / A06)")
+        log("=" * 60)
+        log("  Samsung A05/A06 (Helio G85) keep the SIM/network lock in the")
+        log("  modem NVRAM files (MP0B001_*) inside the nvdata partition.")
+        log("  This flow reads that area over the low-level DA, keeps a backup")
+        log("  and locates the lock record. It WRITES NOTHING unless a")
+        log("  validated recipe matches AND MTK_SIMLOCK_PATCH=1 is set.")
+        log("")
+        da = _find_mtk_da()
+        if not da:
+            log("  DA binary not found.")
+            log("  Pick the MediaTek Download Agent on the 'MTK' workbench page")
+            log("  (e.g. MTK_AllInOne_DA.bin / *_DA.bin), then run this again.")
+            raise RuntimeError("MediaTek DA binary required - pick it on the MTK workbench")
+        log(f"  DA file : {da}")
+        devs = mtk.detect_mtk()
+        if not devs:
+            fallback = mtk.find_mtk()
+            if not fallback:
+                log("")
+                log("  No MediaTek device on USB. Enter BROM / preloader:")
+                log("    1. Power the phone OFF completely.")
+                log("    2. Hold Volume Down + Power (keep holding - the screen")
+                log("       stays dark) until USB shows 0e8d:2000 (BROM) or")
+                log("       0e8d:0003 (preloader).")
+                raise RuntimeError("no MediaTek BROM/preloader device connected")
+        else:
+            pid = devs[0].get("pid")
+            stage = mtk.pid_stage(pid)
+            if stage not in ("brom", "preloader"):
+                log(f"  Device is in '{stage}' stage - need BROM/Preloader.")
+                log("  Power off, then re-enter with Volume Down + Power.")
+                raise RuntimeError(f"MediaTek device in {stage} mode, need BROM/Preloader")
+            log(f"  MediaTek device: 0e8d:{pid:04x} ({mtk.stage_label(stage)[0]})")
+        log("")
+
+        target = "auto"
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_dir = os.path.join(os.path.expanduser("~"), "brilliant_backups",
+                                  f"carrier_lock_{stamp}")
+        os.makedirs(backup_dir, exist_ok=True)
+        log(f"  Backup dir: {backup_dir}")
+        backups = []
+        with tempfile.TemporaryDirectory(prefix="mtk_simlock_") as td:
+            for part in _MTK_NV_PARTITIONS:
+                img = os.path.join(td, f"{part}.img")
+                try:
+                    log(f"  Reading '{part}' partition via DA...")
+                    res = bridge._run(["mtk-read-part", target, da, part, img],
+                                      timeout=1200)
+                    log(f"    {res}")
+                except bridge.BridgeError as e:
+                    log(f"    '{part}' unavailable: {e}")
+                    continue
+                if not os.path.isfile(img) or os.path.getsize(img) == 0:
+                    log(f"    '{part}' read was empty - skipping")
+                    continue
+                shutil.copy2(img, os.path.join(backup_dir, f"{part}.img"))
+                backups.append((part, img))
+                found = _mtk_analyze_nvdata(log, part, img)
+                if found:
+                    ctx.setdefault("mtk_simlock_locked", []).extend(found)
+            if not backups:
+                log("  No NVRAM/NVDATA partition could be read - nothing to analyze.")
+                log("  If the DA is rejected, try an authenticated DA or dump the")
+                log("  preloader first (Read device info -> MTK BROM).")
+                return
+            log(f"  Backups saved: {backup_dir}")
+            _mtk_simlock_patch(ctx, log, da, target, backups)
+
+    steps = [Step("carrier_lock_mtk", _run)]
+    return Flow("MTK nvram simlock read/backup/analyze (A05/A06)", steps)
 
 
 # ---------------------------------------------------------------------------
@@ -4515,6 +5237,9 @@ def flow_mdm_qr():
 
         out_dir = os.path.normpath(os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "..", "mdm_qr"))
+        if os.path.exists(out_dir) and not os.access(out_dir, os.W_OK):
+            # Installed (read-only) layouts fall back to a user-writable dir.
+            out_dir = os.path.join(os.path.expanduser("~"), "brilliant", "mdm_qr")
         os.makedirs(out_dir, exist_ok=True)
         log(f"Output: {out_dir}")
         log("")
@@ -5587,6 +6312,8 @@ FLOWS = {
     "mtk_combo_flash": flow_mtk_combo_flash,
     "mtk_recovery_reset": flow_mtk_recovery_reset,
     "mtk_brom_info": flow_mtk_brom_info,
+    "carrier_lock_status": flow_carrier_lock_status,
+    "carrier_lock_mtk": flow_carrier_lock_mtk,
     "adb_frp": flow_adb_frp,
     "frp_browser": flow_frp_browser,
     "frp_emergency": flow_frp_emergency,
@@ -5715,6 +6442,16 @@ JOBS = {
         "Samsung BROM": [],
         "MTK": [],
         "MTK BROM": [],
+        "FASTBOOT": [],
+        "EDL": [],
+    },
+    "Carrier lock": {
+        "ADB": ["carrier_lock_status"],
+        "MTP": [],
+        "Download mode": [],
+        "Samsung BROM": [],
+        "MTK": [],
+        "MTK BROM": ["carrier_lock_mtk"],
         "FASTBOOT": [],
         "EDL": [],
     },

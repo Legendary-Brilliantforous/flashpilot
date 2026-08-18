@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Brilliant Flashing Tool
+GenericName=Android Flashing Suite
+Comment=FRP reset, flashing and repair for Samsung, MediaTek, Qualcomm and UNISOC devices
+Exec=brilliant
+Icon=brilliant
+Terminal=false
+Categories=Development;Utility;
+Keywords=android;samsung;mtk;qualcomm;unisoc;flash;frp;odin;repair;unlock
+StartupNotify=true
+StartupWMClass=brilliant

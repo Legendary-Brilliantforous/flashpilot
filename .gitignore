@@ -27,6 +27,9 @@ __pycache__/
 # Proprietary tools fetched at setup time (see scripts/fetch-odin4.sh)
 /root/tools/odin4
 
+# Build artifacts
+/dist/
+
 # OS / editor
 .DS_Store
 *.swp

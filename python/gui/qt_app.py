@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
+    QIcon,
     QPainter,
     QPainterPath,
     QPen,
@@ -1001,13 +1002,13 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     for d in (mtk_devs or []):
         pid = d.get("pid")
         if pid == 0x2000:
-            return "MTK BROM MODE (BootROM - held state)"
+            return "SAMSUNG MTK BROM (A05/A06 - held state)"
         elif pid == 0x0003:
-            return "MTK PRELOADER MODE (first bootloader stage)"
+            return "SAMSUNG MTK PRELOADER (A05/A06 - first bootloader stage)"
         elif pid == 0x0004:
-            return "MTK DOWNLOAD AGENT MODE (DA - flashing active)"
+            return "SAMSUNG MTK DA (A05/A06 - flashing active)"
         else:
-            return f"MTK MODE (VID 0x0E8D PID 0x{pid:04X})"
+            return f"SAMSUNG MTK MODE (VID 0x0E8D PID 0x{pid:04X})"
     
     if adb and diag and image:
         return "MTP + DIAG + ADB (combined config)"
@@ -2415,6 +2416,7 @@ class FrpWindow(QMainWindow):
                 ("frp", "FRP"),
                 ("lock", "SCREEN LOCK"),
                 ("mdm", "MDM"),
+                ("carrier", "CARRIER LOCK"),
                 ("tools", "INFO & TOOLS"),
             ]
         )
@@ -2453,6 +2455,9 @@ class FrpWindow(QMainWindow):
         mdm_page = self._build_ops_flow_page(["MDM unlock"])
         self.samsung_stack.addWidget(mdm_page)
 
+        carrier_page = self._build_ops_flow_page(["Carrier lock"])
+        self.samsung_stack.addWidget(carrier_page)
+
         tools_page = self._build_ops_flow_page(
             ["Read device info", "Detect", "Reboot device",
              "Fix Settings / UI crash"]
@@ -2472,7 +2477,8 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _on_samsung_tab(self, key):
-        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3, "tools": 4}.get(key, 0)
+        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3,
+                 "carrier": 4, "tools": 5}.get(key, 0)
         self.samsung_stack.setCurrentIndex(index)
 
     def _build_quick_page(self):
@@ -2707,19 +2713,96 @@ class FrpWindow(QMainWindow):
         opt_row = QHBoxLayout()
         opt_row.setSpacing(8)
         self.allow_unknown_cb = QCheckBox("Allow unknown partitions (bypass PIT check, --allow-unknown)")
-        self.allow_unknown_cb.setChecked(True)
+        self.allow_unknown_cb.setChecked(False)
         self.allow_unknown_cb.setToolTip(
-            "Lets odin4 skip archive entries that have no match in the device's PIT.\n"
-            "Needed for unofficial/custom firmware or region variants whose partition\n"
-            "table differs from the device ('check failure pit' / PIT mismatch)."
+            "OFF by default (safety). Lets odin4 skip archive entries that have no match\n"
+            "in the device's PIT. Needed for unofficial/custom firmware or region variants\n"
+            "whose partition table differs from the device ('check failure pit' / PIT mismatch).\n"
+            "Only enable for firmware you are certain is correct for this device."
         )
         self.allow_unknown_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row.addWidget(self.allow_unknown_cb)
+        self.auto_reboot_cb = QCheckBox("Auto-reboot after flash (--reboot)")
+        self.auto_reboot_cb.setChecked(False)
+        self.auto_reboot_cb.setToolTip(
+            "OFF by default (safety). Lets odin4 reboot the phone as soon as the flash\n"
+            "finishes. Leave OFF so you can verify the flash completed before rebooting -\n"
+            "a failed write otherwise hides behind a phone that no longer answers."
+        )
+        self.auto_reboot_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row.addWidget(self.auto_reboot_cb)
         opt_row.addStretch(1)
         f_lay.addLayout(opt_row)
+
+        # Advanced options row 2 - always-work repair steps
+        opt_row2 = QHBoxLayout()
+        opt_row2.setSpacing(8)
+        self.erase_nv_cb = QCheckBox("Erase NVRAM/NVDATA (zero-fill nv* partitions)")
+        self.erase_nv_cb.setChecked(False)
+        self.erase_nv_cb.setToolTip(
+            "OFF by default (safety - wipes network calibration). After the flash,\n"
+            "zero-fills every NVRAM/NVDATA partition from the device's own PIT using\n"
+            "the native Odin flash path. Standard fix for IMEI/network issues and a\n"
+            "common FRP-adjacent step. Works on Odin-protocol (Exynos/Qualcomm)\n"
+            "download mode; MTK download-agent devices use the MediaTek workbench."
+        )
+        self.erase_nv_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row2.addWidget(self.erase_nv_cb)
+        self.check_only_cb = QCheckBox("Validate archives first (--check-only)")
+        self.check_only_cb.setChecked(False)
+        self.check_only_cb.setToolTip(
+            "Run odin4 --check-only over every selected archive BEFORE flashing.\n"
+            "Aborts on corrupt/renamed .tar.md5 or PIT mismatches so a bad archive\n"
+            "is never written to the phone."
+        )
+        self.check_only_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row2.addWidget(self.check_only_cb)
+        self.redownload_cb = QCheckBox("Re-download after flash (--redownload)")
+        self.redownload_cb.setChecked(False)
+        self.redownload_cb.setToolTip(
+            "After flashing, odin4 sends the Redownload command so the phone re-enters\n"
+            "download mode instead of rebooting - the reliable way to chain a second\n"
+            "step (like Erase NVRAM) without power-cycling. Mutually exclusive with\n"
+            "auto-reboot."
+        )
+        self.redownload_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row2.addWidget(self.redownload_cb)
+        self.verbose_cb = QCheckBox("Verbose logging (--verbose)")
+        self.verbose_cb.setChecked(False)
+        self.verbose_cb.setToolTip(
+            "Pass --verbose to odin4 so the console shows detailed per-partition\n"
+            "progress - useful for diagnosing stuck flashes."
+        )
+        self.verbose_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row2.addWidget(self.verbose_cb)
+        opt_row2.addStretch(1)
+        f_lay.addLayout(opt_row2)
+
+        # Auto-reboot and re-download are mutually exclusive.
+        self.auto_reboot_cb.toggled.connect(
+            lambda on: self.redownload_cb.setChecked(False) if on else None
+        )
+        self.redownload_cb.toggled.connect(
+            lambda on: self.auto_reboot_cb.setChecked(False) if on else None
+        )
 
         # Advanced single-partition + sales code inputs (Odin Flashing (Advanced))
         self.adv_panel = QFrame()
@@ -3078,7 +3161,6 @@ class FrpWindow(QMainWindow):
             "mtk",
             {"MTK", "MTK BROM", "ADB", "MTP", "FASTBOOT"},
             self.mtk_stop_btn, self.mtk_progress, self._mtk_reset_ui,
-            flash_jobs=["Odin Flashing (Advanced)"],
         )
         lay.addWidget(mtk_ops, 1)
         lay.addWidget(self.mtk_progress)
@@ -4471,6 +4553,43 @@ class FrpWindow(QMainWindow):
         )
         lay.addLayout(cards, 1)
 
+        lay.addWidget(SectionTitle("CARRIER / SIM LOCK"))
+        lock_info = QLabel(
+            "Check the SIM / network lock state on any device (read-only), and "
+            "read / back up the modem lock record on MediaTek A05/A06 (BROM).\n"
+            "The MTK unlock step never writes without a validated device recipe."
+        )
+        lock_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        lock_info.setWordWrap(True)
+        lay.addWidget(lock_info)
+
+        lock_cards = QHBoxLayout()
+        lock_cards.setSpacing(12)
+        lock_cards.addWidget(
+            action_card(
+                "Carrier Lock Status",
+                "Read the SIM / network lock state over ADB on ANY phone "
+                "(Samsung, MTK, Qualcomm, UNISOC). Pure read - nothing is "
+                "written.",
+                "Check Status",
+                self._carrier_lock_status,
+                primary=True,
+            ),
+            1,
+        )
+        lock_cards.addWidget(
+            action_card(
+                "MTK NVRAM SimLock",
+                "A05/A06 (Helio G85): dump the modem NVRAM lock record over the "
+                "DA, keep a backup and locate the SimLock record. Recipe-gated "
+                "patch.",
+                "Read / Backup",
+                self._carrier_lock_mtk,
+            ),
+            1,
+        )
+        lay.addLayout(lock_cards, 1)
+
         tip = QLabel(
             "All fixes work over ADB on any connected device (Samsung / MTK / "
             "Qualcomm / any Android). Reversible from the phone's network "
@@ -5353,7 +5472,7 @@ class FrpWindow(QMainWindow):
                      0x0004: "MediaTek Download Agent"}.get(pid, "MediaTek low-level")
             self.orb.set_connected(True)
             self.scene.set_connected(True)
-            self.scene.set_vendor("MEDIATEK", C["warn"])
+            self.scene.set_vendor("SAMSUNG (MTK)", C["warn"])
             self._set_conn_glow(C["warn"])
             self.conn_state.setText(
                 f"0e8d:{pid:04x} · {stage}\nbus {d['bus']} · addr {d['address']}"
@@ -5520,15 +5639,16 @@ class FrpWindow(QMainWindow):
                         "debugging for ADB getprop"
                     )
             elif mtk_devs:
-                lines.append("MEDIATEK USB DEVICE(S):")
+                lines.append("SAMSUNG (MTK) DEVICE(S):")
                 for d in mtk_devs:
                     lines.extend(_fmt_usb_full(d))
                 lines.append("")
                 mode = _detect_mode([], mtk_devs, adb_devs, fastboot)
                 lines.append(f">>> MODE: {mode}")
                 lines.append(
-                    "  Low-level MediaTek mode detected - use 'Detect' -> MTK -> "
-                    "'BROM / preloader info' for full chip details"
+                    "  Samsung MTK models (Galaxy A05/A06) enumerate as MediaTek "
+                    "0e8d in BROM / preloader / DA. Flash them from the FLASH tab "
+                    "(Odin) or use MTK Tools for DA-level operations."
                 )
             else:
                 lines.append("No Samsung device over USB (plug it in, check cable/port)")
@@ -6207,6 +6327,14 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- run flow -------------------------------
+    def _carrier_lock_status(self):
+        name = frp.FLOWS["carrier_lock_status"]().name
+        self._run_ops_flow("Carrier lock", "ADB", "carrier_lock_status", name)
+
+    def _carrier_lock_mtk(self):
+        name = frp.FLOWS["carrier_lock_mtk"]().name
+        self._run_ops_flow("Carrier lock", "MTK BROM", "carrier_lock_mtk", name)
+
     def _browse_slot(self, edit_widget, slot_name):
         # Native Linux (GTK) file dialogs select the FIRST filter by default;
         # using a single comprehensive filter guarantees .img/.lz4/.bin/.pit/
@@ -6243,6 +6371,11 @@ class FrpWindow(QMainWindow):
         self._toasts.show_progress("Operation started", label)
         if job == "Odin Flashing (Advanced)":
             os.environ["ODIN4_ALLOW_UNKNOWN"] = "1" if self.allow_unknown_cb.isChecked() else "0"
+            os.environ["ODIN4_REBOOT"] = "1" if self.auto_reboot_cb.isChecked() else "0"
+            os.environ["ODIN4_ERASE_NV"] = "1" if self.erase_nv_cb.isChecked() else "0"
+            os.environ["ODIN4_CHECK_ONLY"] = "1" if self.check_only_cb.isChecked() else "0"
+            os.environ["ODIN4_REDOWNLOAD"] = "1" if self.redownload_cb.isChecked() else "0"
+            os.environ["ODIN4_VERBOSE"] = "1" if self.verbose_cb.isChecked() else "0"
             for s_name, s_edit in self.slot_inputs.items():
                 val = s_edit.text().strip()
                 if val:
@@ -6265,6 +6398,17 @@ class FrpWindow(QMainWindow):
                 os.environ["SALES_CODE"] = sc
             else:
                 os.environ.pop("SALES_CODE", None)
+
+        if method == "carrier_lock_mtk":
+            mtk_files = getattr(self, "mtk_files", None)
+            if mtk_files:
+                da = mtk_files["da"].text().strip()
+                if da:
+                    os.environ["MTK_DA"] = da
+                else:
+                    os.environ.pop("MTK_DA", None)
+            else:
+                os.environ.pop("MTK_DA", None)
 
         if self.clear_on_run.isChecked():
             self._clear_console()
@@ -6346,13 +6490,30 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
 
+def _app_icon():
+    """Window / taskbar icon: the packaged logo when present, else a drawn one.
+    Resolves docs/logo_256.png in both the dev tree and the installed layout
+    (/usr/share/brilliant/docs/)."""
+    logo_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "..", "docs", "logo_256.png",
+    )
+    if os.path.exists(logo_path):
+        return QIcon(logo_path)
+    pix = _draw_logo(256)
+    return QIcon(pix)
+
+
 def main():
     app = QApplication([])
+    QApplication.setDesktopFileName("brilliant.desktop")
+    app.setWindowIcon(_app_icon())
     splash = SplashScreen()
     splash.show()
 
     def _boot():
         win = FrpWindow()
+        win.setWindowIcon(_app_icon())
         win.show()
 
     QTimer.singleShot(2500, _boot)

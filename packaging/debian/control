@@ -1,0 +1,31 @@
+Package: brilliant-flashing-tool
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: @ARCH@
+Maintainer: Brilliant Flashing Tool <legendary-brilliantforous@users.noreply.github.com>
+Homepage: https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool
+Depends: @PYTHON_DEP@
+Recommends: adb, lz4
+Description: Open-source FRP reset and firmware flashing toolbox
+ A Linux-native equivalent of the paid Windows flashing suites: one tool that
+ talks directly to the bootloader of Samsung, MediaTek, Qualcomm and
+ Spreadtrum/UNISOC phones.
+ .
+  * 8 transport modes (ADB, MTP, Download mode, Samsung BROM, MTK, MTK BROM,
+    Fastboot, Qualcomm EDL) and ~120 operation methods.
+  * Reverse-engineered Odin session protocol (Heimdall-based), PIT read/write,
+    MediaTek BROM/DA flashing (scatter + GPT), Qualcomm Sahara/Firehose,
+    UNISOC BSL, plus ADB/MTP/AT plumbing.
+  * FRP bypass, screen-lock removal, MDM unlock, partition backup, network and
+    battery repair, carrier-lock status checks.
+  * Native Rust core (brilliant-bridge) with vendored libusb - no system USB
+    dependencies beyond the shipped udev rules.
+  * Bundled Python venv (PyQt6 + segno) - only the matching python3 minor is
+    required, no distro Qt packages.
+ .
+ NOTE: the proprietary Samsung odin4 binary is not redistributed; fetch it
+ after install with /usr/share/brilliant/scripts/fetch-odin4.sh.
+ .
+ WARNING: this tool talks directly to bootloaders and can wipe data or brick a
+ device. Use only on devices you own or are authorized to service.

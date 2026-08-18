@@ -844,6 +844,55 @@ pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, Strin
     Ok(out.join("\n"))
 }
 
+/// `mtk-read-part <target> <da> <partition> <out_file>` — upload DA and dump a
+/// single partition by NAME to a local file (address resolved from the device
+/// GPT). No scatter file required. Returns the device to BROM afterwards so a
+/// follow-up write (mtk-flash-part) can re-engage without a full reboot dance.
+pub fn mtk_read_part_cli(
+    target: &str,
+    da_path: &str,
+    partition: &str,
+    out_file: &str,
+) -> Result<String> {
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
+    }
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+    let mut da = DaSession::new(session);
+    da.upload_da(da_path)?;
+
+    let parts = da
+        .list_gpt()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let (start, size) = parts
+        .iter()
+        .find(|(n, _, _)| n == partition)
+        .map(|(_, s, z)| (*s, *z))
+        .ok_or_else(|| {
+            BridgeError::InvalidArgument(format!(
+                "partition '{partition}' not found in device GPT"
+            ))
+        })?;
+    da.read_partition(partition, start, size, out_file).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("read '{partition}': {e}"),
+        })
+    })?;
+    let _ = da.reboot(4); // back to BROM so the caller can write back if needed
+    Ok(format!(
+        "Read '{partition}' ({} MB) -> {out_file} (device back in BROM)",
+        size / (1024 * 1024)
+    ))
+}
+
 pub fn mtk_frp_bypass(target: &str, da_path: &str, scatter_path: &str) -> Result<String> {
     let ops = MtKOperations {
         frp_bypass: true,

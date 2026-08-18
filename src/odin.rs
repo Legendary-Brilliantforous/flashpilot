@@ -530,8 +530,19 @@ fn odin_command(
     Ok(rsp)
 }
 
+/// True when the user asked for strict error handling (ODIN_STRICT=1).
+/// In strict mode, progress-like ack codes and end-session failures are
+/// treated as fatal instead of being tolerated, so a partially written
+/// bootloader is never reported as a success.
+fn strict_mode() -> bool {
+    std::env::var("ODIN_STRICT")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 /// Check response like odin4's odin_fail_check.
-/// If allow_progress is true, codes -2..-7 are treated as progress (success).
+/// If allow_progress is true, codes -2..-7 are treated as progress (success) -
+/// unless ODIN_STRICT=1, in which case they are treated as failures.
 fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResult<()> {
     let rid = u32::from_le_bytes([rsp[0], rsp[1], rsp[2], rsp[3]]);
     let ack = u32::from_le_bytes([rsp[4], rsp[5], rsp[6], rsp[7]]);
@@ -540,11 +551,14 @@ fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResul
 
     if rid_i32 == -1 {
         // BOOTLOADER_FAIL (0xFFFFFFFF) - check if it's actually a progress code
-        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 {
+        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 && !strict_mode() {
             // Progress codes: -2 WP, -3 Erase, -4 Write, -5 Auth, -6 Size, -7 Ext4
             // These are treated as success in odin4 for certain commands.
             eprintln!("[debug] {context}: progress code {ack_i32}");
             return Ok(());
+        }
+        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 {
+            eprintln!("[warn] {context}: progress code {ack_i32} treated as FAILURE (ODIN_STRICT=1)");
         }
         eprintln!("[debug] cmd: BOOTLOADER_FAIL rid=0x{:08x} ack=0x{:08x}", rid, ack);
         return err(format!("{context}: bootloader fail response"));
@@ -716,22 +730,26 @@ fn find_pit_entry(
     pit: &[u8],
     name: &str,
 ) -> std::result::Result<(u32, u32, u32, u32, u32), String> {
-    if pit.len() < 28 {
+    if pit.len() < 32 {
         return Err("PIT too small".into());
     }
     let entry_count = u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
+    // PIT layout (matches python/core/pit.py and the real A14M PIT):
+    // 32-byte header (magic @0, count @4, model @8), then 132-byte entries.
+    // Within an entry: binary_type@0, device_type@4, identifier@8, block_size@20,
+    // block_count@24, partition name@32, flash_filename@64.
     for i in 0..entry_count {
-        let off = 28 + i * 132;
+        let off = 32 + i * 132;
         if off + 132 > pit.len() {
             break;
         }
         let entry = &pit[off..off + 132];
-        let pname_bytes = &entry[36..68];
+        let pname_bytes = &entry[32..64];
         let pname_end = pname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let pname = String::from_utf8_lossy(&pname_bytes[..pname_end]).to_string();
         // Also match by the PIT flash_filename field (e.g. preloader.img
         // maps to the bootloader partition, lk-verified.img to lk).
-        let fname_bytes = &entry[68..100];
+        let fname_bytes = &entry[64..96];
         let fname_end = fname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let fname = String::from_utf8_lossy(&fname_bytes[..fname_end]).to_string();
         if pname == name || fname == name {
@@ -859,7 +877,15 @@ pub fn odin_flash_partition(
         flash_one_partition(&dev, &pit, partition, image_file, packet_size, is_large)
             .map_err(|e| e.to_string())?;
 
-    end_session_v2(&dev).map_err(|e| e.to_string())?;
+    if let Err(e) = end_session_v2(&dev) {
+        // EndSession (0x67/0x00) can return BOOTLOADER_FAIL on some devices
+        // after the partition data was fully written and acknowledged. It is
+        // teardown only; treat as non-fatal unless ODIN_STRICT=1.
+        if strict_mode() {
+            return Err(format!("end_session failed under ODIN_STRICT=1: {e}").into());
+        }
+        eprintln!("[flash] end_session warning (non-fatal): {e}");
+    }
     eprintln!("[flash] end_session ok");
 
     Ok(serde_json::json!({
@@ -915,13 +941,20 @@ pub fn odin_flash_multi(
     }
 
     if let Err(e) = end_session_v2(&dev) {
-        // On this device end_session (0x67/0x00) returns BOOTLOADER_FAIL even
+        // On some devices end_session (0x67/0x00) returns BOOTLOADER_FAIL even
         // after all partition data was written and acknowledged. It is session
-        // teardown only; the data is already committed, so continue to reboot.
+        // teardown only; the data is already committed. Under ODIN_STRICT this
+        // is treated as fatal rather than silently tolerated.
+        if strict_mode() {
+            return Err(format!("end_session failed under ODIN_STRICT=1: {e}").into());
+        }
         eprintln!("[flash] end_session warning (non-fatal): {e}");
     }
     if reboot {
         if let Err(e) = reboot_v2(&dev) {
+            if strict_mode() {
+                return Err(format!("reboot command failed under ODIN_STRICT=1: {e}").into());
+            }
             eprintln!("[flash] reboot command warning: {e}");
         } else {
             eprintln!("[flash] reboot command sent");
@@ -934,4 +967,92 @@ pub fn odin_flash_multi(
         "reboot": reboot,
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_pit(entries: usize) -> Vec<u8> {
+        let mut pit = vec![0u8; 32];
+        pit[0..4].copy_from_slice(&0x12349876u32.to_le_bytes());
+        pit[4..8].copy_from_slice(&(entries as u32).to_le_bytes());
+        for i in 0..entries {
+            let mut e = vec![0u8; 132];
+            e[0..4].copy_from_slice(&1u32.to_le_bytes()); // binary_type
+            e[4..8].copy_from_slice(&0x50u32.to_le_bytes()); // device_type
+            e[8..12].copy_from_slice(&(i as u32).to_le_bytes()); // identifier
+            e[20..24].copy_from_slice(&512u32.to_le_bytes()); // block_size
+            e[24..28].copy_from_slice(&8u32.to_le_bytes()); // block_count
+            let name = format!("partition{i}");
+            e[32..32 + name.len()].copy_from_slice(name.as_bytes());
+            let fname = format!("{i}.img");
+            e[64..64 + fname.len()].copy_from_slice(fname.as_bytes());
+            pit.extend_from_slice(&e);
+        }
+        pit
+    }
+
+    #[test]
+    fn find_pit_entry_matches_by_name() {
+        let pit = make_pit(4);
+        let (bt, dt, id, bs, bc) = find_pit_entry(&pit, "partition2").unwrap();
+        assert_eq!((bt, dt, id, bs, bc), (1, 0x50, 2, 512, 8));
+    }
+
+    #[test]
+    fn find_pit_entry_matches_by_flash_filename() {
+        let pit = make_pit(2);
+        let (_, _, id, _, _) = find_pit_entry(&pit, "1.img").unwrap();
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn find_pit_entry_missing_partition_errors() {
+        let pit = make_pit(2);
+        assert!(find_pit_entry(&pit, "nope").is_err());
+        assert!(find_pit_entry(&pit, "").is_err());
+    }
+
+    #[test]
+    fn find_pit_entry_rejects_truncated_pit() {
+        let pit = make_pit(2);
+        assert!(find_pit_entry(&pit[..20], "partition0").is_err());
+    }
+
+    #[test]
+    fn find_pit_entry_real_a14m_pit() {
+        // Regression test against the real firmware PIT in the repo: the first
+        // entry must resolve to binary_type=2, device_type=0x50, identifier=2
+        // (the old offset code read these 4 bytes early and got zeros).
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/pit/A14M_MEA_OPEN.pit");
+        let pit = std::fs::read(path).expect("real PIT present");
+        let (bt, dt, id, _, _) = find_pit_entry(&pit, "bootloader").unwrap();
+        assert_eq!((bt, dt, id), (2, 0x50, 2));
+        // flash_filename fallback lookup also resolves.
+        let (bt2, _, id2, _, _) = find_pit_entry(&pit, "preloader.img").unwrap();
+        assert_eq!((bt2, id2), (2, 2));
+    }
+
+    #[test]
+    fn fail_check_accepts_clean_ack() {
+        let rsp = [0x64u8, 0, 0, 0, 0, 0, 0, 0];
+        assert!(odin_fail_check(&rsp, "test", false).is_ok());
+    }
+
+    #[test]
+    fn fail_check_rejects_bootloader_fail() {
+        let rsp = [0xffu8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert!(odin_fail_check(&rsp, "test", false).is_err());
+    }
+
+    #[test]
+    fn fail_check_progress_tolerated_only_in_lenient_mode() {
+        let rsp = [0xffu8, 0xff, 0xff, 0xff, 0xfb, 0xff, 0xff, 0xff]; // ack = -5 (Auth)
+        std::env::remove_var("ODIN_STRICT");
+        assert!(odin_fail_check(&rsp, "test", true).is_ok());
+        std::env::set_var("ODIN_STRICT", "1");
+        assert!(odin_fail_check(&rsp, "test", true).is_err());
+        std::env::remove_var("ODIN_STRICT");
+    }
 }

@@ -47,6 +47,7 @@ fn main() {
         eprintln!("  mtk-exploit <t> <type> [payload]  BROM exploit (mtk_bypass|kamakiri2|dump_preloader|patch_da|custom)");
         eprintln!("  mtk-gpt <t> <da>       list device GPT partition table by name (no scatter)");
         eprintln!("  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)");
+        eprintln!("  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)");
         eprintln!("  mtk-frp-gpt <t> <da>  FRP bypass resolving lock partitions from device GPT (no scatter)");
         eprintln!("  qcom-detect            detect Qualcomm EDL devices");
         eprintln!("  spd-detect             detect Spreadtrum/UNISOC download devices");
@@ -146,6 +147,13 @@ fn main() {
                 }
             }
             mtk_da::mtk_flash_part_cli(&target, &da, &entries)
+        }
+        "mtk-read-part" => {
+            if args.len() < 6 {
+                eprintln!("usage: brilliant-bridge mtk-read-part <target> <da_file> <partition> <out_file>");
+                exit(2);
+            }
+            mtk_da::mtk_read_part_cli(&args[2], &args[3], &args[4], &args[5])
         }
         "mtk-frp" => {
             if args.len() < 4 {
