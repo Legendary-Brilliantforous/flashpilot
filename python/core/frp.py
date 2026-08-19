@@ -54,13 +54,19 @@ class Flow:
 
     def run(self, ctx, log):
         log(f"== running flow: {self.name} ==")
-        results = []
-        for step in self.steps:
-            results.append(step.run(ctx, log))
-            if cancel_requested():
-                raise FlowCancelled("cancelled by user")
-        log(f"== flow finished: {self.name} ==")
-        return results
+        # Forward Rust bridge stderr (flash progress, retries, errors) into the
+        # caller's log sink so long operations show live progress on screen.
+        bridge.set_log_hook(log)
+        try:
+            results = []
+            for step in self.steps:
+                results.append(step.run(ctx, log))
+                if cancel_requested():
+                    raise FlowCancelled("cancelled by user")
+            log(f"== flow finished: {self.name} ==")
+            return results
+        finally:
+            bridge.set_log_hook(None)
 
 
 # Commands that actually clear FRP once a device has adb: mark setup complete
@@ -2129,11 +2135,16 @@ def flow_odin_enable_adb():
 # explicitly trusted via ODIN4_SKIP_HASH=1) is refused before it can talk to a
 # phone. Keep this in sync with scripts/fetch-odin4.sh.
 ODIN4_SHA256 = "a35199f8a3f1b07c79eaf1f0f675e94f45a5edc9e75c79a1e45b01d423ac9644"
+# Second known-good odin4 build (2022, 6754aa54). The a35199f8 build cannot
+# handshake with MediaTek Samsung download agents (A05/A06/A14 5G), which the
+# 2022 build handles fine - so the tool accepts both.
+ODIN4_SHA256_MTK = "6754aa54f2abe6e99ece32414cd34c8b23b28dbddde537a33203036813637c3b"
+ODIN4_SHA256S = (ODIN4_SHA256, ODIN4_SHA256_MTK)
 
 
 def _odin4_hash_ok(path):
-    """True if `path` is the known-good odin4 (by SHA-256), or the user has
-    explicitly trusted an alternate binary with ODIN4_SKIP_HASH=1."""
+    """True if `path` is one of the known-good odin4 builds (by SHA-256), or the
+    user has explicitly trusted an alternate binary with ODIN4_SKIP_HASH=1."""
     if os.environ.get("ODIN4_SKIP_HASH", "0").strip().lower() in ("1", "true", "yes", "on"):
         return True
     try:
@@ -2141,7 +2152,7 @@ def _odin4_hash_ok(path):
             digest = hashlib.sha256(f.read()).hexdigest()
     except Exception:
         return False
-    return digest == ODIN4_SHA256
+    return digest in ODIN4_SHA256S
 
 
 def _verified_odin4(path):
@@ -2153,8 +2164,8 @@ def _verified_odin4(path):
         return path
     raise RuntimeError(
         f"odin4 binary at {path} failed SHA-256 verification "
-        f"(expected {ODIN4_SHA256[:16]}...). Refusing to execute it. "
-        f"Re-run scripts/fetch-odin4.sh to restore the known-good binary, "
+        f"(expected one of: {', '.join(h[:16] for h in ODIN4_SHA256S)}). Refusing to "
+        f"execute it. Re-run scripts/fetch-odin4.sh to restore a known-good binary, "
         f"or set ODIN4_SKIP_HASH=1 to trust this copy explicitly."
     )
 
@@ -2272,10 +2283,13 @@ def _explain_odin4_failure(out):
 
 
 def _find_firmware_tar():
-    """Locate any Odin firmware tar (AP_*.tar / *.tar / *.tar.md5)."""
+    """Locate any Odin firmware tar (AP_*.tar / *.tar / *.tar.md5). With
+    ODIN4_EXACT_SLOTS set (GUI-triggered), only FIRMWARE_TAR is honored."""
     env = os.environ.get("FIRMWARE_TAR")
     if env and os.path.isfile(env):
         return env
+    if _env_flag("ODIN4_EXACT_SLOTS"):
+        return ""
     dirs = [os.path.expanduser("~/Downloads"), os.path.expanduser("~"), os.getcwd()]
     for d in dirs:
         if not os.path.isdir(d):
@@ -2323,6 +2337,7 @@ def flow_odin_flash_tar():
             _run_odin4_check_only(log, odin4, {"AP": tar})
 
         log("Flashing firmware via odin4... DO NOT unplug!")
+        tar = _strip_odin4_md5_trailer(tar)
         cmd = [odin4, "-a", tar, *_odin4_allow_unknown()]
         cmd.extend(_reboot_redownload_flags(log))
         cmd.extend(_odin4_verbose())
@@ -2354,22 +2369,30 @@ def flow_odin_flash_tar():
 
 
 def flow_odin_check():
-    """Validate firmware archive and PIT using odin4 --check-only."""
+    """Validate firmware archive and PIT using odin4 --check-only. Checks the
+    slots selected in the GUI (AP_TAR/BL_TAR/... env) or any tar in
+    ~/Downloads as a fallback."""
     def _run(ctx, log):
         odin4 = _find_odin4()
         if not odin4:
             raise RuntimeError("odin4 binary not found.")
-        tar = _find_firmware_tar()
-        if not tar:
-            raise RuntimeError("No firmware tar found.")
-        cmd = [odin4, "--check-only", *_odin4_allow_unknown(), "-a", tar]
-        log("> " + " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        out = (proc.stdout or "") + (proc.stderr or "")
-        log(out)
-        if proc.returncode != 0:
-            hint = _explain_odin4_failure(out)
-            raise RuntimeError(f"Firmware check failed. {hint}")
+        archives = {
+            "AP": _find_slot_tar("AP"),
+            "BL": _find_slot_tar("BL"),
+            "CP": _find_slot_tar("CP"),
+            "CSC": _find_slot_tar("CSC") or _find_slot_tar("HOME_CSC"),
+            "USERDATA": _find_slot_tar("USERDATA"),
+        }
+        selected = {k: v for k, v in archives.items() if v}
+        if not selected:
+            tar = _find_firmware_tar()
+            if not tar:
+                raise RuntimeError("No firmware tar found.")
+            selected = {"AP": tar}
+        log("Checking selected firmware with odin4 --check-only (no write)...")
+        for k, v in selected.items():
+            log(f"  [{k}]  {os.path.basename(v)}")
+        _run_odin4_check_only(log, odin4, archives)
         log("Firmware archive and PIT structure are valid.")
         return True
 
@@ -2392,10 +2415,16 @@ def flow_odin_list():
 
 
 def _find_slot_tar(prefix):
-    """Locate a slot tar (AP_*, BL_*, CP_*, CSC_*, HOME_CSC_*, USERDATA_*)."""
+    """Locate a slot tar (AP_*, BL_*, CP_*, CSC_*, HOME_CSC_*, USERDATA_*).
+    When ODIN4_EXACT_SLOTS is set (GUI-triggered flash), only the path
+    explicitly chosen in the GUI is accepted - the ~/Downloads auto-discovery
+    fallback is disabled so an empty slot can never silently grab a file the
+    user did not select."""
     env = os.environ.get(f"{prefix}_TAR")
     if env and os.path.isfile(env):
         return env
+    if _env_flag("ODIN4_EXACT_SLOTS"):
+        return ""
     dirs = [os.path.expanduser("~/Downloads"), os.path.expanduser("~"), os.getcwd()]
     for d in dirs:
         if not os.path.isdir(d):
@@ -2487,7 +2516,9 @@ def flow_odin_advanced_flash():
         except bridge.BridgeError as e:
             log(f"  (kernel detach skipped: {e})")
 
-        ap = _find_slot_tar("AP") or _find_firmware_tar()
+        ap = _find_slot_tar("AP")
+        if not ap and not _env_flag("ODIN4_EXACT_SLOTS"):
+            ap = _find_firmware_tar()
         bl = _find_slot_tar("BL")
         cp = _find_slot_tar("CP")
         csc = _find_slot_tar("CSC") or _find_slot_tar("HOME_CSC")
@@ -2564,41 +2595,139 @@ def flow_odin_advanced_flash():
 # Advanced flashing helpers (PIT parsing, verification, USB stability)
 # ---------------------------------------------------------------------------
 
+# Samsung .tar.md5 trailer: <32-hex md5> + spaces + <filename> + optional \n.
+_MD5_TRAILER_RE = re.compile(rb"([0-9a-fA-F]{32})[ \t]+([^\r\n]+)\r?\n?$")
+
+
 def _tar_md5_valid(tar_path):
-    """Verify a .tar.md5 archive's embedded md5 checksum. Returns (ok, msg)."""
+    """Verify a .tar.md5 archive's embedded md5 checksum. Returns (ok, msg).
+    Samsung .tar.md5 trailers follow md5sum output: <32-hex>  <filename>\n
+    (two spaces and a trailing newline are both legal)."""
     if not str(tar_path).lower().endswith(".md5"):
         return True, "not a .md5 archive, skipping checksum"
+    import hashlib
     try:
+        # The trailer is the last ~40 bytes; the body is everything before it.
+        # Stream the body through hashlib in chunks instead of reading the whole
+        # archive into RAM - a Samsung AP tar can be 5-10 GB and a full read
+        # exhausts memory (system freeze / OOM-killed app).
+        trailer_len = 1024
         with open(tar_path, "rb") as f:
-            data = f.read()
-        if len(data) < 33:
-            return False, "file too small"
-        trailer = data.rsplit(b" ", 1)
-        if len(trailer) != 2:
-            return False, "no embedded md5 trailer"
-        expected = trailer[0][-32:]
-        body = data[: len(data) - len(trailer[0][-32:]) - 1 - len(trailer[1])]
-        import hashlib
-        actual = hashlib.md5(body).hexdigest().encode()
-        if actual != expected:
-            return False, f"checksum mismatch ({actual.decode()[:8]}... vs {expected.decode()[:8]}...)"
+            f.seek(0, os.SEEK_END)
+            fsize = f.tell()
+            if fsize < 33:
+                return False, "file too small"
+            win = min(trailer_len, fsize)
+            f.seek(-win, os.SEEK_END)
+            tail = f.read(win)
+            f.seek(0)
+            m = _MD5_TRAILER_RE.search(tail)
+            if not m:
+                return False, "no embedded md5 trailer"
+            expected = m.group(1)
+            body_len = fsize - win + m.start(1)
+            hasher = hashlib.md5()
+            remaining = body_len
+            while remaining > 0:
+                chunk = f.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                hasher.update(chunk)
+                remaining -= len(chunk)
+        actual = hasher.hexdigest().encode()
+        if actual.lower() != expected.lower():
+            return False, (
+                f"checksum mismatch ({actual.decode()[:8]}... vs "
+                f"{expected.decode()[:8]}...)"
+            )
         return True, "checksum OK"
     except Exception as e:
         return False, f"could not verify: {e}"
 
 
+def _strip_odin4_md5_trailer(tar):
+    """Return a path odin4 can safely consume for a .tar.md5 archive.
+
+    Official Samsung tars use a '<md5>  <name>\\n' trailer (two spaces and a
+    trailing newline). odin4's own md5 parser mis-reads this variant and aborts
+    with 'MD5 verification failed' even though the checksum is valid (we verify
+    it ourselves first via _tar_md5_valid). For such archives, return a
+    trailer-free '.tar' copy cached under ~/brilliant/odin4_cache so odin4 skips
+    its broken md5 path. Plain .tar files are returned unchanged."""
+    if not str(tar).lower().endswith(".md5"):
+        return tar
+    try:
+        with open(tar, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            fsize = f.tell()
+            f.seek(-min(1024, fsize), os.SEEK_END)
+            tail = f.read(1024)
+        m = _MD5_TRAILER_RE.search(tail)
+        if not m:
+            return tar
+        body_len = fsize - len(tail) + m.start(1)
+    except OSError:
+        return tar
+    cache = os.path.expanduser("~/brilliant/odin4_cache")
+    os.makedirs(cache, exist_ok=True)
+    out = os.path.join(cache, os.path.basename(tar)[: -len(".md5")])
+    if not os.path.isfile(out) or os.path.getsize(out) != body_len:
+        with open(tar, "rb") as src, open(out, "wb") as dst:
+            remaining = body_len
+            while remaining > 0:
+                chunk = src.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                dst.write(chunk)
+                remaining -= len(chunk)
+    return out
+
+
 def _bl_rev_from_name(name):
-    """Extract the bootloader binary version (REVxx) from a firmware filename."""
+    """Extract the bootloader binary version from a firmware filename.
+
+    Samsung's authoritative bootloader revision is the digit in the build ID
+    ('A145PXXU1AWC1' -> binary 1). The '_REVxx_user_low_ship' label in the
+    filename is a package label that can disagree (the AWC1 factory build is
+    labeled '_REV00_' yet carries binary 1). Prefer the build-ID digit, then
+    fall back to the '_REVxx_' label."""
+    m = re.search(r"(?:U|S)(\d)", name)
+    if m:
+        return int(m.group(1))
     m = re.search(r"_REV(\d{2})_", name)
     return int(m.group(1)) if m else None
 
 
+_MODEL_TOKEN_RE = re.compile(r"(?:SM-)?[A-Z]\d{3}[A-Z]")
+
+
 def _model_from_firmware_name(name):
-    """Extract the device model from a Samsung firmware filename (e.g. SM-A145P)."""
-    m = re.search(r"(SM-[A-Z0-9]+|[A-Z]\d{4}[A-Z]?)(?:/\d)?", name)
-    if m:
-        return m.group(1)
-    return ""
+    """Extract the device model from a Samsung firmware filename (e.g. SM-A145P).
+    Handles 'AP_SM-A145P_...' and the no-SM-prefix convention used by real
+    archives ('AP_A145PXXSCDZE3_...', 'CSC_OJM_A145POJMCDZE3_...' -> 'A145P').
+    The token requires a trailing LETTER, so sloppy substrings like 'B1102'
+    (inside MQB110285214) never match."""
+    m = _MODEL_TOKEN_RE.search(name)
+    return m.group(0) if m else ""
+
+
+def _is_device_model(s):
+    """True when a string is a recognizable device model (A145P, SM-A145P).
+    Combo PIT labels like 'COM_TAR2MTK6765' are not device models."""
+    n = _normalize_model(s)
+    return bool(re.match(r"^[A-Z]\d{3}[A-Z0-9]$", n))
+
+
+def _models_match(a, b):
+    """Compare two model strings. Returns True/False when both are recognizable
+    device models, None when either side is unverifiable (e.g. a combo PIT
+    header label like 'COM_TAR2MTK6765')."""
+    if not a or not b:
+        return None
+    na, nb = _normalize_model(a), _normalize_model(b)
+    if not _is_device_model(na) or not _is_device_model(nb):
+        return None
+    return na == nb
 
 
 def _parse_pit_from_tar(tar_path):
@@ -2703,18 +2832,24 @@ def _enforce_flash_gates(ctx, log, d):
       over the Odin protocol; a mismatch blocks the flash.
     - A BL archive must not be a lower bootloader revision than the device's.
 
+    The device model is taken from ctx['device_model'] (set by an ADB read or a
+    booted device) - NOT from a live Odin session probe: MediaTek download
+    agents (A05/A06/A14 5G) only tolerate one session per plug-in and any probe
+    before odin4 wedges the agent for the actual flash.
+
     Both gates can be overridden explicitly (ODIN4_FORCE_MODEL=1 /
     ODIN4_FORCE_BL=1) - overrides log a prominent warning first."""
     target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
 
     fw = _find_slot_tar("AP") or _find_firmware_tar()
     fw_model = _model_from_firmware_name(os.path.basename(fw)) if fw else ""
-    dev_model = ""
-    try:
-        info = bridge.odin_model(target, timeout=40)
-        dev_model = (info or {}).get("model", "") or ""
-    except bridge.BridgeError as e:
-        log(f"  (device model probe skipped: {e})")
+    dev_model = ctx.get("device_model", "") or ""
+
+    if dev_model and not _is_device_model(dev_model):
+        # Combo/MTK labels ('COM_TAR2MTK6765') or partial reads are not device
+        # models - treat them as unreadable and skip the model gate.
+        log(f"  (device model '{dev_model}' is not a device model - model gate skipped)")
+        dev_model = ""
 
     if fw_model and dev_model:
         if _normalize_model(fw_model) == _normalize_model(dev_model):
@@ -2751,6 +2886,34 @@ def _enforce_flash_gates(ctx, log, d):
                 )
         elif fw_rev is not None:
             log(f"  BL revision: REV{fw_rev:02d} (device rev unknown - downgrade check skipped)")
+
+
+def _enforce_bl_downgrade_gate(ctx, log, specs):
+    """BL revision downgrade gate for the native multi-partition flash.
+
+    If any flashed image targets a bootloader (BL) partition whose firmware
+    name carries a LOWER bootloader revision than the device's current one,
+    refuse unless ODIN4_FORCE_BL=1 (logged with a prominent warning first).
+    Flashing a lower BL revision on a newer device can hard-brick it."""
+    bl = next((img for name, img in specs if name in ("bootloader", "lk", "param")), None)
+    if not bl:
+        return
+    fw_rev = _bl_rev_from_name(os.path.basename(bl))
+    dev_rev = _get_device_bl_rev(ctx, log)
+    if fw_rev is None or dev_rev is None:
+        return
+    if fw_rev >= dev_rev:
+        log(f"  BL check: REV{fw_rev:02d} >= device REV{dev_rev:02d} - OK")
+        return
+    if _env_flag("ODIN4_FORCE_BL"):
+        log(f"  !!! BL DOWNGRADE OVERRIDDEN (ODIN4_FORCE_BL=1): flashing REV{fw_rev:02d} "
+            f"on a REV{dev_rev:02d} device - at your own risk.")
+        return
+    raise RuntimeError(
+        f"BLOCKED: flashed BL REV{fw_rev:02d} is LOWER than the device's "
+        f"REV{dev_rev:02d}. Flashing a lower bootloader revision can hard-brick "
+        f"the device. Use newer firmware or set ODIN4_FORCE_BL=1 to proceed anyway."
+    )
 
 
 def _require_preflight(ctx, log):
@@ -2855,7 +3018,7 @@ def _run_odin4_check_only(log, odin4, archives):
                       ("-c", archives.get("CP")), ("-s", archives.get("CSC")),
                       ("-u", archives.get("USERDATA"))):
         if path:
-            cmd.extend([opt, path])
+            cmd.extend([opt, _strip_odin4_md5_trailer(path)])
     log("  > " + " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     out = (proc.stdout or "") + (proc.stderr or "")
@@ -3047,6 +3210,62 @@ def _find_mtk_da():
         "/tmp",
     ]
     return _da_in_dirs(candidates)
+
+
+def _wait_mtk_brom_target(log, timeout=120):
+    """Wait for a MediaTek BROM / preloader device to appear on USB.
+
+    Boot-looping phones (the corrupted A14 case) cycle continuously: the
+    preloader only stays on USB for a few seconds per reboot, so a fail-fast
+    check misses it. This polls until the window is seen (or timeout / user
+    cancel). Returns ('bus:address', stage) or (None, None).
+    """
+    deadline = time.time() + timeout
+    last_hint = 0.0
+    while time.time() < deadline:
+        if cancel_requested():
+            raise FlowCancelled("cancelled while waiting for MTK device")
+        for d in mtk.find_mtk():
+            stage = mtk.pid_stage(d.get("pid", 0))
+            if stage in ("brom", "preloader"):
+                return f"{d.get('bus')}:{d.get('address')}", stage
+        if time.time() - last_hint > 6:
+            last_hint = time.time()
+            log("  ... waiting for the MTK BROM/preloader window (a boot-looping")
+            log("      phone cycles - keep it plugged and wait for the catch)...")
+        time.sleep(0.5)
+    return None, None
+
+
+def _mtk_retry(log, label, fn, timeout=180, abort_on=()):
+    """Run a BROM-level bridge operation that can lose the device mid-run
+    (boot-looping phone). Waits for the next BROM/preloader window and retries
+    until success, timeout or user cancel. `fn(target)` returns the result
+    string and must raise bridge.BridgeError on failure. `abort_on` is a
+    sequence of substrings that mark a PERMANENT failure (e.g. "partition not
+    found") - those stop retrying immediately."""
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        if cancel_requested():
+            raise FlowCancelled(f"cancelled: {label}")
+        target, stage = _wait_mtk_brom_target(log, timeout=deadline - time.time())
+        if not target:
+            raise RuntimeError(
+                f"{label}: no MediaTek BROM/preloader device appeared within "
+                f"{timeout}s - enter BROM (Vol Down + Power, dark screen)"
+            )
+        attempt += 1
+        log(f"  [{label}] attempt {attempt} - device in {stage} mode, running ...")
+        try:
+            return fn(target)
+        except bridge.BridgeError as e:
+            msg = str(e)
+            if abort_on and any(k in msg.lower() for k in abort_on):
+                raise
+            log(f"  [{label}] attempt {attempt} lost the device ({e}) - "
+                "waiting for the next window ...")
+    raise RuntimeError(f"{label}: no successful run within {timeout}s")
 
 
 def _mtk_analyze_nvdata(log, part, img):
@@ -3281,7 +3500,9 @@ def flow_preflight():
         ok = True
 
         # 1. Firmware archive integrity (md5)
-        ap = _find_slot_tar("AP") or _find_firmware_tar()
+        ap = _find_slot_tar("AP")
+        if not ap and not _env_flag("ODIN4_EXACT_SLOTS"):
+            ap = _find_firmware_tar()
         bl = _find_slot_tar("BL")
         cp = _find_slot_tar("CP")
         csc = _find_slot_tar("CSC") or _find_slot_tar("HOME_CSC")
@@ -3340,6 +3561,24 @@ def flow_preflight():
         if pit_src:
             slot, entries, model = pit_src
             log(f"  PIT from {slot}: {len(entries)} partitions ({model})")
+            # PITs are model-specific: refuse a PIT that provably belongs to a
+            # different device. Combo labels (COM_TAR2MTK6765) cannot be
+            # verified -> log and continue; the device PIT is authoritative.
+            if models:
+                fw_model = next(iter(set(models.values())))
+                match = _models_match(fw_model, model)
+                if match is False:
+                    log(
+                        f"  ERROR: PIT model '{model}' does not match firmware "
+                        f"model '{fw_model}' - PITs are model-specific, refusing."
+                    )
+                    ok = False
+                elif match is None and _is_device_model(_normalize_model(fw_model)):
+                    log(
+                        f"  NOTE: PIT header '{model}' is a combo/partition label "
+                        "not a device model - proceeding (device PIT is "
+                        "authoritative at flash time)."
+                    )
             ctx["fw_pit_entries"] = entries
             ctx["fw_pit_model"] = model
 
@@ -3401,6 +3640,11 @@ def flow_odin_pit_tools():
         ctx["device_pit_entries"] = entries
         ctx["device_pit_model"] = model
         log(f"  Device model (from PIT): {model}")
+        if model and not _is_device_model(model):
+            log("  NOTE: combo/MTK PIT label - this is a MediaTek device (uses a")
+            log("  GPT partition table). PIT dump/compare work as reference, but")
+            log("  PIT repartitioning ('Send PIT') is NOT supported on MTK - use")
+            log("  the MTK page GPT flows instead.")
         log(f"  Partitions: {len(entries)}")
         for e in entries[:40]:
             log(f"    {e.name}  {e.size_bytes() >> 20} MB")
@@ -3421,6 +3665,24 @@ def flow_odin_pit_tools():
                 log("  -> If flashing fails, use 'Repartition with firmware PIT'.")
             else:
                 log("  PIT layouts MATCH - no repartition needed.")
+
+        # PITs are model-specific: an A14 PIT is only valid on an A14, an A06
+        # PIT only on an A06. Refuse a provable model mismatch.
+        fw_model = ctx.get("fw_pit_model")
+        if fw_model:
+            match = _models_match(model, fw_model)
+            if match is False:
+                raise RuntimeError(
+                    f"PIT model mismatch: device PIT says '{model}' but firmware "
+                    f"PIT is '{fw_model}'. Refusing - PITs are model-specific and "
+                    "must only be used on the matching device."
+                )
+            if match is None:
+                log(
+                    f"  NOTE: '{fw_model}' is a combo/partition PIT label - "
+                    "cannot verify model from the header (device PIT is "
+                    "authoritative)."
+                )
 
         return True
     return Flow("PIT tools (dump/compare/repartition)", [Step("pit_tools", _run)])
@@ -3490,7 +3752,9 @@ def flow_odin_vbmeta():
         log("=" * 60)
         log("VBMETA / AVB SIGNATURE CONTROL")
         log("=" * 60)
-        ap = _find_slot_tar("AP") or _find_firmware_tar()
+        ap = _find_slot_tar("AP")
+        if not ap and not _env_flag("ODIN4_EXACT_SLOTS"):
+            ap = _find_firmware_tar()
         if not ap:
             raise RuntimeError("AP firmware archive not found.")
 
@@ -3566,6 +3830,150 @@ def flow_odin_vbmeta():
             raise RuntimeError(f"vbmeta flash failed: {e}")
         return True
     return Flow("VBMETA / AVB signature control", [Step("vbmeta", _run)])
+
+
+# ---------------------------------------------------------------------------
+# Flow: Native multi-partition flash (one session, no odin4 binary)
+# ---------------------------------------------------------------------------
+def flow_odin_flash_multi():
+    """Flash several raw partition images in ONE native Odin session using the
+    Rust protocol implementation - the odin4 binary is NOT required.
+
+    Each partition=image pair is resolved against the device's own PIT (dumped
+    automatically when missing). The whole set is written in a single session
+    with end-of-flash reboot optional.
+
+    Bootloader-revision awareness: when a flashed image is an older bootloader
+    (BL) revision than the device's current one, the flow refuses unless
+    ODIN4_FORCE_BL=1 (same override as the odin4 advanced flash) - flashing a
+    lower BL revision can hard-brick newer devices."""
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MULTI-PARTITION FLASH (NATIVE ODIN PROTOCOL)")
+        log("=" * 60)
+        d = _download_mode_device()
+        if not d:
+            log("Waiting for device in download mode...")
+            d = _wait_download_mode(log, timeout=30)
+        if not d:
+            raise RuntimeError("Device not in download mode.")
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+        spec_str = ctx.get("flash_specs") or os.environ.get("FLASH_SPECS")
+        if not spec_str:
+            raise RuntimeError(
+                "No flash specs. Provide partition=image pairs separated by ';' "
+                "(e.g. boot=boot.img;recovery=recovery.img) in the Flash specs field."
+            )
+        specs = []
+        for part in spec_str.split(";"):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" not in part:
+                raise RuntimeError(f"Bad spec '{part}' (expected partition=image).")
+            name, img = part.split("=", 1)
+            name, img = name.strip(), img.strip()
+            if not name or not os.path.isfile(img):
+                raise RuntimeError(f"Bad spec: partition='{name}' image='{img}' (missing file?).")
+            specs.append((name, img))
+
+        pit_path = ctx.get("device_pit_path")
+        if not pit_path or not os.path.isfile(pit_path):
+            pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
+            try:
+                bridge.odin_pit(target, pit_path, timeout=120)
+            except bridge.BridgeError as e:
+                raise RuntimeError(f"Could not dump device PIT: {e}")
+        ctx["device_pit_path"] = pit_path
+
+        log(f"  Partitions to flash ({len(specs)}):")
+        total = 0
+        for name, img in specs:
+            sz = os.path.getsize(img)
+            total += sz
+            log(f"    {name} <- {os.path.basename(img)} ({sz >> 20} MB)")
+        log(f"  Total: {total >> 20} MB - flashing in ONE session via native protocol.")
+        log("  DO NOT unplug!")
+
+        _enforce_bl_downgrade_gate(ctx, log, specs)
+
+        reboot = ctx.get("flash_reboot") or _env_flag("ODIN4_REBOOT")
+        try:
+            res = bridge.odin_flash_multi(target, pit_path, specs, reboot=bool(reboot))
+        except bridge.BridgeError as e:
+            raise RuntimeError(f"Multi-partition flash failed: {e}")
+        log(f"  {res}")
+        log("  Multi-partition flash completed successfully.")
+        if reboot:
+            log("  Device is rebooting.")
+        else:
+            log("  Device stays in download mode - power off / reboot when ready.")
+        return True
+
+    return Flow("Flash multiple partitions (native Odin)", [Step("flash_multi", _run)])
+
+
+# ---------------------------------------------------------------------------
+# Flow: Send a PIT to the device (repartition)
+# ---------------------------------------------------------------------------
+def flow_odin_send_pit():
+    """Send a PIT file to the device to repartition / re-map its partition
+    layout, using the native Odin protocol (no odin4 binary)."""
+    def _run(ctx, log):
+        log("=" * 60)
+        log("SEND PIT TO DEVICE (REPARTITION)")
+        log("=" * 60)
+        pit_file = ctx.get("pit_file") or os.environ.get("PIT_FILE")
+        if not pit_file or not os.path.isfile(pit_file):
+            raise RuntimeError(
+                "No PIT file. Set a .pit path in the PIT file field "
+                "(or PIT_FILE env var)."
+            )
+        d = _download_mode_device()
+        if not d:
+            log("Waiting for device in download mode...")
+            d = _wait_download_mode(log, timeout=30)
+        if not d:
+            raise RuntimeError("Device not in download mode.")
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+        log(f"  PIT:     {pit_file} ({os.path.getsize(pit_file)} bytes)")
+        log(f"  Device:  {target}")
+        try:
+            raw = open(pit_file, "rb").read()
+            model = pit.parse_model(raw)
+        except OSError as e:
+            raise RuntimeError(f"Could not read PIT file: {e}")
+        if model:
+            log(f"  PIT header model: '{model}'")
+            if not _is_device_model(model):
+                # Combo labels (COM_TAR2MTK6765, ...) belong to MediaTek
+                # Samsung devices (A05/A06/A14 5G). They use a GPT partition
+                # table and their download agent has no PIT_SET / repartition
+                # flow - sending a PIT to them ALWAYS fails at the protocol
+                # level, so refuse up front instead of a cryptic error.
+                log("  WARNING: this PIT has a combo/MTK label - MediaTek Samsung")
+                log("  devices (A05/A06/A14 5G) use a GPT partition table, not a PIT.")
+                log("  The MTK download agent does NOT implement the PIT_SET flow,")
+                log("  so sending this PIT can never succeed. Partition work on MTK")
+                log("  is done over the MediaTek DA: use the MTK page flows")
+                log("  'List Partitions' / 'Flash Partition (No Scatter)' /")
+                log("  'Generate Scatter (from device GPT)'.")
+                raise RuntimeError(
+                    "PIT repartition is not supported on MediaTek devices (they "
+                    "use a GPT partition table) - sending this PIT would always fail."
+                )
+        log("  WARNING: repartitioning rewrites the partition table. Only send")
+        log("  a PIT for the EXACT same model, or the device may not boot.")
+        try:
+            res = bridge.odin_send_pit(target, pit_file, timeout=120)
+            log(f"  {res}")
+        except bridge.BridgeError as e:
+            raise RuntimeError(f"PIT send failed: {e}")
+        log("  PIT sent successfully.")
+        return True
+
+    return Flow("Send PIT to device (repartition)", [Step("send_pit", _run)])
 
 
 # ---------------------------------------------------------------------------
@@ -3742,6 +4150,7 @@ def _combo_flash_to_adb(ctx, log, purpose="get adb"):
 
     log("")
     log("  Flashing now ... phone shows progress; DO NOT unplug. (15 min cap)")
+    combo = _strip_odin4_md5_trailer(combo)
     cmd = [odin4, "-a", combo, *_odin4_allow_unknown()]
     log("  > " + " ".join(cmd))
     try:
@@ -3922,6 +4331,152 @@ def flow_mtk_brom_info():
 
     steps = [Step("mtk_brom_info", _run)]
     return Flow("mediaTek BROM / preloader detection", steps)
+
+
+# Bootloader / security partitions worth backing up before any SW-REV bypass
+# or downgrade write. Names are the standard MediaTek GPT labels on Samsung
+# A-series; partitions that do not exist are skipped, never guessed at.
+_MTK_BROM_BACKUP_PARTS = (
+    "preloader", "boot", "vbmeta", "lk", "tee",
+    "seccfg", "proinfo", "frp", "recovery", "dtbo",
+)
+
+
+def flow_mtk_brom_backup():
+    """MediaTek BROM partition backup - the read-only safety net that must run
+    BEFORE any SW-REV bypass / downgrade write.
+
+    On Samsung MTK devices (A14 5G = MT6833, A05/A06 = Helio G85) the
+    bootloader binary counter (SW-REV) is enforced by the Download Agent
+    during the Odin/DA flash protocol, so a REV00 AP/BL can never be flashed
+    over a REV1 bootloader through download mode. The only way past it is
+    writing partitions directly at BROM level (kamakiri2 / mtkclient flow).
+    Before that is ever attempted this flow:
+
+      1. verifies the device is in BROM / preloader,
+      2. runs the kamakiri2 BROM exploit and dumps + patches the preloader
+         (the patched preloader is the DA that bypasses SLA auth later),
+      3. lists the device GPT partition table,
+      4. reads the bootloader / security partitions (preloader, boot, vbmeta,
+         lk, tee, seccfg, proinfo, frp, recovery, dtbo) to a dated backup dir.
+
+    It WRITES NOTHING to the device. If the exploit or a partition read fails
+    it reports clearly - the downgrade flash is a separate explicit write flow.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MTK BROM PARTITION BACKUP (read-only safety net)")
+        log("=" * 60)
+        log("  Purpose: back up the bootloader / security area before any")
+        log("  SW-REV bypass or downgrade write. WRITES NOTHING to the phone.")
+        log("")
+        da = _find_mtk_da()
+        if not da:
+            log("  DA binary not found.")
+            log("  Pick the MediaTek Download Agent on the 'MTK' workbench page")
+            log("  (e.g. MTK_AllInOne_DA.bin / *_DA.bin), then run this again.")
+            raise RuntimeError("MediaTek DA binary required - pick it on the MTK workbench")
+        log(f"  DA file : {da}")
+        log("")
+
+        log("  Waiting for a MediaTek BROM / preloader device ...")
+        log("  (Boot-looping phone: keep it plugged - the flow catches the")
+        log("   preloader window automatically instead of failing instantly.)")
+        log("")
+        target, stage = _wait_mtk_brom_target(log, timeout=120)
+        if not target:
+            log("  To enter BROM / preloader:")
+            log("    1. Power the phone OFF completely.")
+            log("    2. Hold Volume Down + Power (keep holding - the screen")
+            log("       stays dark) until USB shows 0e8d:2000 (BROM) or")
+            log("       0e8d:0003 (preloader).")
+            raise RuntimeError("no MediaTek BROM/preloader device appeared")
+        log(f"  Caught device in '{stage}' ({mtk.stage_label(stage)[0]}).")
+        log("")
+
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        backup_dir = os.path.join(os.path.expanduser("~"), "brilliant_backups",
+                                  f"brom_{stamp}")
+        os.makedirs(backup_dir, exist_ok=True)
+        log(f"  Backup dir: {backup_dir}")
+
+        # 1) kamakiri2 exploit + preloader dump/patch. This validates the
+        #    bypass path on THIS unit and produces the patched preloader (the
+        #    DA used later to skip SLA auth), even if the partition reads below
+        #    turn out to be rejected. Retried across boot-loop windows.
+        pl_out = os.path.join(backup_dir, "preloader_patched.bin")
+        os.environ["MTK_PRELOADER_OUT"] = pl_out
+        try:
+            log("  Running kamakiri2 BROM exploit (handshake + preloader dump)...")
+            res = _mtk_retry(
+                log, "kamakiri2 exploit",
+                lambda t: bridge._run(["mtk-exploit", t, "mtk_bypass"],
+                                      timeout=120),
+                timeout=300,
+            )
+            log(f"    {res}")
+        except (bridge.BridgeError, RuntimeError) as e:
+            log(f"    exploit failed: {e}")
+            log("    (continuing to GPT/read - unprotected chips may still work)")
+        finally:
+            os.environ.pop("MTK_PRELOADER_OUT", None)
+        if os.path.isfile(pl_out) and os.path.getsize(pl_out):
+            log(f"  Patched preloader saved: {pl_out} "
+                f"({os.path.getsize(pl_out) >> 10} KB)")
+        log("")
+
+        # 2) Device GPT partition table listing (also saved to the backup dir).
+        gpt_file = os.path.join(backup_dir, "gpt.txt")
+        try:
+            res = _mtk_retry(
+                log, "GPT listing",
+                lambda t: bridge._run(["mtk-gpt", t, da], timeout=300),
+                timeout=120,
+            )
+            log(f"  Device GPT:\n{res}")
+            with open(gpt_file, "w") as f:
+                f.write(res + "\n")
+        except (bridge.BridgeError, RuntimeError) as e:
+            log(f"    GPT read failed: {e}")
+        log("")
+
+        # 3) Read the bootloader / security partitions.
+        saved = []
+        with tempfile.TemporaryDirectory(prefix="mtk_brom_") as td:
+            for part in _MTK_BROM_BACKUP_PARTS:
+                img = os.path.join(td, f"{part}.img")
+                try:
+                    res = _mtk_retry(
+                        log, f"read '{part}'",
+                        lambda t, p=part, i=img: bridge._run(
+                            ["mtk-read-part", t, da, p, i], timeout=1200),
+                        timeout=90,
+                        abort_on=("not found",),
+                    )
+                    log(f"  {part}: {res}")
+                except (bridge.BridgeError, RuntimeError) as e:
+                    log(f"  {part}: unavailable ({e})")
+                    continue
+                if not os.path.isfile(img) or os.path.getsize(img) == 0:
+                    log(f"  {part}: empty - skipping")
+                    continue
+                shutil.copy2(img, os.path.join(backup_dir, f"{part}.img"))
+                saved.append(part)
+        log("")
+        if not saved:
+            log("  No partitions could be read back.")
+            log("  The patched preloader above may already be enough for the")
+            log("  later downgrade path. If reads were rejected with an auth")
+            log("  error, the DA itself still needs the bypass - re-run this")
+            log("  with the phone freshly in BROM, or supply an auth file.")
+        else:
+            log(f"  Backed up {len(saved)} partition(s): {', '.join(sorted(saved))}")
+        log(f"  Backup saved at: {backup_dir}")
+        log("  Next step when ready: the explicit 'MTK BROM downgrade flash' write.")
+
+    steps = [Step("mtk_brom_backup", _run)]
+    return Flow("MTK BROM read & backup (bootloader + security area)", steps)
 
 
 def flow_mtk_combo_flash():
@@ -4612,6 +5167,114 @@ def flow_screen_lock_download():
 
     steps = [Step("screen_lock_download_combo", _run)]
     return Flow("screen lock remove (download mode - combo firmware + adb)", steps)
+
+
+def flow_screen_lock_csc():
+    """Screen lock removal that adapts to the device state - NOT Odin-only.
+    When an authorized adb device is online it clears the lock over adb
+    (locksettings, no Odin). Otherwise it flashes the model's CSC slot in
+    download mode / Samsung BROM / MediaTek DA, which performs the factory
+    reset that removes the lock. The CSC is model-specific and is refused when
+    it does not match the connected device's PIT (A14 CSC only on A14, A06
+    CSC only on A06)."""
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("SCREEN LOCK REMOVAL (adb first, CSC flash fallback)")
+        log("=" * 60)
+        try:
+            adb_ok = any(d["state"] == "device" for d in bridge.adb_status())
+        except bridge.BridgeError:
+            adb_ok = False
+        if adb_ok:
+            log("  Authorized adb device online - clearing the lock over adb")
+            log("  (no Odin / download mode needed)...")
+            flow_screen_lock_locksettings().run(ctx, log)
+            return True
+        log("  No adb (or not authorized). Falling back to the CSC factory-reset flash.")
+        log("  The CSC slot wipes /data and clears FRP. The lock lives in /data,")
+        log("  so after this flash the phone boots to setup with no lock.")
+        log("")
+        csc = _find_slot_tar("CSC") or _find_slot_tar("HOME_CSC")
+        if not csc:
+            raise RuntimeError(
+                "No CSC archive found. Put the model's CSC_*.tar.md5 in "
+                "~/Downloads (or set CSC_TAR=/path/to/file.tar) and retry."
+            )
+        log(f"  CSC archive: {os.path.basename(csc)} ({os.path.getsize(csc) >> 20} MB)")
+        ok, msg = _tar_md5_valid(csc)
+        if not ok:
+            raise RuntimeError(f"CSC archive failed validation: {msg}")
+
+        odin4 = _find_odin4()
+        if not odin4:
+            raise RuntimeError(
+                "odin4 binary not found. Run bash /usr/share/brilliant/scripts/"
+                "fetch-odin4.sh (or put odin4 in ~/.local/bin) and retry."
+            )
+
+        d = _download_mode_device()
+        if not d:
+            log("Waiting for device in download mode...")
+            d = _wait_download_mode(log, timeout=30)
+        if not d:
+            raise RuntimeError(
+                "Device not in download mode. Power off, hold Vol Down + Power, "
+                "then press Vol Up."
+            )
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+        # Model gate: a CSC is model-specific. Verify against the device's own
+        # PIT before flashing anything.
+        csc_model = _model_from_firmware_name(os.path.basename(csc))
+        device_model = ctx.get("device_pit_model")
+        if not device_model:
+            import tempfile
+            pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
+            try:
+                bridge.odin_pit(target, pit_path, timeout=120)
+                device_model = pit.parse_model(open(pit_path, "rb").read())
+            except (bridge.BridgeError, OSError) as e:
+                log(f"  (device PIT read failed - model gate skipped: {e})")
+        if csc_model:
+            log(f"  CSC model:          {csc_model}")
+        if device_model:
+            log(f"  Device model (PIT): {device_model}")
+        match = _models_match(device_model, csc_model)
+        if match is False:
+            raise RuntimeError(
+                f"Model mismatch: the CSC is for '{csc_model}' but the connected "
+                f"device PIT says '{device_model}'. Refusing - a CSC must only be "
+                "used on its matching model."
+            )
+
+        log("")
+        log("  WARNING: this performs a FACTORY RESET - all user data is wiped")
+        log("  and Google FRP is cleared.")
+        log("")
+        try:
+            res = bridge.usb_detach_kernel(target, timeout=15)
+            log(f"  Kernel drivers detached: {res.get('detached')}")
+        except bridge.BridgeError as e:
+            log(f"  (kernel detach skipped: {e})")
+
+        log("Flashing CSC only (no AP/BL/CP)... DO NOT disconnect the cable!")
+        cmd = [odin4, "-s", csc] + _odin4_reboot() + _odin4_verbose()
+        log(f"Executing: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if out:
+            log(out[-3500:])
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"CSC flash failed (rc={proc.returncode}). {_explain_odin4_failure(out)}"
+            )
+        log("")
+        log("  CSC flash completed. The phone is factory-reset: the screen lock is")
+        log("  gone and it boots to the setup wizard.")
+
+    steps = [Step("screen_lock_csc", _run)]
+    return Flow("screen lock remove (adb or CSC flash - factory reset)", steps)
 
 
 def flow_recovery():
@@ -6312,6 +6975,7 @@ FLOWS = {
     "mtk_combo_flash": flow_mtk_combo_flash,
     "mtk_recovery_reset": flow_mtk_recovery_reset,
     "mtk_brom_info": flow_mtk_brom_info,
+    "mtk_brom_backup": flow_mtk_brom_backup,
     "carrier_lock_status": flow_carrier_lock_status,
     "carrier_lock_mtk": flow_carrier_lock_mtk,
     "adb_frp": flow_adb_frp,
@@ -6323,6 +6987,7 @@ FLOWS = {
     "screen_lock_locksettings": flow_screen_lock_locksettings,
     "enable_adb": flow_enable_adb,
     "screen_lock_download": flow_screen_lock_download,
+    "screen_lock_csc": flow_screen_lock_csc,
     "screen_lock_recovery": flow_screen_lock_recovery,
     "screen_lock_edl": flow_screen_lock_edl,
     "screen_lock_comprehensive": flow_screen_lock_comprehensive,
@@ -6344,6 +7009,8 @@ FLOWS = {
     "odin_preflight": flow_preflight,
     "odin_pit_tools": flow_odin_pit_tools,
     "odin_flash_partition": flow_odin_flash_partition_gui,
+    "odin_flash_multi": flow_odin_flash_multi,
+    "odin_send_pit": flow_odin_send_pit,
     "odin_vbmeta": flow_odin_vbmeta,
     "odin_efs_backup": flow_efs_backup,
     "odin_efs_restore": flow_efs_restore,
@@ -6367,8 +7034,8 @@ JOBS = {
     "Odin Flashing (Advanced)": {
         "ADB": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_efs_backup", "odin_efs_restore", "odin_sales_code"],
         "MTP": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices"],
-        "Download mode": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_vbmeta", "reboot_normal"],
-        "Samsung BROM": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_vbmeta"],
+        "Download mode": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_flash_multi", "odin_send_pit", "odin_vbmeta", "reboot_normal"],
+        "Samsung BROM": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_flash_multi", "odin_send_pit", "odin_vbmeta"],
         "MTK": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices"],
         "MTK BROM": [],
         "FASTBOOT": [],
@@ -6387,13 +7054,14 @@ JOBS = {
     "Screen lock remove": {
         "ADB": [
             "screen_lock_locksettings",
+            "screen_lock_csc",
             "screen_lock_recovery",
             "screen_lock_comprehensive",
         ],
         "MTP": ["enable_adb", "test_mode"],
-        "Download mode": ["screen_lock_download", "odin_enable_adb"],
-        "Samsung BROM": ["screen_lock_download", "odin_enable_adb"],
-        "MTK": ["mtk_recovery_reset", "mtk_combo_flash"],
+        "Download mode": ["screen_lock_download", "screen_lock_csc", "odin_enable_adb"],
+        "Samsung BROM": ["screen_lock_download", "screen_lock_csc", "odin_enable_adb"],
+        "MTK": ["screen_lock_csc", "mtk_recovery_reset", "mtk_combo_flash"],
         "MTK BROM": [],
         "FASTBOOT": ["fastboot_wipe", "fastboot_erase", "fastboot_frp"],
         "EDL": ["screen_lock_edl"],
@@ -6403,8 +7071,8 @@ JOBS = {
         "MTP": ["at_info", "enable_adb", "test_mode"],
         "Download mode": ["download_mode_info"],
         "Samsung BROM": ["download_mode_info"],
-        "MTK": ["mtk_download_info", "mtk_brom_info"],
-        "MTK BROM": ["mtk_brom_info"],
+        "MTK": ["mtk_download_info", "mtk_brom_info", "mtk_brom_backup"],
+        "MTK BROM": ["mtk_brom_info", "mtk_brom_backup"],
         "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot"],
         "EDL": ["edl_detect"],
     },
@@ -6413,8 +7081,8 @@ JOBS = {
         "MTP": ["detect"],
         "Download mode": ["detect"],
         "Samsung BROM": ["detect"],
-        "MTK": ["mtk_download_info", "mtk_brom_info"],
-        "MTK BROM": ["mtk_brom_info"],
+        "MTK": ["mtk_download_info", "mtk_brom_info", "mtk_brom_backup"],
+        "MTK BROM": ["mtk_brom_info", "mtk_brom_backup"],
         "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot"],
         "EDL": ["detect"],
     },

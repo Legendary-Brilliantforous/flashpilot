@@ -1,27 +1,28 @@
 """Left navigation rail - the signature element of commercial flashing tools.
 
-A slim vertical strip of icon+label buttons. The active section is highlighted
-with a left accent bar and a gradient fill. Emits `section_selected(str)`.
+A slim vertical strip of icon+label buttons styled as a backlit circuit-deck
+switchboard. The active section is highlighted with a cyan left accent bar and
+a gradient fill. Emits `section_selected(str)`.
 """
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import QButtonGroup, QFrame, QPushButton, QVBoxLayout
 
-_PANEL = "#10161f"
-_INSET = "#0c111a"
-_BORDER = "#1f2a38"
-_BORDER_HI = "#31415a"
-_TEXT = "#e8ebf1"
-_DIM = "#98a3b4"
-_MUTE = "#5c6a7e"
-_ACCENT = "#3b82f6"
-_GRAD_A = "#2563eb"
-_GRAD_B = "#06b6d4"
+_PANEL = "#0a111a"
+_INSET = "#070d15"
+_BORDER = "#16233a"
+_BORDER_HI = "#2c405e"
+_TEXT = "#e7eef8"
+_DIM = "#8fa4bd"
+_MUTE = "#52657d"
+_ACCENT = "#22d3ee"
+_GRAD_A = "#0ea5e9"
+_GRAD_B = "#22d3ee"
 
 
 class _NavButton(QPushButton):
-    """Painted nav item with a left accent indicator when selected."""
+    """Painted nav item with a cyan left accent indicator when selected."""
 
     def __init__(self, label, glyph):
         super().__init__(f"{glyph}  {label}")
@@ -45,12 +46,13 @@ class _NavButton(QPushButton):
 
         if self._active:
             grad = QLinearGradient(0, 0, w, 0)
-            grad.setColorAt(0, QColor(_ACCENT).darker(160))
+            grad.setColorAt(0, QColor(_ACCENT).darker(140))
+            grad.setColorAt(0.55, QColor(_PANEL))
             grad.setColorAt(1, QColor(_PANEL))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(6, 3, w - 12, h - 6), 9, 9)
-            # left accent bar
+            p.drawRoundedRect(QRectF(6, 3, w - 12, h - 6), 6, 6)
+            # cyan left accent bar
             bar = QLinearGradient(0, 0, 4, 0)
             bar.setColorAt(0, QColor(_GRAD_A))
             bar.setColorAt(1, QColor(_GRAD_B))
@@ -91,7 +93,7 @@ class NavRail(QFrame):
         brand.setEnabled(False)
         brand.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none;"
-            f" color: {_MUTE}; font-size: 11px; font-weight: 800;"
+            f" color: {_MUTE}; font-size: 10px; font-weight: 800;"
             f" letter-spacing: 2px; text-align: left; padding: 2px 12px; }}"
         )
         lay.addWidget(brand)

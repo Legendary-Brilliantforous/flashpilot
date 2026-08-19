@@ -145,10 +145,27 @@ fn open_device(target: &str) -> OdinResult<Device> {
 
 impl Device {
     fn send_raw(&self, data: &[u8]) -> OdinResult<()> {
-        self.handle
-            .write_bulk(self.out_ep, data, Duration::from_secs(10))
-            .map_err(|e| OdinError(format!("bulk write: {e}")))?;
-        Ok(())
+        const WRITE_RETRIES: u32 = 3;
+        let mut last_err: Option<String> = None;
+        for attempt in 0..WRITE_RETRIES {
+            let res = self
+                .handle
+                .write_bulk(self.out_ep, data, Duration::from_secs(10))
+                .map_err(|e| OdinError(format!("bulk write: {e}")));
+            match res {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                    if is_transient_usb_error(&e.to_string()) {
+                        eprintln!("[flash]   write retry {attempt}: {}", e.to_string().trim());
+                        std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Err(OdinError(last_err.unwrap_or_else(|| "bulk write failed".into())))
     }
 
     fn recv_raw(&self, len: usize, timeout: u64) -> OdinResult<Vec<u8>> {
@@ -176,18 +193,30 @@ impl Device {
                 Err(_) => break, // no pending data
             }
         }
-        for attempt in 0..4 {
-            self.send_raw(b"ODIN")?;
-            let resp = self.recv_raw(7, 5)?;
-            if resp.get(..4) == Some(b"LOKE") {
-                return Ok(());
+        for attempt in 0..6 {
+            match self.send_raw(b"ODIN") {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[handshake] send error attempt {attempt}: {e}");
+                    std::thread::sleep(Duration::from_millis(100 * (attempt as u64 + 1)));
+                    continue;
+                }
             }
-            eprintln!(
-                "[handshake] attempt {attempt}: got {:?}, retrying",
-                resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
-            );
+            match self.recv_raw(7, 5) {
+                Ok(resp) if resp.get(..4) == Some(b"LOKE") => return Ok(()),
+                Ok(resp) => {
+                    eprintln!(
+                        "[handshake] attempt {attempt}: got {:?}, retrying",
+                        resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[handshake] recv error attempt {attempt}: {e}");
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100 * (attempt as u64 + 1)));
         }
-        err("handshake failed after retries")
+        err("handshake failed after retries (device must be in download mode)")
     }
 
     /// Pack a little-endian u32 control frame of the given type + payload.
@@ -507,6 +536,11 @@ pub fn odin_info(target: &str, pit_file: &str) -> Result<String> {
 
 /// Odin command: send a 1024-byte request frame with type/subtype/payload,
 /// read a response (at least 8 bytes: id + ack), and validate the id.
+///
+/// Retries on transient USB errors (timeout/stall/overflow) with a short
+/// backoff. Control commands are idempotent enough to resend: the bootloader
+/// either replies to the first copy or has gone quiet and needs the command
+/// re-issued (odin4 retries these the same way).
 fn odin_command(
     dev: &Device,
     cmd: u32,
@@ -514,6 +548,7 @@ fn odin_command(
     payload: &[u8],
     timeout: u64,
 ) -> OdinResult<Vec<u8>> {
+    const CMD_RETRIES: u32 = 4;
     let mut buf = vec![0u8; PACKET_SIZE];
     buf[0..4].copy_from_slice(&cmd.to_le_bytes());
     buf[4..8].copy_from_slice(&sub.to_le_bytes());
@@ -521,13 +556,41 @@ fn odin_command(
         return err("odin command payload too large");
     }
     buf[8..8 + payload.len()].copy_from_slice(payload);
-    dev.send_raw(&buf)?;
 
-    let rsp = dev.recv_raw(512, timeout)?;
-    if rsp.len() < 8 {
-        return err(format!("odin response too short: {} bytes", rsp.len()));
+    let mut last_err: Option<String> = None;
+    for attempt in 0..CMD_RETRIES {
+        if attempt > 0 {
+            eprintln!(
+                "[odin] command 0x{cmd:02x}/0x{sub:02x} retry {attempt}: {last}",
+                last = last_err.as_deref().unwrap_or("unknown")
+            );
+            std::thread::sleep(Duration::from_millis(100 * (attempt as u64)));
+        }
+        if let Err(e) = dev.send_raw(&buf) {
+            last_err = Some(e.to_string());
+            if !is_transient_usb_error(&e.to_string()) {
+                return Err(e);
+            }
+            continue;
+        }
+        match dev.recv_raw(512, timeout) {
+            Ok(rsp) if rsp.len() >= 8 => return Ok(rsp),
+            Ok(rsp) => {
+                last_err = Some(format!("odin response too short: {} bytes", rsp.len()));
+                continue;
+            }
+            Err(e) => {
+                last_err = Some(e.to_string());
+                if !is_transient_usb_error(&e.to_string()) {
+                    return Err(e);
+                }
+                continue;
+            }
+        }
     }
-    Ok(rsp)
+    Err(OdinError(
+        last_err.unwrap_or_else(|| format!("odin command 0x{cmd:02x}/0x{sub:02x} failed")),
+    ))
 }
 
 /// True when the user asked for strict error handling (ODIN_STRICT=1).
@@ -613,24 +676,72 @@ fn request_sequence_flash(dev: &Device, aligned_size: u32) -> OdinResult<()> {
     odin_fail_check(&rsp, "RequestSequenceFlash", false)
 }
 
+/// True when an error string looks like a transient USB timeout/stall that is
+/// safe to retry: the bootloader was slow to ACK a chunk, or the USB bus
+/// dropped a frame. Same classes odin4/heimdall retry before giving up.
+fn is_transient_usb_error(e: &str) -> bool {
+    let lower = e.to_lowercase();
+    lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("pipe")
+        || lower.contains("stall")
+        || lower.contains("no device")
+        || lower.contains("overflow")
+        || lower.contains("not found")
+}
+
 /// Send one file chunk and wait for the ack with the expected index (0x66 data).
+///
+/// Retries the ack read on transient USB errors (timeout/stall/overflow) with
+/// a short backoff, up to ACK_RETRIES total attempts. The chunk is written once;
+/// the device only ACKs once it has the chunk, so re-reading on timeout is safe.
+/// A hard failure (BOOTLOADER_FAIL, index mismatch) is never retried.
 fn send_file_part(dev: &Device, data: &[u8], expected_index: u32, timeout: u64) -> OdinResult<()> {
+    const ACK_RETRIES: u32 = 5;
     dev.send_raw(data)?;
-    let rsp = dev.recv_raw(512, timeout)?;
-    if rsp.len() < 8 {
-        return err("short file-part ack");
+    let mut last_err: Option<String> = None;
+    for attempt in 0..ACK_RETRIES {
+        let rsp = dev.recv_raw(512, timeout);
+        let rsp = match rsp {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(e.to_string());
+                if is_transient_usb_error(&e.to_string()) {
+                    eprintln!(
+                        "[flash]   ack retry {attempt}: {}",
+                        e.to_string().trim()
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+                    continue;
+                }
+                return Err(e);
+            }
+        };
+        if rsp.len() < 8 {
+            last_err = Some("short file-part ack".into());
+            std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+            continue;
+        }
+        let rid = u32::from_le_bytes([rsp[0], rsp[1], rsp[2], rsp[3]]);
+        let ack = u32::from_le_bytes([rsp[4], rsp[5], rsp[6], rsp[7]]);
+        if rid == 0xFFFFFFFF || ack == 0xFFFFFFFF {
+            return err("bootloader fail during file part");
+        }
+        if ack != expected_index {
+            // A stale ACK from a previous chunk: the bootloader was one step
+            // behind. Drain and re-read rather than aborting the flash.
+            eprintln!(
+                "[flash]   index mismatch: expected {expected_index}, got {ack} (attempt {attempt})"
+            );
+            last_err = Some(format!(
+                "file part index mismatch: expected {expected_index}, got {ack}"
+            ));
+            std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+            continue;
+        }
+        return Ok(());
     }
-    let rid = u32::from_le_bytes([rsp[0], rsp[1], rsp[2], rsp[3]]);
-    let ack = u32::from_le_bytes([rsp[4], rsp[5], rsp[6], rsp[7]]);
-    if rid == 0xFFFFFFFF || ack == 0xFFFFFFFF {
-        return err("bootloader fail during file part");
-    }
-    if ack != expected_index {
-        return err(format!(
-            "file part index mismatch: expected {expected_index}, got {ack}"
-        ));
-    }
-    Ok(())
+    Err(OdinError(last_err.unwrap_or_else(|| "file part ack failed".into())))
 }
 
 /// End a sequence flash (0x66/0x03) with the partition metadata payload.
@@ -794,6 +905,10 @@ fn flash_one_partition(
     let mut sent = 0usize;
     let mut sequence = 0u32;
 
+    // Report progress to stderr as parseable lines so the Python bridge can
+    // show live percentage on screen. Emitted at least once per sequence.
+    let mut last_report_pct = 0u32;
+
     let sequence_count = 30;
     let max_seq_bytes = packet_size as usize * sequence_count;
     while sent < total {
@@ -802,7 +917,8 @@ fn flash_one_partition(
         let aligned =
             (real_size + packet_size as usize - 1) / packet_size as usize * packet_size as usize;
         eprintln!("[flash]   seq {sequence}: real={real_size} aligned={aligned} ({sent}/{total})");
-        request_sequence_flash(dev, aligned as u32).map_err(|e| e.to_string())?;
+        request_sequence_flash(dev, aligned as u32)
+            .map_err(|e| format!("{partition}: sequence {sequence}: {e}"))?;
 
         let mut index = 0u32;
         let parts = aligned / packet_size as usize;
@@ -813,17 +929,28 @@ fn flash_one_partition(
             while got < packet_size as usize {
                 let n = file
                     .read(&mut buf[got..packet_size as usize])
-                    .map_err(|e| format!("read image: {e}"))?;
+                    .map_err(|e| format!("{partition}: read image at byte {sent}: {e}"))?;
                 if n == 0 {
                     break;
                 }
                 got += n;
             }
-            send_file_part(dev, &buf, index, 120).map_err(|e| e.to_string())?;
+            send_file_part(dev, &buf, index, 120)
+                .map_err(|e| format!("{partition}: byte {sent}: {e}"))?;
             index += 1;
+
+            sent += packet_size as usize;
+            if sent > total {
+                sent = total;
+            }
+            let pct = (sent * 100 / total) as u32;
+            if pct >= last_report_pct + 2 || sent >= total {
+                eprintln!("[progress] {partition}: {pct}% ({sent}/{total})");
+                last_report_pct = pct;
+            }
         }
 
-        let is_last = if sent + real_size >= total { 1 } else { 0 };
+        let is_last = if sent >= total { 1 } else { 0 };
         let mut final_size = real_size;
         if is_last == 1 && large {
             // Large partitions (super/system/userdata) get the last real_size
@@ -843,12 +970,11 @@ fn flash_one_partition(
             0,
             1,
         )
-        .map_err(|e| e.to_string())?;
-        sent += real_size;
+        .map_err(|e| format!("{partition}: end sequence {sequence}: {e}"))?;
         sequence += 1;
     }
 
-    reset_flash_count(dev).map_err(|e| e.to_string())?;
+    reset_flash_count(dev).map_err(|e| format!("{partition}: reset flash count: {e}"))?;
     eprintln!("[flash] {partition}: done, {sequence} sequences, {sent} bytes");
     Ok(sequence)
 }
@@ -1044,6 +1170,18 @@ mod tests {
     fn fail_check_rejects_bootloader_fail() {
         let rsp = [0xffu8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
         assert!(odin_fail_check(&rsp, "test", false).is_err());
+    }
+
+    #[test]
+    fn transient_usb_errors_are_identified() {
+        assert!(is_transient_usb_error("bulk read: timed out"));
+        assert!(is_transient_usb_error("LIBUSB_ERROR_TIMEOUT"));
+        assert!(is_transient_usb_error("bulk write: pipe error"));
+        assert!(is_transient_usb_error("no device found"));
+        assert!(is_transient_usb_error("LIBUSB_ERROR_OVERFLOW"));
+        assert!(!is_transient_usb_error("bootloader fail during file part"));
+        assert!(!is_transient_usb_error("file part index mismatch"));
+        assert!(!is_transient_usb_error("could not open file /nope.img"));
     }
 
     #[test]

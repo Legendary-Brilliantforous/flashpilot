@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QPolygonF,
     QLinearGradient,
     QRadialGradient,
     QTextCharFormat,
@@ -77,35 +78,39 @@ from .nav import NavRail
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
 C = {
-    "bg": "#0a0e14",            # window background
-    "panel": "#10161f",         # card panel
-    "card": "#141c28",          # inner card
-    "card_hover": "#1a2430",    # card hover state
-    "inset": "#0c111a",         # console / inputs
-    "border": "#1f2a38",
-    "border_hi": "#31415a",
-    "text": "#e8ebf1",
-    "dim": "#98a3b4",
-    "mute": "#5c6a7e",
-    "accent": "#3b82f6",
-    "accent_hi": "#6ea8ff",
-    "grad_a": "#2563eb",
-    "grad_b": "#06b6d4",
-    "ok": "#34d399",
-    "ok_dim": "#0f3d31",
+    "bg": "#04070c",            # window background (deep carbon)
+    "panel": "#0a111a",         # card panel
+    "card": "#0d1622",          # inner card
+    "card_hover": "#152032",    # card hover state
+    "inset": "#070d15",         # console / inputs
+    "border": "#16233a",
+    "border_hi": "#2c405e",
+    "text": "#e7eef8",
+    "dim": "#8fa4bd",
+    "mute": "#52657d",
+    "accent": "#22d3ee",        # circuit-cyan signature
+    "accent_hi": "#7dd3fc",
+    "grad_a": "#0ea5e9",
+    "grad_b": "#22d3ee",
+    "ok": "#2dd4bf",
+    "ok_dim": "#0c332f",
     "warn": "#fbbf24",
-    "warn_dim": "#3d3413",
-    "err": "#f87171",
-    "err_dim": "#3d1b1e",
-    "chip_blue": "#1e3a5f",
-    "chip_text": "#93c5fd",
-    "accent_dim": "#1d3a66",     # soft accent fill (dropdown selection, tiles)
+    "warn_dim": "#3a3010",
+    "err": "#fb7185",
+    "err_dim": "#3d1721",
+    "chip_blue": "#0f2a41",
+    "chip_text": "#7dd3fc",
+    "accent_dim": "#0e3350",     # soft accent fill (dropdown selection, tiles)
     "sheen": "#ffffff",          # highlight on painted glyphs
 }
 
 # Accent themes selectable in Settings -> Appearance. Each swaps the accent /
 # gradient tokens, mirroring how premium commercial tools ship colour packs.
 ACCENT_THEMES = {
+    "Neon Circuit": {
+        "accent": "#22d3ee", "accent_hi": "#7dd3fc",
+        "grad_a": "#0ea5e9", "grad_b": "#22d3ee", "accent_dim": "#0e3350",
+    },
     "Cobalt Blue": {
         "accent": "#3b82f6", "accent_hi": "#6ea8ff",
         "grad_a": "#2563eb", "grad_b": "#06b6d4", "accent_dim": "#1d3a66",
@@ -137,11 +142,22 @@ QToolTip {{
     background-color: {C['card']}; color: {C['text']};
     border: 1px solid {C['border_hi']}; border-radius: 6px; padding: 6px 8px;
 }}
+QLineEdit {{
+    background: {C['inset']};
+    border: 1px solid {C['border']};
+    border-radius: 7px;
+    padding: 6px 10px;
+    color: {C['text']};
+    selection-background-color: {C['accent']};
+    selection-color: #ffffff;
+}}
+QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }}
+QLineEdit:focus {{ border: 1px solid {C['accent']}; }}
 QComboBox {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 {C['card_hover']}, stop:1 {C['card']});
     border: 1px solid {C['border']};
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 8px 34px 8px 12px;
     color: {C['text']};
     min-height: 20px;
@@ -167,7 +183,7 @@ QComboBox::down-arrow:on {{ border-top: 6px solid {C['accent']}; }}
 QComboBox QAbstractItemView {{
     background-color: {C['panel']};
     border: 1px solid {C['border_hi']};
-    border-radius: 12px;
+    border-radius: 10px;
     color: {C['text']};
     selection-background-color: transparent;
     outline: 0;
@@ -177,7 +193,7 @@ QScrollBar:vertical {{
     background: transparent; width: 10px; border-radius: 5px; margin: 2px;
 }}
 QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 5px; min-height: 30px; }}
-QScrollBar::handle:vertical:hover {{ background: {C['dim']}; }}
+QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
 QScrollBar:horizontal {{ height: 0; }}
@@ -187,18 +203,19 @@ QScrollBar:horizontal {{ height: 0; }}
 def _btn_primary():
     return f"""
     QPushButton {{
-        border: 1px solid rgba(120, 180, 255, 60);
-        border-radius: 8px;
+        border: 1px solid {C['accent']};
+        border-radius: 6px;
         padding: 7px 16px;
         font-size: 12px;
         font-weight: 700;
-        color: #ffffff;
+        letter-spacing: 0.5px;
+        color: #04121a;
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                     stop:0 {C['grad_a']}, stop:1 {C['grad_b']});
     }}
     QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                    stop:0 {C['accent']}, stop:1 #22d3ee);
-                         border: 1px solid rgba(140, 200, 255, 130); }}
+                                    stop:0 {C['accent']}, stop:1 #67e8f9);
+                         border: 1px solid {C['accent_hi']}; }}
     QPushButton:pressed {{ background: {C['grad_a']};
                           border: 1px solid {C['accent_hi']}; }}
     QPushButton:disabled {{ background: {C['border']}; color: {C['mute']};
@@ -207,13 +224,15 @@ def _btn_primary():
 
 
 def _card_qss():
-    """Glass card used as the section surface - subtle vertical gradient and a
-    soft top highlight for the premium commercial-tool look."""
+    """Circuit-deck card surface: dark carbon slab with a hairline top
+    highlight and a thin accent edge on the left, like a backlit instrument
+    panel rather than a soft rounded glass card."""
     return (
         f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(20, 27, 39, 236), stop:1 rgba(13, 18, 27, 236));"
-        f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
-        f" border-radius: 14px; }}"
+        f" stop:0 rgba(15, 24, 38, 244), stop:1 rgba(7, 12, 19, 244));"
+        f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+        f" border-top: 1px solid {C['border_hi']};"
+        f" border-radius: 10px; }}"
     )
 
 
@@ -221,7 +240,7 @@ def _btn_ghost():
     return f"""
     QPushButton {{
         border: 1px solid {C['border']};
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 6px 12px;
         font-size: 12px;
         font-weight: 600;
@@ -229,21 +248,47 @@ def _btn_ghost():
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                     stop:0 {C['card']}, stop:1 {C['inset']});
     }}
-    QPushButton:hover {{ border: 1px solid {C['accent']}; color: #ffffff; background: {C['card_hover']}; }}
-    QPushButton:pressed {{ background: {C['accent']}; color: #fff; }}
+    QPushButton:hover {{ border: 1px solid {C['accent']}; color: {C['accent_hi']};
+                        background: {C['card_hover']}; }}
+    QPushButton:pressed {{ background: {C['accent_dim']}; color: #fff; }}
     QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; background: {C['card']}; }}
     """
+
+
+def _risk_banner(text):
+    """A compact red-striped warning bar used near destructive operations
+    (flash / wipe). Keeps beginners aware of the consequence before they click."""
+    w = QWidget()
+    w.setStyleSheet("background: transparent;")
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    icon = QLabel("⚠")
+    icon.setStyleSheet(f"color: {C['err']}; font-size: 14px; font-weight: 800;")
+    icon.setFixedWidth(18)
+    lay.addWidget(icon)
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(
+        f"color: #ffb4b4; font-size: 11px; font-weight: 600;"
+        f" background: rgba(220, 38, 38, 22);"
+        f" border: 1px solid rgba(239, 68, 68, 140);"
+        f" border-left: 3px solid {C['err']}; border-radius: 6px;"
+        f" padding: 6px 10px;"
+    )
+    lay.addWidget(lbl, 1)
+    return w
 
 
 def _btn_danger():
     return f"""
     QPushButton {{
         border: 1px solid {C['err']};
-        border-radius: 8px;
+        border-radius: 6px;
         padding: 6px 12px;
         font-size: 12px;
         font-weight: 700;
-        color: #ff7b7b;
+        color: #ffa3b2;
         background: {C['card']};
     }}
     QPushButton:hover {{ background: {C['err']}; color: #ffffff; }}
@@ -257,7 +302,7 @@ def _console_qss():
     QPlainTextEdit {{
         background-color: {C['inset']};
         border: 1px solid {C['border']};
-        border-radius: 12px;
+        border-radius: 8px;
         color: {C['text']};
         font-family: "JetBrains Mono", "Consolas", "Menlo", monospace;
         font-size: 12px;
@@ -649,16 +694,50 @@ def _draw_logo(size):
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    grad = QLinearGradient(0, 0, size, size)
-    grad.setColorAt(0, QColor(C["grad_a"]))
-    grad.setColorAt(1, QColor(C["grad_b"]))
-    p.setBrush(grad)
+    s = float(size)
+
+    # outer hexagonal chip die
+    hexpts = []
+    for i in range(6):
+        ang = math.pi / 180.0 * (60 * i - 30)
+        hexpts.append(QPointF(s * 0.5 + s * 0.44 * math.cos(ang),
+                              s * 0.5 + s * 0.44 * math.sin(ang)))
+    hx = QPolygonF(hexpts)
+    g = QLinearGradient(0, 0, s, s)
+    g.setColorAt(0, QColor(C["grad_a"]))
+    g.setColorAt(1, QColor(C["grad_b"]))
+    p.setPen(QPen(QColor(C["accent_hi"]), s * 0.02))
+    p.setBrush(g)
+    p.drawPolygon(hx)
+
+    # inner core (dark inset with a bright node)
+    inner = []
+    for i in range(6):
+        ang = math.pi / 180.0 * (60 * i - 30)
+        inner.append(QPointF(s * 0.5 + s * 0.26 * math.cos(ang),
+                             s * 0.5 + s * 0.26 * math.sin(ang)))
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.28, size * 0.28)
-    p.setBrush(QColor("#ffffff"))
-    p.drawRoundedRect(QRectF(size * 0.30, size * 0.16, size * 0.40, size * 0.68), size * 0.09, size * 0.09)
-    p.setBrush(QColor("#0ea5e9"))
-    p.drawRoundedRect(QRectF(size * 0.34, size * 0.22, size * 0.32, size * 0.46), size * 0.05, size * 0.05)
+    p.setBrush(QColor("#051019"))
+    p.drawPolygon(QPolygonF(inner))
+
+    # circuit traces fanning from the core to the die edge
+    p.setPen(QPen(QColor(C["accent_hi"]), s * 0.025, Qt.PenStyle.SolidLine,
+                  Qt.PenCapStyle.RoundCap))
+    for i in range(6):
+        ang = math.pi / 180.0 * (60 * i - 30)
+        x0 = s * 0.5 + s * 0.26 * math.cos(ang)
+        y0 = s * 0.5 + s * 0.26 * math.sin(ang)
+        x1 = s * 0.5 + s * 0.42 * math.cos(ang)
+        y1 = s * 0.5 + s * 0.42 * math.sin(ang)
+        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+    # centre node
+    core = QRadialGradient(s * 0.5, s * 0.5, s * 0.16)
+    core.setColorAt(0, QColor("#e0f7ff"))
+    core.setColorAt(1, QColor(C["accent"]))
+    p.setBrush(core)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawEllipse(QRectF(s * 0.34, s * 0.34, s * 0.32, s * 0.32))
     p.end()
     return pix
 
@@ -1151,8 +1230,8 @@ class FlowLayout(QLayout):
 
 class SamsungSubTabs(QFrame):
     """Horizontal sub-tab bar for the Samsung operations panel - a compact
-    TFT-style segmented control (FLASH / UNLOCK & FRP / INFO & TOOLS) so the
-    operations are split into focused views instead of one congested column."""
+    terminal-style segmented control (FLASH / UNLOCK & FRP / INFO & TOOLS) so
+    the operations are split into focused views instead of one congested column."""
 
     tab_selected = pyqtSignal(str)
 
@@ -1161,11 +1240,11 @@ class SamsungSubTabs(QFrame):
         self.setObjectName("subnav")
         self.setStyleSheet(
             f"QFrame#subnav {{ background:{C['inset']};"
-            f" border:1px solid {C['border']}; border-radius:10px; }}"
+            f" border:1px solid {C['border']}; border-radius:7px; }}"
         )
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(4)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(3)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
@@ -1176,12 +1255,13 @@ class SamsungSubTabs(QFrame):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(30)
             btn.setStyleSheet(
-                f"QPushButton {{ border:none; border-radius:7px; padding:0 14px;"
-                f" font-size:11px; font-weight:800; letter-spacing:1px;"
+                f"QPushButton {{ border:none; border-radius:4px; padding:0 14px;"
+                f" font-family:'JetBrains Mono','Consolas',monospace;"
+                f" font-size:10px; font-weight:800; letter-spacing:1.5px;"
                 f" color:{C['mute']}; background:transparent; }}"
                 f" QPushButton:hover {{ color:{C['text']};"
                 f" background:{C['card_hover']}; }}"
-                f" QPushButton:checked {{ color:#fff;"
+                f" QPushButton:checked {{ color:#04121a;"
                 f" background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
                 f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); }}"
             )
@@ -1197,6 +1277,66 @@ class SamsungSubTabs(QFrame):
     def set_tab(self, key):
         if key in self._keys:
             self._group.button(self._keys.index(key)).setChecked(True)
+
+
+class CollapsibleSection(QFrame):
+    """Circuit-deck collapsible panel: a clickable header with a chevron +
+    terminal title that toggles the body. Keeps dense pages (like the FLASH
+    tab) to one screen - advanced panels collapse by default."""
+
+    def __init__(self, title, body, accent=C["accent"], collapsed=False,
+                 parent=None):
+        super().__init__(parent)
+        self.setObjectName("colsec")
+        self._title = title
+        self._accent = accent
+        self._collapsed = collapsed
+        self.setStyleSheet(
+            f"QFrame#colsec {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {accent};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 6, 14, 8)
+        lay.setSpacing(8)
+
+        self._header = QPushButton()
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.setStyleSheet("QPushButton { border: none; background: transparent; }")
+        self._header.clicked.connect(self.toggle)
+        lay.addWidget(self._header)
+
+        self._body = body
+        self._body.setParent(self)
+        lay.addWidget(self._body)
+        self._body.setVisible(not collapsed)
+
+    def toggle(self):
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # chevron rendered on the header strip
+        if self._collapsed:
+            pts = [QPointF(14, 12), QPointF(21, 17), QPointF(14, 22)]
+        else:
+            pts = [QPointF(14, 16), QPointF(20, 10), QPointF(26, 16)]
+        p.setBrush(QColor(self._accent))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(QPolygonF(pts))
+        # ">>" prefix
+        p.setPen(QPen(QColor(self._accent)))
+        p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.Bold))
+        p.drawText(34, 16, ">>")
+        # title
+        p.setFont(QFont("Inter", 11, QFont.Weight.Bold))
+        p.setPen(QPen(QColor(C["text"])))
+        p.drawText(66, 16, self._title)
+        p.end()
 
 
 class ModeBadge(QFrame):
@@ -1220,12 +1360,13 @@ class ModeBadge(QFrame):
         label, bg, fg, dot = _mode_chip(mode)
         self._label.setText(label)
         self._label.setStyleSheet(
-            f"color:{fg}; font-size:11px; font-weight:700; letter-spacing:1px;"
+            f"color:{fg}; font-size:10px; font-weight:700; letter-spacing:1.5px;"
+            f" font-family:'JetBrains Mono','Consolas',monospace;"
         )
         self._dot.setStyleSheet(f"background:{dot}; border-radius:4px;")
         self.setStyleSheet(
             f"QFrame#modebadge {{ background:{bg}; border:1px solid {C['border']};"
-            f" border-radius:13px; }}"
+            f" border-left: 2px solid {dot}; border-radius:7px; }}"
         )
 
 
@@ -1259,8 +1400,9 @@ class MetricCard(QFrame):
         self.setStyleSheet(
             f"QFrame#metric {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
-            f" border-radius: 11px; }}"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {self._accent_hex};"
+            f" border-top: 1px solid {C['border_hi']};"
+            f" border-radius: 8px; }}"
             f" QFrame#metric:hover {{ border: 1px solid {self._accent_hex};"
             f" background: {C['card_hover']}; }}"
         )
@@ -1296,11 +1438,11 @@ class _SettingsCatButton(QPushButton):
         w, h = self.width(), self.height()
         if self._active:
             grad = QLinearGradient(0, 0, w, 0)
-            grad.setColorAt(0, QColor(C["accent"]).darker(150))
+            grad.setColorAt(0, QColor(C["accent"]).darker(140))
             grad.setColorAt(1, QColor(C["panel"]))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(4, 3, w - 8, h - 6), 8, 8)
+            p.drawRoundedRect(QRectF(4, 3, w - 8, h - 6), 5, 5)
             bar = QLinearGradient(0, 0, 4, 0)
             bar.setColorAt(0, QColor(C["grad_a"]))
             bar.setColorAt(1, QColor(C["grad_b"]))
@@ -1321,7 +1463,7 @@ class SectionTitle(QLabel):
         super().__init__(text)
         self._accent = accent
         self.setStyleSheet(
-            f"color:{C['dim']}; font-size:11px; font-weight:700; letter-spacing:1px;"
+            f"color:{C['dim']}; font-size:11px; font-weight:700; letter-spacing:1.5px;"
         )
         self.setContentsMargins(0, 0, 0, 0)
 
@@ -1331,16 +1473,27 @@ class SectionTitle(QLabel):
         pm = p.fontMetrics()
         x = 0
         y = pm.ascent() + 1
-        p.setPen(QPen(QColor(C["dim"])))
+
+        # mono ">>" terminal prefix
+        mono = QFont("JetBrains Mono", 8, QFont.Weight.Bold)
+        p.setFont(mono)
+        p.setPen(QPen(QColor(self._accent)))
+        p.drawText(x, y, ">>")
+        prefix_w = p.fontMetrics().horizontalAdvance(">>") + 4
+
         p.setFont(self.font())
-        p.drawText(x, y, self.text())
+        p.setPen(QPen(QColor(C["dim"])))
+        p.drawText(x + prefix_w, y, self.text())
+
+        # dashed trace line + node dot (circuit-run style)
         tw = pm.horizontalAdvance(self.text())
-        bar = QLinearGradient(0, 0, 42, 0)
-        bar.setColorAt(0, QColor(self._accent))
-        bar.setColorAt(1, QColor(self._accent).darker(180))
+        lx = x + prefix_w + tw + 10
+        dash = QPen(QColor(self._accent), 1.2, Qt.PenStyle.DashLine)
+        p.setPen(dash)
+        p.drawLine(QPointF(lx, y - 2), QPointF(lx + 56, y - 2))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bar)
-        p.drawRoundedRect(QRectF(x + tw + 8, y - 4, 42, 3), 1.5, 1.5)
+        p.setBrush(QColor(self._accent))
+        p.drawEllipse(QRectF(lx + 58, y - 4.5, 5, 5))
         p.end()
 
 
@@ -1485,6 +1638,38 @@ class ConnectionScene(QWidget):
         w = float(self.width())
         h = float(self.height())
 
+        # circuit-grid backdrop: faint traces + nodes + a vertical scanline
+        grid = QColor(C["accent"])
+        grid.setAlpha(22)
+        p.setPen(QPen(grid, 1))
+        step = 26.0
+        gx = 0.0
+        while gx < w:
+            p.drawLine(QPointF(gx, 0), QPointF(gx, h))
+            gx += step
+        gy = 0.0
+        while gy < h:
+            p.drawLine(QPointF(0, gy), QPointF(w, gy))
+            gy += step
+        # junction nodes where traces cross
+        node = QColor(C["accent_hi"])
+        node.setAlpha(60)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(node)
+        for gxx in range(1, int(w / step)):
+            for gyy in range(1, int(h / step)):
+                if (gxx + gyy) % 3 == 0:
+                    p.drawEllipse(QRectF(gxx * step - 1.2, gyy * step - 1.2, 2.4, 2.4))
+        # moving vertical scanline sweep
+        scan_x = int((self._phase * (w + 80)) - 40)
+        sc = QLinearGradient(scan_x - 20, 0, scan_x + 20, 0)
+        sc.setColorAt(0, QColor(125, 211, 252, 0))
+        sc.setColorAt(0.5, QColor(125, 211, 252, 26))
+        sc.setColorAt(1, QColor(125, 211, 252, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(sc)
+        p.drawRect(QRect(scan_x - 20, 0, 40, int(h)))
+
         icon = 80.0
         pc_x = 10.0
         phone_x = w - 10.0 - icon
@@ -1521,7 +1706,7 @@ class ConnectionScene(QWidget):
                 p.setBrush(QColor(14, 20, 30, 200))
                 p.drawRoundedRect(QRectF(bx, by, bw, bh), 8, 8)
                 p.setPen(QPen(vc))
-                p.setFont(QFont("Inter", 8, QFont.Weight.ExtraBold))
+                p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.ExtraBold))
                 p.drawText(QRectF(bx, by, bw, bh),
                            Qt.AlignmentFlag.AlignCenter, self._vendor)
 
@@ -1967,18 +2152,32 @@ class SplashScreen(QWidget):
 
         w, h = self.width(), self.height()
 
-        # card background
+        # carbon deck background
         grad = QLinearGradient(0, 0, w, h)
-        grad.setColorAt(0, QColor("#0e1622"))
-        grad.setColorAt(1, QColor("#0a0f18"))
+        grad.setColorAt(0, QColor("#0a1220"))
+        grad.setColorAt(1, QColor("#04070c"))
         p.setBrush(grad)
         p.setPen(QPen(QColor(C["border_hi"]), 1))
-        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 24, 24)
+        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 14, 14)
+
+        # faint circuit grid
+        grid = QColor(C["accent"])
+        grid.setAlpha(14)
+        p.setPen(QPen(grid, 1))
+        step = 24.0
+        gx = 0.0
+        while gx < w:
+            p.drawLine(QPointF(gx, 0), QPointF(gx, h))
+            gx += step
+        gy = 0.0
+        while gy < h:
+            p.drawLine(QPointF(0, gy), QPointF(w, gy))
+            gy += step
 
         # soft radial glow behind the logo
         glow = QRadialGradient(w / 2, 150, 220)
-        glow.setColorAt(0, QColor(59, 130, 246, 34))
-        glow.setColorAt(1, QColor(59, 130, 246, 0))
+        glow.setColorAt(0, QColor(34, 211, 238, 40))
+        glow.setColorAt(1, QColor(34, 211, 238, 0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(glow)
         p.drawRect(QRect(0, 0, w, h))
@@ -1990,64 +2189,68 @@ class SplashScreen(QWidget):
         ag.setColorAt(1, QColor(C["grad_b"]))
         p.setBrush(ag)
         p.setOpacity(pulse)
-        p.drawRoundedRect(QRectF(26, 20, w - 52, 5), 2, 2)
+        p.drawRoundedRect(QRectF(26, 20, w - 52, 4), 2, 2)
         p.setOpacity(self._alpha)
 
-        # classic badge logo
-        logo_size = 128
+        # hex circuit logo
+        logo_size = 116
         p.drawPixmap(
-            QRect((w - logo_size) // 2, 40, logo_size, logo_size),
-            self._logo,
+            QRect((w - logo_size) // 2, 44, logo_size, logo_size),
+            _draw_logo(logo_size),
         )
 
-        # title
+        # title (terminal style)
+        p.setFont(QFont("JetBrains Mono", 19, QFont.Weight.ExtraBold))
         p.setPen(QPen(QColor(C["text"])))
-        p.setFont(QFont("Inter", 21, QFont.Weight.ExtraBold))
         p.drawText(
-            QRectF(0, 178, w, 36),
+            QRectF(0, 166, w, 34),
             Qt.AlignmentFlag.AlignCenter,
             "BRILLIANT FLASHING TOOL",
         )
 
         # tagline
-        p.setPen(QPen(QColor(C["dim"])))
-        p.setFont(QFont("Inter", 11, QFont.Weight.DemiBold))
+        p.setFont(QFont("JetBrains Mono", 9, QFont.Weight.DemiBold))
+        p.setPen(QPen(QColor(C["accent_hi"])))
         p.drawText(
-            QRectF(0, 216, w, 24),
+            QRectF(0, 202, w, 22),
             Qt.AlignmentFlag.AlignCenter,
-            "FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD",
+            ">>  FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD  <<",
         )
 
-        # progress bar track + fill
-        bar_w, bar_h = w - 110, 8
+        # segmented progress bar (ticked, instrument-style)
+        bar_w, bar_h = w - 110, 10
         bx = (w - bar_w) / 2
-        by = 262
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(255, 255, 255, 18))
-        p.drawRoundedRect(QRectF(bx, by, bar_w, bar_h), 4, 4)
-        fill_w = bar_w * self._progress
-        if fill_w > 2:
-            bg = QLinearGradient(bx, 0, bx + bar_w, 0)
-            bg.setColorAt(0, QColor(C["grad_a"]))
-            bg.setColorAt(1, QColor(C["grad_b"]))
-            p.setBrush(bg)
-            p.drawRoundedRect(QRectF(bx, by, fill_w, bar_h), 4, 4)
+        by = 248
+        segs = 40
+        seg_w = (bar_w - (segs - 1) * 2) / segs
+        filled = int(segs * self._progress)
+        for i in range(segs):
+            sx = bx + i * (seg_w + 2)
+            if i < filled:
+                gr = QLinearGradient(sx, 0, sx + seg_w, 0)
+                gr.setColorAt(0, QColor(C["grad_a"]))
+                gr.setColorAt(1, QColor(C["grad_b"]))
+                p.setBrush(gr)
+            else:
+                p.setBrush(QColor(255, 255, 255, 16))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QRectF(sx, by, seg_w, bar_h), 1.5, 1.5)
 
-        # status line
-        p.setPen(QPen(QColor(C["mute"])))
-        p.setFont(QFont("Inter", 10))
+        # status line (mono, like a boot log)
+        p.setFont(QFont("JetBrains Mono", 10))
+        p.setPen(QPen(QColor(C["dim"])))
         p.drawText(
-            QRectF(0, 284, w, 22),
+            QRectF(0, 274, w, 22),
             Qt.AlignmentFlag.AlignCenter,
             _SPLASH_MESSAGES[self._msg_idx],
         )
 
         # footer chips
-        chips = "SAMSUNG  ·  MEDIATEK  ·  QUALCOMM  ·  UNISOC"
-        p.setPen(QPen(QColor(C["dim"])))
-        p.setFont(QFont("Inter", 8, QFont.Weight.DemiBold))
+        chips = "SAMSUNG  /  MEDIATEK  /  QUALCOMM  /  UNISOC"
+        p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.DemiBold))
+        p.setPen(QPen(QColor(C["mute"])))
         p.drawText(
-            QRectF(0, 326, w, 20),
+            QRectF(0, 318, w, 20),
             Qt.AlignmentFlag.AlignCenter,
             chips,
         )
@@ -2075,7 +2278,7 @@ class FrpWindow(QMainWindow):
         self.settings = QSettings("BrilliantTools", "FlashingTool")
 
         # apply persisted accent theme before any widget styles are generated
-        theme = self.settings.value("theme", "Cobalt Blue")
+        theme = self.settings.value("theme", "Neon Circuit")
         if theme in ACCENT_THEMES:
             C.update(ACCENT_THEMES[theme])
 
@@ -2134,7 +2337,9 @@ class FrpWindow(QMainWindow):
         # USB re-enumeration, so poll for it).
         self._adb_timer = QTimer(self)
         self._adb_timer.timeout.connect(self._poll_adb_metric)
+        self._adb_timer.timeout.connect(self._poll_net_live)
         self._adb_timer.start(3000)
+        self._update_net_in_progress = False
 
         self._install_shortcuts()
         self.refresh_device()
@@ -2173,8 +2378,9 @@ class FrpWindow(QMainWindow):
         root = QFrame()
         root.setObjectName("root")
         root.setStyleSheet(
-            f"QFrame#root {{ background: rgba(10, 14, 21, 240);"
-            f" border: 1px solid {C['border_hi']}; border-radius: 18px; }}"
+            f"QFrame#root {{ background: rgba(5, 9, 15, 244);"
+            f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['accent']};"
+            f" border-radius: 12px; }}"
         )
         root_shadow = QGraphicsDropShadowEffect(root)
         root_shadow.setBlurRadius(42)
@@ -2197,7 +2403,7 @@ class FrpWindow(QMainWindow):
         root_lay.addWidget(strip_wrap)
 
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(30, 26, 30, 34)
+        outer.setContentsMargins(30, 18, 30, 26)
         outer.addWidget(root)
         self._outer = outer
 
@@ -2207,8 +2413,8 @@ class FrpWindow(QMainWindow):
         titlebar.setObjectName("dragbar")
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 rgba(24, 32, 46, 90), stop:0.55 rgba(18, 24, 35, 0),"
-            f" stop:1 rgba(18, 24, 35, 90));"
+            f" stop:0 rgba(16, 26, 40, 90), stop:0.55 rgba(10, 15, 23, 0),"
+            f" stop:1 rgba(10, 15, 23, 90));"
             f" border-bottom: 1px solid {C['border']}; }}"
         )
         tb = QHBoxLayout(titlebar)
@@ -2223,10 +2429,13 @@ class FrpWindow(QMainWindow):
         title_box.setSpacing(0)
         title = QLabel("BRILLIANT FLASHING TOOL")
         title.setStyleSheet(
-            f"color:{C['text']}; font-size:16px; font-weight:800; letter-spacing:1px;"
+            f"color:{C['text']}; font-size:16px; font-weight:800; letter-spacing:1.5px;"
         )
         sub = QLabel("FRP bypass · screen lock · download mode & ADB tooling")
-        sub.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
+        sub.setStyleSheet(
+            f"color:{C['mute']}; font-size:10px;"
+            f" font-family:'JetBrains Mono','Consolas',monospace;"
+        )
         title_box.addWidget(title)
         title_box.addWidget(sub)
         tb.addLayout(title_box)
@@ -2327,21 +2536,21 @@ class FrpWindow(QMainWindow):
         self._conn = conn
         conn.setStyleSheet(
             f"QFrame#connbar {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(24, 33, 47, 210), stop:1 rgba(15, 21, 31, 215));"
-            f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
-            f" border-radius: 13px; }}"
+            f" stop:0 rgba(15, 24, 38, 225), stop:1 rgba(7, 12, 19, 230));"
+            f" border: 1px solid {C['border']}; border-top: 1px solid {C['accent']};"
+            f" border-radius: 9px; }}"
             f" QFrame#connbar:hover {{ border: 1px solid {C['border_hi']};"
-            f" background: rgba(26, 37, 53, 215); }}"
+            f" background: rgba(16, 25, 39, 230); }}"
         )
         conn_lay = QHBoxLayout(conn)
-        conn_lay.setContentsMargins(14, 10, 14, 10)
+        conn_lay.setContentsMargins(14, 8, 14, 8)
         conn_lay.setSpacing(14)
 
         # left: animated computer -- cable -- phone scene + orb + state
         left = QVBoxLayout()
         left.setSpacing(4)
         self.scene = ConnectionScene()
-        self.scene.setMinimumHeight(150)
+        self.scene.setMinimumHeight(108)
         left.addWidget(self.scene, 1)
 
         row = QHBoxLayout()
@@ -2352,7 +2561,8 @@ class FrpWindow(QMainWindow):
         self.conn_state.setWordWrap(True)
         self.conn_state.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.conn_state.setStyleSheet(
-            f"color:{C['dim']}; font-size:12px; font-weight:500; background:transparent;"
+            f"color:{C['dim']}; font-size:11px; font-weight:500; background:transparent;"
+            f" font-family:'JetBrains Mono','Consolas',monospace;"
         )
         row.addWidget(self.conn_state, 1, Qt.AlignmentFlag.AlignVCenter)
         left.addLayout(row)
@@ -2437,10 +2647,22 @@ class FrpWindow(QMainWindow):
         flash_host.setStyleSheet("background: transparent;")
         fh_lay = QVBoxLayout(flash_host)
         fh_lay.setContentsMargins(0, 0, 0, 0)
-        fh_lay.setSpacing(10)
-        fh_lay.addWidget(self.firmware_panel)
-        fh_lay.addWidget(self.adv_panel)
-        self._add_job_flows(fh_lay, ["Odin Flashing (Advanced)"])
+        fh_lay.setSpacing(8)
+        self._firmware_sec = CollapsibleSection(
+            "FIRMWARE SLOTS", self.firmware_panel, accent=C["accent"],
+            collapsed=False
+        )
+        self._options_sec = CollapsibleSection(
+            "FLASH OPTIONS", self.options_panel, accent=C["warn"],
+            collapsed=True
+        )
+        self._adv_sec = CollapsibleSection(
+            "ADVANCED FLASH", self.adv_panel, accent=C["ok"],
+            collapsed=True
+        )
+        fh_lay.addWidget(self._firmware_sec)
+        fh_lay.addWidget(self._options_sec)
+        fh_lay.addWidget(self._adv_sec)
         fh_lay.addStretch(1)
         flash_scroll.setWidget(flash_host)
         fp_lay.addWidget(flash_scroll)
@@ -2458,11 +2680,41 @@ class FrpWindow(QMainWindow):
         carrier_page = self._build_ops_flow_page(["Carrier lock"])
         self.samsung_stack.addWidget(carrier_page)
 
-        tools_page = self._build_ops_flow_page(
-            ["Read device info", "Detect", "Reboot device",
-             "Fix Settings / UI crash"]
+        utils_body = QWidget()
+        utils_body.setStyleSheet("background: transparent;")
+        u_lay = QVBoxLayout(utils_body)
+        u_lay.setContentsMargins(0, 0, 0, 0)
+        u_lay.setSpacing(0)
+        self._add_job_flows(
+            u_lay, ["Odin Flashing (Advanced)"],
+            modes=["Download mode", "ADB"],
+            methods=[
+                "odin_preflight", "odin_efs_backup", "odin_efs_restore",
+                "odin_pit_tools", "odin_list_devices", "odin_vbmeta",
+                "reboot_normal",
+            ],
         )
-        self.samsung_stack.addWidget(tools_page)
+        tools_combo = QWidget()
+        tools_combo.setStyleSheet("background: transparent;")
+        tc_lay = QVBoxLayout(tools_combo)
+        tc_lay.setContentsMargins(0, 0, 0, 0)
+        tc_lay.setSpacing(0)
+        scroll = self._ops_scroll_area()
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        hv = QVBoxLayout(host)
+        hv.setContentsMargins(0, 0, 0, 0)
+        hv.setSpacing(10)
+        self._add_job_flows(hv, ["Read device info", "Detect", "Reboot device",
+                                 "Fix Settings / UI crash"])
+        utils = CollapsibleSection(
+            "ODIN UTILITIES", utils_body, accent=C["mute"], collapsed=True
+        )
+        hv.addWidget(utils)
+        hv.addStretch(1)
+        scroll.setWidget(host)
+        tc_lay.addWidget(scroll)
+        self.samsung_stack.addWidget(tools_combo)
 
         lay.addWidget(self.samsung_stack, 1)
 
@@ -2529,6 +2781,23 @@ class FrpWindow(QMainWindow):
         # --- ADB: one-tap reboot destinations ---
         hv.addWidget(SectionTitle("ADB / USB DEBUGGING"))
         self._add_job_flows(hv, ["Reboot device"], modes=["ADB"])
+        sw_row = QHBoxLayout()
+        sw_row.setSpacing(8)
+        sw_btn = QPushButton("Setup wizard bypass")
+        sw_btn.setStyleSheet(_btn_ghost())
+        sw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        sw_btn.setToolTip(
+            "Classic ADB bypass for older Android (7-8) stuck on the setup wizard"
+        )
+        sw_btn.clicked.connect(
+            lambda: self._run_ops_flow(
+                "FRP bypass", "ADB", "setup_wizard",
+                frp.FLOWS["setup_wizard"]().name,
+            )
+        )
+        sw_row.addWidget(sw_btn)
+        sw_row.addStretch(1)
+        hv.addLayout(sw_row)
 
         # --- Fastboot: reboot out of / within bootloader mode ---
         hv.addWidget(SectionTitle("FASTBOOT"))
@@ -2546,9 +2815,11 @@ class FrpWindow(QMainWindow):
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
         return scroll
 
-    def _add_job_flows(self, parent_layout, jobs, modes=None, run_cb=None):
+    def _add_job_flows(self, parent_layout, jobs, modes=None, run_cb=None,
+                       methods=None):
         """Add one wrapping FlowLayout of action buttons per job, no dropdowns.
         modes: optional iterable of frp modes to restrict which flows show.
+        methods: optional iterable of method keys to show (only those).
         run_cb: optional callable(job, mode, key, name); defaults to the
         Samsung operations runner (_run_ops_flow)."""
         if modes is not None:
@@ -2561,6 +2832,8 @@ class FrpWindow(QMainWindow):
                     continue
                 for key in frp.methods_for(job, mode):
                     if key in seen:
+                        continue
+                    if methods is not None and key not in methods:
                         continue
                     seen.add(key)
                     entries.append((key, mode))
@@ -2678,40 +2951,111 @@ class FrpWindow(QMainWindow):
         return section
 
     def _build_flash_inputs(self):
-        # Firmware slots panel for Odin Flashing (Advanced)
+        # --- Zone 1: Firmware slots (circuit-deck panel) ---
         self.firmware_panel = QFrame()
-        self.firmware_panel.setStyleSheet(f"background: {C['card']}; border: 1px solid {C['border']}; border-radius: 12px;")
+        self.firmware_panel.setObjectName("firmware")
+        self.firmware_panel.setStyleSheet(
+            f"QFrame#firmware {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
         f_lay = QVBoxLayout(self.firmware_panel)
-        f_lay.setContentsMargins(12, 12, 12, 12)
+        f_lay.setContentsMargins(14, 10, 14, 14)
         f_lay.setSpacing(8)
-        f_lay.addWidget(SectionTitle("FIRMWARE SLOTS (AP, BL, CP, CSC, Userdata)"))
 
         self.slot_inputs = {}
-        for slot_name in ["AP", "BL", "CP", "CSC", "USERDATA"]:
-            s_row = QHBoxLayout()
-            s_label = QLabel(slot_name)
-            s_label.setStyleSheet(f"color: {C['dim']}; font-weight: 600; min-width: 70px;")
-            s_edit = QLineEdit()
-            s_edit.setPlaceholderText(f"Click Browse to select {slot_name} (.tar / .tar.md5)...")
-            s_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        slots_grid = QGridLayout()
+        slots_grid.setContentsMargins(0, 0, 0, 0)
+        slots_grid.setHorizontalSpacing(10)
+        slots_grid.setVerticalSpacing(8)
 
-            s_btn = QPushButton("Browse...")
-            s_btn.setStyleSheet(_btn_ghost())
-            s_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            s_btn.setFixedWidth(90)
+        slot_row = {"AP": 0, "BL": 0, "CP": 1, "CSC": 1, "USERDATA": 2}
+        slot_col = {"AP": 0, "BL": 1, "CP": 0, "CSC": 1, "USERDATA": 0}
 
-            def make_browse(edit_widget, name):
-                return lambda: self._browse_slot(edit_widget, name)
-            s_btn.clicked.connect(make_browse(s_edit, slot_name))
+        def _slot_row(label, row, col, span):
+            cell = QWidget()
+            cell.setStyleSheet("background: transparent;")
+            c_lay = QVBoxLayout(cell)
+            c_lay.setContentsMargins(0, 0, 0, 0)
+            c_lay.setSpacing(4)
+            hl = QHBoxLayout()
+            hl.setSpacing(6)
+            lbl = QLabel(label)
+            lbl.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; font-size: 10px; min-width: 58px;")
+            hl.addWidget(lbl)
+            edit = QLineEdit()
+            edit.setPlaceholderText(f"Select {label} (.tar)")
+            edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 4px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+            hl.addWidget(edit, 1)
+            btn = QPushButton("Browse")
+            btn.setStyleSheet(_btn_ghost())
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedWidth(66)
+            btn.clicked.connect(
+                (lambda e=edit, n=label: lambda: self._browse_slot(e, n))()
+            )
+            hl.addWidget(btn)
+            c_lay.addLayout(hl)
+            slots_grid.addWidget(cell, row, col, 1, span)
+            self.slot_inputs[label] = edit
 
-            s_row.addWidget(s_label)
-            s_row.addWidget(s_edit, 1)
-            s_row.addWidget(s_btn)
-            f_lay.addLayout(s_row)
-            self.slot_inputs[slot_name] = s_edit
+        _slot_row("AP", 0, 0, 1)
+        _slot_row("BL", 0, 1, 1)
+        _slot_row("CP", 1, 0, 1)
+        _slot_row("CSC", 1, 1, 1)
+        _slot_row("USERDATA", 2, 0, 2)
+        slots_grid.setColumnStretch(0, 1)
+        slots_grid.setColumnStretch(1, 1)
+        f_lay.addLayout(slots_grid)
 
-        opt_row = QHBoxLayout()
-        opt_row.setSpacing(8)
+        run_row = QHBoxLayout()
+        run_row.setSpacing(8)
+        self.flash_btn = QPushButton("Flash Firmware")
+        self.flash_btn.setStyleSheet(_btn_primary())
+        self.flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.flash_btn.setToolTip(
+            "Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)"
+        )
+        self.flash_btn.clicked.connect(self._on_flash_slots)
+        run_row.addWidget(self.flash_btn)
+        self.check_tar_btn = QPushButton("Check archive")
+        self.check_tar_btn.setStyleSheet(_btn_ghost())
+        self.check_tar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.check_tar_btn.setToolTip(
+            "Validate the firmware archive / PIT with odin4 --check-only (no write)"
+        )
+        self.check_tar_btn.clicked.connect(
+            lambda: self._run_ops_flow(
+                "Odin Flashing (Advanced)", "Download mode",
+                "odin_check_tar", "Check firmware archive (odin4)"
+            )
+        )
+        run_row.addWidget(self.check_tar_btn)
+        run_row.addStretch(1)
+        f_lay.addLayout(run_row)
+        f_lay.addWidget(
+            _risk_banner(
+                "Flashing overwrites your device's firmware. Wrong files or a "
+                "power cut can brick it - keep it plugged in and charged."
+            )
+        )
+
+        # --- Zone 2: Flash options (safety switches) ---
+        self.options_panel = QFrame()
+        self.options_panel.setObjectName("flashopts")
+        self.options_panel.setStyleSheet(
+            f"QFrame#flashopts {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['warn']};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
+        opt_lay = QVBoxLayout(self.options_panel)
+        opt_lay.setContentsMargins(14, 10, 14, 14)
+        opt_lay.setSpacing(6)
+
+        opt_row = FlowLayout(spacing=8)
         self.allow_unknown_cb = QCheckBox("Allow unknown partitions (bypass PIT check, --allow-unknown)")
         self.allow_unknown_cb.setChecked(False)
         self.allow_unknown_cb.setToolTip(
@@ -2737,12 +3081,10 @@ class FrpWindow(QMainWindow):
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row.addWidget(self.auto_reboot_cb)
-        opt_row.addStretch(1)
-        f_lay.addLayout(opt_row)
+        opt_lay.addLayout(opt_row)
 
         # Advanced options row 2 - always-work repair steps
-        opt_row2 = QHBoxLayout()
-        opt_row2.setSpacing(8)
+        opt_row2 = FlowLayout(spacing=8)
         self.erase_nv_cb = QCheckBox("Erase NVRAM/NVDATA (zero-fill nv* partitions)")
         self.erase_nv_cb.setChecked(False)
         self.erase_nv_cb.setToolTip(
@@ -2793,8 +3135,7 @@ class FrpWindow(QMainWindow):
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row2.addWidget(self.verbose_cb)
-        opt_row2.addStretch(1)
-        f_lay.addLayout(opt_row2)
+        opt_lay.addLayout(opt_row2)
 
         # Auto-reboot and re-download are mutually exclusive.
         self.auto_reboot_cb.toggled.connect(
@@ -2804,49 +3145,154 @@ class FrpWindow(QMainWindow):
             lambda on: self.auto_reboot_cb.setChecked(False) if on else None
         )
 
-        # Advanced single-partition + sales code inputs (Odin Flashing (Advanced))
-        self.adv_panel = QFrame()
-        self.adv_panel.setStyleSheet(f"background: {C['card']}; border: 1px solid {C['border']}; border-radius: 12px;")
-        a_lay = QVBoxLayout(self.adv_panel)
-        a_lay.setContentsMargins(12, 12, 12, 12)
-        a_lay.setSpacing(8)
-        a_lay.addWidget(SectionTitle("SINGLE PARTITION + SALES CODE"))
+        # BL downgrade override row (native multi-partition flash gate)
+        opt_row3 = FlowLayout(spacing=8)
+        self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
+        self.force_bl_cb.setChecked(False)
+        self.force_bl_cb.setToolTip(
+            "OFF by default (safety). Lets the native multi-partition flash write a\n"
+            "bootloader whose revision is LOWER than the device's current one.\n"
+            "Flashing a lower BL revision on a newer device can hard-brick it - only\n"
+            "enable when you are certain the older firmware is correct for this device."
+        )
+        self.force_bl_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row3.addWidget(self.force_bl_cb)
+        opt_lay.addLayout(opt_row3)
 
-        p_row = QHBoxLayout()
-        p_label = QLabel("Partition")
-        p_label.setStyleSheet(f"color: {C['dim']}; font-weight: 600; min-width: 70px;")
+        # --- Zone 3: Advanced single-partition + native flash (circuit-deck) ---
+        self.adv_panel = QFrame()
+        self.adv_panel.setObjectName("adv")
+        self.adv_panel.setStyleSheet(
+            f"QFrame#adv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['ok']};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
+        a_lay = QVBoxLayout(self.adv_panel)
+        a_lay.setContentsMargins(14, 10, 14, 14)
+        a_lay.setSpacing(8)
+        a_lay.addWidget(
+            _risk_banner(
+                "Advanced: these write directly to partitions. A wrong "
+                "partition/image combo can soft-brick the device."
+            )
+        )
+
         self.partition_edit = QLineEdit()
         self.partition_edit.setPlaceholderText("e.g. vbmeta, boot, super, system ...")
+        self.partition_edit.setMinimumWidth(80)
+        self.partition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.partition_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+
+        self.image_edit = QLineEdit()
+        self.image_edit.setPlaceholderText("Image file (.img / .lz4 / .tar)")
+        self.image_edit.setMinimumWidth(80)
+        self.image_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.image_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+
+        self.sales_code_edit = QLineEdit()
+        self.sales_code_edit.setPlaceholderText("e.g. XSG")
+        self.sales_code_edit.setMinimumWidth(80)
+        self.sales_code_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.sales_code_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+
+        self.flash_specs_edit = QLineEdit()
+        self.flash_specs_edit.setPlaceholderText("partition=image;partition=image")
+        self.flash_specs_edit.setMinimumWidth(80)
+        self.flash_specs_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.flash_specs_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+
+        self.pit_file_edit = QLineEdit()
+        self.pit_file_edit.setPlaceholderText("Path to .pit")
+        self.pit_file_edit.setMinimumWidth(80)
+        self.pit_file_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.pit_file_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+
+        def _adv_run(method, label, tooltip):
+            btn = QPushButton(label)
+            btn.setStyleSheet(_btn_ghost())
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tooltip)
+            btn.clicked.connect(
+                lambda _=False, m=method, n=label: self._confirm_flash_action(
+                    n, m,
+                    "This writes data to your device. DO NOT unplug it until "
+                    "the operation finishes.",
+                )
+            )
+            return btn
+
+        # single partition + image -> one row
+        p_row = QHBoxLayout()
+        p_label = QLabel("Single")
+        p_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 52px; font-size: 11px;")
         p_row.addWidget(p_label)
         p_row.addWidget(self.partition_edit, 1)
-        a_lay.addLayout(p_row)
-
-        i_row = QHBoxLayout()
-        i_label = QLabel("Image")
-        i_label.setStyleSheet(f"color: {C['dim']}; font-weight: 600; min-width: 70px;")
-        self.image_edit = QLineEdit()
-        self.image_edit.setPlaceholderText("Image file (.img / .lz4 / .tar) for that partition...")
-        self.image_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        p_row.addWidget(self.image_edit, 1)
         img_btn = QPushButton("Browse...")
         img_btn.setStyleSheet(_btn_ghost())
         img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        img_btn.setFixedWidth(90)
+        img_btn.setFixedWidth(80)
         img_btn.clicked.connect(lambda: self._browse_slot(self.image_edit, "partition image"))
-        i_row.addWidget(i_label)
-        i_row.addWidget(self.image_edit, 1)
-        i_row.addWidget(img_btn)
-        a_lay.addLayout(i_row)
+        p_row.addWidget(img_btn)
+        p_run = _adv_run(
+            "odin_flash_partition", "Flash",
+            "Flash one partition (raw) with the partition name + image above"
+        )
+        p_run.setFixedWidth(64)
+        p_row.addWidget(p_run)
+        a_lay.addLayout(p_row)
 
+        # sales code -> one row
         sc_row = QHBoxLayout()
         sc_label = QLabel("Sales Code")
-        sc_label.setStyleSheet(f"color: {C['dim']}; font-weight: 600; min-width: 70px;")
-        self.sales_code_edit = QLineEdit()
-        self.sales_code_edit.setPlaceholderText("e.g. XSG (change CSC / region code)")
-        self.sales_code_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        sc_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
         sc_row.addWidget(sc_label)
         sc_row.addWidget(self.sales_code_edit, 1)
+        sc_run = _adv_run(
+            "odin_sales_code", "Apply",
+            "Change the CSC / sales code on the device (needs a matching CSC archive)"
+        )
+        sc_run.setFixedWidth(64)
+        sc_row.addWidget(sc_run)
         a_lay.addLayout(sc_row)
+
+        # multi-partition specs -> one row
+        ms_row = QHBoxLayout()
+        ms_label = QLabel("Flash specs")
+        ms_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
+        ms_row.addWidget(ms_label)
+        ms_row.addWidget(self.flash_specs_edit, 1)
+        ms_run = _adv_run(
+            "odin_flash_multi", "Flash",
+            "Flash multiple partitions from partition=image;partition=image specs"
+        )
+        ms_run.setFixedWidth(64)
+        ms_row.addWidget(ms_run)
+        a_lay.addLayout(ms_row)
+
+        # pit -> one row
+        pit_row = QHBoxLayout()
+        pit_label = QLabel("PIT file")
+        pit_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
+        pit_row.addWidget(pit_label)
+        pit_row.addWidget(self.pit_file_edit, 1)
+        pit_btn = QPushButton("Browse...")
+        pit_btn.setStyleSheet(_btn_ghost())
+        pit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pit_btn.setFixedWidth(80)
+        pit_btn.clicked.connect(lambda: self._browse_slot(self.pit_file_edit, "pit"))
+        pit_row.addWidget(pit_btn)
+        pit_run = _adv_run(
+            "odin_send_pit", "Send",
+            "Send the PIT to the device (repartition)"
+        )
+        pit_run.setFixedWidth(64)
+        pit_row.addWidget(pit_run)
+        a_lay.addLayout(pit_row)
 
     def _build_console(self):
         """Shared console/log panel shown on the right side of every section."""
@@ -2854,11 +3300,11 @@ class FrpWindow(QMainWindow):
         panel.setObjectName("console")
         panel.setStyleSheet(
             f"QFrame#console {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(22, 30, 44, 215), stop:1 rgba(15, 21, 31, 220));"
-            f" border: 1px solid {C['border_hi']};"
-            f" border-radius: 13px; }}"
+            f" stop:0 rgba(13, 20, 31, 230), stop:1 rgba(6, 10, 16, 235));"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border-radius: 9px; }}"
             f" QFrame#console:hover {{ border: 1px solid {C['border_hi']};"
-            f" background: rgba(24, 33, 47, 220); }}"
+            f" background: rgba(15, 23, 35, 235); }}"
         )
         panel.setMinimumWidth(360)
         panel.setMaximumWidth(430)
@@ -2874,6 +3320,7 @@ class FrpWindow(QMainWindow):
         self.console_count = QLabel("0 lines")
         self.console_count.setStyleSheet(
             f"color:{C['mute']}; font-size:10px; font-weight:600; letter-spacing:1px;"
+            f" font-family:'JetBrains Mono','Consolas',monospace;"
         )
         console_row.addWidget(self.console_count)
         console_row.addStretch(1)
@@ -2900,7 +3347,7 @@ class FrpWindow(QMainWindow):
         self.find_edit.textChanged.connect(self._apply_find)
         self.find_edit.setStyleSheet(
             f"QLineEdit {{ background:{C['card']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:5px 10px; color:{C['text']};"
+            f" border-radius:6px; padding:5px 10px; color:{C['text']};"
             f" selection-background-color:{C['accent']}; }}"
             f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
             f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
@@ -3064,6 +3511,35 @@ class FrpWindow(QMainWindow):
             lay.addLayout(row)
             self.mtk_files[name] = edit
 
+        # Generate a scatter file straight from the device GPT (Samsung
+        # firmware ships no scatter; this rebuilds one from the phone).
+        gen_row = QHBoxLayout()
+        gen_btn = QPushButton("Generate Scatter (from device GPT)")
+        gen_btn.setStyleSheet(_btn_ghost())
+        gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gen_btn.setToolTip(
+            "Read the device's own GPT partition table and write an SP Flash\n"
+            "Tool scatter file. Samsung firmware never includes a scatter file,\n"
+            "so this rebuilds one from the phone. Large data partitions are\n"
+            "marked non-downloadable. Needs the DA binary + BROM/preloader."
+        )
+        gen_btn.clicked.connect(self._mtk_gen_scatter)
+        gen_row.addWidget(gen_btn)
+        da_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
+        da_btn.setStyleSheet(_btn_ghost())
+        da_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        da_btn.setToolTip(
+            "Dump the phone's own preloader and patch its security checks -\n"
+            "the result IS a working Download Agent for this device. This is\n"
+            "how you get a DA without downloading one: the phone provides it.\n"
+            "The patched file is saved to ~/Downloads/preloader_patched.bin\n"
+            "and auto-selected as the DA binary. Needs the phone in BROM."
+        )
+        da_btn.clicked.connect(self._mtk_dump_preloader)
+        gen_row.addWidget(da_btn)
+        gen_row.addStretch(1)
+        lay.addLayout(gen_row)
+
         # action buttons (two compact rows like the QC page)
         acts = QVBoxLayout()
         acts.setSpacing(8)
@@ -3145,6 +3621,13 @@ class FrpWindow(QMainWindow):
         fw_btn.setFixedWidth(90)
         fw_row.addWidget(fw_btn)
         lay.addLayout(fw_row)
+        lay.addWidget(
+            _risk_banner(
+                "MTK flashing and FRP bypass write directly to the chip. "
+                "Ensure the DA and scatter match your exact model - a wrong "
+                "DA can hard-brick the device."
+            )
+        )
 
         self.mtk_progress = QProgressBar()
         self.mtk_progress.setRange(0, 1000)
@@ -3242,6 +3725,114 @@ class FrpWindow(QMainWindow):
             except Exception as e:  # noqa: BLE001
                 self._ui.ui.emit(lambda err=e: self.mtk_status.setText(
                     f"Scan error: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _mtk_dump_preloader(self):
+        """Dump + patch the phone's own preloader into a working DA. This is
+        how the tool gets a DA without downloading one: the phone provides it.
+        Only needs the device in BROM/preloader - no DA, no scatter required
+        up front. Handles a boot-looping phone: it WAITS for the preloader
+        window and retries across cycles instead of failing instantly. The
+        patched file is saved to ~/Downloads/preloader_patched.bin and
+        auto-selected as the DA binary."""
+        out = os.path.expanduser("~/Downloads/preloader_patched.bin")
+        self._ui.line.emit(
+            "[step] MTK dump + patch preloader - waiting for the "
+            "BROM/preloader window ..."
+        )
+        self._ui.status.emit("MTK: waiting for BROM/preloader ...")
+        self.mtk_stop_btn.setEnabled(True)
+
+        def work():
+            deadline = _time.monotonic() + 240
+            attempt = 0
+            os.environ["MTK_PRELOADER_OUT"] = out
+            try:
+                while _time.monotonic() < deadline:
+                    if frp.cancel_requested():
+                        self._ui.line.emit("[cancelled] MTK preloader dump stopped")
+                        return
+                    d = None
+                    stage = None
+                    for x in mtk.find_mtk():
+                        st = mtk.pid_stage(x.get("pid", 0))
+                        if st in ("brom", "preloader"):
+                            d = x
+                            stage = st
+                            break
+                    if not d:
+                        _time.sleep(0.7)
+                        continue
+                    target = f"{d.get('bus')}:{d.get('address')}"
+                    attempt += 1
+                    self._ui.line.emit(
+                        f"  attempt {attempt}: 0e8d:{d.get('pid', 0):04x} "
+                        f"({mtk.stage_label(stage)[0]}) - dumping ..."
+                    )
+                    try:
+                        res = bridge._run(
+                            ["mtk-exploit", target, "mtk_bypass"], timeout=120
+                        )
+                        self._ui.line.emit(res)
+                    except bridge.BridgeError as e:
+                        self._ui.line.emit(
+                            f"  attempt {attempt} lost the device ({e}) - "
+                            "waiting for the next window ..."
+                        )
+                        continue
+                    if os.path.isfile(out) and os.path.getsize(out):
+                        self._ui.ui.emit(lambda: self.mtk_files["da"].setText(out))
+                        self._ui.status.emit("MTK: DA built from phone preloader")
+                        self._ui.toast.emit(
+                            "ok", "MTK DA", "Patched preloader saved + selected as DA"
+                        )
+                        return
+                    self._ui.line.emit(
+                        "  dump ran but produced no file - retrying next window ..."
+                    )
+                    _time.sleep(1)
+                self._ui.line.emit(
+                    "[error] MTK preloader: no successful dump within 240s"
+                )
+                self._ui.status.emit("MTK: preloader dump timed out")
+            finally:
+                os.environ.pop("MTK_PRELOADER_OUT", None)
+                self._ui.ui.emit(self._mtk_reset_ui)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _mtk_gen_scatter(self):
+        """Generate an SP Flash Tool scatter file from the device's own GPT
+        (Samsung firmware ships no scatter; this rebuilds one from the phone).
+        Read-only, then auto-fills the scatter field so the scatter-based
+        buttons (Backup Partitions / Flash Firmware / FRP Bypass / Enable ADB)
+        work without hunting for a scatter file."""
+        da = self.mtk_files["da"].text().strip()
+        if not da:
+            self._ui.line.emit("[warn] MTK: DA binary is required")
+            self._toasts.show_warn("MTK files missing", "Select a DA binary")
+            return
+        out = os.path.join(
+            os.path.expanduser("~/Downloads"),
+            f"mtk_scatter_{_time.strftime('%Y%m%d_%H%M%S')}.txt",
+        )
+        self._ui.line.emit(f"[step] MTK generate scatter from device GPT: da={da}")
+        self._ui.status.emit("MTK: reading device GPT ...")
+
+        def work():
+            try:
+                res = bridge.mtk_scatter_gpt(da, out)
+                self._ui.line.emit(res)
+                self._ui.ui.emit(lambda: self.mtk_files["scatter"].setText(out))
+                self._ui.status.emit("MTK: scatter generated from device GPT")
+                self._ui.toast.emit("ok", "MTK scatter", "Generated from device GPT")
+            except bridge.BridgeError as e:
+                self._ui.line.emit(f"[error] MTK scatter: {e}")
+                self._ui.status.emit("MTK: scatter generation failed")
+                self._ui.toast.emit("error", "MTK scatter", str(e))
+            except Exception as e:  # noqa: BLE001
+                self._ui.line.emit(f"[error] MTK scatter: {e}")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3594,6 +4185,12 @@ class FrpWindow(QMainWindow):
         fw_btn.setFixedWidth(90)
         fw_row.addWidget(fw_btn)
         lay.addLayout(fw_row)
+        lay.addWidget(
+            _risk_banner(
+                "Qualcomm firehose flashing writes the whole device. The "
+                "programmer must match your exact SoC - a mismatch can hard-brick."
+            )
+        )
 
         self.qc_progress = QProgressBar()
         self.qc_progress.setRange(0, 1000)
@@ -3606,6 +4203,69 @@ class FrpWindow(QMainWindow):
             f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); border-radius:4px; }}"
         )
         self.qc_progress.setVisible(False)
+
+        # --- Fastboot partition tools (not covered by the job/flow maps) ---
+        fb_body = QWidget()
+        fb_body.setStyleSheet("background: transparent;")
+        fb_lay = QVBoxLayout(fb_body)
+        fb_lay.setContentsMargins(0, 0, 0, 0)
+        fb_lay.setSpacing(8)
+
+        fb_row = QHBoxLayout()
+        fb_row.setSpacing(6)
+        fb_part = QLineEdit()
+        fb_part.setPlaceholderText("Partition (e.g. boot, system, super)")
+        fb_part.setMinimumWidth(80)
+        fb_part.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        fb_part.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        fb_row.addWidget(fb_part, 1)
+        fb_img = QLineEdit()
+        fb_img.setPlaceholderText("Image file (.img / .tar)")
+        fb_img.setMinimumWidth(80)
+        fb_img.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        fb_img.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        fb_row.addWidget(fb_img, 1)
+        fb_browse = QPushButton("Browse...")
+        fb_browse.setStyleSheet(_btn_ghost())
+        fb_browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        fb_browse.setFixedWidth(80)
+        fb_browse.clicked.connect(lambda: self._qc_browse(fb_img, "fastboot image", "Images (*.img *.img.gz *.tar);;All files (*)"))
+        fb_row.addWidget(fb_browse)
+        fb_lay.addLayout(fb_row)
+
+        def _fb_run(method, label, tooltip):
+            btn = QPushButton(label)
+            btn.setStyleSheet(_btn_ghost())
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tooltip)
+            btn.clicked.connect(
+                lambda _=False, m=method, n=label: self._qc_fastboot_flow(
+                    m, n, fb_part, fb_img
+                )
+            )
+            return btn
+
+        fb_btns = QHBoxLayout()
+        fb_btns.setSpacing(6)
+        fb_btns.addWidget(_fb_run("fastboot_flash", "Flash", "fastboot flash <partition> <image> (bootloader must be unlocked)"))
+        fb_btns.addWidget(_fb_run("fastboot_format", "Format", "fastboot format <partition> (ext4/f2fs)"))
+        fb_btns.addWidget(_fb_run("fastboot_lock", "Relock", "fastboot flashing lock / oem lock (re-lock the bootloader)"))
+        fb_btns.addWidget(_fb_run("fastboot_set_active", "Set active", "fastboot set_active a/b - choose the boot slot"))
+        fb_btns.addStretch(1)
+        fb_lay.addLayout(fb_btns)
+
+        fb_btns2 = QHBoxLayout()
+        fb_btns2.setSpacing(6)
+        fb_btns2.addWidget(_fb_run("fastboot_read", "Getvar", "fastboot getvar all - dump device variables"))
+        fb_btns2.addWidget(_fb_run("fastboot_oem", "OEM", "fastboot oem <cmd> (set FASTBOOT_OEM, default device-info)"))
+        fb_btns2.addStretch(1)
+        fb_lay.addLayout(fb_btns2)
+
+        fb_sec = CollapsibleSection(
+            "FASTBOOT TOOLS", fb_body, accent=C["accent"], collapsed=True
+        )
+        lay.addWidget(fb_sec)
+
         qc_ops = self._build_chip_ops_section(
             "qc",
             {"EDL", "FASTBOOT", "ADB", "MTP"},
@@ -3616,6 +4276,25 @@ class FrpWindow(QMainWindow):
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
         return panel
+
+    def _qc_fastboot_flow(self, method, label, part_edit, img_edit):
+        """Run a fastboot partition flow with the values typed in the FASTBOOT
+        TOOLS section. Sets FASTBOOT_PARTITION / FASTBOOT_IMAGE env so the flow
+        flashes / formats exactly the partition+image the user entered."""
+        part = part_edit.text().strip()
+        img = img_edit.text().strip()
+        if part:
+            os.environ["FASTBOOT_PARTITION"] = part
+        else:
+            os.environ.pop("FASTBOOT_PARTITION", None)
+        if img:
+            os.environ["FASTBOOT_IMAGE"] = img
+        else:
+            os.environ.pop("FASTBOOT_IMAGE", None)
+        self._run_job_flow(
+            "Reboot device", "FASTBOOT", method, label,
+            self.qc_stop_btn, self.qc_progress, self._qc_reset_ui,
+        )
 
     def _qc_browse(self, edit, name, name_filter):
         path, _ = QFileDialog.getOpenFileName(self, f"Select {name}", os.path.expanduser("~/Downloads"), name_filter)
@@ -3793,6 +4472,20 @@ class FrpWindow(QMainWindow):
             "re-flashed / set up as new. The device must be in EDL mode.",
             confirm_label="Erase FRP",
             on_confirm=lambda: self._qc_run(["qcom-frp-reset", "auto"], timeout=300),
+        )
+
+    def _confirm_flash_action(self, label, method, extra):
+        """Confirm any device-writing operation before it runs, then dispatch
+        through the Odin advanced-flow runner."""
+        self._confirm_overlay(
+            label,
+            f"{extra}\n\n"
+            "Make sure you selected the correct files. Proceed only if you "
+            "are sure this is the right firmware for your model.",
+            confirm_label="Continue",
+            on_confirm=lambda: self._run_ops_flow(
+                "Odin Flashing (Advanced)", "Download mode", method, label
+            ),
         )
 
     def _confirm_overlay(self, title, text, confirm_label, on_confirm):
@@ -4018,6 +4711,13 @@ class FrpWindow(QMainWindow):
         fw_btn.setFixedWidth(90)
         fw_row.addWidget(fw_btn)
         lay.addLayout(fw_row)
+        lay.addWidget(
+            _risk_banner(
+                "SPD flashing and factory format write directly to the chip. "
+                "The FDL binaries and base addresses must match your exact "
+                "chipset - a wrong FDL can hard-brick the device."
+            )
+        )
 
         self.spd_progress = QProgressBar()
         self.spd_progress.setRange(0, 1000)
@@ -4470,9 +5170,18 @@ class FrpWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("card")
         panel.setStyleSheet(_card_qss())
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(12)
+        root_lay = QVBoxLayout(panel)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(0)
+
+        # Scroll wrapper: the page holds a live readout + two action groups, so
+        # it must be scrollable rather than crushed into the fixed viewport.
+        page_scroll = self._ops_scroll_area()
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(14)
 
         lay.addWidget(SectionTitle("NETWORK REPAIR (ADB)"))
         info = QLabel(
@@ -4485,14 +5194,39 @@ class FrpWindow(QMainWindow):
         info.setWordWrap(True)
         lay.addWidget(info)
 
+        # --- Live diagnostics readout (updates every 3s while an ADB device
+        #     is connected - no need to click anything) ---
+        self.net_cards = {}
+        net_grid = QGridLayout()
+        net_grid.setContentsMargins(0, 0, 0, 0)
+        net_grid.setHorizontalSpacing(14)
+        net_grid.setVerticalSpacing(12)
+        for i, (key, cap) in enumerate(
+            (
+                ("sim", "SIM STATE"),
+                ("net", "NETWORK TYPE"),
+                ("mode", "PREFERRED MODE"),
+                ("signal", "SIGNAL"),
+                ("data", "MOBILE DATA"),
+                ("wifi", "WI-FI"),
+                ("dns", "PRIVATE DNS"),
+                ("airplane", "AIRPLANE MODE"),
+            )
+        ):
+            mc = MetricCard(cap, "--", accent=C["accent"])
+            net_grid.addWidget(mc, i // 4, i % 4)
+            self.net_cards[key] = mc
+        net_grid.setColumnStretch(0, 1)
+        net_grid.setColumnStretch(1, 1)
+        net_grid.setColumnStretch(2, 1)
+        net_grid.setColumnStretch(3, 1)
+        lay.addLayout(net_grid)
+
         status_row = QHBoxLayout()
-        self.net_status = QLabel("No device probed yet")
-        self.net_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
+        self.net_status = QLabel("Live diagnostics update while a device is connected")
+        self.net_status.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         status_row.addWidget(self.net_status, 1)
         lay.addLayout(status_row)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
 
         def action_card(title, desc, btn_label, slot, primary=False):
             c = QFrame()
@@ -4501,7 +5235,7 @@ class FrpWindow(QMainWindow):
                 f" border-radius: 12px;"
             )
             cv = QVBoxLayout(c)
-            cv.setContentsMargins(14, 14, 14, 14)
+            cv.setContentsMargins(16, 16, 16, 16)
             cv.setSpacing(10)
             t = QLabel(title)
             t.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800;")
@@ -4519,11 +5253,15 @@ class FrpWindow(QMainWindow):
             cv.addWidget(b)
             return c
 
+        lay.addWidget(SectionTitle("ACTIONS"))
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
         cards.addWidget(
             action_card(
                 "Network Report",
-                "SIM state, network type, preferred mode, data/Wi-Fi flags, "
-                "DNS mode, IP address and Wi-Fi status.",
+                "Full report: SIM state, network type, preferred mode, "
+                "data/Wi-Fi flags, DNS, IP and radio version - printed to the "
+                "console.",
                 "Run Report",
                 self._network_report,
             ),
@@ -4551,9 +5289,16 @@ class FrpWindow(QMainWindow):
             ),
             1,
         )
-        lay.addLayout(cards, 1)
+        lay.addLayout(cards)
 
-        lay.addWidget(SectionTitle("CARRIER / SIM LOCK"))
+        # --- SIM / carrier lock lives in a collapsible section so the main
+        #     view stays open and breathable ---
+        lock_body = QWidget()
+        lock_body.setStyleSheet("background: transparent;")
+        lock_lay = QVBoxLayout(lock_body)
+        lock_lay.setContentsMargins(0, 0, 0, 0)
+        lock_lay.setSpacing(12)
+
         lock_info = QLabel(
             "Check the SIM / network lock state on any device (read-only), and "
             "read / back up the modem lock record on MediaTek A05/A06 (BROM).\n"
@@ -4561,10 +5306,10 @@ class FrpWindow(QMainWindow):
         )
         lock_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         lock_info.setWordWrap(True)
-        lay.addWidget(lock_info)
+        lock_lay.addWidget(lock_info)
 
         lock_cards = QHBoxLayout()
-        lock_cards.setSpacing(12)
+        lock_cards.setSpacing(14)
         lock_cards.addWidget(
             action_card(
                 "Carrier Lock Status",
@@ -4588,7 +5333,11 @@ class FrpWindow(QMainWindow):
             ),
             1,
         )
-        lay.addLayout(lock_cards, 1)
+        lock_lay.addLayout(lock_cards)
+
+        lay.addWidget(CollapsibleSection(
+            "CARRIER / SIM LOCK", lock_body, accent=C["warn"], collapsed=True
+        ))
 
         tip = QLabel(
             "All fixes work over ADB on any connected device (Samsung / MTK / "
@@ -4598,7 +5347,10 @@ class FrpWindow(QMainWindow):
         tip.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         tip.setWordWrap(True)
         lay.addWidget(tip)
+        lay.addStretch(1)
 
+        page_scroll.setWidget(host)
+        root_lay.addWidget(page_scroll)
         return panel
 
     # ----------------------------- Settings page --------------------------
@@ -5042,7 +5794,7 @@ class FrpWindow(QMainWindow):
         view = combo.view()
         view.setStyleSheet(
             f"QListView {{ background:{C['panel']}; color:{C['text']};"
-            f" border:1px solid {C['border_hi']}; border-radius:12px;"
+            f" border:1px solid {C['border_hi']}; border-radius:8px;"
             f" outline:0; padding:4px; }}"
         )
         pal = view.palette()
@@ -5083,6 +5835,7 @@ class FrpWindow(QMainWindow):
         if (
             m.startswith("[error]")
             or m.startswith("[cancelled]")
+            or m.startswith("[FAILED]")
             or "bridge error" in m
             or m.startswith("[err]")
         ):
@@ -6149,6 +6902,84 @@ class FrpWindow(QMainWindow):
             )
         return serial
 
+    def _poll_net_live(self):
+        """Live network readout on the Network page. Runs from the 3s ADB
+        timer; updates the metric cards while an authorized ADB device is
+        connected, so diagnostics appear without clicking anything."""
+        if not hasattr(self, "net_cards"):
+            return
+        if self._update_net_in_progress:
+            return
+        self._update_net_in_progress = True
+
+        def work():
+            try:
+                try:
+                    adb_devs = bridge.adb_status()
+                except bridge.BridgeError:
+                    adb_devs = []
+                authorized = [d for d in adb_devs if d["state"] == "device"]
+                if not authorized:
+                    self._ui.ui.emit(self._net_set_offline)
+                    return
+                serial = authorized[0]["serial"]
+                try:
+                    get = lambda prop: bridge.adb_shell(
+                        f"getprop {prop}", timeout=8
+                    ).strip()
+                    settings_get = lambda key: bridge.adb_shell(
+                        f"settings get global {key}", timeout=8
+                    ).strip()
+                    sim = get("gsm.sim.state")
+                    net = get("gsm.network.type")
+                    mode = settings_get("preferred_network_mode")
+                    data = settings_get("mobile_data")
+                    wifi = settings_get("wifi_on")
+                    dns = settings_get("private_dns_mode")
+                    airplane = settings_get("airplane_mode_on")
+                except (bridge.BridgeError, ValueError):
+                    self._ui.ui.emit(self._net_set_offline)
+                    return
+                vals = {
+                    "sim": sim or "unknown",
+                    "net": net or "unknown",
+                    "mode": mode or "unknown",
+                    "data": data or "unknown",
+                    "wifi": wifi or "unknown",
+                    "dns": dns or "unknown",
+                    "airplane": airplane or "unknown",
+                }
+                try:
+                    sig = bridge.adb_shell(
+                        "dumpsys telephony.registry 2>/dev/null | grep -m1 "
+                        "'mSignalStrength' | awk -F'=' '{print $2}'",
+                        timeout=8,
+                    ).strip()
+                    vals["signal"] = sig or "unknown"
+                except bridge.BridgeError:
+                    vals["signal"] = "unknown"
+                self._ui.ui.emit(lambda: self._net_apply(vals, serial))
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                self._update_net_in_progress = False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _net_apply(self, vals, serial):
+        for k, v in vals.items():
+            card = self.net_cards.get(k)
+            if card:
+                card.set(v)
+        self.net_status.setText(f"Live from {serial} - updates every 3 seconds")
+
+    def _net_set_offline(self):
+        for k, card in self.net_cards.items():
+            card.set("--")
+        self.net_status.setText(
+            "No authorized ADB device - connect + authorize to see live diagnostics"
+        )
+
     def _network_report(self):
         def work():
             try:
@@ -6335,6 +7166,39 @@ class FrpWindow(QMainWindow):
         name = frp.FLOWS["carrier_lock_mtk"]().name
         self._run_ops_flow("Carrier lock", "MTK BROM", "carrier_lock_mtk", name)
 
+    def _on_flash_slots(self):
+        """Primary FLASH button: confirm what will be flashed, then run the
+        5-slot advanced flash. Refuses to start with no slots selected, and
+        always asks for confirmation since flashing overwrites the device."""
+        picked = []
+        for name, edit in self.slot_inputs.items():
+            val = edit.text().strip()
+            if val:
+                picked.append((name, os.path.basename(val)))
+        if not picked:
+            self._toasts.show_warn(
+                "No firmware selected",
+                "Pick at least one AP / BL / CP / CSC / USERDATA archive before flashing.",
+            )
+            self._ui.status.emit("Flash blocked: no firmware slot selected")
+            self._ui.line.emit("\n[blocked] flash aborted - select a firmware slot first")
+            return
+
+        detail = "\n".join(f"    {n} <- {f}" for n, f in picked)
+        self._confirm_overlay(
+            "Flash Firmware",
+            "This will OVERWRITE the following partitions on your device.\n\n"
+            f"{detail}\n\n"
+            "DO NOT unplug the phone and keep the battery above 50% until the "
+            "flash finishes. A failed bootloader flash can permanently brick "
+            "the device.",
+            confirm_label="Flash now",
+            on_confirm=lambda: self._run_ops_flow(
+                "Odin Flashing (Advanced)", "Download mode",
+                "odin_advanced_flash", "Advanced flash (AP/BL/CP/CSC + Unofficial)",
+            ),
+        )
+
     def _browse_slot(self, edit_widget, slot_name):
         # Native Linux (GTK) file dialogs select the FIRST filter by default;
         # using a single comprehensive filter guarantees .img/.lz4/.bin/.pit/
@@ -6376,6 +7240,10 @@ class FrpWindow(QMainWindow):
             os.environ["ODIN4_CHECK_ONLY"] = "1" if self.check_only_cb.isChecked() else "0"
             os.environ["ODIN4_REDOWNLOAD"] = "1" if self.redownload_cb.isChecked() else "0"
             os.environ["ODIN4_VERBOSE"] = "1" if self.verbose_cb.isChecked() else "0"
+            os.environ["ODIN4_FORCE_BL"] = "1" if self.force_bl_cb.isChecked() else "0"
+            # GUI-triggered Odin flows must flash ONLY the files the user
+            # picked in the slots - never auto-discover in ~/Downloads.
+            os.environ["ODIN4_EXACT_SLOTS"] = "1"
             for s_name, s_edit in self.slot_inputs.items():
                 val = s_edit.text().strip()
                 if val:
@@ -6386,6 +7254,8 @@ class FrpWindow(QMainWindow):
             part = self.partition_edit.text().strip()
             img = self.image_edit.text().strip()
             sc = self.sales_code_edit.text().strip().upper()
+            specs = self.flash_specs_edit.text().strip()
+            pit = self.pit_file_edit.text().strip()
             if part:
                 os.environ["FLASH_PARTITION"] = part
             else:
@@ -6398,6 +7268,14 @@ class FrpWindow(QMainWindow):
                 os.environ["SALES_CODE"] = sc
             else:
                 os.environ.pop("SALES_CODE", None)
+            if specs:
+                os.environ["FLASH_SPECS"] = specs
+            else:
+                os.environ.pop("FLASH_SPECS", None)
+            if pit:
+                os.environ["PIT_FILE"] = pit
+            else:
+                os.environ.pop("PIT_FILE", None)
 
         if method == "carrier_lock_mtk":
             mtk_files = getattr(self, "mtk_files", None)
@@ -6436,16 +7314,120 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] {type(e).__name__}: {e}")
-                self._ui.status.emit(f"Flow '{label}' failed")
-                self._ui.toast.emit(
-                    "error", "Operation failed", f"{type(e).__name__}: {e}"
-                )
+                self._emit_flow_error(label, e, mode=mode)
             finally:
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.finished.emit()
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _coach_no_device(self, mode):
+        """When a flow failed because no device was present, print plain-language
+        instructions for getting the phone into the right mode. Uses the mode
+        the operation was launched with so the guidance is specific."""
+        from python.core.mtp import find_samsung
+
+        cur = find_samsung()
+        if cur:
+            self._ui.line.emit(
+                f"  [hint] a Samsung device IS connected (pid 04e8:{cur.get('pid', 0):04x}),"
+                " but not in the mode this operation needs."
+            )
+        self._ui.line.emit("  [hint] what to do:")
+        mode = (mode or "").strip().lower()
+        if "download" in mode:
+            self._ui.line.emit(
+                "    1. Power the phone fully OFF (hold power, tap Power off)."
+            )
+            self._ui.line.emit(
+                "    2. Hold Volume Down + Power for a few seconds."
+            )
+            self._ui.line.emit(
+                "    3. On the warning screen press Volume Up to enter"
+                " 'Downloading...' mode."
+            )
+            self._ui.line.emit(
+                "    The phone now shows a blue 'Downloading' screen - do NOT"
+                " press Volume Down on it."
+            )
+        elif "edl" in mode or "qualcomm" in mode:
+            self._ui.line.emit(
+                "    1. Power the phone fully OFF."
+            )
+            self._ui.line.emit(
+                "    2. Hold Volume Up + Volume Down together, then plug in the"
+                " USB cable (or hold Volume Up + Power on some models)."
+            )
+            self._ui.line.emit(
+                "    The Qualcomm EDL port (05c6:9008) should now appear - a"
+                " window may pop up asking for a driver on Windows."
+            )
+        elif "brom" in mode or "mtk" in mode:
+            self._ui.line.emit(
+                "    1. Power the phone fully OFF."
+            )
+            self._ui.line.emit(
+                "    2. Hold Volume Up + Volume Down, then plug in the USB cable"
+                " (MediaTek BROM/preloader mode)."
+            )
+            self._ui.line.emit(
+                "    The MediaTek port (0e8d:0003 BROM) should now appear."
+            )
+        elif "fastboot" in mode:
+            self._ui.line.emit(
+                "    1. Boot the phone to fastboot: hold Volume Down + Power from"
+                " the bootloader screen, then select 'fastboot' with Volume"
+                " keys + Power."
+            )
+        elif "adb" in mode:
+            self._ui.line.emit(
+                "    1. On the phone enable Developer Options, then USB Debugging."
+            )
+            self._ui.line.emit(
+                "    2. Plug in the USB cable and tap 'Allow' on the RSA"
+                " debugging prompt on the phone screen."
+            )
+        else:
+            self._ui.line.emit(
+                "    Put the phone in the mode this operation needs (see the"
+                " operation description / console output for which one)."
+            )
+        self._ui.line.emit(
+            "  If it is already in the right mode, press F5 to re-scan USB."
+        )
+
+    def _emit_flow_error(self, label, e, mode=None):
+        """Render a failed flow so the real error is unmissable: a FAILED status,
+        the error + bridge log tail in the console, and a red toast. If the
+        failure looks like a missing device, add mode-specific coaching."""
+        msg = f"{type(e).__name__}: {e}"
+        self._ui.line.emit(f"\n[FAILED] {label}")
+        self._ui.line.emit(f"  {msg.splitlines()[0]}")
+        if "bridge log tail" in msg:
+            tail = msg.split("[bridge log tail]", 1)[1].strip()
+            if tail:
+                self._ui.line.emit("  -- last bridge output --")
+                for ln in tail.splitlines():
+                    self._ui.line.emit(f"  {ln}")
+        self._ui.status.emit(f"FAILED: {label} - {msg.splitlines()[0]}")
+        self._ui.toast.emit("error", "Operation failed", msg.splitlines()[0])
+        low = msg.lower()
+        if any(
+            k in low
+            for k in (
+                "no device",
+                "not in download mode",
+                "device not found",
+                "no samsung",
+                "no target",
+                "not connected",
+                "no adb",
+                "not in the right mode",
+                "device in fastboot",
+                "not found",
+            )
+        ):
+            self._coach_no_device(mode)
 
     def _run_job_flow(self, job, mode, method, label, stop_btn, progress, reset_ui):
         """Run one of the frp job flows (screen lock remove, MDM unlock, BROM
@@ -6478,11 +7460,7 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] {type(e).__name__}: {e}")
-                self._ui.status.emit(f"Flow '{label}' failed")
-                self._ui.toast.emit(
-                    "error", "Operation failed", f"{type(e).__name__}: {e}"
-                )
+                self._emit_flow_error(label, e, mode=mode)
             finally:
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.ui.emit(reset_ui)

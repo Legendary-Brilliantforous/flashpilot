@@ -42,6 +42,30 @@ class BridgeCancelled(BridgeError):
 # ---- cooperative cancel (mirrors frp.py) ------------------------------
 _cancel = threading.Event()
 
+# Optional live-log callback: the GUI wires this to its console so Rust
+# eprintln! progress lines reach the screen in real time.
+_log_hook = None
+_lock = threading.Lock()
+
+
+def set_log_hook(fn):
+    """Set a callable(line) that receives every line the bridge writes to
+    stderr as it runs (flash progress, handshake retries, ...)."""
+    global _log_hook
+    with _lock:
+        _log_hook = fn
+
+
+def _forward_log(line):
+    fn = None
+    with _lock:
+        fn = _log_hook
+    if fn is not None:
+        try:
+            fn(line)
+        except Exception:  # noqa: BLE001 - logging must never break a flash
+            pass
+
 
 def request_cancel():
     _cancel.set()
@@ -56,34 +80,65 @@ def cancel_requested():
 
 
 def _run(args, timeout=15):
-    if not BRIDGE.exists():
+    bridge_path = Path(BRIDGE)
+    if not bridge_path.exists():
         raise BridgeError(
             f"rust bridge not built at {BRIDGE}. Run `cargo build --release` first."
         )
     proc = subprocess.Popen(
-        [str(BRIDGE), *args],
+        [str(bridge_path), *args],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,
     )
     deadline = time.monotonic() + timeout
-    while True:
-        if cancel_requested():
+
+    # Background thread drains stderr line-by-line so live progress reaches
+    # the GUI even while the process is still running.
+    stderr_lines = []
+    stopped = threading.Event()
+
+    def _drain():
+        assert proc.stderr is not None
+        for raw in proc.stderr:
+            line = raw.rstrip("\n")
+            if not line.strip():
+                continue
+            stderr_lines.append(line)
+            _forward_log(line)
+        stopped.set()
+
+    drainer = threading.Thread(target=_drain, daemon=True)
+    drainer.start()
+
+    try:
+        while True:
+            if cancel_requested():
+                proc.kill()
+                proc.wait()
+                raise BridgeCancelled("cancelled by user")
+            rc = proc.poll()
+            if rc is not None:
+                break
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.wait()
+                raise BridgeError(f"timed out after {timeout}s")
+            time.sleep(0.05)
+        out, err = proc.communicate()
+        stopped.wait(timeout=2)
+        drainer.join(timeout=2)
+        tail = "\n".join(stderr_lines[-25:])
+        if proc.returncode != 0:
+            detail = err.strip() or out.strip() or "bridge exited with error"
+            raise BridgeError(detail + (f"\n[bridge log tail]\n{tail}" if tail else ""))
+        return out.strip()
+    finally:
+        if not stopped.is_set():
             proc.kill()
             proc.wait()
-            raise BridgeCancelled("cancelled by user")
-        rc = proc.poll()
-        if rc is not None:
-            break
-        if time.monotonic() > deadline:
-            proc.kill()
-            proc.wait()
-            raise BridgeError(f"timed out after {timeout}s")
-        time.sleep(0.05)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise BridgeError(err.strip() or out.strip())
-    return out.strip()
+            stopped.set()
 
 
 def detect_usb():
@@ -99,6 +154,13 @@ def detect_all():
 def detect_mtk():
     """MediaTek low-level USB devices (BROM/preloader/DA) - VID 0x0e8d."""
     return json.loads(_run(["mtk-detect"]))
+
+
+def mtk_scatter_gpt(da, out_file, timeout=600):
+    """Generate an SP Flash Tool scatter file from the device's own GPT
+    partition table (no scatter file in Samsung firmware needed). Returns the
+    bridge's summary string."""
+    return _run(["mtk-scatter-gpt", "auto", da, out_file], timeout=timeout)
 
 
 def list_samsung_hid():
@@ -181,6 +243,21 @@ def odin_model(target, timeout=40):
     """Read the device model string over the Odin session probe (0x64/0x01),
     falling back to the 0x69 device-info dump. Returns dict."""
     return json.loads(_run(["odin-model", target], timeout=timeout))
+
+
+def odin_flash_multi(target, pit_file, specs, reboot=False, timeout=1800):
+    """Flash several partition=image pairs in ONE native Odin session using the
+    Rust protocol implementation - no odin4 binary needed. specs is a list of
+    (partition, image_file) tuples. Returns the parsed bridge JSON."""
+    args = ["odin-flash-multi", target, pit_file, "1" if reboot else "0"]
+    for part, img in specs:
+        args.append(f"{part}={img}")
+    return json.loads(_run(args, timeout=timeout))
+
+
+def odin_send_pit(target, pit_file, timeout=120):
+    """Send a PIT to the device (repartition / re-map partitions)."""
+    return _run(["odin-send-pit", target, pit_file], timeout=timeout)
 
 
 def has_adb():

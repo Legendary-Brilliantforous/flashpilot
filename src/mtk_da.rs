@@ -893,6 +893,74 @@ pub fn mtk_read_part_cli(
     ))
 }
 
+/// Render an SP Flash Tool scatter file from a partition list
+/// (name, start_addr, size_bytes). Large data partitions (>= 2 GiB) are marked
+/// non-downloadable so backup/flash flows never dump or rewrite them by
+/// accident. Returns a human summary string.
+fn write_scatter_file(
+    parts: &[(String, u64, u64)],
+    out_path: &str,
+) -> Result<String> {
+    const BIG_DATA: u64 = 2 * 1024 * 1024 * 1024;
+
+    let mut out = String::new();
+    out.push_str("# Scatter file generated from the device GPT (brilliant-flashing-tool)\n");
+    out.push_str("# Partition addresses/sizes are read directly from the phone.\n");
+    out.push_str("version: 0.0.1\n");
+    out.push_str("platform: MTK\n");
+    out.push_str("project: Samsung-MTK\n");
+    out.push_str("block_size: 512\n");
+    for (name, start, size) in parts {
+        let download = *size < BIG_DATA;
+        out.push_str(&format!(
+            "partition_name: {name}\nstart_addr: 0x{start:x}\npartition_size: 0x{size:x}\n"
+        ));
+        out.push_str(&format!("file_name: {name}.img\n"));
+        out.push_str(&format!("type: RAW\n"));
+        out.push_str(&format!("is_download: {download}\n"));
+        out.push_str("storage_type: 1\noperation_type: UPDATE\nbackup_type: NONE\nregion: EMMC_USER\n\n");
+    }
+    fs::write(out_path, out)
+        .map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
+
+    let total: u64 = parts.iter().map(|(_, _, s)| s).sum();
+    let dl = parts.iter().filter(|(_, _, s)| *s < BIG_DATA).count();
+    Ok(format!(
+        "Scatter written: {} ({} partitions from device GPT, {} downloadable, {} bytes total flash).",
+        out_path, parts.len(), dl, total
+    ))
+}
+
+/// `mtk-scatter-gpt <target> <da> <out_file>` — generate an SP Flash Tool
+/// scatter file from the device's OWN GPT partition table. Samsung firmware
+/// ships no scatter file (it is an SPFT-side concept), so this rebuilds one
+/// from the authoritative on-device table. Large data partitions (super,
+/// userdata, ...) are marked non-downloadable so backup/flash flows never
+/// touch them by accident.
+pub fn mtk_scatter_gpt_cli(
+    target: &str,
+    da_path: &str,
+    out_path: &str,
+) -> Result<String> {
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
+    }
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+    let mut da = DaSession::new(session);
+    da.upload_da(da_path)?;
+    let parts = da
+        .list_gpt()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let _ = da.reboot(0);
+    write_scatter_file(&parts, out_path)
+}
+
 pub fn mtk_frp_bypass(target: &str, da_path: &str, scatter_path: &str) -> Result<String> {
     let ops = MtKOperations {
         frp_bypass: true,
@@ -1383,6 +1451,36 @@ storage: HW_STORAGE_EMMC
         assert_eq!(scatter.entries.len(), 1);
         assert_eq!(scatter.entries[0].partition_name, "boot");
         assert_eq!(scatter.entries[0].length, 0x4000000);
+    }
+
+    #[test]
+    fn test_write_scatter_file_roundtrips_through_parser() {
+        // Simulated Samsung MTK GPT: bootloader-area partitions plus big data.
+        let parts = vec![
+            ("preloader".to_string(), 0x0u64, 0x200000u64),
+            ("boot".to_string(), 0x200000, 0x4000000),
+            ("vbmeta".to_string(), 0x4200000, 0x1000),
+            ("super".to_string(), 0x10000000, 5 * 1024 * 1024 * 1024u64),
+            ("userdata".to_string(), 0x200000000, 100 * 1024 * 1024 * 1024u64),
+        ];
+        let path = "/tmp/test_scatter_gpt.txt";
+        let msg = write_scatter_file(&parts, path).unwrap();
+        assert!(msg.contains("5 partitions"));
+        assert!(msg.contains("3 downloadable"));
+
+        let scatter = ScatterFile::parse(path).unwrap();
+        let mut by_name = std::collections::HashMap::new();
+        for e in &scatter.entries {
+            by_name.insert(e.partition_name.clone(), e);
+        }
+        assert_eq!(by_name.len(), 3, "big partitions must be filtered out");
+        assert_eq!(by_name["preloader"].length, 0x200000);
+        assert_eq!(by_name["preloader"].start_addr, 0x0);
+        assert_eq!(by_name["boot"].filename, "boot.img");
+        assert_eq!(by_name["boot"].is_download, true);
+        assert_eq!(by_name["boot"].operation_type, "UPDATE");
+        assert_eq!(by_name["boot"].storage_type, 1);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -34,6 +34,7 @@ fn main() {
         eprintln!("  mtk-detect             detect MediaTek BROM/preloader/DA devices");
         eprintln!("  mtk-da-upload <t> <da> upload Download Agent to device in BROM/preloader");
         eprintln!("  mtk-scatter <file>     parse and display scatter file info");
+        eprintln!("  mtk-scatter-gpt <t> <da> <out>  generate a scatter file from the device GPT");
         eprintln!("  mtk-flash <t> <da> <scatter> <fw_dir>  flash firmware from scatter");
         eprintln!("  mtk-backup <t> <da> <scatter> <out_dir>  backup partitions");
         eprintln!("  mtk-frp <t> <da> <scatter>  FRP bypass (wipe frp/nvdata)");
@@ -128,6 +129,13 @@ fn main() {
                 exit(2);
             }
             mtk_da::mtk_gpt_cli(&args[2], &args[3])
+        }
+        "mtk-scatter-gpt" => {
+            if args.len() < 5 {
+                eprintln!("usage: brilliant-bridge mtk-scatter-gpt <target> <da_file> <out_file>");
+                exit(2);
+            }
+            mtk_da::mtk_scatter_gpt_cli(&args[2], &args[3], &args[4])
         }
         "mtk-flash-part" => {
             // mtk-flash-part <target> <da_file> <partition=file>...

@@ -26,18 +26,18 @@ from PyQt6.QtWidgets import (
 )
 
 # Mirrors the design tokens in qt_app.C
-_PANEL = "#10161f"
-_CARD = "#141c28"
-_INSET = "#0c111a"
-_BORDER_HI = "#31415a"
-_TEXT = "#e8ebf1"
-_DIM = "#98a3b4"
-_GRAD_A = "#2563eb"
-_GRAD_B = "#06b6d4"
-_OK = "#34d399"
+_PANEL = "#0a111a"
+_CARD = "#0d1622"
+_INSET = "#070d15"
+_BORDER_HI = "#2c405e"
+_TEXT = "#e7eef8"
+_DIM = "#8fa4bd"
+_GRAD_A = "#0ea5e9"
+_GRAD_B = "#22d3ee"
+_OK = "#2dd4bf"
 _WARN = "#fbbf24"
-_ERR = "#f87171"
-_ACCENT_HI = "#6ea8ff"
+_ERR = "#fb7185"
+_ACCENT_HI = "#7dd3fc"
 
 _ICON = {
     "ok": _OK,
@@ -61,7 +61,7 @@ class _SlideFrame(QFrame):
             f"QFrame#toast {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             f" stop:0 {_PANEL}, stop:1 {_CARD});"
             f" border:1px solid {_BORDER_HI}; border-left:3px solid {accent};"
-            f" border-radius:12px; }}"
+            f" border-radius:9px; }}"
         )
         self.setObjectName("toast")
 
@@ -83,7 +83,10 @@ class _SlideFrame(QFrame):
         text_box = QVBoxLayout()
         text_box.setSpacing(1)
         self._title = QLabel(title)
-        self._title.setStyleSheet(f"color:{_TEXT}; font-size:12px; font-weight:700;")
+        self._title.setStyleSheet(
+            f"color:{_TEXT}; font-size:12px; font-weight:700;"
+            f" font-family:'JetBrains Mono','Consolas',monospace;"
+        )
         self._title.setWordWrap(True)
         text_box.addWidget(self._title)
 

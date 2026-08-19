@@ -168,3 +168,90 @@ class TestMtkSimlockPatchGating:
         calls, _ = self._run_patch(monkeypatch, tmp_path, content, env="1",
                                    model="SM-G999F")
         assert calls == []
+
+
+class TestScreenLockCscRegistration:
+    """The CSC-flash screen-lock method is registered where the GUI shows it."""
+
+    def test_registered_in_flows(self):
+        assert "screen_lock_csc" in frp.FLOWS
+        assert "CSC" in frp.FLOWS["screen_lock_csc"]().name.upper()
+
+    def test_available_in_download_and_brom_modes(self):
+        m = frp.JOBS["Screen lock remove"]
+        assert "screen_lock_csc" in m["Download mode"]
+        assert "screen_lock_csc" in m["Samsung BROM"]
+        assert "screen_lock_csc" in m["MTK"]
+        assert "screen_lock_csc" in frp.methods_for("Screen lock remove", "Download mode")
+
+    def test_flow_rejects_mismatched_csc_model(self, monkeypatch, tmp_path):
+        """A CSC for a different model must refuse before flashing."""
+        from python.core import pit as _pit
+        fake_odin4 = tmp_path / "odin4"
+        fake_odin4.write_bytes(b"#!/bin/sh\nexit 0\n")
+        fake_odin4.chmod(0o755)
+        fake_csc = tmp_path / "CSC_OJM_A065FOJMAAA.tar.md5"
+        fake_csc.write_bytes(b"fakedata")
+        monkeypatch.setenv("CSC_TAR", str(fake_csc))
+        monkeypatch.setattr(frp, "_find_odin4", lambda: str(fake_odin4))
+        monkeypatch.setattr(frp, "_find_slot_tar", lambda pre: str(fake_csc))
+        monkeypatch.setattr(frp, "_download_mode_device",
+                            lambda: {"pid": 0x685d, "bus": 1, "address": 2})
+
+        def _fake_pit(target, p, timeout=120):
+            with open(p, "wb") as fh:
+                fh.write(b"fake")
+
+        monkeypatch.setattr(frp.bridge, "odin_pit", _fake_pit)
+        monkeypatch.setattr(frp.bridge, "adb_status", lambda: [])
+        # Device PIT model says A145P (A14), CSC is A065F (A06) -> refuse.
+        monkeypatch.setattr(_pit, "parse_model", lambda raw: "A145P")
+        monkeypatch.setattr(_pit, "parse_pit", lambda raw: [])
+        calls = []
+        monkeypatch.setattr(frp.subprocess, "run",
+                            lambda *a, **k: calls.append(a) or (lambda: None)())
+        import io
+        buf = io.StringIO()
+        raised = False
+        try:
+            frp.flow_screen_lock_csc().run({}, buf.write)
+        except Exception:
+            raised = True
+        assert raised is True
+        assert calls == []
+
+
+class TestScreenLockCscAdbFirst:
+    """The screen-lock flow uses adb (no Odin) when an authorized device is up."""
+
+    def _run_flow(self, monkeypatch, adb_devs):
+        from python.core import pit as _pit
+        calls = {"adb_shell": [], "odin": []}
+        monkeypatch.setattr(frp.bridge, "adb_status", lambda: adb_devs)
+        monkeypatch.setattr(
+            frp.bridge, "adb_shell",
+            lambda cmd, timeout=30: calls["adb_shell"].append(cmd) or "ok",
+        )
+        monkeypatch.setattr(frp, "_find_odin4", lambda: "/nope")
+        monkeypatch.setattr(frp, "_find_slot_tar", lambda pre: "")
+        monkeypatch.setattr(frp, "_download_mode_device", lambda: None)
+        monkeypatch.setattr(_pit, "parse_pit", lambda raw: [])
+        monkeypatch.setattr(_pit, "parse_model", lambda raw: "")
+        import io
+        buf = io.StringIO()
+        try:
+            frp.flow_screen_lock_csc().run({}, buf.write)
+        except Exception:
+            pass
+        return calls, buf.getvalue()
+
+    def test_authorized_adb_uses_locksettings_not_odin(self, monkeypatch):
+        calls, out = self._run_flow(monkeypatch, [{"state": "device", "serial": "x"}])
+        assert "locksettings" in " ".join(calls["adb_shell"]) or calls["adb_shell"]
+        assert calls["odin"] == []
+        assert "over adb" in out
+
+    def test_no_adb_falls_back_to_csc_flash(self, monkeypatch):
+        calls, out = self._run_flow(monkeypatch, [])
+        assert "CSC" in out
+        assert "falling back" in out.lower() or "Fallback" in out

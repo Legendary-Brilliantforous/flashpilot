@@ -45,46 +45,49 @@ impl UsbDevice {
         let handle = device.open()?;
         
         let device_desc = device.device_descriptor()?;
-        let config_desc = device.active_config_descriptor()?;
+        let config_desc = device.active_config_descriptor().ok()
+            .or_else(|| device.config_descriptor(0).ok());
         
         let mut interfaces = Vec::new();
         let mut endpoints = HashMap::new();
         
-        for interface in config_desc.interfaces() {
-            let mut iface_endpoints = Vec::new();
-            for interface_desc in interface.descriptors() {
-                for endpoint_desc in interface_desc.endpoint_descriptors() {
-                    let ep_config = EndpointConfig {
-                        address: endpoint_desc.address(),
-                        direction: endpoint_desc.direction(),
-                        transfer_type: endpoint_desc.transfer_type(),
-                        max_packet_size: endpoint_desc.max_packet_size(),
-                        interval: endpoint_desc.interval(),
-                    };
-                    endpoints.insert(endpoint_desc.address(), ep_config.clone());
-                    iface_endpoints.push(EndpointInfo {
-                        address: endpoint_desc.address(),
-                        direction: match endpoint_desc.direction() {
-                            Direction::In => "in".to_string(),
-                            Direction::Out => "out".to_string(),
-                        },
-                        transfer_type: match endpoint_desc.transfer_type() {
-                            TransferType::Control => "control".to_string(),
-                            TransferType::Bulk => "bulk".to_string(),
-                            TransferType::Interrupt => "interrupt".to_string(),
-                            TransferType::Isochronous => "isochronous".to_string(),
-                        },
-                        max_packet_size: endpoint_desc.max_packet_size(),
-                    });
+        if let Some(config_desc) = config_desc {
+            for interface in config_desc.interfaces() {
+                let mut iface_endpoints = Vec::new();
+                for interface_desc in interface.descriptors() {
+                    for endpoint_desc in interface_desc.endpoint_descriptors() {
+                        let ep_config = EndpointConfig {
+                            address: endpoint_desc.address(),
+                            direction: endpoint_desc.direction(),
+                            transfer_type: endpoint_desc.transfer_type(),
+                            max_packet_size: endpoint_desc.max_packet_size(),
+                            interval: endpoint_desc.interval(),
+                        };
+                        endpoints.insert(endpoint_desc.address(), ep_config.clone());
+                        iface_endpoints.push(EndpointInfo {
+                            address: endpoint_desc.address(),
+                            direction: match endpoint_desc.direction() {
+                                Direction::In => "in".to_string(),
+                                Direction::Out => "out".to_string(),
+                            },
+                            transfer_type: match endpoint_desc.transfer_type() {
+                                TransferType::Control => "control".to_string(),
+                                TransferType::Bulk => "bulk".to_string(),
+                                TransferType::Interrupt => "interrupt".to_string(),
+                                TransferType::Isochronous => "isochronous".to_string(),
+                            },
+                            max_packet_size: endpoint_desc.max_packet_size(),
+                        });
+                    }
                 }
+                interfaces.push(InterfaceInfo {
+                    number: interface.number(),
+                    class: interface.descriptors().next().map(|d| d.class_code()).unwrap_or(0),
+                    subclass: interface.descriptors().next().map(|d| d.sub_class_code()).unwrap_or(0),
+                    protocol: interface.descriptors().next().map(|d| d.protocol_code()).unwrap_or(0),
+                    endpoints: iface_endpoints,
+                });
             }
-            interfaces.push(InterfaceInfo {
-                number: interface.number(),
-                class: interface.descriptors().next().map(|d| d.class_code()).unwrap_or(0),
-                subclass: interface.descriptors().next().map(|d| d.sub_class_code()).unwrap_or(0),
-                protocol: interface.descriptors().next().map(|d| d.protocol_code()).unwrap_or(0),
-                endpoints: iface_endpoints,
-            });
         }
 
         let info = DeviceInfo {
@@ -228,7 +231,14 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
     for device in context.devices()?.iter() {
         let desc = match device.device_descriptor() {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!(
+                    "[usb] skip dev bus={} addr={}: device_descriptor: {e}",
+                    device.bus_number(),
+                    device.address()
+                );
+                continue;
+            }
         };
         
         if let Some(vid) = vid_filter {
@@ -236,39 +246,44 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
                 continue;
             }
         }
-        
-        let config_desc = match device.active_config_descriptor() {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+
+        // Download-mode / EDL / preloader devices often have NO active
+        // configuration (config value 0), which makes active_config_descriptor
+        // fail. Falling back to the first available config descriptor (and
+        // finally to an empty interface list) keeps such devices visible to
+        // detection instead of silently dropping them.
+        let config_desc = device.active_config_descriptor().ok()
+            .or_else(|| device.config_descriptor(0).ok());
         
         let mut interfaces = Vec::new();
-        for interface in config_desc.interfaces() {
-            for interface_desc in interface.descriptors() {
-                let mut iface_endpoints = Vec::new();
-                for endpoint_desc in interface_desc.endpoint_descriptors() {
-                    iface_endpoints.push(EndpointInfo {
-                        address: endpoint_desc.address(),
-                        direction: match endpoint_desc.direction() {
-                            Direction::In => "in".to_string(),
-                            Direction::Out => "out".to_string(),
-                        },
-                        transfer_type: match endpoint_desc.transfer_type() {
-                            TransferType::Control => "control".to_string(),
-                            TransferType::Bulk => "bulk".to_string(),
-                            TransferType::Interrupt => "interrupt".to_string(),
-                            TransferType::Isochronous => "isochronous".to_string(),
-                        },
-                        max_packet_size: endpoint_desc.max_packet_size(),
+        if let Some(config_desc) = config_desc {
+            for interface in config_desc.interfaces() {
+                for interface_desc in interface.descriptors() {
+                    let mut iface_endpoints = Vec::new();
+                    for endpoint_desc in interface_desc.endpoint_descriptors() {
+                        iface_endpoints.push(EndpointInfo {
+                            address: endpoint_desc.address(),
+                            direction: match endpoint_desc.direction() {
+                                Direction::In => "in".to_string(),
+                                Direction::Out => "out".to_string(),
+                            },
+                            transfer_type: match endpoint_desc.transfer_type() {
+                                TransferType::Control => "control".to_string(),
+                                TransferType::Bulk => "bulk".to_string(),
+                                TransferType::Interrupt => "interrupt".to_string(),
+                                TransferType::Isochronous => "isochronous".to_string(),
+                            },
+                            max_packet_size: endpoint_desc.max_packet_size(),
+                        });
+                    }
+                    interfaces.push(InterfaceInfo {
+                        number: interface.number(),
+                        class: interface_desc.class_code(),
+                        subclass: interface_desc.sub_class_code(),
+                        protocol: interface_desc.protocol_code(),
+                        endpoints: iface_endpoints,
                     });
                 }
-                interfaces.push(InterfaceInfo {
-                    number: interface.number(),
-                    class: interface_desc.class_code(),
-                    subclass: interface_desc.sub_class_code(),
-                    protocol: interface_desc.protocol_code(),
-                    endpoints: iface_endpoints,
-                });
             }
         }
         
@@ -409,4 +424,38 @@ pub fn detach_kernel_drivers(target: &str) -> Result<String> {
     }
     
     Ok(serde_json::json!({"status": "kernel drivers detached"}).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: download-mode / EDL / preloader devices have no active
+    /// configuration, so collect_devices must still report them (with an empty
+    /// interface list) instead of dropping them. This exercises the exact JSON
+    /// contract the Python layer parses from `detect` / `detect-all`.
+    #[test]
+    fn download_mode_device_without_active_config_is_reported() {
+        let info = DeviceInfo {
+            vid: 0x04e8,
+            pid: 0x685d,
+            bus: 1,
+            address: 3,
+            product: Some("SAMSUNG USB".into()),
+            manufacturer: Some("SAMSUNG".into()),
+            serial: None,
+            interfaces: Vec::new(),
+            is_samsung: true,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: DeviceInfo = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.is_samsung);
+        assert!(parsed.interfaces.is_empty());
+        assert_eq!(parsed.vid, 0x04e8);
+        assert_eq!(parsed.pid, 0x685d);
+        assert_eq!(parsed.bus, 1);
+        assert_eq!(parsed.address, 3);
+    }
 }
