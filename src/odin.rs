@@ -603,6 +603,34 @@ fn strict_mode() -> bool {
         .unwrap_or(false)
 }
 
+/// Read an integer env override (used for ODIN_BOOT_UPDATE / ODIN_EFS_CLEAR).
+fn env_override(name: &str) -> Option<u32> {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+}
+
+/// True when the partition belongs to the bootloader (BL) tar. These are the
+/// partitions whose end-sequence commit must set `boot_update`, which tells LK
+/// to regenerate the `md5hdr` secure-check hash table after writing.
+fn is_bootloader_partition(partition: &str) -> bool {
+    matches!(
+        partition,
+        "bootloader"
+            | "lk"
+            | "param"
+            | "up_param"
+            | "efuse"
+            | "vbmeta"
+            | "spmfw"
+            | "scp1"
+            | "sspm_1"
+            | "tee1"
+            | "tzar"
+            | "gz1"
+    )
+}
+
 /// Check response like odin4's odin_fail_check.
 /// If allow_progress is true, codes -2..-7 are treated as progress (success) -
 /// unless ODIN_STRICT=1, in which case they are treated as failures.
@@ -633,8 +661,16 @@ fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResul
     Ok(())
 }
 
-/// Begin session with protocol negotiation (0x64/0x00), returns packet size.
-fn begin_session_v2(dev: &Device) -> OdinResult<u32> {
+/// Begin session with protocol negotiation (0x64/0x00), returns packet size
+/// and whether the legacy 128KiB protocol is in use.
+fn begin_session_v2(dev: &Device) -> OdinResult<(u32, bool)> {
+    // Some Samsung MTK download agents (J3/MTK "COM_TAR2MTK*" devices) hard-
+    // reject the modern 1MiB framing at EndSequence even though they advertise
+    // protocol version 2. Force the legacy 128KiB path with ODIN_LEGACY=1.
+    let force_legacy = std::env::var("ODIN_LEGACY")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+
     let rsp = odin_command(dev, 0x64, 0x00, &0x7FFFFFFFu32.to_le_bytes(), 15)?;
     odin_fail_check(&rsp, "BeginSession", false)?;
     let ack = u32::from_le_bytes([rsp[4], rsp[5], rsp[6], rsp[7]]);
@@ -642,19 +678,19 @@ fn begin_session_v2(dev: &Device) -> OdinResult<u32> {
     let version = ack_upper & 0x7FFF;
     let compressed = (ack_upper & 0x8000) != 0;
     eprintln!(
-        "[flash] begin_session ack=0x{ack:08x} version={version} compressed={compressed}"
+        "[flash] begin_session ack=0x{ack:08x} version={version} compressed={compressed} force_legacy={force_legacy}"
     );
 
-    if version <= 1 {
+    if version <= 1 || force_legacy {
         // Legacy protocol: 128KiB packets, no packet-size negotiation.
         let rsp = odin_command(dev, 0x64, 0x05, &131072u32.to_le_bytes(), 15)?;
         odin_fail_check(&rsp, "SendFilePartSize", false)?;
-        Ok(131072)
+        Ok((131072, true))
     } else {
         // Modern protocol: 1MiB packets negotiated via 0x64/0x05.
         let rsp = odin_command(dev, 0x64, 0x05, &1048576u32.to_le_bytes(), 15)?;
         odin_fail_check(&rsp, "SendFilePartSize", false)?;
-        Ok(1048576)
+        Ok((1048576, false))
     }
 }
 
@@ -884,6 +920,7 @@ fn flash_one_partition(
     partition: &str,
     image_file: &str,
     packet_size: u32,
+    legacy: bool,
     large: bool,
 ) -> std::result::Result<u32, String> {
     let (binary_type, device_type, identifier, _block_size, _block_count) =
@@ -892,7 +929,12 @@ fn flash_one_partition(
     let total = std::fs::metadata(image_file)
         .map_err(|e| format!("stat image: {e}"))?
         .len() as usize;
-    eprintln!("[flash] {partition}: {total} bytes, binary_type={binary_type} ident={identifier}");
+    let boot_update = env_override("ODIN_BOOT_UPDATE")
+        .unwrap_or_else(|| u32::from(is_bootloader_partition(partition)));
+    let efs_clear = env_override("ODIN_EFS_CLEAR").unwrap_or(0);
+    eprintln!(
+        "[flash] {partition}: {total} bytes, binary_type={binary_type} ident={identifier} boot_update={boot_update} efs_clear={efs_clear}"
+    );
 
     request_file_flash(dev).map_err(|e| e.to_string())?;
 
@@ -900,8 +942,9 @@ fn flash_one_partition(
     let mut buf = vec![0u8; packet_size as usize];
 
     // Sequence geometry matching odin4: up to 30 sequences of packet_size
-    // (modern) or 240 (legacy); each sequence is a set of packet_size chunks,
-    // and each chunk is acknowledged individually by the bootloader.
+    // (modern 1MiB) or 240 (legacy 128KiB); each sequence is a set of
+    // packet_size chunks, and each chunk is acknowledged individually by the
+    // bootloader.
     let mut sent = 0usize;
     let mut sequence = 0u32;
 
@@ -909,7 +952,7 @@ fn flash_one_partition(
     // show live percentage on screen. Emitted at least once per sequence.
     let mut last_report_pct = 0u32;
 
-    let sequence_count = 30;
+    let sequence_count = if legacy { 240 } else { 30 };
     let max_seq_bytes = packet_size as usize * sequence_count;
     while sent < total {
         let remaining = total - sent;
@@ -967,8 +1010,8 @@ fn flash_one_partition(
             identifier,
             final_size as u32,
             is_last,
-            0,
-            1,
+            efs_clear,
+            boot_update,
         )
         .map_err(|e| format!("{partition}: end sequence {sequence}: {e}"))?;
         sequence += 1;
@@ -994,13 +1037,13 @@ pub fn odin_flash_partition(
     let dev = open_device(target).map_err(|e| e.to_string())?;
     dev.handshake().map_err(|e| e.to_string())?;
     eprintln!("[flash] handshake ok");
-    let packet_size = begin_session_v2(&dev).map_err(|e| e.to_string())?;
-    eprintln!("[flash] session ok, packet_size={packet_size}");
+    let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
+    eprintln!("[flash] session ok, packet_size={packet_size}, legacy={legacy}");
 
     set_total_bytes(&dev, total as u64).map_err(|e| e.to_string())?;
     let is_large = matches!(partition, "super" | "system" | "userdata");
     let sequences =
-        flash_one_partition(&dev, &pit, partition, image_file, packet_size, is_large)
+        flash_one_partition(&dev, &pit, partition, image_file, packet_size, legacy, is_large)
             .map_err(|e| e.to_string())?;
 
     if let Err(e) = end_session_v2(&dev) {
@@ -1045,8 +1088,8 @@ pub fn odin_flash_multi(
     let dev = open_device(target).map_err(|e| e.to_string())?;
     dev.handshake().map_err(|e| e.to_string())?;
     eprintln!("[flash] handshake ok");
-    let packet_size = begin_session_v2(&dev).map_err(|e| e.to_string())?;
-    eprintln!("[flash] session ok, packet_size={packet_size}");
+    let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
+    eprintln!("[flash] session ok, packet_size={packet_size}, legacy={legacy}");
 
     // NOTE: the reference odin4 never sends a PIT to the device during a
     // firmware flash - it only *reads* the device's own PIT to learn partition
@@ -1061,7 +1104,7 @@ pub fn odin_flash_multi(
     for (partition, image_file) in files {
         let is_large = matches!(*partition, "super" | "system" | "userdata");
         let sequences =
-            flash_one_partition(&dev, &pit, partition, image_file, packet_size, is_large)
+            flash_one_partition(&dev, &pit, partition, image_file, packet_size, legacy, is_large)
                 .map_err(|e| e.to_string())?;
         results.push((partition.to_string(), sequences));
     }
