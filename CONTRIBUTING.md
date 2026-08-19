@@ -1,4 +1,4 @@
-# 🧑‍💻 Contributing to Brilliant Flashing Tool
+# 🧑‍💻 Contributing to FlashPilot
 
 Thanks for stopping by! This project is built on reverse-engineered protocols and
 open knowledge — every contribution makes it more capable, more reliable, and
@@ -36,11 +36,11 @@ Two halves work together:
 
 | Layer | Location | Language | Role |
 |---|---|---|---|
-| **Core / protocol engine** | `src/` | Rust | Raw USB, all bootloader protocols (`brilliant-bridge` CLI) |
+| **Core / protocol engine** | `src/` | Rust | Raw USB, all bootloader protocols (`flashpilot-bridge` CLI) |
 | **Flow orchestrator** | `python/core/frp.py` | Python | Turns operations into a list of human-readable steps |
 | **GUI studio** | `python/gui/qt_app.py` | Python / PyQt6 | The user-facing workbench |
 
-Python never talks to USB directly. It shells out to `target/release/brilliant-bridge`
+Python never talks to USB directly. It shells out to `target/release/flashpilot-bridge`
 (the Rust binary), which returns JSON/text. The GUI only listens to signals from
 worker threads — never touch widgets from a background thread.
 
@@ -55,7 +55,7 @@ No coding? No problem:
 - **Firmware / DA / combo archives** — pointers to legitimate, freely available binaries.
 - **Translations & themes** — the GUI is themable; new accent packs are easy wins.
 - **UI/UX** — mockups, accessibility passes, keyboard-shortcut design.
-- **Bug reports** — use the [bug report template](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=bug&template=bug_report.yml): steps, logs, `brilliant-bridge detect` output, device model + firmware version.
+- **Bug reports** — use the [bug report template](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml): steps, logs, `flashpilot-bridge detect` output, device model + firmware version.
 - **Code** — see below.
 
 > 💡 **New here?** Look for the **`good first issue`** label on the issue tracker —
@@ -107,7 +107,7 @@ click button
   → _run_ops_flow(job, mode, method, name)
   → frp.flow_for(...) -> Flow (list of Steps)
   → each Step runs in a worker thread, calling bridge._run([...])
-  → bridge spawns target/release/brilliant-bridge ...
+  → bridge spawns target/release/flashpilot-bridge ...
   → Rust does USB I/O, prints JSON/text
   → Python parses + emits _ui.line() signals
   → GUI updates console / status / progress safely

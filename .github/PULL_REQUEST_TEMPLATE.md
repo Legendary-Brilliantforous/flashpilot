@@ -17,7 +17,7 @@
 
 ## Test evidence
 
-<!-- Paste `brilliant-bridge detect` output, logs, or pytest results. -->
+<!-- Paste `flashpilot-bridge detect` output, logs, or pytest results. -->
 
 ## Screenshots (if UI)
 

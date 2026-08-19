@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-# Nothing user-destructive lives outside ~/.config/BrilliantTools and
-# ~/brilliant_backups, so removal needs no cleanup.
+# Nothing user-destructive lives outside ~/.config/FlashPilot and
+# ~/flashpilot_backups, so removal needs no cleanup.
 
 exit 0

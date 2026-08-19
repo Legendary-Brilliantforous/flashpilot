@@ -109,6 +109,36 @@ def _flow_busy_msg():
         return f"'{other}' is still running. Wait for it to finish before starting another operation."
     return "Another operation is still running. Wait for it to finish."
 
+
+# Flows that wipe device data / clear security state. These must always ask
+# for confirmation, even when launched from the generic job-flow buttons.
+_DESTRUCTIVE_CONFIRM = {
+    "factory_reset": (
+        "Factory Reset",
+        "This WIPES ALL DATA on the connected device:\n\n"
+        "  - Apps, accounts, photos, messages, files\n"
+        "  - Phone / modem settings are kept\n\n"
+        "It tries an ADB /data wipe first, and falls back to a guided "
+        "recovery-mode reset if the device is not authorized.\n\n"
+        "There is NO undo. Continue?",
+    ),
+    "mdm_unlock": (
+        "MDM Unlock",
+        "Removes the mobile-device-management (MDM / device-owner) app and "
+        "clears its control over the phone.\n\n"
+        "On some builds this also WIPES USER DATA (--wipe_data) so the "
+        "device can be set up fresh.\n\n"
+        "There is NO undo for the wiped data. Continue?",
+    ),
+    "screen_lock_remove": (
+        "Screen Lock Remove",
+        "Removes the screen lock (PIN / password / pattern / face) and the "
+        "associated FRP / account lock records.\n\n"
+        "This may log out signed-in accounts and reset security settings. "
+        "Continue?",
+    ),
+}
+
 # ---------------------------------------------------------------------------
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
@@ -2240,7 +2270,7 @@ class SplashScreen(QWidget):
         p.drawText(
             QRectF(0, 166, w, 34),
             Qt.AlignmentFlag.AlignCenter,
-            "BRILLIANT FLASHING TOOL",
+            "flashpilot FLASHING TOOL",
         )
 
         # tagline
@@ -2299,7 +2329,7 @@ class SplashScreen(QWidget):
 class FrpWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Brilliant Flashing Tool")
+        self.setWindowTitle("FlashPilot")
 
         self._cached_model = None
         self._cached_adb_status = None
@@ -2310,7 +2340,7 @@ class FrpWindow(QMainWindow):
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
         self._combo_styled = False
         self._anim_enabled = True
-        self.settings = QSettings("BrilliantTools", "FlashingTool")
+        self.settings = QSettings("FlashPilot", "FlashingTool")
 
         # apply persisted accent theme before any widget styles are generated
         theme = self.settings.value("theme", "Neon Circuit")
@@ -2379,7 +2409,7 @@ class FrpWindow(QMainWindow):
         self._install_shortcuts()
         self.refresh_device()
         self.log_line(
-            f"Brilliant Flashing Tool — console ready "
+            f"FlashPilot — console ready "
             f"({_time.strftime('%Y-%m-%d %H:%M:%S')})"
         )
 
@@ -2462,7 +2492,7 @@ class FrpWindow(QMainWindow):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
-        title = QLabel("BRILLIANT FLASHING TOOL")
+        title = QLabel("flashpilot FLASHING TOOL")
         title.setStyleSheet(
             f"color:{C['text']}; font-size:16px; font-weight:800; letter-spacing:1.5px;"
         )
@@ -2804,9 +2834,19 @@ class FrpWindow(QMainWindow):
         fr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fr_btn.setToolTip("ADB wipe /data when authorized, else guided recovery reset")
         fr_btn.clicked.connect(
-            lambda: self._run_ops_flow(
-                "FRP bypass", "ADB", "factory_reset",
-                frp.FLOWS["factory_reset"]().name,
+            lambda: self._confirm_overlay(
+                "Factory Reset",
+                "This WIPES ALL DATA on the connected device:\n\n"
+                "  - Apps, accounts, photos, messages, files\n"
+                "  - Phone / modem settings are kept\n\n"
+                "It tries an ADB /data wipe first, and falls back to a guided "
+                "recovery-mode reset if the device is not authorized.\n\n"
+                "There is NO undo. Continue?",
+                confirm_label="Wipe Device",
+                on_confirm=lambda: self._run_ops_flow(
+                    "FRP bypass", "ADB", "factory_reset",
+                    frp.FLOWS["factory_reset"]().name,
+                ),
             )
         )
         fr_row.addWidget(fr_btn)
@@ -2888,17 +2928,39 @@ class FrpWindow(QMainWindow):
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setToolTip(f"{job} / {mode} / {key}")
                 if run_cb is None:
-                    b.clicked.connect(
-                        lambda _=False, j=job, m=mode, k=key, n=name: self._run_ops_flow(
-                            j, m, k, n
+                    confirm = _DESTRUCTIVE_CONFIRM.get(key)
+                    if confirm:
+                        b.clicked.connect(
+                            lambda _=False, j=job, m=mode, k=key, n=name, t=confirm[0], tx=confirm[1]:
+                                self._confirm_overlay(
+                                    t, tx, confirm_label="Continue",
+                                    on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
+                                        self._run_ops_flow(j, m, k, n),
+                                )
                         )
-                    )
+                    else:
+                        b.clicked.connect(
+                            lambda _=False, j=job, m=mode, k=key, n=name: self._run_ops_flow(
+                                j, m, k, n
+                            )
+                        )
                 else:
-                    b.clicked.connect(
-                        lambda _=False, j=job, m=mode, k=key, n=name: run_cb(
-                            j, m, k, n
+                    confirm = _DESTRUCTIVE_CONFIRM.get(key)
+                    if confirm:
+                        b.clicked.connect(
+                            lambda _=False, j=job, m=mode, k=key, n=name, t=confirm[0], tx=confirm[1]:
+                                self._confirm_overlay(
+                                    t, tx, confirm_label="Continue",
+                                    on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
+                                        run_cb(j, m, k, n),
+                                )
                         )
-                    )
+                    else:
+                        b.clicked.connect(
+                            lambda _=False, j=job, m=mode, k=key, n=name: run_cb(
+                                j, m, k, n
+                            )
+                        )
                 flow.addWidget(b)
             parent_layout.addLayout(flow)
 
@@ -3452,7 +3514,7 @@ class FrpWindow(QMainWindow):
         f_lay = QVBoxLayout(footer)
         f_lay.setContentsMargins(10, 6, 10, 6)
         f_lay.setSpacing(6)
-        self.version_lbl = QLabel("BRILLIANT FLASHING TOOL v1.2")
+        self.version_lbl = QLabel("flashpilot FLASHING TOOL v1.2")
         self.version_lbl.setStyleSheet(
             f"color:{C['mute']}; font-size:9px; font-weight:700; letter-spacing:1px;"
         )
@@ -3699,6 +3761,12 @@ class FrpWindow(QMainWindow):
             self.mtk_fw_dir.setText(d)
 
     def _mtk_run(self, args, timeout=600):
+        if not _flow_start(f"MTK {args[0]}", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 out = bridge._run(args, timeout=timeout)
@@ -3714,6 +3782,7 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit(f"MTK: {args[0]} failed")
                 self._ui.toast.emit("error", f"MTK {args[0]}", str(e))
             finally:
+                _flow_end()
                 bridge.clear_cancel()
                 self._ui.ui.emit(self._mtk_reset_ui)
 
@@ -3772,6 +3841,11 @@ class FrpWindow(QMainWindow):
         patched file is saved to ~/Downloads/preloader_patched.bin and
         auto-selected as the DA binary."""
         out = os.path.expanduser("~/Downloads/preloader_patched.bin")
+        if not _flow_start("MTK preloader dump", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
         self._ui.line.emit(
             "[step] MTK dump + patch preloader - waiting for the "
             "BROM/preloader window ..."
@@ -3833,6 +3907,7 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit("MTK: preloader dump timed out")
             finally:
                 os.environ.pop("MTK_PRELOADER_OUT", None)
+                _flow_end()
                 self._ui.ui.emit(self._mtk_reset_ui)
 
         threading.Thread(target=work, daemon=True).start()
@@ -4344,6 +4419,12 @@ class FrpWindow(QMainWindow):
             self.qc_fw_dir.setText(d)
 
     def _qc_run(self, args, timeout=600):
+        if not _flow_start(f"Qualcomm {args[0]}", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 out = bridge._run(args, timeout=timeout)
@@ -4359,6 +4440,7 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit(f"Qualcomm: {args[0]} failed")
                 self._ui.toast.emit("error", f"Qualcomm {args[0]}", str(e))
             finally:
+                _flow_end()
                 bridge.clear_cancel()
                 self._ui.ui.emit(self._qc_reset_ui)
 
@@ -4795,6 +4877,12 @@ class FrpWindow(QMainWindow):
         return getattr(self, "_last_spd_target", None)
 
     def _spd_run(self, args, timeout=900):
+        if not _flow_start(f"SPD {args[0]}", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 out = bridge._run(args, timeout=timeout)
@@ -4810,6 +4898,7 @@ class FrpWindow(QMainWindow):
                 self._ui.status.emit(f"SPD: {args[0]} failed")
                 self._ui.toast.emit("error", f"SPD {args[0]}", str(e))
             finally:
+                _flow_end()
                 bridge.clear_cancel()
                 self._ui.ui.emit(self._spd_reset_ui)
 
@@ -5028,6 +5117,12 @@ class FrpWindow(QMainWindow):
         return entries
 
     def _spd_flash_run(self, fdl1, a1, fdl2, entries):
+        if not _flow_start("SPD flash", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 tgt = self._spd_resolve_target()
@@ -5049,6 +5144,7 @@ class FrpWindow(QMainWindow):
                 self._ui.line.emit(f"[error] SPD flash: {e}")
                 self._ui.toast.emit("error", "SPD flash", str(e))
             finally:
+                _flow_end()
                 bridge.clear_cancel()
                 self._ui.ui.emit(self._spd_reset_ui)
 
@@ -5062,8 +5158,14 @@ class FrpWindow(QMainWindow):
         fdl1 = self._spd_require_files()
         if not fdl1:
             return
+        if not _flow_start("SPD backup", destructive=False):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
         a1 = self._spd_addr(self.spd_fdl1_addr)
         if a1 is None:
+            _flow_end()
             return
         fdl2 = self.spd_files["fdl2"].text().strip()
         fw = self.spd_fw_dir.text().strip()
@@ -5090,6 +5192,7 @@ class FrpWindow(QMainWindow):
                 self._ui.line.emit(f"[error] SPD backup: {e}")
                 self._ui.toast.emit("error", "SPD backup", str(e))
             finally:
+                _flow_end()
                 bridge.clear_cancel()
                 self._ui.ui.emit(self._spd_reset_ui)
 
@@ -5677,7 +5780,7 @@ class FrpWindow(QMainWindow):
 
         bl = self._settings_box("ENGINE", lay)
         rows = [
-            ("Engine", "Rust core (brilliant-bridge) + PyQt6 shell"),
+            ("Engine", "Rust core (flashpilot-bridge) + PyQt6 shell"),
             ("Bridge binary", str(bridge.BRIDGE)),
             ("Bridge built", "yes" if bridge.BRIDGE.exists()
              else "no (run `cargo build --release`)"),
@@ -5762,7 +5865,7 @@ class FrpWindow(QMainWindow):
         logo.setPixmap(_draw_logo(56))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(logo)
-        name = QLabel("BRILLIANT FLASHING TOOL")
+        name = QLabel("flashpilot FLASHING TOOL")
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name.setStyleSheet(
             f"color:{C['text']}; font-size:17px; font-weight:800; letter-spacing:1px;"
@@ -7518,7 +7621,7 @@ class FrpWindow(QMainWindow):
 def _app_icon():
     """Window / taskbar icon: the packaged logo when present, else a drawn one.
     Resolves docs/logo_256.png in both the dev tree and the installed layout
-    (/usr/share/brilliant/docs/)."""
+    (/usr/share/flashpilot/docs/)."""
     logo_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "..", "docs", "logo_256.png",
@@ -7531,7 +7634,7 @@ def _app_icon():
 
 def main():
     app = QApplication([])
-    QApplication.setDesktopFileName("brilliant.desktop")
+    QApplication.setDesktopFileName("flashpilot.desktop")
     app.setWindowIcon(_app_icon())
     splash = SplashScreen()
     splash.show()

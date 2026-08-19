@@ -64,7 +64,7 @@ def test_success_returns_stdout(monkeypatch, tmp_path):
 
 
 def test_missing_bridge_raises_clear_error(monkeypatch):
-    monkeypatch.setattr(bridge, "BRIDGE", "/nonexistent/brilliant-bridge")
+    monkeypatch.setattr(bridge, "BRIDGE", "/nonexistent/flashpilot-bridge")
     with pytest.raises(bridge.BridgeError) as exc:
         bridge._run(["detect"])
     assert "rust bridge not built" in str(exc.value)

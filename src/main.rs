@@ -23,7 +23,7 @@ const SAMSUNG_VID: u16 = 0x04e8;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: brilliant-bridge <command> [args...]");
+        eprintln!("usage: flashpilot-bridge <command> [args...]");
         eprintln!("commands:");
         eprintln!("  detect                 list USB devices (all + Samsung filter)");
         eprintln!("  hid-list               list HID interfaces on Samsung devices");
@@ -88,7 +88,7 @@ fn main() {
         "hid-list" => hid::list_samsung_hid(),
         "hid-open" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge hid-open <path> <hex>");
+                eprintln!("usage: flashpilot-bridge hid-open <path> <hex>");
                 exit(2);
             }
             hid::open_and_send(&args[2], &args[3])
@@ -97,42 +97,42 @@ fn main() {
         "mtk-detect" => mtk::detect_mtk(),
         "mtk-da-upload" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-da-upload <target> <da_file>");
+                eprintln!("usage: flashpilot-bridge mtk-da-upload <target> <da_file>");
                 exit(2);
             }
             mtk_da::mtk_da_upload(&args[2], &args[3])
         }
         "mtk-scatter" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge mtk-scatter <scatter_file>");
+                eprintln!("usage: flashpilot-bridge mtk-scatter <scatter_file>");
                 exit(2);
             }
             mtk_da::mtk_scatter_parse(&args[2])
         }
         "mtk-flash" => {
             if args.len() < 6 {
-                eprintln!("usage: brilliant-bridge mtk-flash <target> <da_file> <scatter_file> <firmware_dir>");
+                eprintln!("usage: flashpilot-bridge mtk-flash <target> <da_file> <scatter_file> <firmware_dir>");
                 exit(2);
             }
             mtk_da::mtk_flash_firmware(&args[2], &args[3], &args[4], &args[5])
         }
         "mtk-backup" => {
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge mtk-backup <target> <da_file> <scatter_file> <out_dir>");
+                eprintln!("usage: flashpilot-bridge mtk-backup <target> <da_file> <scatter_file> <out_dir>");
                 exit(2);
             }
             mtk_da::mtk_backup(&args[2], &args[3], &args[4], &args[5])
         }
         "mtk-gpt" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-gpt <target> <da_file>");
+                eprintln!("usage: flashpilot-bridge mtk-gpt <target> <da_file>");
                 exit(2);
             }
             mtk_da::mtk_gpt_cli(&args[2], &args[3])
         }
         "mtk-scatter-gpt" => {
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge mtk-scatter-gpt <target> <da_file> <out_file>");
+                eprintln!("usage: flashpilot-bridge mtk-scatter-gpt <target> <da_file> <out_file>");
                 exit(2);
             }
             mtk_da::mtk_scatter_gpt_cli(&args[2], &args[3], &args[4])
@@ -140,7 +140,7 @@ fn main() {
         "mtk-flash-part" => {
             // mtk-flash-part <target> <da_file> <partition=file>...
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge mtk-flash-part <target> <da_file> <partition=file>...");
+                eprintln!("usage: flashpilot-bridge mtk-flash-part <target> <da_file> <partition=file>...");
                 exit(2);
             }
             let target = args[2].clone();
@@ -158,35 +158,35 @@ fn main() {
         }
         "mtk-read-part" => {
             if args.len() < 6 {
-                eprintln!("usage: brilliant-bridge mtk-read-part <target> <da_file> <partition> <out_file>");
+                eprintln!("usage: flashpilot-bridge mtk-read-part <target> <da_file> <partition> <out_file>");
                 exit(2);
             }
             mtk_da::mtk_read_part_cli(&args[2], &args[3], &args[4], &args[5])
         }
         "mtk-frp" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-frp <target> <da_file> <scatter_file>");
+                eprintln!("usage: flashpilot-bridge mtk-frp <target> <da_file> <scatter_file>");
                 exit(2);
             }
             mtk_da::mtk_frp_bypass(&args[2], &args[3], &args[4])
         }
         "mtk-frp-gpt" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-frp-gpt <target> <da_file>");
+                eprintln!("usage: flashpilot-bridge mtk-frp-gpt <target> <da_file>");
                 exit(2);
             }
             mtk_da::mtk_frp_bypass_gpt(&args[2], &args[3])
         }
         "mtk-adb-enable" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-adb-enable <target> <da_file> <scatter_file>");
+                eprintln!("usage: flashpilot-bridge mtk-adb-enable <target> <da_file> <scatter_file>");
                 exit(2);
             }
             mtk_da::mtk_adb_enable(&args[2], &args[3], &args[4])
         }
         "mtk-reboot" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-reboot <target> <da_file> <mode>");
+                eprintln!("usage: flashpilot-bridge mtk-reboot <target> <da_file> <mode>");
                 exit(2);
             }
             let mode: u8 = args[4].parse().unwrap_or(0);
@@ -194,7 +194,7 @@ fn main() {
         }
         "mtk-factory" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge mtk-factory <target>");
+                eprintln!("usage: flashpilot-bridge mtk-factory <target>");
                 exit(2);
             }
             mtk_da::mtk_enter_factory_mode(&args[2])
@@ -204,7 +204,7 @@ fn main() {
         }
         "mtk-bypass" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-bypass <target> <da_file> <mode> [scatter_file] [skip_auth]");
+                eprintln!("usage: flashpilot-bridge mtk-bypass <target> <da_file> <mode> [scatter_file] [skip_auth]");
                 eprintln!("  modes: standard, brom_exploit, da_auth_bypass, factory, emergency, sla_bypass");
                 exit(2);
             }
@@ -214,21 +214,21 @@ fn main() {
         }
         "mtk-dealer" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-dealer <target> <da_file>");
+                eprintln!("usage: flashpilot-bridge mtk-dealer <target> <da_file>");
                 exit(2);
             }
             mtk_da::mtk_dealer_mode(&args[2], &args[3])
         }
         "mtk-emergency-mode" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-emergency-mode <target> <da_file>");
+                eprintln!("usage: flashpilot-bridge mtk-emergency-mode <target> <da_file>");
                 exit(2);
             }
             mtk_da::mtk_emergency_mode(&args[2], &args[3])
         }
         "mtk-exploit" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge mtk-exploit <target> <type> [payload_file]");
+                eprintln!("usage: flashpilot-bridge mtk-exploit <target> <type> [payload_file]");
                 eprintln!("  types:");
                 eprintln!("    mtk_bypass     handshake + kamakiri2 + dump+patch preloader (recommended)");
                 eprintln!("    kamakiri2      run the CVE-2020-11152 linecoding exploit only");
@@ -300,56 +300,56 @@ fn main() {
         }
         "qcom-sahara" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge qcom-sahara <target>");
+                eprintln!("usage: flashpilot-bridge qcom-sahara <target>");
                 exit(2);
             }
             qualcomm::qcom_sahara_handshake(&args[2])
         }
         "qcom-firehose" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge qcom-firehose <target> <programmer>");
+                eprintln!("usage: flashpilot-bridge qcom-firehose <target> <programmer>");
                 exit(2);
             }
             qualcomm::qcom_firehose_start(&args[2], &args[3])
         }
         "qcom-flash" => {
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge qcom-flash <target> <programmer> <rawprogram.xml> <fw_dir>");
+                eprintln!("usage: flashpilot-bridge qcom-flash <target> <programmer> <rawprogram.xml> <fw_dir>");
                 exit(2);
             }
             qualcomm::qcom_flash_firmware(&args[2], &args[3], &args[4], &args[5])
         }
         "qcom-backup" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge qcom-backup <target> <programmer> <out_dir>");
+                eprintln!("usage: flashpilot-bridge qcom-backup <target> <programmer> <out_dir>");
                 exit(2);
             }
             qualcomm::qcom_backup(&args[2], &args[3], &args[4])
         }
         "qcom-partitions" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge qcom-partitions <target>");
+                eprintln!("usage: flashpilot-bridge qcom-partitions <target>");
                 exit(2);
             }
             qualcomm::qcom_partitions(&args[2])
         }
         "qcom-reboot" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge qcom-reboot <target> <mode>");
+                eprintln!("usage: flashpilot-bridge qcom-reboot <target> <mode>");
                 exit(2);
             }
             qualcomm::qcom_reboot(&args[2], &args[3])
         }
         "qcom-info" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge qcom-info <target>");
+                eprintln!("usage: flashpilot-bridge qcom-info <target>");
                 exit(2);
             }
             qualcomm::qcom_device_info(&args[2])
         }
         "qcom-frp-reset" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge qcom-frp-reset <target>");
+                eprintln!("usage: flashpilot-bridge qcom-frp-reset <target>");
                 exit(2);
             }
             qualcomm::qcom_frp_reset(&args[2])
@@ -357,14 +357,14 @@ fn main() {
         "spd-detect" => spd::spd_detect_cli(),
         "spd-info" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge spd-info <target>");
+                eprintln!("usage: flashpilot-bridge spd-info <target>");
                 exit(2);
             }
             spd::spd_info_cli(&args[2])
         }
         "spd-format" => {
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge spd-format <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
+                eprintln!("usage: flashpilot-bridge spd-format <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
                 exit(2);
             }
             let fdl1_addr = u32::from_str_radix(&args[4].trim_start_matches("0x"), 16)
@@ -380,7 +380,7 @@ fn main() {
         }
         "spd-frp" => {
             if args.len() < 5 {
-                eprintln!("usage: brilliant-bridge spd-frp <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
+                eprintln!("usage: flashpilot-bridge spd-frp <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
                 exit(2);
             }
             let fdl1_addr = u32::from_str_radix(&args[4].trim_start_matches("0x"), 16)
@@ -396,7 +396,7 @@ fn main() {
         }
         "spd-backup" => {
             if args.len() < 8 {
-                eprintln!("usage: brilliant-bridge spd-backup <target> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out_dir>");
+                eprintln!("usage: flashpilot-bridge spd-backup <target> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out_dir>");
                 exit(2);
             }
             let fdl1_addr = u32::from_str_radix(&args[4].trim_start_matches("0x"), 16).unwrap_or(0);
@@ -405,7 +405,7 @@ fn main() {
         }
         "spd-partitions" => {
             if args.len() < 7 {
-                eprintln!("usage: brilliant-bridge spd-partitions <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
+                eprintln!("usage: flashpilot-bridge spd-partitions <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]");
                 exit(2);
             }
             let target = args[2].clone();
@@ -421,7 +421,7 @@ fn main() {
         }
         "spd-reset" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge spd-reset <target>");
+                eprintln!("usage: flashpilot-bridge spd-reset <target>");
                 exit(2);
             }
             spd::spd_reset_cli(&args[2])
@@ -429,7 +429,7 @@ fn main() {
         "spd-flash" => {
             // spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...
             if args.len() < 6 {
-                eprintln!("usage: brilliant-bridge spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...");
+                eprintln!("usage: flashpilot-bridge spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...");
                 exit(2);
             }
             let target = args[2].clone();
@@ -469,7 +469,7 @@ fn main() {
         }
         "usb-config" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge usb-config <target> <config_index>");
+                eprintln!("usage: flashpilot-bridge usb-config <target> <config_index>");
                 exit(2);
             }
             let idx: usize = match args[3].parse() {
@@ -483,14 +483,14 @@ fn main() {
         }
         "usb-detach-kernel" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge usb-detach-kernel <target>");
+                eprintln!("usage: flashpilot-bridge usb-detach-kernel <target>");
                 exit(2);
             }
             usb::detach_kernel_drivers(&args[2])
         }
         "at-send" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge at-send <target> <cmd> [timeout_ms]");
+                eprintln!("usage: flashpilot-bridge at-send <target> <cmd> [timeout_ms]");
                 exit(2);
             }
             let timeout_ms = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3000);
@@ -498,7 +498,7 @@ fn main() {
         }
         "mtp-info" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge mtp-info <target> [timeout_ms]");
+                eprintln!("usage: flashpilot-bridge mtp-info <target> [timeout_ms]");
                 exit(2);
             }
             let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(6000);
@@ -506,42 +506,42 @@ fn main() {
         }
         "odin-connect" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge odin-connect <target>");
+                eprintln!("usage: flashpilot-bridge odin-connect <target>");
                 exit(2);
             }
             odin::odin_connect(&args[2])
         }
         "odin-pit" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge odin-pit <target> [outfile]");
+                eprintln!("usage: flashpilot-bridge odin-pit <target> [outfile]");
                 exit(2);
             }
             odin::odin_pit(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-pit-mtk" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge odin-pit-mtk <target> [outfile]");
+                eprintln!("usage: flashpilot-bridge odin-pit-mtk <target> [outfile]");
                 exit(2);
             }
             odin::odin_pit_mtk(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-info" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge odin-info <target> <pit_file>");
+                eprintln!("usage: flashpilot-bridge odin-info <target> <pit_file>");
                 exit(2);
             }
             odin::odin_info(&args[2], &args[3])
         }
         "odin-model" => {
             if args.len() < 3 {
-                eprintln!("usage: brilliant-bridge odin-model <target>");
+                eprintln!("usage: flashpilot-bridge odin-model <target>");
                 exit(2);
             }
             odin::odin_model(&args[2])
         }
         "odin-flash" => {
             if args.len() < 6 {
-                eprintln!("usage: brilliant-bridge odin-flash <target> <pit_file> <partition> <image_file>");
+                eprintln!("usage: flashpilot-bridge odin-flash <target> <pit_file> <partition> <image_file>");
                 exit(2);
             }
             let image = &args[5];
@@ -549,14 +549,14 @@ fn main() {
         }
         "odin-send-pit" => {
             if args.len() < 4 {
-                eprintln!("usage: brilliant-bridge odin-send-pit <target> <pit_file>");
+                eprintln!("usage: flashpilot-bridge odin-send-pit <target> <pit_file>");
                 exit(2);
             }
             odin::odin_send_pit(&args[2], &args[3])
         }
         "odin-flash-multi" => {
             if args.len() < 6 {
-                eprintln!("usage: brilliant-bridge odin-flash-multi <target> <pit_file> <reboot:0|1> <part=file> [part=file ...]");
+                eprintln!("usage: flashpilot-bridge odin-flash-multi <target> <pit_file> <reboot:0|1> <part=file> [part=file ...]");
                 exit(2);
             }
             let reboot = args[4] == "1";

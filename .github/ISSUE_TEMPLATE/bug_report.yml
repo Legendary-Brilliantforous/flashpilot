@@ -20,13 +20,13 @@ What should have happened instead.
 
 **Diagnostics (run these and paste the output)**
 ```
-./target/release/brilliant-bridge detect
-./target/release/brilliant-bridge <affected command> ...
+./target/release/flashpilot-bridge detect
+./target/release/flashpilot-bridge <affected command> ...
 ```
 
 - **Device:** model + firmware/Android version
 - **Mode:** ADB / Download / BROM / EDL / BSL / MTP
-- **Bridge version:** `./target/release/brilliant-bridge --version` (or `cargo` rev)
+- **Bridge version:** `./target/release/flashpilot-bridge --version` (or `cargo` rev)
 
 **Environment**
 - OS / distro:

@@ -641,15 +641,25 @@ fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResul
     let ack_i32 = ack as i32;
 
     if rid_i32 == -1 {
-        // BOOTLOADER_FAIL (0xFFFFFFFF) - check if it's actually a progress code
-        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 && !strict_mode() {
+        // BOOTLOADER_FAIL (0xFFFFFFFF) - check if it's actually a progress code.
+        // Only codes that are pure transfer progress markers (-2 WP, -3 Erase,
+        // -4 Write, -7 Ext4) may ever be treated as success. -5 (Auth) and
+        // -6 (Size) are real validation failures: the device rejected the data
+        // (bad signature / wrong size), so treating them as "progress" would
+        // report a rejected bootloader write as complete. They are fatal
+        // regardless of allow_progress / strict mode.
+        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 && ack_i32 != -5 && ack_i32 != -6 && !strict_mode() {
             // Progress codes: -2 WP, -3 Erase, -4 Write, -5 Auth, -6 Size, -7 Ext4
-            // These are treated as success in odin4 for certain commands.
             eprintln!("[debug] {context}: progress code {ack_i32}");
             return Ok(());
         }
         if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 {
-            eprintln!("[warn] {context}: progress code {ack_i32} treated as FAILURE (ODIN_STRICT=1)");
+            let reason = if ack_i32 == -5 || ack_i32 == -6 {
+                " (Auth/Size: always fatal)"
+            } else {
+                " (ODIN_STRICT=1)"
+            };
+            eprintln!("[warn] {context}: code {ack_i32} treated as FAILURE{reason}");
         }
         eprintln!("[debug] cmd: BOOTLOADER_FAIL rid=0x{:08x} ack=0x{:08x}", rid, ack);
         return err(format!("{context}: bootloader fail response"));
@@ -1229,11 +1239,32 @@ mod tests {
 
     #[test]
     fn fail_check_progress_tolerated_only_in_lenient_mode() {
-        let rsp = [0xffu8, 0xff, 0xff, 0xff, 0xfb, 0xff, 0xff, 0xff]; // ack = -5 (Auth)
+        let rsp = [0xffu8, 0xff, 0xff, 0xff, 0xfc, 0xff, 0xff, 0xff]; // ack = -4 (Write)
         std::env::remove_var("ODIN_STRICT");
         assert!(odin_fail_check(&rsp, "test", true).is_ok());
         std::env::set_var("ODIN_STRICT", "1");
         assert!(odin_fail_check(&rsp, "test", true).is_err());
         std::env::remove_var("ODIN_STRICT");
+    }
+
+    #[test]
+    fn auth_and_size_commit_failures_are_never_treated_as_progress() {
+        // -5 (Auth) and -6 (Size) mean the device rejected the write at the
+        // end-sequence commit. These must be fatal even in lenient mode: a
+        // rejected bootloader must never be reported as a completed flash.
+        for ack_le in [[0xfb, 0xff, 0xff, 0xff], [0xfa, 0xff, 0xff, 0xff]] {
+            let mut rsp = [0xffu8; 8];
+            rsp[4..8].copy_from_slice(&ack_le);
+            assert!(
+                odin_fail_check(&rsp, "EndSequenceFlash", true).is_err(),
+                "ack {:?} must be fatal with ODIN_STRICT unset",
+                ack_le,
+            );
+        }
+        // A genuine transfer-progress code (-4 Write) is still tolerated.
+        let mut rsp = [0xffu8; 8];
+        rsp[4..8].copy_from_slice(&[0xfc, 0xff, 0xff, 0xff]); // ack = -4
+        std::env::remove_var("ODIN_STRICT");
+        assert!(odin_fail_check(&rsp, "file part", true).is_ok());
     }
 }

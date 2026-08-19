@@ -2652,7 +2652,7 @@ def _strip_odin4_md5_trailer(tar):
     trailing newline). odin4's own md5 parser mis-reads this variant and aborts
     with 'MD5 verification failed' even though the checksum is valid (we verify
     it ourselves first via _tar_md5_valid). For such archives, return a
-    trailer-free '.tar' copy cached under ~/brilliant/odin4_cache so odin4 skips
+    trailer-free '.tar' copy cached under ~/flashpilot/odin4_cache so odin4 skips
     its broken md5 path. Plain .tar files are returned unchanged."""
     if not str(tar).lower().endswith(".md5"):
         return tar
@@ -2668,7 +2668,7 @@ def _strip_odin4_md5_trailer(tar):
         body_len = fsize - len(tail) + m.start(1)
     except OSError:
         return tar
-    cache = os.path.expanduser("~/brilliant/odin4_cache")
+    cache = os.path.expanduser("~/flashpilot/odin4_cache")
     os.makedirs(cache, exist_ok=True)
     out = os.path.join(cache, os.path.basename(tar)[: -len(".md5")])
     if not os.path.isfile(out) or os.path.getsize(out) != body_len:
@@ -2930,7 +2930,7 @@ def _require_recent_efs_backup(ctx, log, max_age_days=30):
     if os.environ.get("ODIN4_SKIP_BACKUP", "0").strip().lower() in ("1", "true", "yes", "on"):
         log("  SKIPPING EFS backup requirement (ODIN4_SKIP_BACKUP=1).")
         return
-    backup_dir = os.path.expanduser("~/brilliant/efs_backups")
+    backup_dir = os.path.expanduser("~/flashpilot/efs_backups")
     cands = []
     if os.path.isdir(backup_dir):
         cands = sorted(
@@ -3450,7 +3450,7 @@ def flow_carrier_lock_mtk():
 
         target = "auto"
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join(os.path.expanduser("~"), "brilliant_backups",
+        backup_dir = os.path.join(os.path.expanduser("~"), "flashpilot_backups",
                                   f"carrier_lock_{stamp}")
         os.makedirs(backup_dir, exist_ok=True)
         log(f"  Backup dir: {backup_dir}")
@@ -3541,9 +3541,9 @@ def flow_preflight():
                     pit_src = (slot, entries, model)
                     break
         if not pit_src:
-            # Fall back to a PIT dropped in ~/brilliant/pit/ (e.g. the CSC .pit).
+            # Fall back to a PIT dropped in ~/flashpilot/pit/ (e.g. the CSC .pit).
             local_pit = None
-            pit_dir = os.path.expanduser("~/brilliant/pit")
+            pit_dir = os.path.expanduser("~/flashpilot/pit")
             if os.path.isdir(pit_dir):
                 for f in sorted(os.listdir(pit_dir)):
                     if f.lower().endswith(".pit"):
@@ -3624,7 +3624,7 @@ def flow_odin_pit_tools():
 
         # Dump device PIT
         import tempfile
-        pit_dir = os.path.expanduser("~/brilliant/pit")
+        pit_dir = os.path.expanduser("~/flashpilot/pit")
         os.makedirs(pit_dir, exist_ok=True)
         device_pit_path = os.path.join(pit_dir, f"device_{d['bus']}_{d['address']}.pit")
         log(f"Dumping device PIT to {device_pit_path}...")
@@ -3775,7 +3775,7 @@ def flow_odin_vbmeta():
             log("  No vbmeta.img found in AP archive - device may not use AVB.")
             return False
 
-        out_dir = os.path.expanduser("~/brilliant/cache")
+        out_dir = os.path.expanduser("~/flashpilot/cache")
         os.makedirs(out_dir, exist_ok=True)
         out_name = os.path.basename(vbmeta_member.name)
         if out_name.endswith(".lz4"):
@@ -3987,7 +3987,7 @@ def flow_efs_backup():
         log("=" * 60)
         if not _wait_for_adb(ctx, log, timeout=30):
             raise RuntimeError("ADB device required for EFS backup.")
-        backup_dir = os.path.expanduser("~/brilliant/efs_backups")
+        backup_dir = os.path.expanduser("~/flashpilot/efs_backups")
         os.makedirs(backup_dir, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join(backup_dir, f"efs_{ctx.get('serial','device')}_{stamp}.tar")
@@ -4014,7 +4014,7 @@ def flow_efs_restore():
         backup = os.environ.get("EFS_BACKUP_PATH")
         if not backup or not os.path.isfile(backup):
             # pick most recent
-            d = os.path.expanduser("~/brilliant/efs_backups")
+            d = os.path.expanduser("~/flashpilot/efs_backups")
             cands = sorted(glob.glob(os.path.join(d, "efs_*.tar")), key=os.path.getmtime, reverse=True)
             if not cands:
                 raise RuntimeError("No EFS backup found. Run EFS backup first.")
@@ -4396,7 +4396,7 @@ def flow_mtk_brom_backup():
         log("")
 
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join(os.path.expanduser("~"), "brilliant_backups",
+        backup_dir = os.path.join(os.path.expanduser("~"), "flashpilot_backups",
                                   f"brom_{stamp}")
         os.makedirs(backup_dir, exist_ok=True)
         log(f"  Backup dir: {backup_dir}")
@@ -5209,7 +5209,7 @@ def flow_screen_lock_csc():
         odin4 = _find_odin4()
         if not odin4:
             raise RuntimeError(
-                "odin4 binary not found. Run bash /usr/share/brilliant/scripts/"
+                "odin4 binary not found. Run bash /usr/share/flashpilot/scripts/"
                 "fetch-odin4.sh (or put odin4 in ~/.local/bin) and retry."
             )
 
@@ -5902,7 +5902,7 @@ def flow_mdm_qr():
             os.path.dirname(os.path.abspath(__file__)), "..", "..", "mdm_qr"))
         if os.path.exists(out_dir) and not os.access(out_dir, os.W_OK):
             # Installed (read-only) layouts fall back to a user-writable dir.
-            out_dir = os.path.join(os.path.expanduser("~"), "brilliant", "mdm_qr")
+            out_dir = os.path.join(os.path.expanduser("~"), "flashpilot", "mdm_qr")
         os.makedirs(out_dir, exist_ok=True)
         log(f"Output: {out_dir}")
         log("")

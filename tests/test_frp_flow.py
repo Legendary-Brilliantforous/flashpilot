@@ -70,3 +70,29 @@ class TestFlowContext:
         flow = Flow("test", [Step("inc", inc), Step("inc2", inc)])
         flow.run(ctx, lambda m: None)
         assert ctx["counter"] == 2
+
+
+class TestRunGuard:
+    """The GUI run-guard serializes device operations: only one flow may run
+    at a time, so two destructive writes can never overlap and a second
+    clear_cancel() cannot discard the in-flight flow's cancel request."""
+
+    def test_second_flow_blocked_while_first_runs(self):
+        from python.gui.qt_app import _flow_start, _flow_end, _flow_busy_msg
+        assert _flow_start("Odin flash", destructive=True)
+        assert not _flow_start("MTK flash", destructive=True)
+        assert "still running" in _flow_busy_msg()
+        _flow_end()
+
+    def test_lock_released_after_end(self):
+        from python.gui.qt_app import _flow_start, _flow_end
+        assert _flow_start("op", destructive=False)
+        _flow_end()
+        assert _flow_start("op2", destructive=False)
+        _flow_end()
+
+    def test_busy_msg_mentions_blocking_flow(self):
+        from python.gui.qt_app import _flow_start, _flow_end, _flow_busy_msg
+        assert _flow_start("Carrier lock check", destructive=False)
+        assert "Carrier lock check" in _flow_busy_msg()
+        _flow_end()

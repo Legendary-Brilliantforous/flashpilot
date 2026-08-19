@@ -8,7 +8,7 @@ set -euo pipefail
 # re-verifies that digest before every flash (see python/core/frp.py).
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$DIR/root/tools/odin4"
-# Installed layouts (read-only /usr/share/brilliant) fall back to a
+# Installed layouts (read-only /usr/share/flashpilot) fall back to a
 # user-writable path so the script still works after packaging.
 if [ ! -d "$(dirname "$OUT")" ] || [ ! -w "$(dirname "$OUT")" ]; then
     OUT="${XDG_BIN_HOME:-$HOME/.local/bin}/odin4"

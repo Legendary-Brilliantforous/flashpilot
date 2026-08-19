@@ -10,18 +10,18 @@ from pathlib import Path
 def _resolve_bridge():
     """Locate the compiled Rust bridge binary.
 
-    Priority: BRILLIANT_BRIDGE env override -> in-source `target/release` path
+    Priority: flashpilot_BRIDGE env override -> in-source `target/release` path
     (dev) -> installed system paths (packaged .deb layout)."""
-    env = os.environ.get("BRILLIANT_BRIDGE")
+    env = os.environ.get("flashpilot_BRIDGE")
     if env:
         return Path(env)
-    dev = Path(__file__).resolve().parent.parent.parent / "target" / "release" / "brilliant-bridge"
+    dev = Path(__file__).resolve().parent.parent.parent / "target" / "release" / "flashpilot-bridge"
     if dev.exists():
         return dev
     for cand in (
-        "/usr/lib/brilliant/brilliant-bridge",
-        "/usr/libexec/brilliant/brilliant-bridge",
-        "/opt/brilliant/brilliant-bridge",
+        "/usr/lib/flashpilot/flashpilot-bridge",
+        "/usr/libexec/flashpilot/flashpilot-bridge",
+        "/opt/flashpilot/flashpilot-bridge",
     ):
         if Path(cand).exists():
             return Path(cand)

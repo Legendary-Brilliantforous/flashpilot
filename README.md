@@ -1,4 +1,4 @@
-# 🔧 Brilliant Flashing Tool
+# 🔧 FlashPilot
 
 > **An open-source Samsung firmware flashing & repair workbench for Linux — an Odin / Heimdall alternative for flashing Galaxy phones (Download/Odin mode), MediaTek (BROM/DA), Qualcomm (EDL) and Spreadtrum/UNISOC devices. Native Rust core, PyQt6 GUI.**
 
@@ -9,9 +9,9 @@
 [![PyQt6](https://img.shields.io/badge/UI-PyQt6-41cd52)](https://www.riverbankcomputing.com/software/pyqt/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![CI](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/actions)
-[![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/brilliant-flashing-tool/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-[![Contributors](https://img.shields.io/github/contributors/Legendary-Brilliantforous/brilliant-flashing-tool)](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/graphs/contributors)
+[![CI](https://github.com/Legendary-Brilliantforous/flashpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Legendary-Brilliantforous/flashpilot/actions)
+[![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/flashpilot/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+[![Contributors](https://img.shields.io/github/contributors/Legendary-Brilliantforous/flashpilot)](https://github.com/Legendary-Brilliantforous/flashpilot/graphs/contributors)
 
 **What is this?** A Linux-native equivalent of the paid Windows flashing suites — one unified tool that talks straight to the bootloader of **Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC** phones. No Windows VM, no crack, no gray-market server: everything runs on your own machine.
 
@@ -37,7 +37,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 - **8 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL.
 - **8 job categories, ~120 operation methods** — flashing, FRP bypass, screen-lock removal, MDM unlock, device info, reboot, settings/UI repair, and more.
-- **Rust core (`brilliant-bridge`, ~9.3k LOC)** — raw USB with a *vendored libusb* (no system deps), real protocol implementations:
+- **Rust core (`flashpilot-bridge`, ~9.3k LOC)** — raw USB with a *vendored libusb* (no system deps), real protocol implementations:
   - **Samsung**: reverse-engineered Odin session protocol (Heimdall-based), HID download-mode payloads, PIT read/write/flash.
   - **MediaTek**: BootROM / preloader / Download-Agent handshake, scatter & GPT partition flashing, BROM exploits, SLA keys, dealer & emergency modes.
   - **Qualcomm**: Sahara handshake, Firehose session, rawprogram.xml flashing, backup.
@@ -116,13 +116,13 @@ The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scri
 ### CLI / bridge
 
 ```bash
-./target/release/brilliant-bridge detect          # all USB + Samsung filter (JSON)
-./target/release/brilliant-bridge mtk-detect      # MediaTek BROM/preloader/DA
-./target/release/brilliant-bridge qcom-detect     # Qualcomm EDL
-./target/release/brilliant-bridge spd-detect      # Spreadtrum/UNISOC
-./target/release/brilliant-bridge odin-pit 04e8:xxxx@bus:addr  # read PIT
-./target/release/brilliant-bridge at-send <t> ATI # AT over CDC ACM
-./target/release/brilliant-bridge adb-devices     # adb devices -l as JSON
+./target/release/flashpilot-bridge detect          # all USB + Samsung filter (JSON)
+./target/release/flashpilot-bridge mtk-detect      # MediaTek BROM/preloader/DA
+./target/release/flashpilot-bridge qcom-detect     # Qualcomm EDL
+./target/release/flashpilot-bridge spd-detect      # Spreadtrum/UNISOC
+./target/release/flashpilot-bridge odin-pit 04e8:xxxx@bus:addr  # read PIT
+./target/release/flashpilot-bridge at-send <t> ATI # AT over CDC ACM
+./target/release/flashpilot-bridge adb-devices     # adb devices -l as JSON
 ```
 
 ---
@@ -130,7 +130,7 @@ The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scri
 ## 📁 Repository layout
 
 ```
-brilliant/
+flashpilot/
 ├── src/                      # Rust bridge (~9.3k LOC)
 │   ├── main.rs               #   command-line entry (60+ commands)
 │   ├── usb.rs                #   USB enumeration / interfaces
@@ -164,8 +164,8 @@ brilliant/
 **This project only gets better with you.** We want maintainers, protocol hackers, GUI designers, doc writers, and testers.
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — everything you need to start.
-- **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
-- Use the **[bug report](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool/issues/new?labels=enhancement&template=feature_request.yml)** templates; every PR gets a review.
+- **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
+- Use the **[bug report](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=enhancement&template=feature_request.yml)** templates; every PR gets a review.
 - **Beginner-friendly tasks** — every `flow_*` function in `python/core/frp.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
 - **No prior flashing experience required.** The flow framework (`python/core/frp.py`) is dead simple — a new method is ~5 lines:
 

@@ -389,7 +389,7 @@ class TestOdin4TarStripping:
         from python.core import frp
 
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
-        (tmp_path / "home" / "brilliant").mkdir(parents=True)
+        (tmp_path / "home" / "flashpilot").mkdir(parents=True)
         tar, body = self._make(tmp_path)
         out = frp._strip_odin4_md5_trailer(tar)
         assert out.endswith(".tar")

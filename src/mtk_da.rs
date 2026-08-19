@@ -904,7 +904,7 @@ fn write_scatter_file(
     const BIG_DATA: u64 = 2 * 1024 * 1024 * 1024;
 
     let mut out = String::new();
-    out.push_str("# Scatter file generated from the device GPT (brilliant-flashing-tool)\n");
+    out.push_str("# Scatter file generated from the device GPT (flashpilot)\n");
     out.push_str("# Partition addresses/sizes are read directly from the phone.\n");
     out.push_str("version: 0.0.1\n");
     out.push_str("platform: MTK\n");

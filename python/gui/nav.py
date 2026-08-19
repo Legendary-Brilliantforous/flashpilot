@@ -89,7 +89,7 @@ class NavRail(QFrame):
         lay.setContentsMargins(8, 10, 8, 10)
         lay.setSpacing(4)
 
-        brand = QPushButton("BRILLIANT FLASHING")
+        brand = QPushButton("flashpilot FLASHING")
         brand.setEnabled(False)
         brand.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none;"

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Build a self-contained .deb package for Brilliant Flashing Tool.
+# Build a self-contained .deb package for FlashPilot.
 #
 # The package bundles a full Python venv (with PyQt6 + segno) so it has no
 # dependency on distro PyQt6 packages - only the matching CPython minor
 # interpreter is required. A compiled Rust bridge, udev rules, desktop entry
 # and icons complete the layout:
 #
-#   /usr/bin/brilliant                     launcher
-#   /usr/lib/brilliant/brilliant-bridge    compiled Rust bridge
-#   /usr/lib/brilliant/venv/               bundled Python venv (PyQt6 + segno)
-#   /usr/share/brilliant/                  python/, main.py, scripts/, root/,
+#   /usr/bin/flashpilot                     launcher
+#   /usr/lib/flashpilot/flashpilot-bridge    compiled Rust bridge
+#   /usr/lib/flashpilot/venv/               bundled Python venv (PyQt6 + segno)
+#   /usr/share/flashpilot/                  python/, main.py, scripts/, root/,
 #                                          pit/, docs/, LICENSE, README
 #   /usr/lib/udev/rules.d/60-odin4.rules   Samsung USB rules (no sudo flashing)
-#   /usr/share/applications/brilliant.desktop
-#   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/brilliant.png
+#   /usr/share/applications/flashpilot.desktop
+#   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/flashpilot.png
 #
 # The proprietary odin4 binary is NOT shipped (legal); users fetch it via
-# /usr/share/brilliant/scripts/fetch-odin4.sh after install.
+# /usr/share/flashpilot/scripts/fetch-odin4.sh after install.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,30 +25,30 @@ cd "$ROOT"
 VERSION="$(.venv/bin/python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 PYVER="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
-PKG="brilliant-flashing-tool_${VERSION}_${ARCH}.deb"
+PKG="flashpilot_${VERSION}_${ARCH}.deb"
 STAGE="$ROOT/packaging/_stage"
 DIST="$ROOT/dist"
 
-echo "== Packaging Brilliant Flashing Tool ${VERSION} (${ARCH}) with bundled venv (cp${PYVER})"
+echo "== Packaging FlashPilot ${VERSION} (${ARCH}) with bundled venv (cp${PYVER})"
 
 # 1. Build the Rust bridge (release).
 echo "-- cargo build --release"
 cargo build --release --locked
-[ -x target/release/brilliant-bridge ] || { echo "bridge build failed"; exit 1; }
+[ -x target/release/flashpilot-bridge ] || { echo "bridge build failed"; exit 1; }
 
 # 2. Clean staging dir.
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN"
 mkdir -p "$STAGE/usr/bin"
-mkdir -p "$STAGE/usr/lib/brilliant"
-mkdir -p "$STAGE/usr/share/brilliant"
+mkdir -p "$STAGE/usr/lib/flashpilot"
+mkdir -p "$STAGE/usr/share/flashpilot"
 mkdir -p "$STAGE/usr/lib/udev/rules.d"
 mkdir -p "$STAGE/usr/share/applications"
 mkdir -p "$STAGE/usr/share/icons/hicolor/256x256/apps"
 mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 
 # 3. Rust bridge.
-install -m 0755 target/release/brilliant-bridge "$STAGE/usr/lib/brilliant/brilliant-bridge"
+install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
 
 # 4. Bundled venv (PyQt6 + segno). Reuses the repo's .venv when present (the
 #    user's environment), otherwise builds a fresh one with the system
@@ -57,15 +57,15 @@ install -m 0755 target/release/brilliant-bridge "$STAGE/usr/lib/brilliant/brilli
 SRC_VENV="$ROOT/.venv"
 if [ -x "$SRC_VENV/bin/python" ] && [ -d "$SRC_VENV/lib/python$PYVER/site-packages/PyQt6" ]; then
     echo "-- reusing repo .venv (PyQt6 present)"
-    cp -a "$SRC_VENV" "$STAGE/usr/lib/brilliant/venv"
+    cp -a "$SRC_VENV" "$STAGE/usr/lib/flashpilot/venv"
 else
     echo "-- building fresh venv (pip install PyQt6 segno)"
-    /usr/bin/python3 -m venv "$STAGE/usr/lib/brilliant/venv"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/brilliant/venv/bin/pip" install --quiet \
+    /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
         --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6"
 fi
 
-V="$STAGE/usr/lib/brilliant/venv"
+V="$STAGE/usr/lib/flashpilot/venv"
 SP="$V/lib/python$PYVER/site-packages"
 QT6="$SP/PyQt6"
 
@@ -128,36 +128,36 @@ rm -rf "$QT6/Qt6/plugins/qmltooling" "$QT6/Qt6/plugins/sqldrivers" \
 echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 
 # 5. Application (python + assets).
-cp main.py "$STAGE/usr/share/brilliant/"
-cp -r python "$STAGE/usr/share/brilliant/"
-cp -r scripts "$STAGE/usr/share/brilliant/"
-cp -r root "$STAGE/usr/share/brilliant/"
-cp -r pit "$STAGE/usr/share/brilliant/"
-cp -r docs "$STAGE/usr/share/brilliant/"
-cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/brilliant/"
-find "$STAGE/usr/share/brilliant" -name "__pycache__" -type d -prune -exec rm -rf {} +
-rm -rf "$STAGE/usr/share/brilliant/tests"
-find "$STAGE/usr/share/brilliant" -type f ! -name "*.sh" -exec chmod 0644 {} +
-find "$STAGE/usr/share/brilliant" -type f -name "*.sh" -exec chmod 0755 {} +
-find "$STAGE/usr/share/brilliant" -type d -exec chmod 0755 {} +
+cp main.py "$STAGE/usr/share/flashpilot/"
+cp -r python "$STAGE/usr/share/flashpilot/"
+cp -r scripts "$STAGE/usr/share/flashpilot/"
+cp -r root "$STAGE/usr/share/flashpilot/"
+cp -r pit "$STAGE/usr/share/flashpilot/"
+cp -r docs "$STAGE/usr/share/flashpilot/"
+cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
+find "$STAGE/usr/share/flashpilot" -name "__pycache__" -type d -prune -exec rm -rf {} +
+rm -rf "$STAGE/usr/share/flashpilot/tests"
+find "$STAGE/usr/share/flashpilot" -type f ! -name "*.sh" -exec chmod 0644 {} +
+find "$STAGE/usr/share/flashpilot" -type f -name "*.sh" -exec chmod 0755 {} +
+find "$STAGE/usr/share/flashpilot" -type d -exec chmod 0755 {} +
 
 # 6. Udev rules (Samsung VID 04e8 -> world-readable for plugdev users).
 install -m 0644 root/60-odin4.rules "$STAGE/usr/lib/udev/rules.d/60-odin4.rules"
 
 # 7. Launcher.
-install -m 0755 packaging/launcher.sh "$STAGE/usr/bin/brilliant"
-ln -sf brilliant "$STAGE/usr/bin/brilliant-flashing-tool"
+install -m 0755 packaging/launcher.sh "$STAGE/usr/bin/flashpilot"
+ln -sf flashpilot "$STAGE/usr/bin/flashpilot"
 
 # 8. Desktop entry + icons.
-install -m 0644 packaging/brilliant.desktop "$STAGE/usr/share/applications/brilliant.desktop"
-install -m 0644 docs/logo_256.png "$STAGE/usr/share/icons/hicolor/256x256/apps/brilliant.png"
-install -m 0644 docs/logo_512.png "$STAGE/usr/share/icons/hicolor/512x512/apps/brilliant.png"
+install -m 0644 packaging/flashpilot.desktop "$STAGE/usr/share/applications/flashpilot.desktop"
+install -m 0644 docs/logo_256.png "$STAGE/usr/share/icons/hicolor/256x256/apps/flashpilot.png"
+install -m 0644 docs/logo_512.png "$STAGE/usr/share/icons/hicolor/512x512/apps/flashpilot.png"
 
 # 9. Verify the stripped venv actually builds the real GUI (headless).
 echo "-- smoke test: construct the real main window (QT_QPA_PLATFORM=offscreen)"
 if ! QT_QPA_PLATFORM=offscreen "$V/bin/python" -c "
 import sys
-sys.path.insert(0, '$STAGE/usr/share/brilliant')
+sys.path.insert(0, '$STAGE/usr/share/flashpilot')
 from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 from python.gui.qt_app import FrpWindow
@@ -190,6 +190,6 @@ echo "== Built: $DIST/$PKG  ($(du -h "$DIST/$PKG" | cut -f1))"
 dpkg-deb --info "$DIST/$PKG" | grep -E "^( Package| Version| Architecture| Depends| Recommends| Installed-Size)"
 echo ""
 echo "Install with:  sudo dpkg -i $DIST/$PKG"
-echo "Then run:      brilliant"
+echo "Then run:      flashpilot"
 echo "USB rules are applied automatically on install."
-echo "Fetch odin4 (Samsung download mode): bash /usr/share/brilliant/scripts/fetch-odin4.sh"
+echo "Fetch odin4 (Samsung download mode): bash /usr/share/flashpilot/scripts/fetch-odin4.sh"

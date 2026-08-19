@@ -1,10 +1,10 @@
-Package: brilliant-flashing-tool
+Package: flashpilot
 Version: @VERSION@
 Section: utils
 Priority: optional
 Architecture: @ARCH@
-Maintainer: Brilliant Flashing Tool <legendary-brilliantforous@users.noreply.github.com>
-Homepage: https://github.com/Legendary-Brilliantforous/brilliant-flashing-tool
+Maintainer: FlashPilot <legendary-flashpilotforous@users.noreply.github.com>
+Homepage: https://github.com/Legendary-Brilliantforous/flashpilot
 Depends: @PYTHON_DEP@
 Recommends: adb, lz4
 Description: Open-source FRP reset and firmware flashing toolbox
@@ -19,13 +19,13 @@ Description: Open-source FRP reset and firmware flashing toolbox
     UNISOC BSL, plus ADB/MTP/AT plumbing.
   * FRP bypass, screen-lock removal, MDM unlock, partition backup, network and
     battery repair, carrier-lock status checks.
-  * Native Rust core (brilliant-bridge) with vendored libusb - no system USB
+  * Native Rust core (flashpilot-bridge) with vendored libusb - no system USB
     dependencies beyond the shipped udev rules.
   * Bundled Python venv (PyQt6 + segno) - only the matching python3 minor is
     required, no distro Qt packages.
  .
  NOTE: the proprietary Samsung odin4 binary is not redistributed; fetch it
- after install with /usr/share/brilliant/scripts/fetch-odin4.sh.
+ after install with /usr/share/flashpilot/scripts/fetch-odin4.sh.
  .
  WARNING: this tool talks directly to bootloaders and can wipe data or brick a
  device. Use only on devices you own or are authorized to service.
