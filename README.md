@@ -1,6 +1,8 @@
 # 🔧 Brilliant Flashing Tool
 
-> **The open-source, cross-platform-grade flashing & repair workbench for Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC devices — powered by a native Rust core and a polished PyQt6 studio.**
+> **An open-source Samsung firmware flashing & repair workbench for Linux — an Odin / Heimdall alternative for flashing Galaxy phones (Download/Odin mode), MediaTek (BROM/DA), Qualcomm (EDL) and Spreadtrum/UNISOC devices. Native Rust core, PyQt6 GUI.**
+
+**Search keywords:** Samsung flashing tool · Odin alternative · Android firmware flashing Linux · Heimdall GUI · Galaxy phone repair · MTK BROM flash · Qualcomm EDL · FRP unlock · UNISOC flash
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org)
