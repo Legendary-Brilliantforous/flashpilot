@@ -75,6 +75,41 @@ from .toast import ToastHost
 from .nav import NavRail
 
 # ---------------------------------------------------------------------------
+# Flow run-guard: only ONE device operation may run at a time. Without this a
+# user can click "Flash" while a flash is in progress - launching a second
+# write to the same device - and the second clear_cancel() silently discards
+# the in-flight operation's cancel request. The lock is acquired on the GUI
+# thread when an operation starts and released from the worker's finally.
+# ---------------------------------------------------------------------------
+_FLOW_LOCK = threading.Lock()
+_FLOW_LABEL = [None]
+_FLOW_IS_DESTRUCTIVE = [False]
+
+
+def _flow_start(label, destructive):
+    """Try to begin a device operation. Returns False (and the caller should
+    abort) if another operation is already running. Records whether this
+    operation can brick/wipe a device so Stop reflects the true severity."""
+    if not _FLOW_LOCK.acquire(blocking=False):
+        return False
+    _FLOW_LABEL[0] = label
+    _FLOW_IS_DESTRUCTIVE[0] = bool(destructive)
+    return True
+
+
+def _flow_end():
+    _FLOW_LABEL[0] = None
+    _FLOW_IS_DESTRUCTIVE[0] = False
+    _FLOW_LOCK.release()
+
+
+def _flow_busy_msg():
+    other = _FLOW_LABEL[0]
+    if other:
+        return f"'{other}' is still running. Wait for it to finish before starting another operation."
+    return "Another operation is still running. Wait for it to finish."
+
+# ---------------------------------------------------------------------------
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
 C = {
@@ -7230,6 +7265,11 @@ class FrpWindow(QMainWindow):
     def _run_ops_flow(self, job, mode, method, label):
         """Run a Samsung Operations flow directly from its button - no
         job/mode/method dropdowns, each operation is its own button."""
+        if not _flow_start(label, destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
         frp.clear_cancel()
         bridge.clear_cancel()
         self._toasts.show_progress("Operation started", label)
@@ -7316,6 +7356,7 @@ class FrpWindow(QMainWindow):
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
             finally:
+                _flow_end()
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.finished.emit()
 
@@ -7434,6 +7475,11 @@ class FrpWindow(QMainWindow):
         info, ...) directly from the MTK / Qualcomm / SPD chip pages. The
         Samsung Operations panel exposes the same flows through its job/mode/
         method pickers; this lets the dedicated chip pages run them too."""
+        if not _flow_start(label, destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
         frp.clear_cancel()
         bridge.clear_cancel()
         self._toasts.show_progress("Operation started", label)
@@ -7462,6 +7508,7 @@ class FrpWindow(QMainWindow):
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
             finally:
+                _flow_end()
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.ui.emit(reset_ui)
 
