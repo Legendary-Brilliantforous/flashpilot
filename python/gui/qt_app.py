@@ -130,11 +130,64 @@ _DESTRUCTIVE_CONFIRM = {
         "device can be set up fresh.\n\n"
         "There is NO undo for the wiped data. Continue?",
     ),
-    "screen_lock_remove": (
+    "mdm_unlock_comprehensive": (
+        "MDM Unlock (Comprehensive)",
+        "Removes the MDM / device-owner app AND clears related account and "
+        "system state across all users.\n\n"
+        "This is the deepest MDM removal and may also wipe user data. "
+        "Continue?",
+    ),
+    "mdm_unlock_recovery_wipe": (
+        "MDM Unlock (with data wipe)",
+        "Removes the MDM / device-owner app and WIPES USER DATA via "
+        "recovery so the device can be set up as new.\n\n"
+        "There is NO undo for the wiped data. Continue?",
+    ),
+    "screen_lock_locksettings": (
         "Screen Lock Remove",
-        "Removes the screen lock (PIN / password / pattern / face) and the "
-        "associated FRP / account lock records.\n\n"
+        "Removes the screen lock (PIN / password / pattern / face) via the "
+        "locksettings command.\n\n"
         "This may log out signed-in accounts and reset security settings. "
+        "Continue?",
+    ),
+    "screen_lock_csc": (
+        "Screen Lock Remove (CSC flash)",
+        "Removes the screen lock by flashing a combination/CSC build, which "
+        "FACTORY RESETS the device and wipes all user data.\n\n"
+        "There is NO undo. Continue?",
+    ),
+    "screen_lock_recovery": (
+        "Screen Lock Remove (Recovery)",
+        "Removes the screen lock and FRP records from recovery, which "
+        "resets security state and may log out accounts.\n\n"
+        "Continue?",
+    ),
+    "screen_lock_comprehensive": (
+        "Screen Lock Remove (Comprehensive)",
+        "Removes the screen lock / FRP / account lock records by the most "
+        "thorough method available on the device.\n\n"
+        "This may wipe data and log out accounts. Continue?",
+    ),
+    "screen_lock_download": (
+        "Screen Lock Remove (Combo flash)",
+        "Flashes a combination firmware in Download mode to remove the "
+        "screen lock - this REPLACES the firmware and wipes the device.\n\n"
+        "There is NO undo. Continue?",
+    ),
+    "adb_frp": (
+        "FRP Bypass (ADB)",
+        "Clears the Factory Reset Protection flag so the device can be set "
+        "up with a new account.\n\n"
+        "Continue?",
+    ),
+    "frp_browser": (
+        "FRP Bypass (Browser)",
+        "Clears the Factory Reset Protection flag via the browser workaround.\n\n"
+        "Continue?",
+    ),
+    "frp_settings": (
+        "FRP Bypass (Settings)",
+        "Clears the Factory Reset Protection flag via the settings workaround.\n\n"
         "Continue?",
     ),
 }
