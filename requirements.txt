@@ -3,3 +3,7 @@ PyQt6>=6.5
 
 # MDM provisioning QR generation (used by the MDM/QR flow)
 segno>=1.6
+
+# LZ4 firmware decompression (frp.py _lz4_decompress falls back to the Python
+# package when the system `lz4` binary is not installed)
+lz4>=4.0

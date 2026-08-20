@@ -94,8 +94,11 @@ def _run(args, timeout=15):
     )
     deadline = time.monotonic() + timeout
 
-    # Background thread drains stderr line-by-line so live progress reaches
-    # the GUI even while the process is still running.
+    # Background threads drain stdout and stderr independently. stderr lines
+    # are forwarded live to the GUI; reading both pipes without double-reading
+    # avoids the race where communicate() and a manual drainer split the pipe
+    # nondeterministically and drop log lines.
+    stdout_lines = []
     stderr_lines = []
     stopped = threading.Event()
 
@@ -109,8 +112,15 @@ def _run(args, timeout=15):
             _forward_log(line)
         stopped.set()
 
+    def _drain_stdout():
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            stdout_lines.append(raw)
+
     drainer = threading.Thread(target=_drain, daemon=True)
     drainer.start()
+    out_drainer = threading.Thread(target=_drain_stdout, daemon=True)
+    out_drainer.start()
 
     try:
         while True:
@@ -126,12 +136,13 @@ def _run(args, timeout=15):
                 proc.wait()
                 raise BridgeError(f"timed out after {timeout}s")
             time.sleep(0.05)
-        out, err = proc.communicate()
+        out_drainer.join(timeout=2)
         stopped.wait(timeout=2)
         drainer.join(timeout=2)
+        out = "".join(stdout_lines)
         tail = "\n".join(stderr_lines[-25:])
         if proc.returncode != 0:
-            detail = err.strip() or out.strip() or "bridge exited with error"
+            detail = tail.strip() or out.strip() or "bridge exited with error"
             raise BridgeError(detail + (f"\n[bridge log tail]\n{tail}" if tail else ""))
         return out.strip()
     finally:

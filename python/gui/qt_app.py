@@ -4131,8 +4131,18 @@ class FrpWindow(QMainWindow):
             self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
             return
         self._ui.line.emit(f"[step] MTK flashing: scatter={scatter} da={da} fw={fw}")
-        self._toasts.show_ok("MTK flash queued", "Starting in background...")
-        self._mtk_run(["mtk-flash", "auto", da, scatter, fw], timeout=1800)
+        self._confirm_overlay(
+            "Flash Firmware (MTK)",
+            "Write ALL firmware images from the selected directory to the "
+            "connected MediaTek device, following the scatter file.\n\n"
+            "This OVERWRITES the system, boot, vendor and modem partitions.\n"
+            "If the firmware is wrong for this model, the device may not boot.\n\n"
+            "There is NO undo. Continue?",
+            confirm_label="Flash",
+            on_confirm=lambda: self._mtk_run(
+                ["mtk-flash", "auto", da, scatter, fw], timeout=1800
+            ),
+        )
 
     def _mtk_backup(self):
         files = self._mtk_require_files()
@@ -6849,6 +6859,12 @@ class FrpWindow(QMainWindow):
         )
 
     def _battery_repair_run(self):
+        if not _flow_start("Battery repair", destructive=False):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 devs = bridge.adb_status()
@@ -6932,6 +6948,8 @@ class FrpWindow(QMainWindow):
                 )
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] battery repair: {e}")
+            finally:
+                _flow_end()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6952,7 +6970,14 @@ class FrpWindow(QMainWindow):
         )
 
     def _battery_load_test_run(self):
+        if not _flow_start("Battery load test", destructive=False):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
+            restored = False
             try:
                 devs = bridge.adb_status()
                 auth = [d for d in devs if d["state"] == "device"]
@@ -7006,6 +7031,7 @@ class FrpWindow(QMainWindow):
                         bridge.adb_shell(cmd, timeout=10)
                     except bridge.BridgeError:
                         pass
+                restored = False  # phone is now maxed - must restore below
 
                 # CPU burn in background
                 bridge.adb_shell(
@@ -7017,18 +7043,15 @@ class FrpWindow(QMainWindow):
                 samples = []
                 t0 = _time.time()
                 while _time.time() - t0 < 14:
+                    if frp.cancel_requested():
+                        self._ui.line.emit("[cancelled] load test stopped by user")
+                        return
                     v = read()
                     if v:
                         samples.append(v)
                     _time.sleep(0.8)
-
-                # restore normal brightness
-                try:
-                    bridge.adb_shell(
-                        "settings put system screen_brightness_mode 1", timeout=8
-                    )
-                except bridge.BridgeError:
-                    pass
+                # loop done (not cancelled) - the full stress window ran
+                restored = True  # handled by finally below
 
                 if not samples:
                     self._ui.line.emit("[error] load test: no voltage samples read")
@@ -7069,6 +7092,17 @@ class FrpWindow(QMainWindow):
                 self._ui.toast.emit("ok", "Load test", "Result printed to console")
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] battery load test: {e}")
+            finally:
+                # Restore brightness even if the burn/read path raised or was
+                # cancelled - otherwise the phone is left at 100% brightness.
+                if not restored:
+                    try:
+                        bridge.adb_shell(
+                            "settings put system screen_brightness_mode 1", timeout=8
+                        )
+                    except bridge.BridgeError:
+                        pass
+                _flow_end()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -7240,6 +7274,12 @@ class FrpWindow(QMainWindow):
         )
 
     def _network_repair_run(self):
+        if not _flow_start("Network repair", destructive=False):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 serial = self._require_adb()
@@ -7287,6 +7327,8 @@ class FrpWindow(QMainWindow):
                 self._ui.toast.emit("ok", "Network repair", "Radios reset + caches flushed")
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] network repair: {e}")
+            finally:
+                _flow_end()
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -7304,6 +7346,12 @@ class FrpWindow(QMainWindow):
         )
 
     def _network_modem_reset_run(self):
+        if not _flow_start("Modem reset", destructive=False):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+            return
+
         def work():
             try:
                 serial = self._require_adb()
@@ -7345,6 +7393,8 @@ class FrpWindow(QMainWindow):
                 self._ui.toast.emit("ok", "Modem reset", "Modem re-registering")
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] modem reset: {e}")
+            finally:
+                _flow_end()
 
         threading.Thread(target=work, daemon=True).start()
 

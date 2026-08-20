@@ -417,9 +417,12 @@ pub fn detach_kernel_drivers(target: &str) -> Result<String> {
         })
         .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
     
-    let handle = device.open()?;
-    
-    for iface in &devices[0].interfaces {
+let handle = device.open()?;
+    let _ = handle.set_auto_detach_kernel_driver(true);
+
+    // Detach the *matched* device's interfaces (not devices[0] - with several
+    // phones plugged in that would release the wrong device).
+    for iface in &dev.interfaces {
         let _ = handle.release_interface(iface.number);
     }
     

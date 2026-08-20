@@ -364,6 +364,20 @@ impl BromSession {
         (chksum, out)
     }
 
+    /// True when the device-reported checksum validates against the host
+    /// checksum. A device checksum of 0 is the BROM's "no compute / error"
+    /// value and is rejected unless MTK_ALLOW_ZERO_CHECKSUM is set - accepting
+    /// it could let a corrupt DA be executed.
+    pub fn checksum_matches(host: u16, device: u16) -> bool {
+        if host == device {
+            return true;
+        }
+        device == 0
+            && std::env::var("MTK_ALLOW_ZERO_CHECKSUM")
+                .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false)
+    }
+
     /// mtkclient `upload_data`: push the DA in `maxinsize` chunks, writing an
     /// empty keep-alive packet every 0x2000 bytes, then read back the
     /// (checksum, status) pair (both big-endian u16).
@@ -385,7 +399,7 @@ impl BromSession {
         let resp = self.read_exact(4, Duration::from_secs(30))?;
         let checksum = u16::from_be_bytes([resp[0], resp[1]]);
         let status = u16::from_be_bytes([resp[2], resp[3]]);
-        if gen_chksum != checksum && checksum != 0 {
+        if !Self::checksum_matches(gen_chksum, checksum) {
             return Err(format!(
                 "upload_data checksum mismatch: host 0x{gen_chksum:04x}, device 0x{checksum:04x}"
             ));
@@ -843,5 +857,22 @@ mod tests {
         assert_eq!(out2.len(), 36); // 31 + 4 = 35, + sigdata(4) = 39 -> pad 1
         assert_eq!(out2[35], 0x00);
         assert_eq!(cks2, 0x7966);
+    }
+
+    #[test]
+    fn upload_checksum_mismatch_is_rejected_even_for_zero() {
+        // A device-reported checksum of 0 is the BROM's "no compute / error"
+        // value. It must NOT be accepted as a match, or a corrupt DA upload
+        // would be executed.
+        std::env::remove_var("MTK_ALLOW_ZERO_CHECKSUM");
+        assert!(BromSession::checksum_matches(0x6666, 0x6666));
+        assert!(!BromSession::checksum_matches(0x6666, 0));
+        assert!(!BromSession::checksum_matches(0x6666, 0x1234));
+
+        // Explicit opt-in restores the lenient behavior for devices that
+        // genuinely echo 0.
+        std::env::set_var("MTK_ALLOW_ZERO_CHECKSUM", "1");
+        assert!(BromSession::checksum_matches(0x6666, 0));
+        std::env::remove_var("MTK_ALLOW_ZERO_CHECKSUM");
     }
 }

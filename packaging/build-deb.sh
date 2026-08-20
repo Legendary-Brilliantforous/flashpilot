@@ -50,8 +50,8 @@ mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 # 3. Rust bridge.
 install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
 
-# 4. Bundled venv (PyQt6 + segno). Reuses the repo's .venv when present (the
-#    user's environment), otherwise builds a fresh one with the system
+# 4. Bundled venv (PyQt6 + segno + lz4). Reuses the repo's .venv when present
+#    (the user's environment), otherwise builds a fresh one with the system
 #    interpreter. Either way the CPython ABI must match the target's python3
 #    minor, which is enforced in Depends.
 SRC_VENV="$ROOT/.venv"
@@ -59,10 +59,10 @@ if [ -x "$SRC_VENV/bin/python" ] && [ -d "$SRC_VENV/lib/python$PYVER/site-packag
     echo "-- reusing repo .venv (PyQt6 present)"
     cp -a "$SRC_VENV" "$STAGE/usr/lib/flashpilot/venv"
 else
-    echo "-- building fresh venv (pip install PyQt6 segno)"
+    echo "-- building fresh venv (pip install PyQt6 segno lz4)"
     /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
     PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
-        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6"
+        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0"
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"
@@ -131,7 +131,9 @@ echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 cp main.py "$STAGE/usr/share/flashpilot/"
 cp -r python "$STAGE/usr/share/flashpilot/"
 cp -r scripts "$STAGE/usr/share/flashpilot/"
-cp -r root "$STAGE/usr/share/flashpilot/"
+# root/ is copied EXCEPT root/tools/odin4: the proprietary Samsung binary is
+# never redistributed (see fetch-odin4.sh for the after-install download).
+rsync -a --exclude 'tools/odin4' root/ "$STAGE/usr/share/flashpilot/root/"
 cp -r pit "$STAGE/usr/share/flashpilot/"
 cp -r docs "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
@@ -141,12 +143,11 @@ find "$STAGE/usr/share/flashpilot" -type f ! -name "*.sh" -exec chmod 0644 {} +
 find "$STAGE/usr/share/flashpilot" -type f -name "*.sh" -exec chmod 0755 {} +
 find "$STAGE/usr/share/flashpilot" -type d -exec chmod 0755 {} +
 
-# 6. Udev rules (Samsung VID 04e8 -> world-readable for plugdev users).
+# 6. Udev rules (Samsung VID 04e8 -> plugdev users get device access).
 install -m 0644 root/60-odin4.rules "$STAGE/usr/lib/udev/rules.d/60-odin4.rules"
 
 # 7. Launcher.
 install -m 0755 packaging/launcher.sh "$STAGE/usr/bin/flashpilot"
-ln -sf flashpilot "$STAGE/usr/bin/flashpilot"
 
 # 8. Desktop entry + icons.
 install -m 0644 packaging/flashpilot.desktop "$STAGE/usr/share/applications/flashpilot.desktop"

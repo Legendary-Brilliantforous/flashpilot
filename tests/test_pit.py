@@ -24,26 +24,39 @@ class TestPITParsing:
         assert parse_model(raw) == ""
 
     def test_parse_pit_valid(self):
-        """Parse the real firmware PIT (A14M_MEA_OPEN.pit)."""
-        import os
-        pit_path = os.path.expanduser("~/Downloads/CSC_OJM_A145POJMCDZE3_MQB110285214_REV00_user_low_ship_MULTI_CERT.tar.md5")
-        # Extract PIT from tar if not already extracted
-        import tarfile, tempfile
-        with tempfile.TemporaryDirectory() as td:
-            with tarfile.open(pit_path, "r") as tf:
-                for m in tf.getmembers():
-                    if m.name.endswith(".pit"):
-                        tf.extract(m, td)
-                        raw = open(os.path.join(td, m.name), "rb").read()
-                        break
-        entries = parse_pit(raw)
-        assert len(entries) == 57
-        # Check first entry (bootloader)
+        """Parse a synthetic valid PIT and check field extraction."""
+        def entry(name, fname, identifier, dev_type, block_size, block_count):
+            e = bytearray(132)
+            e[4:8] = (dev_type).to_bytes(4, "little")  # device_type
+            e[8:12] = (identifier).to_bytes(4, "little")
+            e[20:24] = (block_size).to_bytes(4, "little")
+            e[24:28] = (block_count).to_bytes(4, "little")
+            e[128:132] = (512).to_bytes(4, "little")  # file_size
+            e[32:32 + len(name)] = name.encode()
+            e[64:64 + len(fname)] = fname.encode()
+            return e
+
+        pit = bytearray(32 + 132 * 3)
+        pit[0:4] = (0x12349876).to_bytes(4, "little")  # magic
+        pit[4:8] = (3).to_bytes(4, "little")  # entry count
+        pit[8:12] = (132).to_bytes(4, "little")  # entry size
+        pit[12:16] = (0).to_bytes(4, "little")  # device type
+        pit[16:20] = (0).to_bytes(4, "little")  # device type2
+        pit[28:32] = (1).to_bytes(4, "little")  # block size
+        pit[32:36] = (1).to_bytes(4, "little")  # block count
+        for i, (n, f, ident, dt, bs, bc) in enumerate([
+            ("bootloader", "preloader.img", 0, 0x50, 512, 8),
+            ("system", "system.img", 1, 0x50, 512, 2048),
+            ("sgpt", "sgpt.img", 2, 0x50, 512, 64),
+        ]):
+            pit[32 + i * 132:32 + (i + 1) * 132] = entry(n, f, ident, dt, bs, bc)
+
+        entries = parse_pit(bytes(pit))
+        assert len(entries) == 3
         e0 = entries[0]
         assert e0.name == "bootloader"
         assert e0.flash_filename == "preloader.img"
         assert e0.device_type == 0x50
-        # Check last entry (sgpt)
         e_last = entries[-1]
         assert e_last.name == "sgpt"
         assert e_last.flash_filename == "sgpt.img"

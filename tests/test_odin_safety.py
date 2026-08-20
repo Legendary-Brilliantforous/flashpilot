@@ -127,10 +127,24 @@ class TestOdin4BinaryVerification:
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(here, "root", "tools", "odin4")
 
+    @pytest.mark.skipif(
+        not os.path.exists(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "root", "tools", "odin4",
+        )),
+        reason="bundled odin4 is gitignored; fetched by scripts/fetch-odin4.sh",
+    )
     def test_pinned_hash_matches_bundled_binary(self):
         with open(self.bundled_path(), "rb") as f:
             assert hashlib.sha256(f.read()).hexdigest() == ODIN4_SHA256
 
+    @pytest.mark.skipif(
+        not os.path.exists(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "root", "tools", "odin4",
+        )),
+        reason="bundled odin4 is gitignored; fetched by scripts/fetch-odin4.sh",
+    )
     def test_bundled_binary_verified(self):
         assert _odin4_hash_ok(self.bundled_path()) is True
 

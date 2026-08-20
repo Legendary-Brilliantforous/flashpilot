@@ -247,7 +247,8 @@ class TestScreenLockCscAdbFirst:
 
     def test_authorized_adb_uses_locksettings_not_odin(self, monkeypatch):
         calls, out = self._run_flow(monkeypatch, [{"state": "device", "serial": "x"}])
-        assert "locksettings" in " ".join(calls["adb_shell"]) or calls["adb_shell"]
+        adb_cmds = " ".join(calls["adb_shell"])
+        assert "locksettings" in adb_cmds
         assert calls["odin"] == []
         assert "over adb" in out
 
@@ -255,3 +256,34 @@ class TestScreenLockCscAdbFirst:
         calls, out = self._run_flow(monkeypatch, [])
         assert "CSC" in out
         assert "falling back" in out.lower() or "Fallback" in out
+
+
+class TestChangeSalesCode:
+    def _run(self, monkeypatch, code):
+        calls = {"adb_shell": []}
+        monkeypatch.setenv("SALES_CODE", code)
+        monkeypatch.setattr(frp, "_wait_for_adb", lambda ctx, log, timeout=30: True)
+        monkeypatch.setattr(
+            frp.bridge, "adb_shell",
+            lambda cmd, timeout=30: calls["adb_shell"].append(cmd) or "ok",
+        )
+        import io
+        buf = io.StringIO()
+        result = frp.flow_change_sales_code().run({}, buf.write)
+        return result, calls["adb_shell"]
+
+    def test_valid_code_is_quoted_in_shell(self, monkeypatch):
+        result, cmds = self._run(monkeypatch, "ojm")
+        assert result == [True]
+        assert "sales_code 'OJM'" in " ".join(cmds)
+        assert "OJM; rm" not in " ".join(cmds)
+
+    def test_invalid_code_rejected(self, monkeypatch):
+        import pytest
+        with pytest.raises(RuntimeError, match="Invalid sales code"):
+            self._run(monkeypatch, "OJM; rm -rf /")
+
+    def test_injection_payload_rejected(self, monkeypatch):
+        import pytest
+        with pytest.raises(RuntimeError, match="Invalid sales code"):
+            self._run(monkeypatch, "x'; setprop pwn'd")

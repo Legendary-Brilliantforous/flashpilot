@@ -347,8 +347,11 @@ impl SpdSession {
         let text = String::from_utf8_lossy(&payload).to_string();
         // The banner may contain "CHIP ID = 0x..." — capture it for chip logic.
         if let Some(pos) = text.find("CHIP ID = 0x") {
-            if let Ok(v) = u32::from_str_radix(&text[pos + 11..pos + 19], 16) {
-                self.chip_id = v;
+            let end = (pos + 19).min(text.len());
+            if end > pos + 11 {
+                if let Ok(v) = u32::from_str_radix(&text[pos + 11..end], 16) {
+                    self.chip_id = v;
+                }
             }
         }
         self.cmd_ack(BSL_CMD_CONNECT, &[])?;

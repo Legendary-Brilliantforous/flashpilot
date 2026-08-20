@@ -4045,13 +4045,18 @@ def flow_change_sales_code():
         log("=" * 60)
         if not _wait_for_adb(ctx, log, timeout=30):
             raise RuntimeError("ADB device required.")
-        code = (os.environ.get("SALES_CODE") or "").strip()
+        code = (os.environ.get("SALES_CODE") or "").strip().upper()
         if not code:
             raise RuntimeError("Set a sales code (e.g. OJM, XME, INS) in the Sales Code field.")
+        if not re.fullmatch(r"[A-Z0-9]{2,6}", code):
+            raise RuntimeError(
+                f"Invalid sales code {code!r}: sales codes are 2-6 chars of "
+                "letters/digits (e.g. OJM, XME, INS)."
+            )
         log(f"  Setting sales code to {code}...")
         try:
-            bridge.adb_shell(f"settings put global sales_code {code}", timeout=30)
-            bridge.adb_shell(f"setprop persist.sys.csc.sales_code {code}", timeout=30)
+            bridge.adb_shell(f"settings put global sales_code '{code}'", timeout=30)
+            bridge.adb_shell(f"setprop persist.sys.csc.sales_code '{code}'", timeout=30)
             bridge.adb_shell("am broadcast -a com.sec.android.app.csc.MAIN", timeout=30)
             log(f"  Sales code set to {code}. Some features apply after reboot.")
         except Exception as e:

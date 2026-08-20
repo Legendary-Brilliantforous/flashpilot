@@ -46,6 +46,19 @@ pub struct ScatterFile {
     pub block_size: u32,
 }
 
+/// Parse a hex value from a scatter file (with optional 0x prefix). Errors
+/// instead of silently defaulting to 0, so a typo in the scatter can never
+/// turn into a flash at address/size 0.
+fn parse_scatter_hex(val: &str) -> std::result::Result<u64, String> {
+    let val = val.trim();
+    let digits = val.trim_start_matches("0x").trim_start_matches("0X");
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("invalid hex value in scatter: '{val}'"));
+    }
+    u64::from_str_radix(digits, 16)
+        .map_err(|e| format!("invalid hex value in scatter: '{val}' ({e})"))
+}
+
 impl ScatterFile {
     pub fn parse(path: &str) -> std::result::Result<Self, String> {
         let content = fs::read_to_string(path).map_err(|e| format!("read scatter: {e}"))?;
@@ -93,10 +106,10 @@ impl ScatterFile {
             } else if let Some(last_entry) = entries.last_mut() {
                 if line.starts_with("linear_start_addr:") || line.starts_with("start_addr:") {
                     let val = line.split(':').nth(1).unwrap_or("0").trim();
-                    last_entry.start_addr = u64::from_str_radix(val.trim_start_matches("0x"), 16).unwrap_or(0);
+                    last_entry.start_addr = parse_scatter_hex(val).map_err(|e| e)?;
                 } else if line.starts_with("partition_size:") || line.starts_with("length:") {
                     let val = line.split(':').nth(1).unwrap_or("0").trim();
-                    last_entry.length = u64::from_str_radix(val.trim_start_matches("0x"), 16).unwrap_or(0);
+                    last_entry.length = parse_scatter_hex(val).map_err(|e| e)?;
                 } else if line.starts_with("file_name:") || line.starts_with("filename:") {
                     last_entry.filename = line.split(':').nth(1).unwrap_or("").trim().to_string();
                 } else if line.starts_with("is_download:") {
@@ -133,7 +146,32 @@ impl ScatterFile {
             }
         }
 
-        // Filter to downloadable entries only
+        // Validate BEFORE filtering: a broken entry must be an error, not silently
+// dropped (silently dropping = the flash proceeds without that partition).
+for e in &entries {
+    if e.length == 0 {
+        return Err(format!(
+            "scatter entry '{}' has zero partition_size - refusing to flash",
+            e.partition_name
+        ));
+    }
+    if e.filename.is_empty() {
+        return Err(format!(
+            "scatter entry '{}' has no filename - refusing to flash",
+            e.partition_name
+        ));
+    }
+    let f = &e.filename;
+    let base = std::path::Path::new(f);
+    if f.contains('/') || f.contains('\\') || f.contains("..") || base.is_absolute() {
+        return Err(format!(
+            "unsafe filename in scatter for '{}': {:?} (must be a plain file name)",
+            e.partition_name, f
+        ));
+    }
+}
+
+// Filter to downloadable entries only
         entries.retain(|e| e.is_download && e.is_valid());
 
         Ok(ScatterFile {
@@ -461,8 +499,15 @@ impl DaSession {
         
         // Parse boot image header to find ramdisk offset/size
         let (ramdisk_offset, ramdisk_size) = self.parse_boot_header(&boot_data)?;
-        
-        // Extract ramdisk
+
+        // Extract ramdisk (guarded: a corrupt header must not OOB-slice)
+        let ramdisk_end = ramdisk_offset.checked_add(ramdisk_size);
+        if ramdisk_end.is_none() || ramdisk_end.unwrap() > boot_data.len() {
+            return Err(format!(
+                "boot image ramdisk out of range: offset {ramdisk_offset} + size {ramdisk_size} > {} bytes",
+                boot_data.len()
+            ));
+        }
         let ramdisk = &boot_data[ramdisk_offset..ramdisk_offset + ramdisk_size];
         
         // Decompress ramdisk (gzip)
@@ -693,14 +738,33 @@ impl DaSession {
 
     /// Flash firmware from scatter
     pub fn flash_firmware(&self, scatter: &ScatterFile, firmware_dir: &str) -> std::result::Result<(), String> {
+        let mut flashed = 0usize;
         for entry in &scatter.entries {
-            let file_path = format!("{}/{}", firmware_dir, entry.filename);
+            let filename = &entry.filename;
+            // Path traversal guard: the scatter `filename` is untrusted input
+            // (it comes from a firmware zip the user selected). Never let it
+            // escape the firmware directory to read/flash arbitrary host files.
+            let base = std::path::Path::new(filename);
+            if filename.contains('/') || filename.contains('\\') || filename.contains("..") || base.is_absolute() {
+                return Err(format!(
+                    "unsafe filename in scatter: {:?} (must be a plain file name)",
+                    filename
+                ));
+            }
+            let file_path = format!("{}/{}", firmware_dir, filename);
             if fs::metadata(&file_path).is_ok() {
                 println!("Flashing {} ({}MB)...", entry.partition_name, entry.size_mb());
                 self.write_partition(&entry.partition_name, entry.start_addr, &file_path)?;
+                flashed += 1;
             } else {
                 println!("Skipping {} (file not found: {})", entry.partition_name, file_path);
             }
+        }
+        if flashed == 0 {
+            return Err(format!(
+                "no partition images found in '{}' - nothing was flashed (refusing to report success)",
+                firmware_dir
+            ));
         }
         Ok(())
     }
@@ -709,7 +773,16 @@ impl DaSession {
     pub fn backup_partitions(&self, scatter: &ScatterFile, out_dir: &str) -> std::result::Result<(), String> {
         fs::create_dir_all(out_dir).map_err(|e| format!("create dir: {e}"))?;
         for entry in &scatter.entries {
-            let out_path = format!("{}/{}.img", out_dir, entry.partition_name);
+            // Path traversal guard for the backup output name as well: the
+            // scatter `partition_name` must not escape out_dir.
+            let name = &entry.partition_name;
+            if name.contains('/') || name.contains('\\') || name.contains("..") {
+                return Err(format!(
+                    "unsafe partition name in scatter: {:?} (must be a plain name)",
+                    name
+                ));
+            }
+            let out_path = format!("{}/{}.img", out_dir, name);
             println!("Backing up {} ({}MB)...", entry.partition_name, entry.size_mb());
             self.read_partition(&entry.partition_name, entry.start_addr, entry.length, &out_path)?;
         }
@@ -1572,5 +1645,55 @@ storage: HW_STORAGE_EMMC
         assert_eq!(mapped[0].0, "boot");
         assert_eq!(mapped[0].1, 0x1000 * 512);
         assert_eq!(mapped[1].2, 0x2000 * 512);
+    }
+
+    #[test]
+    fn scatter_with_bad_hex_size_is_rejected() {
+        // A typo like "0x4ZZZ0000" must be an error, never silently flashed
+        // with a zero/partial size at the wrong geometry.
+        let content = r#"
+version: 1.0
+platform: MT6765
+partition_name: boot
+linear_start_addr: 0x0
+partition_size: 0x4ZZZ0000
+filename: boot.img
+is_download: true
+"#;
+        std::fs::write("/tmp/test_scatter_bad.txt", content).unwrap();
+        let err = ScatterFile::parse("/tmp/test_scatter_bad.txt").unwrap_err();
+        assert!(err.contains("invalid hex"), "got: {err}");
+    }
+
+    #[test]
+    fn scatter_with_path_traversal_filename_is_rejected() {
+        let content = r#"
+version: 1.0
+platform: MT6765
+partition_name: boot
+linear_start_addr: 0x0
+partition_size: 0x4000000
+filename: ../../etc/shadow
+is_download: true
+"#;
+        std::fs::write("/tmp/test_scatter_trav.txt", content).unwrap();
+        let err = ScatterFile::parse("/tmp/test_scatter_trav.txt").unwrap_err();
+        assert!(err.contains("unsafe filename"), "got: {err}");
+    }
+
+    #[test]
+    fn scatter_with_zero_size_entry_is_rejected() {
+        let content = r#"
+version: 1.0
+platform: MT6765
+partition_name: boot
+linear_start_addr: 0x0
+partition_size: 0x0
+filename: boot.img
+is_download: true
+"#;
+        std::fs::write("/tmp/test_scatter_zero.txt", content).unwrap();
+        let err = ScatterFile::parse("/tmp/test_scatter_zero.txt").unwrap_err();
+        assert!(err.contains("zero partition_size"), "got: {err}");
     }
 }
