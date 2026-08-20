@@ -1,5 +1,17 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Discussions
-    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions
+  - name: 💬 Discussions — General
+    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions/categories/general
     about: Ask questions, share device-test results, or propose ideas before filing an issue.
+  - name: 📱 Discussions — Samsung / Odin
+    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions/categories/samsung-odin
+    about: Samsung flashing, PIT, FRP, and ODIN-mode issues.
+  - name: 🔧 Discussions — MediaTek
+    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions/categories/mediatek
+    about: MediaTek BROM/DA flashing, scatter files, and preloader issues.
+  - name: 💾 Discussions — Qualcomm
+    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions/categories/qualcomm
+    about: Qualcomm EDL / Sahara / Firehose flashing issues.
+  - name: 📟 Discussions — Spreadtrum / UNISOC
+    url: https://github.com/Legendary-Brilliantforous/flashpilot/discussions/categories/spreadtrum-unisoc
+    about: Spreadtrum / UNISOC BSL download and repair flows.
