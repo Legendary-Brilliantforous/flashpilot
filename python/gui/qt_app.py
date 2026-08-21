@@ -3950,38 +3950,101 @@ class FrpWindow(QMainWindow):
         detect_row.addWidget(self.mtk_status, 1)
         lay.addLayout(detect_row)
 
-        # file rows: scatter + DA
-        self.mtk_files = {}
-        for name, lbl, flt in (
-            ("scatter", "Scatter file", "Scatter (*.txt);;All files (*)"),
-            ("da", "DA binary", "DA (*.bin);;All files (*)"),
-        ):
-            row = QHBoxLayout()
-            lab = QLabel(lbl)
-            lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
-            edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {lbl.lower()}...")
-            edit.setStyleSheet(
-                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-                f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-                f" selection-background-color:{C['accent']}; }}"
-                f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-                f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-            )
-            btn = QPushButton("Browse...")
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
-            btn.clicked.connect(
-                lambda _=False, e=edit, n=name, f=flt: self._mtk_browse(e, n, f)
-            )
-            row.addWidget(lab)
-            row.addWidget(edit, 1)
-            row.addWidget(btn)
-            lay.addLayout(row)
-            self.mtk_files[name] = edit
+        # --- Combination Flash section (Samsung-style: Scatter + DA + Firmware dir) ---
+        combo_panel = QFrame()
+        combo_panel.setObjectName("combo")
+        combo_panel.setStyleSheet(
+            f"QFrame#combo {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
+        combo_lay = QVBoxLayout(combo_panel)
+        combo_lay.setContentsMargins(14, 10, 14, 14)
+        combo_lay.setSpacing(8)
 
-        # Auth bypass toggle (da_auth_bypass mode)
+        combo_lay.addWidget(QLabel("COMBINATION FLASH (Scatter + DA + Firmware)"))
+        combo_lay.addWidget(
+            _risk_banner(
+                "This flashes ALL partitions defined in the scatter file. "
+                "Wrong DA/scatter/firmware for this model can hard-brick the device."
+            )
+        )
+
+        # Scatter file row
+        scatter_row = QHBoxLayout()
+        scatter_lbl = QLabel("Scatter file")
+        scatter_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
+        scatter_row.addWidget(scatter_lbl)
+        self.mtk_scatter_edit = QLineEdit()
+        self.mtk_scatter_edit.setPlaceholderText("Select scatter file (.txt)...")
+        self.mtk_scatter_edit.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        scatter_row.addWidget(self.mtk_scatter_edit, 1)
+        scatter_btn = QPushButton("Browse...")
+        scatter_btn.setStyleSheet(_btn_ghost())
+        scatter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        scatter_btn.setFixedWidth(90)
+        scatter_btn.clicked.connect(
+            lambda: self._mtk_browse(self.mtk_scatter_edit, "scatter", "Scatter (*.txt);;All files (*)")
+        )
+        scatter_row.addWidget(scatter_btn)
+        combo_lay.addLayout(scatter_row)
+
+        # DA binary row
+        da_row = QHBoxLayout()
+        da_lbl = QLabel("DA binary")
+        da_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
+        da_row.addWidget(da_lbl)
+        self.mtk_da_edit = QLineEdit()
+        self.mtk_da_edit.setPlaceholderText("Select DA binary (.bin)...")
+        self.mtk_da_edit.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        da_row.addWidget(self.mtk_da_edit, 1)
+        da_btn = QPushButton("Browse...")
+        da_btn.setStyleSheet(_btn_ghost())
+        da_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        da_btn.setFixedWidth(90)
+        da_btn.clicked.connect(
+            lambda: self._mtk_browse(self.mtk_da_edit, "da", "DA (*.bin);;All files (*)")
+        )
+        da_row.addWidget(da_btn)
+        combo_lay.addLayout(da_row)
+
+        # Firmware directory row
+        fw_row = QHBoxLayout()
+        fw_lbl = QLabel("Firmware dir")
+        fw_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
+        fw_row.addWidget(fw_lbl)
+        self.mtk_fw_dir = QLineEdit()
+        self.mtk_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
+        self.mtk_fw_dir.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        fw_row.addWidget(self.mtk_fw_dir, 1)
+        fw_btn = QPushButton("Browse...")
+        fw_btn.setStyleSheet(_btn_ghost())
+        fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fw_btn.setFixedWidth(90)
+        fw_btn.clicked.connect(self._mtk_browse_dir)
+        fw_row.addWidget(fw_btn)
+        combo_lay.addLayout(fw_row)
+
+        # Auth bypass toggle
         auth_row = QHBoxLayout()
         self.mtk_auth_bypass_cb = QCheckBox("Auth bypass (da_auth_bypass mode)")
         self.mtk_auth_bypass_cb.setChecked(False)
@@ -3996,10 +4059,54 @@ class FrpWindow(QMainWindow):
         )
         auth_row.addWidget(self.mtk_auth_bypass_cb)
         auth_row.addStretch(1)
-        lay.addLayout(auth_row)
+        combo_lay.addLayout(auth_row)
 
-        # Generate a scatter file straight from the device GPT (Samsung
-        # firmware ships no scatter; this rebuilds one from the phone).
+        # Flash button
+        flash_row = QHBoxLayout()
+        flash_row.setSpacing(10)
+        self.mtk_flash_combo_btn = QPushButton("Flash Firmware (Combination)")
+        self.mtk_flash_combo_btn.setStyleSheet(_btn_primary())
+        self.mtk_flash_combo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mtk_flash_combo_btn.setToolTip(
+            "Flash ALL partitions from the firmware directory using the scatter file"
+        )
+        self.mtk_flash_combo_btn.clicked.connect(self._mtk_flash)
+        flash_row.addWidget(self.mtk_flash_combo_btn)
+        self.mtk_check_combo_btn = QPushButton("Check Scatter")
+        self.mtk_check_combo_btn.setStyleSheet(_btn_ghost())
+        self.mtk_check_combo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mtk_check_combo_btn.setToolTip(
+            "Validate the scatter file and firmware directory without flashing"
+        )
+        self.mtk_check_combo_btn.clicked.connect(self._mtk_check_scatter)
+        flash_row.addWidget(self.mtk_check_combo_btn)
+        flash_row.addStretch(1)
+        combo_lay.addLayout(flash_row)
+
+        lay.addWidget(combo_panel)
+
+        # --- Advanced Tools section ---
+        adv_panel = QFrame()
+        adv_panel.setObjectName("adv")
+        adv_panel.setStyleSheet(
+            f"QFrame#adv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['ok']};"
+            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
+        )
+        adv_lay = QVBoxLayout(adv_panel)
+        adv_lay.setContentsMargins(14, 10, 14, 14)
+        adv_lay.setSpacing(8)
+
+        adv_lay.addWidget(QLabel("ADVANCED TOOLS"))
+        adv_lay.addWidget(
+            _risk_banner(
+                "These write directly to partitions by NAME (no scatter). "
+                "A wrong partition/image combo can soft-brick the device."
+            )
+        )
+
+        # Generate scatter / Dump preloader row
         gen_row = QHBoxLayout()
         gen_btn = QPushButton("Generate Scatter (from device GPT)")
         gen_btn.setStyleSheet(_btn_ghost())
@@ -4012,30 +4119,30 @@ class FrpWindow(QMainWindow):
         )
         gen_btn.clicked.connect(self._mtk_gen_scatter)
         gen_row.addWidget(gen_btn)
-        da_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
-        da_btn.setStyleSheet(_btn_ghost())
-        da_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        da_btn.setToolTip(
+        dump_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
+        dump_btn.setStyleSheet(_btn_ghost())
+        dump_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        dump_btn.setToolTip(
             "Dump the phone's own preloader and patch its security checks -\n"
             "the result IS a working Download Agent for this device. This is\n"
             "how you get a DA without downloading one: the phone provides it.\n"
             "The patched file is saved to ~/Downloads/preloader_patched.bin\n"
             "and auto-selected as the DA binary. Needs the phone in BROM."
         )
-        da_btn.clicked.connect(self._mtk_dump_preloader)
-        gen_row.addWidget(da_btn)
+        dump_btn.clicked.connect(self._mtk_dump_preloader)
+        gen_row.addWidget(dump_btn)
         gen_row.addStretch(1)
-        lay.addLayout(gen_row)
+        adv_lay.addLayout(gen_row)
 
-        # action buttons (two compact rows like the QC page)
+        # Action buttons
         acts = QVBoxLayout()
         acts.setSpacing(8)
         acts_row1 = QHBoxLayout()
         acts_row1.setSpacing(10)
         for label, slot in (
-            ("Flash Firmware", self._mtk_flash),
             ("Backup Partitions", self._mtk_backup),
             ("Get Device Info", self._mtk_info),
+            ("List Partitions", self._mtk_list_parts),
         ):
             b = QPushButton(label)
             b.setStyleSheet(_btn_ghost())
@@ -4049,7 +4156,6 @@ class FrpWindow(QMainWindow):
         for label, slot in (
             ("FRP Bypass", self._mtk_frp),
             ("Enable ADB", self._mtk_adb),
-            ("List Partitions", self._mtk_list_parts),
         ):
             b = QPushButton(label)
             b.setStyleSheet(_btn_ghost())
@@ -4087,34 +4193,9 @@ class FrpWindow(QMainWindow):
         acts_row3.addWidget(frp_gpt_btn)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
-        lay.addLayout(acts)
+        adv_lay.addLayout(acts)
 
-        self.mtk_fw_dir = QLineEdit()
-        self.mtk_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
-        self.mtk_fw_dir.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        fw_row = QHBoxLayout()
-        fw_row.addWidget(QLabel("Firmware dir"), 0)
-        fw_row.addWidget(self.mtk_fw_dir, 1)
-        fw_btn = QPushButton("Browse...")
-        fw_btn.setStyleSheet(_btn_ghost())
-        fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fw_btn.clicked.connect(self._mtk_browse_dir)
-        fw_btn.setFixedWidth(90)
-        fw_row.addWidget(fw_btn)
-        lay.addLayout(fw_row)
-        lay.addWidget(
-            _risk_banner(
-                "MTK flashing and FRP bypass write directly to the chip. "
-                "Ensure the DA and scatter match your exact model - a wrong "
-                "DA can hard-brick the device."
-            )
-        )
+        lay.addWidget(adv_panel)
 
         self.mtk_progress = QProgressBar()
         self.mtk_progress.setRange(0, 1000)
@@ -4450,8 +4531,8 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _mtk_require_files(self):
-        scatter = self.mtk_files["scatter"].text().strip()
-        da = self.mtk_files["da"].text().strip()
+        scatter = self.mtk_scatter_edit.text().strip()
+        da = self.mtk_da_edit.text().strip()
         if not scatter or not da:
             self._ui.line.emit("[warn] MTK: scatter file and DA binary are both required")
             self._toasts.show_warn("MTK files missing", "Select a scatter file and DA binary")
@@ -4490,6 +4571,18 @@ class FrpWindow(QMainWindow):
             confirm_label="Flash",
             on_confirm=run_flash,
         )
+
+    def _mtk_check_scatter(self):
+        files = self._mtk_require_files()
+        if not files:
+            return
+        scatter, da = files
+        fw = self.mtk_fw_dir.text().strip()
+        if not fw:
+            self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
+            return
+        self._ui.line.emit(f"[step] MTK checking scatter: scatter={scatter} fw={fw}")
+        self._mtk_run(["mtk-check-scatter", "auto", da, scatter, fw], timeout=300)
 
     def _mtk_backup(self):
         files = self._mtk_require_files()
@@ -4549,7 +4642,7 @@ class FrpWindow(QMainWindow):
         )
 
     def _mtk_frp_gpt(self):
-        da = self.mtk_files["da"].text().strip()
+        da = self.mtk_da_edit.text().strip()
         if not da:
             self._ui.line.emit("[warn] MTK: DA binary is required")
             self._toasts.show_warn("MTK files missing", "Select a DA binary")
@@ -4575,7 +4668,7 @@ class FrpWindow(QMainWindow):
         self._mtk_run(["mtk-adb-enable", "auto", da, scatter], timeout=1800)
 
     def _mtk_list_parts(self):
-        da = self.mtk_files["da"].text().strip()
+        da = self.mtk_da_edit.text().strip()
         if not da:
             self._ui.line.emit("[warn] MTK: DA binary is required")
             self._toasts.show_warn("MTK files missing", "Select a DA binary")
@@ -4584,7 +4677,7 @@ class FrpWindow(QMainWindow):
         self._mtk_run(["mtk-gpt", "auto", da], timeout=300)
 
     def _mtk_flash_part(self):
-        da = self.mtk_files["da"].text().strip()
+        da = self.mtk_da_edit.text().strip()
         if not da:
             self._ui.line.emit("[warn] MTK: DA binary is required")
             self._toasts.show_warn("MTK files missing", "Select a DA binary")
