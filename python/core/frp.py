@@ -2276,10 +2276,44 @@ def _explain_odin4_failure(out):
     if "handshake failed" in out_l or "bulk read timed out" in out_l or "timed out" in out_l:
         return ("USB transfer failed - the cdc_acm kernel module often breaks Odin bulk transfers. "
                 "Run `sudo rmmod cdc_acm` and retry.")
-    if "bootloader fail" in out_l:
-        return ("The device bootloader rejected a partition (BOOTLOADER_FAIL). "
-                "A partition is too large, unauthorized, or the archive/PIT mismatch remains.")
+    if "bootloader fail" in out_l or "swrev check fail" in out_l or "secure check fail" in out_l or "anti-rollback" in out_l:
+        return ("Samsung Anti-Rollback / SWREV protection blocked the downgrade or bootloader write. "
+                "The device bootloader rejects older software revisions. "
+                "To downgrade successfully, flash a firmware package with equal or higher binary version (SVN), or use combination firmware.")
+    if "auth" in out_l or "size" in out_l:
+        return ("Authentication or partition size verification failed. Ensure you are using the correct firmware for your exact device model and region.")
     return ""
+
+
+def _run_odin4_streaming(cmd, log, timeout=1200):
+    """Run odin4 command with real-time stdout/stderr streaming and error parsing."""
+    import time
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    output_lines = []
+    start_time = time.time()
+    while True:
+        if time.time() - start_time > timeout:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise RuntimeError(f"odin4 operation timed out after {timeout} seconds.")
+        line = proc.stdout.readline()
+        if not line and proc.poll() is not None:
+            break
+        if line:
+            s = line.strip()
+            output_lines.append(s)
+            log(f"  [odin4] {s}")
+    rc = proc.wait()
+    full_output = "\n".join(output_lines)
+    return rc, full_output
 
 
 def _find_firmware_tar():
@@ -2347,13 +2381,10 @@ def flow_odin_flash_tar():
                 "download mode - disable Auto-reboot (or enable Re-download) and retry."
             )
         log("> " + " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
-        out = (proc.stdout or "") + (proc.stderr or "")
-        if out:
-            log(out[-3000:])
-        if proc.returncode != 0:
+        rc, out = _run_odin4_streaming(cmd, log, timeout=1200)
+        if rc != 0:
             hint = _explain_odin4_failure(out)
-            raise RuntimeError(f"odin4 flashing failed (rc={proc.returncode}). {hint}")
+            raise RuntimeError(f"odin4 flashing failed (rc={rc}). {hint}")
         log("Firmware flashed successfully!")
         if _env_flag("ODIN4_ERASE_NV"):
             _erase_nvram(ctx, log, d)
@@ -2570,13 +2601,10 @@ def flow_odin_advanced_flash():
         log(f"Executing: {' '.join(cmd)}")
         log("Flashing in progress... DO NOT disconnect cable!")
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        out = (proc.stdout or "") + (proc.stderr or "")
-        if out:
-            log(out[-3500:])
-        if proc.returncode != 0:
+        rc, out = _run_odin4_streaming(cmd, log, timeout=1800)
+        if rc != 0:
             hint = _explain_odin4_failure(out)
-            raise RuntimeError(f"Advanced flash failed (rc={proc.returncode}). {hint}")
+            raise RuntimeError(f"Advanced flash failed (rc={rc}). {hint}")
         log("Advanced flash completed successfully!")
         if _env_flag("ODIN4_ERASE_NV"):
             _erase_nvram(ctx, log, d)
