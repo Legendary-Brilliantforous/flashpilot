@@ -4366,9 +4366,24 @@ class FrpWindow(QMainWindow):
                     pid = d.get("pid")
                     stage = mtk.pid_stage(pid)
                     name, note = mtk.stage_label(stage)
-                    self._ui.line.emit(
-                        f"MTK: 0e8d:{pid:04x} bus={d.get('bus')} addr={d.get('address')} - {name}"
-                    )
+                    product = d.get("product")
+                    manufacturer = d.get("manufacturer")
+                    serial = d.get("serial")
+                    chip = d.get("chip")
+                    # Build detailed device info line
+                    parts = [f"MTK: 0e8d:{pid:04x} bus={d.get('bus')} addr={d.get('address')} - {name}"]
+                    if manufacturer:
+                        parts.append(f"mfr={manufacturer}")
+                    if product:
+                        parts.append(f"prod={product}")
+                    if serial:
+                        parts.append(f"sn={serial}")
+                    if chip:
+                        hw = chip.get("hw_code")
+                        hw_sub = chip.get("hw_sub_code")
+                        ca = chip.get("chip_name")
+                        parts.append(f"chip={ca or f'0x{hw:04X}' if hw else 'unknown'}")
+                    self._ui.line.emit(" | ".join(parts))
                 self._ui.ui.emit(lambda n=len(devs): self.mtk_status.setText(
                     f"{n} MediaTek device(s) found"))
             except bridge.BridgeError as e:
@@ -6485,7 +6500,7 @@ class FrpWindow(QMainWindow):
         logo.setPixmap(_draw_logo(56))
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cl.addWidget(logo)
-        name = QLabel("flashpilot FLASHING TOOL")
+        name = QLabel("Legendary-Brilliantforous")
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         name.setStyleSheet(
             f"color:{C['text']}; font-size:17px; font-weight:800; letter-spacing:1px;"
@@ -6502,6 +6517,16 @@ class FrpWindow(QMainWindow):
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tag.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
         cl.addWidget(tag)
+
+        # Update section
+        upd_row = QHBoxLayout()
+        upd_btn = QPushButton("Check for Update")
+        upd_btn.setStyleSheet(_btn_ghost())
+        upd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        upd_btn.clicked.connect(self._check_update)
+        upd_row.addWidget(upd_btn)
+        cl.addLayout(upd_row)
+
         lay.addWidget(card)
 
         bl = self._settings_box("SHORTCUTS", lay)
@@ -6528,6 +6553,46 @@ class FrpWindow(QMainWindow):
 
         lay.addStretch(1)
         return page
+
+    def _check_update(self):
+        import subprocess, sys
+        self._ui.line.emit("[check] Looking for latest FlashPilot version...")
+        try:
+            result = subprocess.run(
+                ["curl", "-s", "https://api.github.com/repos/Legendary-Brilliantforous/flashpilot/releases/latest"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                self._ui.line.emit("[check] Failed to reach GitHub API")
+                self._toasts.show_warn("Update check", "Could not connect to update server.")
+                return
+            data = result.json()
+            latest_tag = data.get("tag_name", "").lstrip("v")
+            latest_url = None
+            for a in data.get("assets", []):
+                if a["name"].endswith("_amd64.deb"):
+                    latest_url = a["browser_download_url"]
+                    break
+            current = "1.2"
+            if not latest_tag:
+                self._ui.line.emit("[check] No version info found")
+                return
+            if latest_tag > current:
+                self._ui.line.emit(f"[check] New version available: {latest_tag}")
+                fpath = os.path.expanduser("~/flashpilot_update.deb")
+                subprocess.run(["curl", "-L", "-o", fpath, latest_url], timeout=60)
+                if os.path.exists(fpath):
+                    self._toasts.show_info(
+                        "Update available",
+                        f"Downloaded {latest_tag}. Run: sudo dpkg -i {fpath}\n\n"
+                        "Or visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                    )
+            else:
+                self._ui.line.emit(f"[check] You are on the latest version ({latest_tag})")
+                self._toasts.show_info("Up to date", f"FlashPilot {latest_tag} is already installed.")
+        except Exception as e:
+            self._ui.line.emit(f"[check] Error: {e}")
+            self._toasts.show_warn("Update check", f"Unexpected error: {e}")
 
     @staticmethod
     def _field_label(text):
