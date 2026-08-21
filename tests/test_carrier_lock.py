@@ -181,7 +181,7 @@ class TestScreenLockCscRegistration:
         m = frp.JOBS["Screen lock remove"]
         assert "screen_lock_csc" in m["Download mode"]
         assert "screen_lock_csc" in m["Samsung BROM"]
-        assert "screen_lock_csc" in m["MTK"]
+        assert "screen_lock_csc" not in m["MTK"]
         assert "screen_lock_csc" in frp.methods_for("Screen lock remove", "Download mode")
 
     def test_flow_rejects_mismatched_csc_model(self, monkeypatch, tmp_path):

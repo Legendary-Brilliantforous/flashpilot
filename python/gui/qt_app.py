@@ -70,7 +70,7 @@ from PyQt6.QtWidgets import (
     QLayout,
 )
 
-from ..core import bridge, frp, mtk, mtp
+from ..core import bridge, frp, mtk, mtp, fus
 from .toast import ToastHost
 from .nav import NavRail
 
@@ -2583,6 +2583,7 @@ class FrpWindow(QMainWindow):
             [
                 ("samsung", "◉", "Samsung"),
                 ("quick", "⚡", "Quick Actions"),
+                ("fus", "⬇", "Firmware Downloader"),
                 ("mtk", "▣", "MTK Tools"),
                 ("qc", "◈", "Qualcomm"),
                 ("spd", "✦", "SPD / Unisoc"),
@@ -2607,6 +2608,7 @@ class FrpWindow(QMainWindow):
         self._stack.addWidget(dash)
 
         self._stack.addWidget(self._build_quick_page())
+        self._stack.addWidget(self._build_fus_page())
         self._stack.addWidget(self._build_mtk_page())
         self._stack.addWidget(self._build_qc_page())
         self._stack.addWidget(self._build_spd_page())
@@ -3586,12 +3588,224 @@ class FrpWindow(QMainWindow):
 
     # ----------------------------- section switching ----------------------
     def _on_section(self, key):
-        order = {"samsung": 0, "quick": 1, "mtk": 2, "qc": 3, "spd": 4,
-                 "battery": 5, "network": 6, "settings": 7}
+        order = {"samsung": 0, "quick": 1, "fus": 2, "mtk": 3, "qc": 4, "spd": 5,
+                 "battery": 6, "network": 7, "settings": 8}
         idx = order.get(key, 0)
         self._stack.setCurrentIndex(idx)
         self.nav.select(key)
         self.set_status(f"Section: {key.upper()}")
+
+    # ----------------------------- Firmware Downloader page --------------
+    def _build_fus_page(self):
+        panel = QFrame()
+        panel.setObjectName("card")
+        panel.setStyleSheet(_card_qss())
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(0, 0, 0, 0)
+        panel_lay.setSpacing(0)
+        page_scroll = self._ops_scroll_area()
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(12)
+
+        lay.addWidget(SectionTitle("SAMSUNG OFFICIAL FIRMWARE DOWNLOADER (SAMFIRM / FUS)"))
+        info = QLabel(
+            "Direct FUS client to query Samsung servers, check latest firmware versions, "
+            "download encrypted firmware packages in parallel, and auto-decrypt them into "
+            "ready-to-flash .tar.md5 archives."
+        )
+        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        form_card = QFrame()
+        form_card.setStyleSheet(
+            f"QFrame {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 12px; }}"
+        )
+        form_lay = QVBoxLayout(form_card)
+        form_lay.setSpacing(10)
+
+        # Model row
+        r1 = QHBoxLayout()
+        lbl1 = QLabel("Device Model:")
+        lbl1.setStyleSheet(f"color:{C['text']}; font-weight:600;")
+        r1.addWidget(lbl1)
+        self.fus_model_input = QLineEdit("SM-S918B")
+        self.fus_model_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
+        r1.addWidget(self.fus_model_input, 1)
+        
+        lbl_reg = QLabel("Region:")
+        lbl_reg.setStyleSheet(f"color:{C['text']}; font-weight:600;")
+        r1.addWidget(lbl_reg)
+        self.fus_region_input = QLineEdit("EUX")
+        self.fus_region_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
+        self.fus_region_input.setMaximumWidth(100)
+        r1.addWidget(self.fus_region_input)
+        form_lay.addLayout(r1)
+
+        # Version row
+        r2 = QHBoxLayout()
+        lbl2 = QLabel("Firmware Version:")
+        lbl2.setStyleSheet(f"color:{C['text']}; font-weight:600;")
+        r2.addWidget(lbl2)
+        self.fus_version_input = QLineEdit()
+        self.fus_version_input.setPlaceholderText("e.g. S918BXXU3BWCV/S918BOXM3BWCV/S918BXXU3BWCV (or click Check Version)")
+        self.fus_version_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
+        r2.addWidget(self.fus_version_input, 1)
+
+        self.fus_check_btn = QPushButton("Check Version")
+        self.fus_check_btn.setStyleSheet(_btn_primary())
+        self.fus_check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_check_btn.clicked.connect(self._fus_check_version)
+        r2.addWidget(self.fus_check_btn)
+        form_lay.addLayout(r2)
+
+        # Output dir row
+        r3 = QHBoxLayout()
+        lbl3 = QLabel("Output Directory:")
+        lbl3.setStyleSheet(f"color:{C['text']}; font-weight:600;")
+        r3.addWidget(lbl3)
+        self.fus_out_input = QLineEdit(os.path.expanduser("~/brilliant/cache"))
+        self.fus_out_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
+        r3.addWidget(self.fus_out_input, 1)
+        form_lay.addLayout(r3)
+
+        lay.addWidget(form_card)
+
+        # Actions row
+        act_row = QHBoxLayout()
+        self.fus_download_btn = QPushButton("⬇ Download & Decrypt Firmware")
+        self.fus_download_btn.setStyleSheet(_btn_primary())
+        self.fus_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_download_btn.setFixedHeight(38)
+        self.fus_download_btn.clicked.connect(self._fus_download)
+        act_row.addWidget(self.fus_download_btn)
+
+        self.fus_load_ap_btn = QPushButton("📂 Load into AP Slot")
+        self.fus_load_ap_btn.setStyleSheet(_btn_ghost())
+        self.fus_load_ap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_load_ap_btn.setFixedHeight(38)
+        self.fus_load_ap_btn.clicked.connect(self._fus_load_into_ap)
+        act_row.addWidget(self.fus_load_ap_btn)
+        lay.addLayout(act_row)
+
+        # Progress bar
+        self.fus_progress = QProgressBar()
+        self.fus_progress.setRange(0, 100)
+        self.fus_progress.setValue(0)
+        self.fus_progress.setStyleSheet(f"QProgressBar {{ background:{C['inset']}; border:1px solid {C['border']}; border-radius:5px; text-align:center; color:{C['text']}; }} QProgressBar::chunk {{ background:{C['accent']}; border-radius:4px; }}")
+        lay.addWidget(self.fus_progress)
+
+        # Status label
+        self.fus_status_lbl = QLabel("Ready.")
+        self.fus_status_lbl.setStyleSheet(f"color:{C['dim']}; font-size:12px; font-weight:600;")
+        lay.addWidget(self.fus_status_lbl)
+
+        host.setLayout(lay)
+        page_scroll.setWidget(host)
+        panel_lay.addWidget(page_scroll)
+        return panel
+
+    def _fus_check_version(self):
+        model = self.fus_model_input.text().strip()
+        region = self.fus_region_input.text().strip()
+        if not model or not region:
+            self.show_toast("Enter device model and region first.", "error")
+            return
+        self.fus_check_btn.setEnabled(False)
+        self.fus_status_lbl.setText(f"Checking latest version for {model} ({region})...")
+
+        def work():
+            try:
+                ver = fus.check_latest_version(model, region)
+                def ok():
+                    self.fus_version_input.setText(ver)
+                    self.fus_status_lbl.setText(f"Latest version found: {ver}")
+                    self.fus_check_btn.setEnabled(True)
+                    self.show_toast(f"Latest firmware: {ver}", "success")
+                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+            except Exception as e:
+                err = str(e)
+                def fail():
+                    self.fus_status_lbl.setText(f"Check failed: {err}")
+                    self.fus_check_btn.setEnabled(True)
+                    self.show_toast(f"Check failed: {err}", "error")
+                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fus_download(self):
+        model = self.fus_model_input.text().strip()
+        region = self.fus_region_input.text().strip()
+        fw_ver = self.fus_version_input.text().strip()
+        out_dir = self.fus_out_input.text().strip()
+        if not model or not region or not fw_ver:
+            self.show_toast("Model, Region, and Firmware Version are required.", "error")
+            return
+        if not _flow_start("Firmware Downloader", destructive=False):
+            self.show_toast(_flow_busy_msg(), "warning")
+            return
+
+        self.fus_download_btn.setEnabled(False)
+        self.fus_progress.setValue(0)
+        self.fus_status_lbl.setText("Starting download and decryption...")
+        self._append_console(f"[fus] Starting download for {model} {fw_ver}...")
+
+        def progress_cb(downloaded, total):
+            if total > 0:
+                pct = int((downloaded * 100) / total)
+                def upd():
+                    self.fus_progress.setValue(pct)
+                    self.fus_status_lbl.setText(f"Downloading... {downloaded/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB ({pct}%)")
+                QMetaObject.invokeMethod(self, upd, Qt.ConnectionType.QueuedConnection)
+
+        def log_cb(msg):
+            def l():
+                self._append_console(f"[fus] {msg}")
+            QMetaObject.invokeMethod(self, l, Qt.ConnectionType.QueuedConnection)
+
+        def work():
+            try:
+                dec_file = fus.download_and_decrypt_firmware(
+                    model, region, fw_ver, out_dir,
+                    progress_callback=progress_cb,
+                    log_callback=log_cb
+                )
+                def done():
+                    self.fus_download_btn.setEnabled(True)
+                    self.fus_progress.setValue(100)
+                    self.fus_status_lbl.setText(f"Success! Decrypted file: {dec_file}")
+                    self._append_console(f"[fus] Complete! Saved to {dec_file}")
+                    self.show_toast("Firmware downloaded & decrypted successfully!", "success")
+                    self._last_decrypted_fw = dec_file
+                    _flow_end()
+                QMetaObject.invokeMethod(self, done, Qt.ConnectionType.QueuedConnection)
+            except Exception as e:
+                err = str(e)
+                def fail():
+                    self.fus_download_btn.setEnabled(True)
+                    self.fus_status_lbl.setText(f"Download/Decrypt failed: {err}")
+                    self._append_console(f"[fus] ERROR: {err}")
+                    self.show_toast(f"Download failed: {err}", "error")
+                    _flow_end()
+                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fus_load_into_ap(self):
+        fw = getattr(self, "_last_decrypted_fw", None)
+        if not fw or not os.path.exists(fw):
+            self.show_toast("No downloaded firmware found to load.", "warning")
+            return
+        # Populate AP path in Samsung tab if available
+        if hasattr(self, "ap_input"):
+            self.ap_input.setText(fw)
+            self.show_toast("Loaded decrypted firmware into AP slot!", "success")
+            self._on_section("samsung")
+        else:
+            self.show_toast(f"Firmware ready at: {fw}", "info")
 
     # ----------------------------- MTK Tools page -------------------------
     def _build_mtk_page(self):
