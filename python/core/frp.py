@@ -3183,6 +3183,52 @@ def _hex_dump(data, off, length=48):
     return "\n".join(lines)
 
 
+# Map of MediaTek hw_code (hex) to DA filename in mtkclient repo
+_MTK_DA_MAP = {
+    0x6735: "mt6735_da.bin",   # MT6735
+    0x6737: "mt6737_da.bin",   # MT6737
+    0x6739: "mt6739_da.bin",   # MT6739
+    0x6753: "mt6753_da.bin",   # MT6753
+    0x6755: "mt6755_da.bin",   # MT6755
+    0x6757: "mt6757_da.bin",   # MT6757
+    0x6763: "mt6763_da.bin",   # MT6763
+    0x6765: "mt6765_da.bin",   # MT6765
+    0x6768: "mt6768_da.bin",   # MT6768
+    0x6771: "mt6771_da.bin",   # MT6771
+    0x6779: "mt6779_da.bin",   # MT6779
+    0x6781: "mt6781_da.bin",   # MT6781
+    0x6785: "mt6785_da.bin",   # MT6785
+    0x6789: "mt6789_da.bin",   # MT6789
+    0x6833: "mt6833_da.bin",   # MT6833
+    0x6835: "mt6835_da.bin",   # MT6835
+    0x6853: "mt6853_da.bin",   # MT6853
+    0x6873: "mt6873_da.bin",   # MT6873
+    0x6877: "mt6877_da.bin",   # MT6877
+    0x6878: "mt6878_da.bin",   # MT6878
+    0x6885: "mt6885_da.bin",   # MT6885
+    0x6886: "mt6886_da.bin",   # MT6886
+    0x6891: "mt6891_da.bin",   # MT6891
+    0x6893: "mt6893_da.bin",   # MT6893
+    0x6895: "mt6895_da.bin",   # MT6895
+    0x6983: "mt6983_da.bin",   # MT6983
+    0x6985: "mt6985_da.bin",   # MT6985
+    0x6991: "mt6991_da.bin",   # MT6991
+    0x8168: "mt8168_da.bin",   # MT8168
+    0x8173: "mt8173_da.bin",   # MT8173
+    0x8183: "mt8183_da.bin",   # MT8183
+    0x8195: "mt8195_da.bin",   # MT8195
+    0x8735: "mt8735_da.bin",   # MT8735
+    0x8765: "mt8765_da.bin",   # MT8765
+    0x8766: "mt8766_da.bin",   # MT8766
+    0x8768: "mt8768_da.bin",   # MT8768
+    0x8781: "mt8781_da.bin",   # MT8781
+    0x8788: "mt8788_da.bin",   # MT8788
+    0x8797: "mt8797_da.bin",   # MT8797
+}
+
+_MTK_DA_BASE_URL = "https://github.com/mtkclient/mtkclient/raw/master/da"
+
+
 def _da_in_dirs(candidates):
     """First MediaTek DA-named .bin in any of the given directories."""
     for d in candidates:
@@ -3197,9 +3243,35 @@ def _da_in_dirs(candidates):
     return ""
 
 
+def _download_mtk_da(hw_code, cache_dir):
+    """Download the DA for the given hw_code from mtkclient repo."""
+    import urllib.request
+    da_name = _MTK_DA_MAP.get(hw_code)
+    if not da_name:
+        return ""
+    url = f"{_MTK_DA_BASE_URL}/{da_name}"
+    dest = os.path.join(cache_dir, da_name)
+    if os.path.isfile(dest):
+        return dest
+    try:
+        log(f"  Downloading DA for 0x{hw_code:04X} from {url}...")
+        urllib.request.urlretrieve(url, dest)
+        if os.path.getsize(dest) < 1024:
+            os.remove(dest)
+            return ""
+        log(f"  Downloaded {da_name} ({os.path.getsize(dest)} bytes)")
+        return dest
+    except Exception as e:
+        log(f"  DA download failed: {e}")
+        if os.path.isfile(dest):
+            os.remove(dest)
+        return ""
+
+
 def _find_mtk_da():
     """Locate a MediaTek Download Agent binary: the MTK_DA env var first (set
-    by the MTK workbench file picker), then common locations."""
+    by the MTK workbench file picker), then local cache, then auto-download
+    based on detected chip, then common locations."""
     env = os.environ.get("MTK_DA", "").strip()
     if env and os.path.isfile(env):
         return env
@@ -3209,7 +3281,25 @@ def _find_mtk_da():
         os.path.expanduser("~/Downloads"),
         "/tmp",
     ]
-    return _da_in_dirs(candidates)
+    da = _da_in_dirs(candidates)
+    if da:
+        return da
+    # Try auto-download based on detected chip
+    try:
+        import json
+        devs = json.loads(bridge._run(["mtk-detect"]))
+        for d in devs:
+            chip = d.get("chip")
+            if chip and "hw_code" in chip:
+                hw_code = chip["hw_code"]
+                cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "flashpilot", "da")
+                os.makedirs(cache_dir, exist_ok=True)
+                da = _download_mtk_da(hw_code, cache_dir)
+                if da:
+                    return da
+    except Exception:
+        pass
+    return ""
 
 
 def _wait_mtk_brom_target(log, timeout=120):
@@ -4770,6 +4860,121 @@ def flow_adb_info():
 
     steps = [Step("adb_info", _run)]
     return Flow("adb read info", steps)
+
+
+# ---------------------------------------------------------------------------
+# Flow: Knox Guard (KG) state check
+# ---------------------------------------------------------------------------
+def flow_kg_state_check():
+    """Check Knox Guard (KG) state via ADB.
+
+    Reads ro.boot.kgstate, ro.boot.knox, ro.warranty_bit, and ro.secure
+    to determine the current KG/Knox state.
+    """
+    def _run(ctx, log):
+        if not _wait_for_adb(ctx, log, timeout=30):
+            raise RuntimeError("ADB device required for KG state check.")
+        
+        log("=" * 60)
+        log("KNOX GUARD (KG) STATE CHECK")
+        log("=" * 60)
+        
+        kg_props = [
+            ("KG State (ro.boot.kgstate)", "ro.boot.kgstate"),
+            ("Knox Warranty Bit (ro.boot.knox)", "ro.boot.knox"),
+            ("Warranty Bit (ro.warranty_bit)", "ro.warranty_bit"),
+            ("Secure Boot (ro.secure)", "ro.secure"),
+            ("Knox Version (ro.config.knox)", "ro.config.knox"),
+            ("Knox Build Date (ro.build.knox)", "ro.build.date"),
+        ]
+        
+        for label, key in kg_props:
+            val = _adb_getprop(key)
+            log(f"  {label:<35}: {val or '(unset)'}")
+        
+        # Interpret KG state
+        kg_state = _adb_getprop("ro.boot.kgstate")
+        if kg_state == "0":
+            log("  >> KG STATE: UNLOCKED (0) - Custom firmware can boot")
+        elif kg_state == "1":
+            log("  >> KG STATE: LOCKED (1) - KG active, custom firmware blocked")
+        elif kg_state:
+            log(f"  >> KG STATE: UNKNOWN ({kg_state})")
+        else:
+            log("  >> KG STATE: Property not found (may be pre-KG device)")
+        
+        knox = _adb_getprop("ro.boot.knox")
+        if knox == "0x0":
+            log("  >> KNOX WARRANTY: INTACT (0x0)")
+        elif knox:
+            log(f"  >> KNOX WARRANTY: VOID ({knox})")
+        
+        return True
+    return Flow("KG state check", [Step("kg_state_check", _run)])
+
+
+# ---------------------------------------------------------------------------
+# Flow: Knox Guard (KG) remove (requires vbmeta patch + root)
+# ---------------------------------------------------------------------------
+def flow_kg_remove():
+    """Attempt to remove/disable Knox Guard (KG) by patching vbmeta.
+
+    This requires:
+    1. Device in Download mode
+    2. vbmeta patching (disable AVB verification)
+    3. Flash patched vbmeta
+    4. Root access to clear KG state files
+
+    WARNING: This trips Knox warranty bit permanently!
+    """
+    def _run(ctx, log):
+        log("=" * 60)
+        log("KNOX GUARD (KG) REMOVE / DISABLE")
+        log("=" * 60)
+        log("WARNING: This will trip the Knox warranty bit permanently!")
+        log("This operation patches vbmeta to disable AVB verification,")
+        log("then attempts to clear KG state via root.")
+        log("")
+        
+        # First check current state
+        if not _wait_for_adb(ctx, log, timeout=10):
+            log("  ADB not available - will need Download mode for vbmeta flash")
+        else:
+            kg_state = _adb_getprop("ro.boot.kgstate")
+            if kg_state == "0":
+                log("  KG already appears UNLOCKED (ro.boot.kgstate=0)")
+                return True
+        
+        # Use existing vbmeta patch flow to disable AVB
+        log("  Patching vbmeta to disable AVB verification...")
+        try:
+            # Run the vbmeta patch flow
+            from python.core import bridge
+            ctx["vbmeta_patched_path"] = None
+            flow_odin_vbmeta().run(ctx, log)
+            vbmeta_path = ctx.get("vbmeta_patched_path")
+            if not vbmeta_path:
+                raise RuntimeError("vbmeta patch failed")
+            log(f"  Patched vbmeta: {vbmeta_path}")
+        except Exception as e:
+            raise RuntimeError(f"vbmeta patch failed: {e}")
+        
+        # Flash the patched vbmeta (requires Download mode)
+        log("  Flashing patched vbmeta (requires Download mode)...")
+        try:
+            flow_odin_flash_partition_gui().run(ctx, log)
+        except Exception as e:
+            raise RuntimeError(f"vbmeta flash failed: {e}")
+        
+        log("")
+        log("vbmeta patched and flashed. Now you need to:")
+        log("  1. Boot the device")
+        log("  2. Gain root access (Magisk, etc.)")
+        log("  3. Run: echo 0 > /sys/fs/pstore/kgstate (or similar)")
+        log("  4. Clear /data/system/kgstate files if present")
+        
+        return True
+    return Flow("KG remove (patch vbmeta)", [Step("kg_remove", _run)])
 
 
 def flow_screen_lock_locksettings():
@@ -6990,6 +7195,8 @@ FLOWS = {
     "frp_emergency": flow_frp_emergency,
     "frp_settings": flow_frp_settings,
     "adb_info": flow_adb_info,
+    "kg_state_check": flow_kg_state_check,
+    "kg_remove": flow_kg_remove,
     "screen_lock_remove": flow_screen_lock_remove,
     "screen_lock_locksettings": flow_screen_lock_locksettings,
     "enable_adb": flow_enable_adb,
@@ -7074,9 +7281,9 @@ JOBS = {
         "EDL": ["screen_lock_edl"],
     },
     "Read device info": {
-        "ADB": ["adb_info", "recovery"],
+        "ADB": ["adb_info", "kg_state_check", "recovery"],
         "MTP": ["at_info", "enable_adb", "test_mode"],
-        "Download mode": ["download_mode_info"],
+        "Download mode": ["download_mode_info", "kg_state_check"],
         "Samsung BROM": ["download_mode_info"],
         "MTK": ["mtk_download_info", "mtk_brom_info", "mtk_brom_backup"],
         "MTK BROM": ["mtk_brom_info", "mtk_brom_backup"],

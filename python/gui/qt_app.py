@@ -3318,6 +3318,22 @@ class FrpWindow(QMainWindow):
         opt_row3.addWidget(self.force_bl_cb)
         opt_lay.addLayout(opt_row3)
 
+        # vbmeta auto-patch toggle
+        opt_row4 = FlowLayout(spacing=8)
+        self.vbmeta_patch_cb = QCheckBox("Auto-patch vbmeta (disable AVB verification)")
+        self.vbmeta_patch_cb.setChecked(True)
+        self.vbmeta_patch_cb.setToolTip(
+            "When ON, extracts vbmeta from AP firmware, patches it to disable\n"
+            "AVB verification (flags 0x03), and flashes the patched vbmeta.\n"
+            "Required for booting custom kernels / unofficial firmware."
+        )
+        self.vbmeta_patch_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row4.addWidget(self.vbmeta_patch_cb)
+        opt_lay.addLayout(opt_row4)
+
         # --- Zone 3: Advanced single-partition + native flash (circuit-deck) ---
         self.adv_panel = QFrame()
         self.adv_panel.setObjectName("adv")
@@ -3430,7 +3446,7 @@ class FrpWindow(QMainWindow):
         ms_row.addWidget(ms_run)
         a_lay.addLayout(ms_row)
 
-        # pit -> one row
+# pit -> one row
         pit_row = QHBoxLayout()
         pit_label = QLabel("PIT file")
         pit_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
@@ -3441,7 +3457,6 @@ class FrpWindow(QMainWindow):
         pit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         pit_btn.setFixedWidth(80)
         pit_btn.clicked.connect(lambda: self._browse_slot(self.pit_file_edit, "pit"))
-        pit_row.addWidget(pit_btn)
         pit_run = _adv_run(
             "odin_send_pit", "Send",
             "Send the PIT to the device (repartition)"
@@ -3449,6 +3464,31 @@ class FrpWindow(QMainWindow):
         pit_run.setFixedWidth(64)
         pit_row.addWidget(pit_run)
         a_lay.addLayout(pit_row)
+
+        # vbmeta -> one row
+        vb_row = QHBoxLayout()
+        vb_label = QLabel("vbmeta")
+        vb_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
+        vb_row.addWidget(vb_label)
+        self.vbmeta_edit = QLineEdit()
+        self.vbmeta_edit.setPlaceholderText("vbmeta image (.img / .img.lz4)")
+        self.vbmeta_edit.setMinimumWidth(80)
+        self.vbmeta_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.vbmeta_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
+        vb_row.addWidget(self.vbmeta_edit, 1)
+        vb_img_btn = QPushButton("Browse...")
+        vb_img_btn.setStyleSheet(_btn_ghost())
+        vb_img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        vb_img_btn.setFixedWidth(80)
+        vb_img_btn.clicked.connect(lambda: self._browse_slot(self.vbmeta_edit, "vbmeta image"))
+        vb_row.addWidget(vb_img_btn)
+        vb_run = _adv_run(
+            "odin_flash_partition", "Flash vbmeta",
+            "Flash vbmeta partition (use pre-modified image to disable verification)"
+        )
+        vb_run.setFixedWidth(64)
+        vb_row.addWidget(vb_run)
+        a_lay.addLayout(vb_row)
 
     def _build_console(self):
         """Shared console/log panel shown on the right side of every section."""
@@ -3941,6 +3981,23 @@ class FrpWindow(QMainWindow):
             lay.addLayout(row)
             self.mtk_files[name] = edit
 
+        # Auth bypass toggle (da_auth_bypass mode)
+        auth_row = QHBoxLayout()
+        self.mtk_auth_bypass_cb = QCheckBox("Auth bypass (da_auth_bypass mode)")
+        self.mtk_auth_bypass_cb.setChecked(False)
+        self.mtk_auth_bypass_cb.setToolTip(
+            "When ON, uses 'da_auth_bypass' mode to skip preloader auth checks.\n"
+            "Required for some secured devices where standard DA auth fails.\n"
+            "WARNING: May not work on all chips; can brick if used incorrectly."
+        )
+        self.mtk_auth_bypass_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        auth_row.addWidget(self.mtk_auth_bypass_cb)
+        auth_row.addStretch(1)
+        lay.addLayout(auth_row)
+
         # Generate a scatter file straight from the device GPT (Samsung
         # firmware ships no scatter; this rebuilds one from the phone).
         gen_row = QHBoxLayout()
@@ -4411,6 +4468,18 @@ class FrpWindow(QMainWindow):
             self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
             return
         self._ui.line.emit(f"[step] MTK flashing: scatter={scatter} da={da} fw={fw}")
+        auth_bypass = self.mtk_auth_bypass_cb.isChecked()
+        
+        def run_flash():
+            if auth_bypass:
+                self._ui.line.emit("[step] Running auth bypass (da_auth_bypass)...")
+                try:
+                    self._mtk_run(["mtk-bypass", "auto", da, "da_auth_bypass", scatter, "1"], timeout=300)
+                except Exception as e:
+                    self._toasts.show_error("Auth bypass failed", str(e))
+                    return
+            self._mtk_run(["mtk-flash", "auto", da, scatter, fw], timeout=1800)
+        
         self._confirm_overlay(
             "Flash Firmware (MTK)",
             "Write ALL firmware images from the selected directory to the "
@@ -4419,9 +4488,7 @@ class FrpWindow(QMainWindow):
             "If the firmware is wrong for this model, the device may not boot.\n\n"
             "There is NO undo. Continue?",
             confirm_label="Flash",
-            on_confirm=lambda: self._mtk_run(
-                ["mtk-flash", "auto", da, scatter, fw], timeout=1800
-            ),
+            on_confirm=run_flash,
         )
 
     def _mtk_backup(self):
@@ -4430,7 +4497,26 @@ class FrpWindow(QMainWindow):
             return
         scatter, da = files
         self._ui.line.emit(f"[step] MTK backup: scatter={scatter} da={da}")
-        self._mtk_run(["mtk-backup", "auto", da, scatter, "/tmp/mtk_backup"], timeout=1800)
+        auth_bypass = self.mtk_auth_bypass_cb.isChecked()
+        
+        def run_backup():
+            if auth_bypass:
+                self._ui.line.emit("[step] Running auth bypass (da_auth_bypass)...")
+                try:
+                    self._mtk_run(["mtk-bypass", "auto", da, "da_auth_bypass", scatter, "1"], timeout=300)
+                except Exception as e:
+                    self._toasts.show_error("Auth bypass failed", str(e))
+                    return
+            self._mtk_run(["mtk-backup", "auto", da, scatter, "/tmp/mtk_backup"], timeout=1800)
+        
+        self._confirm_overlay(
+            "Backup Partitions (MTK)",
+            "Backup ALL partitions from the connected MediaTek device to /tmp/mtk_backup.\n\n"
+            "This reads all partitions defined in the scatter file.\n\n"
+            "Continue?",
+            confirm_label="Backup",
+            on_confirm=run_backup,
+        )
 
     def _mtk_frp(self):
         files = self._mtk_require_files()
@@ -4438,8 +4524,29 @@ class FrpWindow(QMainWindow):
             return
         scatter, da = files
         self._ui.line.emit(f"[step] MTK FRP bypass: scatter={scatter} da={da}")
-        self._toasts.show_ok("MTK FRP bypass", "Clearing frp/nvdata...")
-        self._mtk_run(["mtk-frp", "auto", da, scatter], timeout=1800)
+        auth_bypass = self.mtk_auth_bypass_cb.isChecked()
+        
+        def run_frp():
+            if auth_bypass:
+                self._ui.line.emit("[step] Running auth bypass (da_auth_bypass)...")
+                try:
+                    self._mtk_run(["mtk-bypass", "auto", da, "da_auth_bypass", scatter, "1"], timeout=300)
+                except Exception as e:
+                    self._toasts.show_error("Auth bypass failed", str(e))
+                    return
+            self._toasts.show_ok("MTK FRP bypass", "Clearing frp/nvdata...")
+            self._mtk_run(["mtk-frp", "auto", da, scatter], timeout=1800)
+        
+        self._confirm_overlay(
+            "FRP Bypass (MTK)",
+            "Clear lock / FRP partitions by NAME, resolving addresses\n"
+            "from the device GPT (no scatter file needed)?\n\n"
+            "This formats or zero-fills frp, nvdata, metadata, persistent,\n"
+            "protect1/2, and keystore partitions where present.\n"
+            "User data may be erased. Continue?",
+            confirm_label="Clear FRP",
+            on_confirm=run_frp,
+        )
 
     def _mtk_frp_gpt(self):
         da = self.mtk_files["da"].text().strip()
@@ -7818,6 +7925,7 @@ class FrpWindow(QMainWindow):
             os.environ["ODIN4_REDOWNLOAD"] = "1" if self.redownload_cb.isChecked() else "0"
             os.environ["ODIN4_VERBOSE"] = "1" if self.verbose_cb.isChecked() else "0"
             os.environ["ODIN4_FORCE_BL"] = "1" if self.force_bl_cb.isChecked() else "0"
+            os.environ["VBMETA_PATCH"] = "1" if self.vbmeta_patch_cb.isChecked() else "0"
             # GUI-triggered Odin flows must flash ONLY the files the user
             # picked in the slots - never auto-discover in ~/Downloads.
             os.environ["ODIN4_EXACT_SLOTS"] = "1"
@@ -7853,6 +7961,12 @@ class FrpWindow(QMainWindow):
                 os.environ["PIT_FILE"] = pit
             else:
                 os.environ.pop("PIT_FILE", None)
+
+            vbmeta = self.vbmeta_edit.text().strip()
+            if vbmeta:
+                os.environ["VBMETA_FILE"] = vbmeta
+            else:
+                os.environ.pop("VBMETA_FILE", None)
 
         if method == "carrier_lock_mtk":
             mtk_files = getattr(self, "mtk_files", None)
