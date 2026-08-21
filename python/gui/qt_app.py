@@ -3713,6 +3713,28 @@ class FrpWindow(QMainWindow):
         self.fus_status_lbl.setStyleSheet(f"color:{C['dim']}; font-size:12px; font-weight:600;")
         lay.addWidget(self.fus_status_lbl)
 
+        # Other brand resources card
+        res_card = QFrame()
+        res_card.setStyleSheet(
+            f"QFrame {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 12px; }}"
+        )
+        res_lay = QVBoxLayout(res_card)
+        res_lay.setSpacing(6)
+        
+        res_title = QLabel("🌐 Other Brand Firmware & Loader Repositories (Reference)")
+        res_title.setStyleSheet(f"color:{C['text']}; font-weight:700; font-size:12px;")
+        res_lay.addWidget(res_title)
+
+        res_info = QLabel(
+            "• <b>MediaTek (MTK) Scatter / DA:</b> Check Hovatek & Needrom for scatter files and signed Download Agents.<br>"
+            "• <b>Qualcomm EDL Firehose:</b> Use <i>bkerler/Firehose</i> on GitHub for open EDL programmer loaders.<br>"
+            "• <b>UNISOC / Spreadtrum (SPD):</b> Stock PAC firmwares contain FDL1/FDL2 binaries required for BSL flashing."
+        )
+        res_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        res_info.setWordWrap(True)
+        res_lay.addWidget(res_info)
+        lay.addWidget(res_card)
+
         host.setLayout(lay)
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
@@ -6790,13 +6812,13 @@ class FrpWindow(QMainWindow):
                     if model and model != self._cached_model:
                         self._cached_model = model
                         self._ui.line.emit(f"Device Model: {model}")
-                    # Update vendor badge with brand/manufacturer
-                    vendor_name = mfr or brand
-                    if vendor_name and vendor_name.lower() != "samsung":
-                        self._ui.metric.emit("Vendor", vendor_name)
+                    # Update vendor badge with model name (e.g., "TECNO KG6")
+                    display_name = model or (mfr or brand)
+                    if display_name and display_name.lower() != "samsung":
+                        self._ui.metric.emit("Vendor", display_name)
                         # Update the scene vendor badge above the phone
                         if hasattr(self, "scene") and self.scene:
-                            self.scene.set_vendor(vendor_name.upper(), C["ok"])
+                            self.scene.set_vendor(display_name.upper(), C["ok"])
                     if self._cached_adb_status != adb_status:
                         self._cached_adb_status = adb_status
                         self._ui.line.emit(f"ADB: {serial}")
