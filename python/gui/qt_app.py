@@ -430,6 +430,24 @@ def _console_qss():
     """
 
 
+def _parse_version(tag):
+    """Simple version parser: strips leading 'v', extracts numeric + alpha segments."""
+    if not tag:
+        return (0, 0, 0), ""
+    t = tag.lstrip("v")
+    parts = t.split("-", 1)
+    num_parts = []
+    for p in parts[0].split("."):
+        try:
+            num_parts.append(int(p))
+        except ValueError:
+            num_parts.append(0)
+    while len(num_parts) < 3:
+        num_parts.append(0)
+    alpha = parts[1] if len(parts) > 1 else ""
+    return tuple(num_parts), alpha
+
+
 class LogBridge(QObject):
     line = pyqtSignal(str)
     status = pyqtSignal(str)
@@ -814,7 +832,16 @@ def _draw_logo(size):
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     s = float(size)
 
-    # outer hexagonal chip die
+    # Premium outer glow effect
+    outer_glow = QRadialGradient(s * 0.5, s * 0.5, s * 0.5)
+    outer_glow.setColorAt(0, QColor(99, 102, 241, 40))
+    outer_glow.setColorAt(0.5, QColor(139, 92, 246, 20))
+    outer_glow.setColorAt(1, QColor(139, 92, 246, 0))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(outer_glow)
+    p.drawEllipse(QRectF(0, 0, s, s))
+
+    # Outer hexagonal chip die with premium gradient
     hexpts = []
     for i in range(6):
         ang = math.pi / 180.0 * (60 * i - 30)
@@ -822,40 +849,97 @@ def _draw_logo(size):
                               s * 0.5 + s * 0.44 * math.sin(ang)))
     hx = QPolygonF(hexpts)
     g = QLinearGradient(0, 0, s, s)
-    g.setColorAt(0, QColor(C["grad_a"]))
-    g.setColorAt(1, QColor(C["grad_b"]))
-    p.setPen(QPen(QColor(C["accent_hi"]), s * 0.02))
+    g.setColorAt(0, QColor("#6366f1"))
+    g.setColorAt(0.3, QColor("#8b5cf6"))
+    g.setColorAt(0.7, QColor("#a855f7"))
+    g.setColorAt(1, QColor("#22d3ee"))
+    p.setPen(QPen(QColor("#c4b5fd"), s * 0.025))
     p.setBrush(g)
     p.drawPolygon(hx)
 
-    # inner core (dark inset with a bright node)
+    # Inner hexagonal ring with metallic effect
+    inner_ring = []
+    for i in range(6):
+        ang = math.pi / 180.0 * (60 * i - 30)
+        inner_ring.append(QPointF(s * 0.5 + s * 0.36 * math.cos(ang),
+                                 s * 0.5 + s * 0.36 * math.sin(ang)))
+    ring_grad = QLinearGradient(0, 0, s, s)
+    ring_grad.setColorAt(0, QColor("#1e1b4b"))
+    ring_grad.setColorAt(0.5, QColor("#312e81"))
+    ring_grad.setColorAt(1, QColor("#1e1b4b"))
+    p.setPen(QPen(QColor("#818cf8"), s * 0.015))
+    p.setBrush(ring_grad)
+    p.drawPolygon(QPolygonF(inner_ring))
+
+    # Inner core with premium dark gradient
     inner = []
     for i in range(6):
         ang = math.pi / 180.0 * (60 * i - 30)
         inner.append(QPointF(s * 0.5 + s * 0.26 * math.cos(ang),
                              s * 0.5 + s * 0.26 * math.sin(ang)))
+    core_grad = QRadialGradient(s * 0.5, s * 0.5, s * 0.3)
+    core_grad.setColorAt(0, QColor("#0f172a"))
+    core_grad.setColorAt(0.5, QColor("#1e293b"))
+    core_grad.setColorAt(1, QColor("#020617"))
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#051019"))
+    p.setBrush(core_grad)
     p.drawPolygon(QPolygonF(inner))
 
-    # circuit traces fanning from the core to the die edge
-    p.setPen(QPen(QColor(C["accent_hi"]), s * 0.025, Qt.PenStyle.SolidLine,
-                  Qt.PenCapStyle.RoundCap))
+    # Premium circuit traces with gradient
     for i in range(6):
         ang = math.pi / 180.0 * (60 * i - 30)
         x0 = s * 0.5 + s * 0.26 * math.cos(ang)
         y0 = s * 0.5 + s * 0.26 * math.sin(ang)
         x1 = s * 0.5 + s * 0.42 * math.cos(ang)
         y1 = s * 0.5 + s * 0.42 * math.sin(ang)
+        
+        trace_grad = QLinearGradient(x0, y0, x1, y1)
+        trace_grad.setColorAt(0, QColor("#818cf8"))
+        trace_grad.setColorAt(1, QColor("#22d3ee"))
+        p.setPen(QPen(trace_grad, s * 0.028, Qt.PenStyle.SolidLine,
+                      Qt.PenCapStyle.RoundCap))
         p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
 
-    # centre node
-    core = QRadialGradient(s * 0.5, s * 0.5, s * 0.16)
-    core.setColorAt(0, QColor("#e0f7ff"))
-    core.setColorAt(1, QColor(C["accent"]))
-    p.setBrush(core)
+    # Secondary decorative traces
+    for i in range(12):
+        ang = math.pi / 180.0 * (30 * i - 15)
+        x0 = s * 0.5 + s * 0.32 * math.cos(ang)
+        y0 = s * 0.5 + s * 0.32 * math.sin(ang)
+        x1 = s * 0.5 + s * 0.38 * math.cos(ang)
+        y1 = s * 0.5 + s * 0.38 * math.sin(ang)
+        
+        p.setPen(QPen(QColor(129, 140, 248, 100), s * 0.015, Qt.PenStyle.SolidLine,
+                      Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+
+    # Premium centre node with multi-layer glow
+    node_glow = QRadialGradient(s * 0.5, s * 0.5, s * 0.2)
+    node_glow.setColorAt(0, QColor(99, 102, 241, 80))
+    node_glow.setColorAt(0.5, QColor(139, 92, 246, 40))
+    node_glow.setColorAt(1, QColor(139, 92, 246, 0))
     p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(node_glow)
+    p.drawEllipse(QRectF(s * 0.3, s * 0.3, s * 0.4, s * 0.4))
+
+    # Centre node with premium gradient
+    core = QRadialGradient(s * 0.5, s * 0.5, s * 0.16)
+    core.setColorAt(0, QColor("#f8fafc"))
+    core.setColorAt(0.3, QColor("#e2e8f0"))
+    core.setColorAt(0.7, QColor("#cbd5e1"))
+    core.setColorAt(1, QColor("#6366f1"))
+    p.setBrush(core)
+    p.setPen(QPen(QColor("#c4b5fd"), s * 0.02))
     p.drawEllipse(QRectF(s * 0.34, s * 0.34, s * 0.32, s * 0.32))
+
+    # Inner bright core
+    inner_core = QRadialGradient(s * 0.5, s * 0.5, s * 0.08)
+    inner_core.setColorAt(0, QColor("#ffffff"))
+    inner_core.setColorAt(0.5, QColor("#e0e7ff"))
+    inner_core.setColorAt(1, QColor("#a5b4fc"))
+    p.setBrush(inner_core)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawEllipse(QRectF(s * 0.42, s * 0.42, s * 0.16, s * 0.16))
+    
     p.end()
     return pix
 
@@ -1535,7 +1619,7 @@ class MetricCard(QFrame):
 
 
 class _SettingsCatButton(QPushButton):
-    """Windows-11 style settings category button."""
+    """Premium Windows-11 style settings category button with enhanced gradients and effects."""
 
     def __init__(self, glyph, label):
         super().__init__(f"{glyph}  {label}")
@@ -1543,10 +1627,10 @@ class _SettingsCatButton(QPushButton):
         self._active = False
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(40)
+        self.setFixedHeight(44)
         self.setStyleSheet(
             "QPushButton { border: none; background: transparent;"
-            " text-align: left; padding-left: 12px; }"
+            " text-align: left; padding-left: 14px; }"
         )
 
     def set_active(self, a):
@@ -1558,25 +1642,61 @@ class _SettingsCatButton(QPushButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
+        
+        # Hover effect
+        is_hovered = self.underMouse()
+        
         if self._active:
+            # Premium active state with rich gradient
             grad = QLinearGradient(0, 0, w, 0)
-            grad.setColorAt(0, QColor(C["accent"]).darker(140))
+            grad.setColorAt(0, QColor("#6366f1"))
+            grad.setColorAt(0.5, QColor("#8b5cf6"))
             grad.setColorAt(1, QColor(C["panel"]))
             p.setBrush(grad)
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(4, 3, w - 8, h - 6), 5, 5)
+            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
+            
+            # Premium accent bar
             bar = QLinearGradient(0, 0, 4, 0)
-            bar.setColorAt(0, QColor(C["grad_a"]))
-            bar.setColorAt(1, QColor(C["grad_b"]))
+            bar.setColorAt(0, QColor("#6366f1"))
+            bar.setColorAt(0.5, QColor("#8b5cf6"))
+            bar.setColorAt(1, QColor("#22d3ee"))
             p.setBrush(bar)
-            p.drawRoundedRect(QRectF(4, 8, 4, h - 16), 2, 2)
-        color = QColor(C["text"]) if self._active else QColor(C["dim"])
-        if not self._active and self.underMouse():
-            color = QColor(C["text"])
+            p.drawRoundedRect(QRectF(4, 10, 4, h - 20), 2, 2)
+            
+            # Subtle glow effect
+            glow = QRadialGradient(w/2, h/2, w)
+            glow.setColorAt(0, QColor(99, 102, 241, 20))
+            glow.setColorAt(1, QColor(99, 102, 241, 0))
+            p.setBrush(glow)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
+        elif is_hovered:
+            # Premium hover state
+            hover_grad = QLinearGradient(0, 0, w, 0)
+            hover_grad.setColorAt(0, QColor(255, 255, 255, 8))
+            hover_grad.setColorAt(1, QColor(255, 255, 255, 4))
+            p.setBrush(hover_grad)
+            p.setPen(QPen(QColor(C["border_hi"]), 1))
+            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
+        
+        # Premium text styling
+        if self._active:
+            color = QColor("#f8fafc")
+            font_weight = QFont.Weight.Bold
+        elif is_hovered:
+            color = QColor(C["accent_hi"])
+            font_weight = QFont.Weight.DemiBold
+        else:
+            color = QColor(C["dim"])
+            font_weight = QFont.Weight.Medium
+        
         p.setPen(QPen(color))
-        p.setFont(self.font())
+        font = self.font()
+        font.setWeight(font_weight)
+        p.setFont(font)
         fm = p.fontMetrics()
-        p.drawText(18, (h - fm.height()) // 2 + fm.ascent(), self.text())
+        p.drawText(20, (h - fm.height()) // 2 + fm.ascent(), self.text())
         p.end()
 
 
@@ -2274,19 +2394,21 @@ class SplashScreen(QWidget):
 
         w, h = self.width(), self.height()
 
-        # carbon deck background
-        grad = QLinearGradient(0, 0, w, h)
-        grad.setColorAt(0, QColor("#0a1220"))
-        grad.setColorAt(1, QColor("#04070c"))
-        p.setBrush(grad)
-        p.setPen(QPen(QColor(C["border_hi"]), 1))
-        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 14, 14)
+        # Premium deep space background with rich gradient
+        bg_grad = QLinearGradient(0, 0, w, h)
+        bg_grad.setColorAt(0, QColor("#0f172a"))
+        bg_grad.setColorAt(0.3, QColor("#1e293b"))
+        bg_grad.setColorAt(0.7, QColor("#0f172a"))
+        bg_grad.setColorAt(1, QColor("#020617"))
+        p.setBrush(bg_grad)
+        p.setPen(QPen(QColor(C["border_hi"]), 1.5))
+        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 16, 16)
 
-        # faint circuit grid
+        # Animated circuit grid with premium glow
         grid = QColor(C["accent"])
-        grid.setAlpha(14)
-        p.setPen(QPen(grid, 1))
-        step = 24.0
+        grid.setAlpha(20)
+        p.setPen(QPen(grid, 1.2))
+        step = 28.0
         gx = 0.0
         while gx < w:
             p.drawLine(QPointF(gx, 0), QPointF(gx, h))
@@ -2296,85 +2418,136 @@ class SplashScreen(QWidget):
             p.drawLine(QPointF(0, gy), QPointF(w, gy))
             gy += step
 
-        # soft radial glow behind the logo
-        glow = QRadialGradient(w / 2, 150, 220)
-        glow.setColorAt(0, QColor(34, 211, 238, 40))
-        glow.setColorAt(1, QColor(34, 211, 238, 0))
+        # Premium radial glow with multiple layers
+        glow1 = QRadialGradient(w / 2, 140, 250)
+        glow1.setColorAt(0, QColor(99, 102, 241, 60))
+        glow1.setColorAt(0.5, QColor(139, 92, 246, 30))
+        glow1.setColorAt(1, QColor(139, 92, 246, 0))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(glow)
+        p.setBrush(glow1)
         p.drawRect(QRect(0, 0, w, h))
 
-        # top accent bar (subtle breathing pulse)
-        pulse = 0.7 + 0.3 * math.sin(self._pulse)
+        # Secondary accent glow
+        glow2 = QRadialGradient(w / 2, 180, 180)
+        glow2.setColorAt(0, QColor(34, 211, 238, 35))
+        glow2.setColorAt(1, QColor(34, 211, 238, 0))
+        p.setBrush(glow2)
+        p.drawRect(QRect(0, 0, w, h))
+
+        # Premium top accent bar with enhanced pulse
+        pulse = 0.75 + 0.25 * math.sin(self._pulse)
         ag = QLinearGradient(0, 0, w, 0)
-        ag.setColorAt(0, QColor(C["grad_a"]))
-        ag.setColorAt(1, QColor(C["grad_b"]))
+        ag.setColorAt(0, QColor("#6366f1"))
+        ag.setColorAt(0.5, QColor("#8b5cf6"))
+        ag.setColorAt(1, QColor("#22d3ee"))
         p.setBrush(ag)
         p.setOpacity(pulse)
-        p.drawRoundedRect(QRectF(26, 20, w - 52, 4), 2, 2)
+        p.drawRoundedRect(QRectF(24, 18, w - 48, 5), 2.5, 2.5)
         p.setOpacity(self._alpha)
 
-        # hex circuit logo
-        logo_size = 116
-        p.drawPixmap(
-            QRect((w - logo_size) // 2, 44, logo_size, logo_size),
-            _draw_logo(logo_size),
-        )
+        # Enhanced logo with glow effect
+        logo_size = 128
+        logo_rect = QRect((w - logo_size) // 2, 38, logo_size, logo_size)
+        
+        # Logo glow
+        logo_glow = QRadialGradient(QPointF(logo_rect.center()), logo_size * 0.8)
+        logo_glow.setColorAt(0, QColor(99, 102, 241, 50))
+        logo_glow.setColorAt(1, QColor(99, 102, 241, 0))
+        p.setBrush(logo_glow)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(logo_rect)
+        
+        p.drawPixmap(logo_rect, _draw_logo(logo_size))
 
-        # title (terminal style)
-        p.setFont(QFont("JetBrains Mono", 19, QFont.Weight.ExtraBold))
-        p.setPen(QPen(QColor(C["text"])))
+        # Premium title with gradient text effect
+        p.setFont(QFont("Inter", 22, QFont.Weight.ExtraBold))
+        p.setPen(QPen(QColor("#f8fafc")))
         p.drawText(
-            QRectF(0, 166, w, 34),
+            QRectF(0, 178, w, 38),
             Qt.AlignmentFlag.AlignCenter,
-            "flashpilot FLASHING TOOL",
+            "FlashPilot",
         )
 
-        # tagline
-        p.setFont(QFont("JetBrains Mono", 9, QFont.Weight.DemiBold))
+        # Subtitle
+        p.setFont(QFont("Inter", 11, QFont.Weight.Medium))
         p.setPen(QPen(QColor(C["accent_hi"])))
         p.drawText(
-            QRectF(0, 202, w, 22),
+            QRectF(0, 208, w, 24),
             Qt.AlignmentFlag.AlignCenter,
-            ">>  FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD  <<",
+            "Professional Flashing Tool",
         )
 
-        # segmented progress bar (ticked, instrument-style)
-        bar_w, bar_h = w - 110, 10
+        # Premium tagline
+        p.setFont(QFont("JetBrains Mono", 9, QFont.Weight.DemiBold))
+        p.setPen(QPen(QColor(C["accent"])))
+        p.drawText(
+            QRectF(0, 235, w, 22),
+            Qt.AlignmentFlag.AlignCenter,
+            "FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD",
+        )
+
+        # Premium segmented progress bar with glow
+        bar_w, bar_h = w - 100, 12
         bx = (w - bar_w) / 2
-        by = 248
-        segs = 40
-        seg_w = (bar_w - (segs - 1) * 2) / segs
+        by = 272
+        segs = 35
+        seg_w = (bar_w - (segs - 1) * 3) / segs
         filled = int(segs * self._progress)
+        
+        # Progress bar background glow
+        if filled > 0:
+            progress_glow = QRadialGradient(bx + bar_w/2, by + bar_h/2, bar_w)
+            progress_glow.setColorAt(0, QColor(99, 102, 241, 30))
+            progress_glow.setColorAt(1, QColor(99, 102, 241, 0))
+            p.setBrush(progress_glow)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRect(QRectF(bx - 20, by - 10, bar_w + 40, bar_h + 20))
+        
         for i in range(segs):
-            sx = bx + i * (seg_w + 2)
+            sx = bx + i * (seg_w + 3)
             if i < filled:
                 gr = QLinearGradient(sx, 0, sx + seg_w, 0)
-                gr.setColorAt(0, QColor(C["grad_a"]))
-                gr.setColorAt(1, QColor(C["grad_b"]))
+                gr.setColorAt(0, QColor("#6366f1"))
+                gr.setColorAt(0.5, QColor("#8b5cf6"))
+                gr.setColorAt(1, QColor("#22d3ee"))
                 p.setBrush(gr)
             else:
-                p.setBrush(QColor(255, 255, 255, 16))
+                p.setBrush(QColor(255, 255, 255, 20))
             p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(sx, by, seg_w, bar_h), 1.5, 1.5)
+            p.drawRoundedRect(QRectF(sx, by, seg_w, bar_h), 2, 2)
 
-        # status line (mono, like a boot log)
-        p.setFont(QFont("JetBrains Mono", 10))
-        p.setPen(QPen(QColor(C["dim"])))
+        # Premium status line with accent
+        p.setFont(QFont("Inter", 10, QFont.Weight.Medium))
+        p.setPen(QPen(QColor(C["text"])))
         p.drawText(
-            QRectF(0, 274, w, 22),
+            QRectF(0, 298, w, 22),
             Qt.AlignmentFlag.AlignCenter,
             _SPLASH_MESSAGES[self._msg_idx],
         )
 
-        # footer chips
+        # Premium footer with enhanced styling
+        footer_grad = QLinearGradient(0, 0, w, 0)
+        footer_grad.setColorAt(0, QColor(C["accent"]))
+        footer_grad.setColorAt(0.5, QColor(C["accent_hi"]))
+        footer_grad.setColorAt(1, QColor(C["accent"]))
         chips = "SAMSUNG  /  MEDIATEK  /  QUALCOMM  /  UNISOC"
-        p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.DemiBold))
-        p.setPen(QPen(QColor(C["mute"])))
+        p.setFont(QFont("Inter", 9, QFont.Weight.DemiBold))
+        text_pen = QPen()
+        text_pen.setBrush(footer_grad)
+        p.setPen(text_pen)
         p.drawText(
-            QRectF(0, 318, w, 20),
+            QRectF(0, 330, w, 20),
             Qt.AlignmentFlag.AlignCenter,
             chips,
+        )
+
+        # Version info
+        p.setFont(QFont("JetBrains Mono", 8))
+        p.setPen(QPen(QColor(C["mute"])))
+        p.drawText(
+            QRectF(0, 352, w, 16),
+            Qt.AlignmentFlag.AlignCenter,
+            "v1.2.0  |  Legendary-Brilliantforous",
         )
 
         p.end()
@@ -6162,17 +6335,18 @@ class FrpWindow(QMainWindow):
         root_lay.setContentsMargins(0, 0, 0, 0)
         root_lay.setSpacing(0)
 
-        # Left category rail - mirrors the Windows 11 settings sidebar.
+        # Left category rail - premium Windows 11 style settings sidebar
         cat = QFrame()
         cat.setStyleSheet(
-            f"QFrame {{ background: rgba(12, 17, 25, 170);"
-            f" border-right: 1px solid {C['border']}; border-top-left-radius: 14px;"
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 rgba(15, 23, 42, 245), stop:1 rgba(2, 6, 23, 245));"
+            f" border-right: 1px solid {C['border_hi']}; border-top-left-radius: 14px;"
             f" border-bottom-left-radius: 14px; }}"
         )
-        cat.setFixedWidth(172)
+        cat.setFixedWidth(180)
         cat_lay = QVBoxLayout(cat)
-        cat_lay.setContentsMargins(10, 18, 10, 14)
-        cat_lay.setSpacing(4)
+        cat_lay.setContentsMargins(12, 20, 12, 16)
+        cat_lay.setSpacing(6)
 
         self._settings_pages = QStackedWidget()
         self._settings_pages.setStyleSheet(
@@ -6183,6 +6357,8 @@ class FrpWindow(QMainWindow):
         categories = [
             ("general", "◈", "General",
              self._build_settings_general),
+            ("updates", "↻", "Updates",
+             self._build_settings_updates),
             ("appearance", "✦", "Appearance",
              self._build_settings_appearance),
             ("tools", "▤", "Tools",
@@ -6205,7 +6381,7 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _switch_settings(self, key):
-        order = {"general": 0, "appearance": 1, "tools": 2, "about": 3}
+        order = {"general": 0, "updates": 1, "appearance": 2, "tools": 3, "about": 4}
         idx = order.get(key, 0)
         self._settings_pages.setCurrentIndex(idx)
         for k, btn in self._settings_cats.items():
@@ -6233,13 +6409,13 @@ class FrpWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(10)
         col = QVBoxLayout()
-        col.setSpacing(1)
+        col.setSpacing(2)
         lab = QLabel(text)
-        lab.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:600;")
+        lab.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:700;")
         col.addWidget(lab)
         if detail:
             d = QLabel(detail)
-            d.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
+            d.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
             d.setWordWrap(True)
             col.addWidget(d)
         row.addLayout(col, 1)
@@ -6330,16 +6506,53 @@ class FrpWindow(QMainWindow):
             self._s_clear,
         )
 
-        # Auto-update preference
-        self._auto_update_cb = QCheckBox("Auto-check for updates at startup")
-        self._auto_update_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
-            f" QCheckBox::indicator {{ width:18px; height:18px; }}"
-            f" QCheckBox::indicator:checked {{ background:{C['accent']}; border:2px solid {C['text']}; border-radius:3px; }}"
-            f" QCheckBox::indicator:unchecked {{ background:{C['panel']}; border:1px solid {C['border']}; border-radius:3px; }}"
+        lay.addStretch(1)
+        return page
+
+    def _build_settings_updates(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(18, 18, 18, 18)
+        lay.setSpacing(12)
+
+        bl = self._settings_box("UPDATES & RELEASES", lay)
+        self._auto_update_cb = self._settings_switch()
+        self._auto_update_cb.setChecked(
+            self.settings.value("auto_update_check", True, type=bool)
         )
-        self._auto_update_cb.setChecked(self.settings.value("auto_update_check", True, type=bool))
-        bl.addWidget(self._auto_update_cb)
+        self._auto_update_cb.toggled.connect(lambda on: self.settings.setValue("auto_update_check", on))
+        self._settings_row(
+            bl, "Auto-check for updates",
+            "Automatically check for new versions when FlashPilot starts.",
+            self._auto_update_cb,
+        )
+
+        self._auto_download_cb = self._settings_switch()
+        self._auto_download_cb.setChecked(
+            self.settings.value("auto_download_update", False, type=bool)
+        )
+        self._auto_download_cb.toggled.connect(lambda on: self.settings.setValue("auto_download_update", on))
+        self._settings_row(
+            bl, "Automatically download updates",
+            "Download new updates in the background when available.",
+            self._auto_download_cb,
+        )
+
+        # Manual check button
+        self._check_updates_btn = QPushButton("Check for Updates Now")
+        self._check_updates_btn.setStyleSheet(
+            f"QPushButton {{ background:{C['accent']}; color:{C['panel']}; padding:8px 16px; border-radius:6px; font-size:12px; font-weight:700; }}"
+            f" QPushButton:hover {{ background:{C['card_hover']}; }}"
+            f" QPushButton:disabled {{ background:{C['border']}; color:{C['mute']}; }}"
+        )
+        self._check_updates_btn.setFixedWidth(200)
+        self._check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._check_updates_btn.clicked.connect(self._manual_check_update)
+        self._settings_row(
+            bl, "Manual version check",
+            "Query GitHub releases immediately for updates.",
+            self._check_updates_btn,
+        )
 
         lay.addStretch(1)
         return page
@@ -6586,49 +6799,135 @@ class FrpWindow(QMainWindow):
         if self._update_in_progress:
             return
         self._update_in_progress = True
+        if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
+            self._check_updates_btn.setEnabled(False)
+            self._check_updates_btn.setText("Checking...")
+        threading.Thread(target=self._check_update_thread, daemon=True).start()
+
+    def _manual_check_update(self):
+        if self._update_in_progress:
+            if hasattr(self, "_toasts") and self._toasts:
+                self._toasts.show_warn("Update check", "Update check already in progress.")
+            return
+        self._update_in_progress = True
+        if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
+            self._check_updates_btn.setEnabled(False)
+            self._check_updates_btn.setText("Checking...")
+        if hasattr(self, "_ui") and self._ui:
+            self._ui.line.emit("[check] Manual update check requested...")
         threading.Thread(target=self._check_update_thread, daemon=True).start()
 
     def _check_update_thread(self):
-        import subprocess, json, sys
-        self._ui.line.emit("[check] Looking for latest FlashPilot version...")
+        import urllib.request, json, sys
         try:
-            result = subprocess.run(
-                ["curl", "-s", "https://api.github.com/repos/Legendary-Brilliantforous/flashpilot/releases/latest"],
-                capture_output=True, text=True, timeout=15,
+            if hasattr(self, "_ui") and self._ui:
+                self._ui.line.emit("[check] Looking for latest FlashPilot version...")
+            req = urllib.request.Request(
+                "https://api.github.com/repos/Legendary-Brilliantforous/flashpilot/releases",
+                headers={"User-Agent": "FlashPilot"}
             )
-            if result.returncode != 0 or not result.stdout.strip():
-                self._ui.line.emit("[check] Failed to reach GitHub API")
-                self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "Could not connect to update server."))
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    body = resp.read().decode("utf-8")
+            except Exception as net_err:
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.line.emit(f"[check] Failed to reach GitHub API: {net_err}")
+                    self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Could not connect to update server: {net_err}"))
                 return
-            data = json.loads(result.stdout)
-            latest_tag = data.get("tag_name", "").lstrip("v")
-            latest_url = None
-            for a in data.get("assets", []):
-                if a["name"].endswith("_amd64.deb"):
-                    latest_url = a["browser_download_url"]
-                    break
-            current = "1.2"
-            if not latest_tag:
-                self._ui.line.emit("[check] No version info found")
+
+            releases = json.loads(body)
+            if not isinstance(releases, list) or not releases:
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.line.emit("[check] No release info found")
+                    self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "No release info found on GitHub."))
                 return
-            if latest_tag > current:
-                self._ui.line.emit(f"[check] New version available: {latest_tag}")
-                fpath = os.path.expanduser("~/flashpilot_update.deb")
-                subprocess.run(["curl", "-L", "-o", fpath, latest_url], timeout=60)
-                if os.path.exists(fpath):
+
+            current = "1.2.0"
+            current_tuple, _ = _parse_version(current)
+
+            stables = [r for r in releases if not r.get("prerelease", False)]
+            betas = [r for r in releases if r.get("prerelease", False)]
+
+            latest_stable = stables[0] if stables else None
+            latest_beta = betas[0] if betas else None
+
+            stable_tag = latest_stable.get("tag_name", "").lstrip("v") if latest_stable else ""
+            beta_tag = latest_beta.get("tag_name", "").lstrip("v") if latest_beta else ""
+
+            stable_tuple, _ = _parse_version(stable_tag) if stable_tag else ((0, 0, 0), "")
+            beta_tuple, _ = _parse_version(beta_tag) if beta_tag else ((0, 0, 0), "")
+
+            auto_download = self.settings.value("auto_download_update", False, type=bool)
+
+            if stable_tag and stable_tuple > current_tuple:
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.line.emit(f"[check] New stable version available: {stable_tag}")
+                latest_url = None
+                for a in latest_stable.get("assets", []):
+                    if a["name"].endswith("_amd64.deb"):
+                        latest_url = a["browser_download_url"]
+                        break
+                if latest_url and auto_download:
+                    fpath = os.path.expanduser("~/flashpilot_update.deb")
+                    try:
+                        urllib.request.urlretrieve(latest_url, fpath)
+                        if os.path.exists(fpath):
+                            if hasattr(self, "_ui") and self._ui:
+                                self._ui.line.emit(f"[check] Automatically downloaded {stable_tag}. Installing via pkexec...")
+                            subprocess.Popen(["pkexec", "dpkg", "-i", fpath])
+                    except Exception as dl_err:
+                        if hasattr(self, "_ui") and self._ui:
+                            self._ui.line.emit(f"[check] Auto-download/install failed: {dl_err}")
+                if hasattr(self, "_ui") and self._ui:
                     self._ui.ui.emit(lambda: self._toasts.show_info(
-                        "Update available",
-                        f"Downloaded {latest_tag}. Run: sudo dpkg -i {fpath}\n\n"
-                        "Or visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                        "Stable update available",
+                        f"New stable version {stable_tag} is available.\n\n"
+                        f"{'Installing automatically (password prompt may appear).\n\n' if auto_download and latest_url else 'Downloaded to ~/flashpilot_update.deb. Run: sudo dpkg -i ~/flashpilot_update.deb\n\n'}"
+                        "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                    ))
+            elif beta_tag and beta_tuple > current_tuple and (not stable_tag or stable_tuple <= current_tuple):
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.line.emit(f"[check] You are on the latest stable version. Beta version {beta_tag} is also available.")
+                latest_url = None
+                for a in latest_beta.get("assets", []):
+                    if a["name"].endswith("_amd64.deb"):
+                        latest_url = a["browser_download_url"]
+                        break
+                if latest_url and auto_download:
+                    fpath = os.path.expanduser("~/flashpilot_update.deb")
+                    try:
+                        urllib.request.urlretrieve(latest_url, fpath)
+                        if os.path.exists(fpath):
+                            if hasattr(self, "_ui") and self._ui:
+                                self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag}. Installing via pkexec...")
+                            subprocess.Popen(["pkexec", "dpkg", "-i", fpath])
+                    except Exception as dl_err:
+                        if hasattr(self, "_ui") and self._ui:
+                            self._ui.line.emit(f"[check] Auto-download/install failed: {dl_err}")
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.ui.emit(lambda: self._toasts.show_info(
+                        "Beta version available",
+                        f"You are on the latest stable version. Beta release {beta_tag} is available.\n\n"
+                        f"{'Installing automatically (password prompt may appear).\n\n' if auto_download and latest_url else ''}"
+                        "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
                     ))
             else:
-                self._ui.line.emit(f"[check] You are on the latest version ({latest_tag})")
-                self._ui.ui.emit(lambda: self._toasts.show_info("Up to date", f"FlashPilot {latest_tag} is already installed."))
+                if hasattr(self, "_ui") and self._ui:
+                    self._ui.line.emit(f"[check] You are on the latest version ({current})")
+                    self._ui.ui.emit(lambda: self._toasts.show_info("Up to date", f"FlashPilot {current} is already installed."))
         except Exception as e:
-            self._ui.line.emit(f"[check] Error: {e}")
-            self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Unexpected error: {e}"))
+            if hasattr(self, "_ui") and self._ui:
+                self._ui.line.emit(f"[check] Update check error: {e}")
+                self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Error: {e}"))
         finally:
             self._update_in_progress = False
+            if hasattr(self, "_ui") and self._ui:
+                self._ui.ui.emit(lambda: self._reset_update_btn())
+
+    def _reset_update_btn(self):
+        if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
+            self._check_updates_btn.setEnabled(True)
+            self._check_updates_btn.setText("Check for Updates Now")
 
     @staticmethod
     def _field_label(text):
@@ -8469,7 +8768,7 @@ def _app_icon():
 
 def main():
     app = QApplication([])
-    QApplication.setDesktopFileName("flashpilot.desktop")
+    QApplication.setDesktopFileName("flashpilot")
     app.setWindowIcon(_app_icon())
     splash = SplashScreen()
     splash.show()
