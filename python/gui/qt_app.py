@@ -1198,14 +1198,18 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # low-level modes appear as their own USB vendor, not under 04e8.
     for d in (mtk_devs or []):
         pid = d.get("pid")
+        mfr = (d.get("manufacturer") or "").lower()
+        prod = (d.get("product") or "").lower()
+        is_samsung_mtk = "samsung" in mfr or "samsung" in prod
+        prefix = "SAMSUNG MTK" if is_samsung_mtk else "MEDIATEK"
         if pid == 0x2000:
-            return "SAMSUNG MTK BROM (A05/A06 - held state)"
+            return f"{prefix} BROM (held state)"
         elif pid == 0x0003:
-            return "SAMSUNG MTK PRELOADER (A05/A06 - first bootloader stage)"
+            return f"{prefix} PRELOADER (first bootloader stage)"
         elif pid == 0x0004:
-            return "SAMSUNG MTK DA (A05/A06 - flashing active)"
+            return f"{prefix} DA (flashing active)"
         else:
-            return f"SAMSUNG MTK MODE (VID 0x0E8D PID 0x{pid:04X})"
+            return f"{prefix} MODE (VID 0x0E8D PID 0x{pid:04X})"
     
     if adb and diag and image:
         return "MTP + DIAG + ADB (combined config)"
@@ -3635,6 +3639,12 @@ class FrpWindow(QMainWindow):
         self.fus_model_input = QLineEdit("SM-S918B")
         self.fus_model_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
         r1.addWidget(self.fus_model_input, 1)
+
+        self.fus_detect_btn = QPushButton("🔍 Detect Connected Device")
+        self.fus_detect_btn.setStyleSheet(_btn_ghost())
+        self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_detect_btn.clicked.connect(self._fus_detect_device)
+        r1.addWidget(self.fus_detect_btn)
         
         lbl_reg = QLabel("Region:")
         lbl_reg.setStyleSheet(f"color:{C['text']}; font-weight:600;")
@@ -3707,6 +3717,40 @@ class FrpWindow(QMainWindow):
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
         return panel
+
+    def _fus_detect_device(self):
+        self.fus_status_lbl.setText("Scanning connected Samsung device...")
+        def work():
+            try:
+                devs = bridge.adb_devices()
+                if not devs:
+                    raise RuntimeError("No ADB device authorized/connected. Please connect phone in normal/ADB mode.")
+                model = bridge.adb_shell("getprop ro.product.model", timeout=5).strip()
+                csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5).strip()
+                if not csc:
+                    csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5).strip()
+                if not csc:
+                    csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5).strip()
+                if not model:
+                    model = "SM-S918B"
+                if not csc:
+                    csc = "EUX"
+
+                def ok():
+                    self.fus_model_input.setText(model)
+                    self.fus_region_input.setText(csc)
+                    self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
+                    self.show_toast(f"Detected {model} [{csc}]", "success")
+                    self._fus_check_version()
+                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+            except Exception as e:
+                err = str(e)
+                def fail():
+                    self.fus_status_lbl.setText(f"Detection failed: {err}")
+                    self.show_toast(f"Device detection failed: {err}", "error")
+                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _fus_check_version(self):
         model = self.fus_model_input.text().strip()
@@ -6640,7 +6684,13 @@ class FrpWindow(QMainWindow):
                      0x0004: "MediaTek Download Agent"}.get(pid, "MediaTek low-level")
             self.orb.set_connected(True)
             self.scene.set_connected(True)
-            self.scene.set_vendor("SAMSUNG (MTK)", C["warn"])
+            mfr = (d.get("manufacturer") or "").lower()
+            prod = (d.get("product") or "").lower()
+            is_samsung_mtk = "samsung" in mfr or "samsung" in prod
+            if is_samsung_mtk:
+                self.scene.set_vendor("SAMSUNG (MTK)", C["warn"])
+            else:
+                self.scene.set_vendor("MEDIATEK", C["warn"])
             self._set_conn_glow(C["warn"])
             self.conn_state.setText(
                 f"0e8d:{pid:04x} · {stage}\nbus {d['bus']} · addr {d['address']}"
@@ -6649,6 +6699,24 @@ class FrpWindow(QMainWindow):
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
             self._update_device_info(True, pid, mode)
+        elif adb_devs:
+            auth_adb = [d for d in adb_devs if d["state"] == "device"]
+            d = auth_adb[0] if auth_adb else adb_devs[0]
+            serial = d.get("serial", "unknown")
+            self.orb.set_connected(True)
+            self.scene.set_connected(True)
+            brand = "ADB DEVICE"
+            if self._cached_model:
+                parts = self._cached_model.split()
+                brand = parts[0].upper()
+            self.scene.set_vendor(brand, C["ok"] if auth_adb else C["warn"])
+            self._set_conn_glow(C["ok"] if auth_adb else C["warn"])
+            state_str = "connected" if auth_adb else d.get("state", "connected")
+            self.conn_state.setText(f"ADB · {state_str}\n{serial}")
+            self.conn_state.setStyleSheet(
+                f"color:{C['ok'] if auth_adb else C['warn']}; font-size:12px; font-weight:600; background:transparent;"
+            )
+            self._update_device_info(True, None, mode)
         else:
             self.orb.set_connected(False)
             self.scene.set_connected(False)
@@ -6709,11 +6777,26 @@ class FrpWindow(QMainWindow):
                         model = bridge.adb_shell(
                             "getprop ro.product.model", timeout=8
                         ).strip()
+                        mfr = bridge.adb_shell(
+                            "getprop ro.product.manufacturer", timeout=8
+                        ).strip()
+                        brand = bridge.adb_shell(
+                            "getprop ro.product.brand", timeout=8
+                        ).strip()
                     except bridge.BridgeError:
-                        pass
+                        model = ""
+                        mfr = ""
+                        brand = ""
                     if model and model != self._cached_model:
                         self._cached_model = model
                         self._ui.line.emit(f"Device Model: {model}")
+                    # Update vendor badge with brand/manufacturer
+                    vendor_name = mfr or brand
+                    if vendor_name and vendor_name.lower() != "samsung":
+                        self._ui.metric.emit("Vendor", vendor_name)
+                        # Update the scene vendor badge above the phone
+                        if hasattr(self, "scene") and self.scene:
+                            self.scene.set_vendor(vendor_name.upper(), C["ok"])
                     if self._cached_adb_status != adb_status:
                         self._cached_adb_status = adb_status
                         self._ui.line.emit(f"ADB: {serial}")
@@ -6807,17 +6890,29 @@ class FrpWindow(QMainWindow):
                         "debugging for ADB getprop"
                     )
             elif mtk_devs:
-                lines.append("SAMSUNG (MTK) DEVICE(S):")
+                d = mtk_devs[0]
+                mfr = (d.get("manufacturer") or "").lower()
+                prod = (d.get("product") or "").lower()
+                is_samsung_mtk = "samsung" in mfr or "samsung" in prod
+                if is_samsung_mtk:
+                    lines.append("SAMSUNG (MTK) DEVICE(S):")
+                else:
+                    lines.append("MEDIATEK DEVICE(S):")
                 for d in mtk_devs:
                     lines.extend(_fmt_usb_full(d))
                 lines.append("")
                 mode = _detect_mode([], mtk_devs, adb_devs, fastboot)
                 lines.append(f">>> MODE: {mode}")
-                lines.append(
-                    "  Samsung MTK models (Galaxy A05/A06) enumerate as MediaTek "
-                    "0e8d in BROM / preloader / DA. Flash them from the FLASH tab "
-                    "(Odin) or use MTK Tools for DA-level operations."
-                )
+                if is_samsung_mtk:
+                    lines.append(
+                        "  Samsung MTK models (Galaxy A05/A06) enumerate as MediaTek "
+                        "0e8d in BROM / preloader / DA. Flash them from the FLASH tab "
+                        "(Odin) or use MTK Tools for DA-level operations."
+                    )
+                else:
+                    lines.append(
+                        "  MediaTek low-level device detected. Use MTK Tools / BROM operations."
+                    )
             else:
                 lines.append("No Samsung device over USB (plug it in, check cable/port)")
 
