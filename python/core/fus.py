@@ -19,6 +19,30 @@ def check_latest_version(model: str, region: str) -> str:
     return versionfetch.getlatestver(model, region)
 
 
+def list_all_versions(model: str, region: str) -> list:
+    """
+    List all available firmware versions for a model and region.
+    Returns list of dicts: [{'version': '...', 'size': int, 'rcount': int}, ...]
+    """
+    model = model.strip().upper()
+    region = region.strip().upper()
+    import requests
+    url = f"https://fota-cloud-dn.ospserver.net/firmware/{region}/{model}/version.xml"
+    req = requests.get(url, timeout=15)
+    if req.status_code == 403:
+        raise Exception("Model or region not found (403)")
+    req.raise_for_status()
+    root = ET.fromstring(req.text)
+    versions = []
+    for val in root.findall(".//upgrade/value"):
+        ver = val.text
+        size = int(val.get("fwsize", 0))
+        rcount = int(val.get("rcount", 0))
+        if ver:
+            versions.append({"version": ver, "size": size, "rcount": rcount})
+    return versions
+
+
 def download_and_decrypt_firmware(
     model: str,
     region: str,

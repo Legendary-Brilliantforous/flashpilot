@@ -3710,6 +3710,12 @@ class FrpWindow(QMainWindow):
         self.fus_check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_check_btn.clicked.connect(self._fus_check_version)
         r2.addWidget(self.fus_check_btn)
+
+        self.fus_list_btn = QPushButton("List All Versions")
+        self.fus_list_btn.setStyleSheet(_btn_ghost())
+        self.fus_list_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_list_btn.clicked.connect(self._fus_list_versions)
+        r2.addWidget(self.fus_list_btn)
         form_lay.addLayout(r2)
 
         # Output dir row
@@ -3841,6 +3847,77 @@ class FrpWindow(QMainWindow):
                 QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _fus_list_versions(self):
+        model = self.fus_model_input.text().strip()
+        region = self.fus_region_input.text().strip()
+        if not model or not region:
+            self.show_toast("Enter device model and region first.", "error")
+            return
+        self.fus_list_btn.setEnabled(False)
+        self.fus_status_lbl.setText(f"Fetching all versions for {model} ({region})...")
+
+        def work():
+            try:
+                versions = fus.list_all_versions(model, region)
+                def ok():
+                    self._show_version_dialog(versions)
+                    self.fus_list_btn.setEnabled(True)
+                    self.fus_status_lbl.setText(f"Found {len(versions)} versions for {model} ({region})")
+                    self.show_toast(f"Found {len(versions)} firmware versions", "success")
+                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+            except Exception as e:
+                err = str(e)
+                def fail():
+                    self.fus_status_lbl.setText(f"List failed: {err}")
+                    self.fus_list_btn.setEnabled(True)
+                    self.show_toast(f"List failed: {err}", "error")
+                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_version_dialog(self, versions: list):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QLabel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Available Firmware Versions")
+        dlg.setMinimumSize(700, 500)
+        dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
+        lay = QVBoxLayout(dlg)
+        
+        info = QLabel(f"Found {len(versions)} firmware versions (newest first)")
+        info.setStyleSheet(f"color:{C['dim']}; font-size:12px; padding:5px;")
+        lay.addWidget(info)
+        
+        list_w = QListWidget()
+        list_w.setStyleSheet(f"QListWidget {{ background:{C['inset']}; border:1px solid {C['border']}; border-radius:8px; color:{C['text']}; }} QListWidget::item {{ padding:8px; border-bottom:1px solid {C['border']}; }} QListWidget::item:selected {{ background:{C['accent']}; }}")
+        for v in versions:
+            size_mb = v['size'] / (1024 * 1024)
+            item = QListWidgetItem(f"{v['version']}  ({size_mb:.1f} MB, rcount={v['rcount']})")
+            item.setData(Qt.ItemDataRole.UserRole, v['version'])
+            list_w.addItem(item)
+        lay.addWidget(list_w)
+        
+        btn_row = QHBoxLayout()
+        select_btn = QPushButton("Select Version")
+        select_btn.setStyleSheet(_btn_primary())
+        select_btn.clicked.connect(lambda: self._select_version_from_dialog(dlg, list_w))
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setStyleSheet(_btn_ghost())
+        cancel_btn.clicked.connect(dlg.reject)
+        btn_row.addStretch(1)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(select_btn)
+        lay.addLayout(btn_row)
+        
+        dlg.exec()
+
+    def _select_version_from_dialog(self, dlg, list_w):
+        item = list_w.currentItem()
+        if item:
+            ver = item.data(Qt.ItemDataRole.UserRole)
+            self.fus_version_input.setText(ver)
+            dlg.accept()
+            self.show_toast(f"Selected version: {ver}", "info")
 
     def _fus_download(self):
         model = self.fus_model_input.text().strip()
