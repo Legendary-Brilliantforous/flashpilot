@@ -377,3 +377,43 @@ def odin_send_pit(target, pit_file, timeout=120):
 
 def has_adb():
     return shutil.which("adb") is not None
+
+
+# ---- USB re-enumeration helpers ----------------------------------------
+
+def wait_for_usb_reenumeration(vid: int, pid: int = None, timeout: float = 15.0,
+                                interval: float = 0.5) -> dict:
+    """
+    Wait for a USB device with the given VID (and optional PID) to appear.
+    Returns the device dict from detect_all() when found.
+    Raises BridgeTimeout if not found within timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for dev in detect_all():
+            if dev.get("vid") == vid:
+                if pid is None or dev.get("pid") == pid:
+                    return dev
+        time.sleep(interval)
+    raise BridgeTimeout(f"USB device VID={vid:04x}" + (f" PID={pid:04x}" if pid else "") + " not found after re-enumeration", timeout=int(timeout))
+
+
+def wait_for_mode_switch(from_vid: int, to_vid: int, to_pid: int = None,
+                          timeout: float = 30.0) -> dict:
+    """
+    Wait for a device to switch from one USB mode to another (e.g., Download -> BROM,
+    or normal -> EDL). Polls detect_all() until a device with to_vid appears.
+    Returns the new device dict.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for dev in detect_all():
+            if dev.get("vid") == to_vid:
+                if to_pid is None or dev.get("pid") == to_pid:
+                    return dev
+        time.sleep(0.5)
+    raise BridgeTimeout(
+        f"Device did not switch from VID={from_vid:04x} to VID={to_vid:04x}"
+        + (f" PID={to_pid:04x}" if to_pid else ""),
+        timeout=int(timeout)
+    )
