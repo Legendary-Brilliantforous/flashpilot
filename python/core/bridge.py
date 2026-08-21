@@ -136,9 +136,9 @@ def _run(args, timeout=15):
                 proc.wait()
                 raise BridgeError(f"timed out after {timeout}s")
             time.sleep(0.05)
-        out_drainer.join(timeout=2)
-        stopped.wait(timeout=2)
-        drainer.join(timeout=2)
+        out_drainer.join()
+        stopped.wait(timeout=30)
+        drainer.join(timeout=30)
         out = "".join(stdout_lines)
         tail = "\n".join(stderr_lines[-25:])
         if proc.returncode != 0:

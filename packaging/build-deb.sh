@@ -62,7 +62,7 @@ else
     echo "-- building fresh venv (pip install PyQt6 segno lz4)"
     /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
     PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
-        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0"
+        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0" "samloader>=0.2.0" "requests>=2.28.0" "tqdm>=4.0"
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"
@@ -75,13 +75,10 @@ rm -rf "$SP/pip" "$SP/setuptools"
 rm -f "$V/bin/pip" "$V/bin/pip3" "$V/bin/activate" "$V/bin/activate.csh" \
       "$V/bin/activate.fish" "$V/bin/Activate.ps1"
 rm -rf "$V/include"
-# dev / runtime-unused packages (pytest, samloader, requests, ...).
+# dev / runtime-unused packages.
 rm -rf "$SP/pytest" "$SP/_pytest" "$SP/pluggy" "$SP/iniconfig"
 rm -rf "$SP/Pygments" "$SP/pygments" "$SP/packaging"
-rm -rf "$SP/requests" "$SP/urllib3" "$SP/idna" "$SP/charset_normalizer" "$SP/certifi"
-rm -rf "$SP/tqdm" "$SP/samloader" "$SP/Cryptodome" "$SP/pycryptodomex"
 rm -f "$V/bin/py.test" "$V/bin/pytest" "$V/bin/pygmentize" \
-      "$V/bin/samloader" "$V/bin/tqdm" "$V/bin/idna" "$V/bin/normalizer" \
       "$V/bin/pip3.12"
 rm -rf "$SP"/*.dist-info
 find "$V" -name "__pycache__" -type d -prune -exec rm -rf {} +

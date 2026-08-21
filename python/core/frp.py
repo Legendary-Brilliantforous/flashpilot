@@ -4731,6 +4731,8 @@ def flow_adb_info():
         log("=" * 60)
         for label, key in PROPS:
             val = _adb_getprop(key)
+            if label == "One UI version" and not val:
+                continue
             log(f"  {label:<18}: {val or '(unset)'}")
 
         log("")
