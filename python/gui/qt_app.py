@@ -2463,6 +2463,11 @@ class FrpWindow(QMainWindow):
         self._adb_timer.start(3000)
         self._update_net_in_progress = False
 
+        # Auto-check for updates on startup (respected if checkbox is checked)
+        self._update_in_progress = False
+        if self.settings.value("auto_update_check", True, type=bool):
+            QTimer.singleShot(2000, self._check_update)
+
         self._install_shortcuts()
         self.refresh_device()
         self.log_line(
@@ -6546,6 +6551,18 @@ class FrpWindow(QMainWindow):
         upd_btn.clicked.connect(self._check_update)
         upd_row.addWidget(upd_btn)
         cl.addLayout(upd_row)
+
+# Auto-check checkbox
+        self._auto_update_cb = QCheckBox("Auto-check for updates at startup")
+        self._auto_update_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
+            f" QCheckBox::indicator {{ width:18px; height:18px; }}"
+            f" QCheckBox::indicator:checked {{ background:{C['accent']}; border:2px solid {C['text']}; border-radius:3px; }}"
+            f" QCheckBox::indicator:unchecked {{ background:{C['panel']}; border:1px solid {C['border']}; border-radius:3px; }}"
+        )
+        # Load preference (default: True for user convenience)
+        self._auto_update_cb.setChecked(self.settings.value("auto_update_check", True, type=bool))
+        cl.addWidget(self._auto_update_cb)
 
         lay.addWidget(card)
 
