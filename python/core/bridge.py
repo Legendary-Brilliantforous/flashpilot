@@ -32,11 +32,108 @@ BRIDGE = _resolve_bridge()
 
 
 class BridgeError(RuntimeError):
-    pass
+    """Base class for all bridge errors."""
+    def __init__(self, message: str, code: str = "BRIDGE_ERROR", details: dict = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
 
 
 class BridgeCancelled(BridgeError):
     """Raised when the user hits Stop while a bridge subprocess is running."""
+    def __init__(self, message: str = "Operation cancelled by user"):
+        super().__init__(message, code="CANCELLED")
+
+
+class BridgeTimeout(BridgeError):
+    """Raised when the bridge operation exceeds the timeout."""
+    def __init__(self, message: str, timeout: int):
+        super().__init__(message, code="TIMEOUT", details={"timeout_seconds": timeout})
+
+
+class USBError(BridgeError):
+    """USB communication errors (device disconnect, permission, claim failed)."""
+    def __init__(self, message: str, details: dict = None):
+        super().__init__(message, code="USB_ERROR", details=details)
+
+
+class ProtocolError(BridgeError):
+    """Protocol-level errors (handshake failed, unexpected response, checksum mismatch)."""
+    def __init__(self, message: str, stage: str = None, details: dict = None):
+        d = details or {}
+        if stage:
+            d["stage"] = stage
+        super().__init__(message, code="PROTOCOL_ERROR", details=d)
+
+
+class FirmwareMismatchError(BridgeError):
+    """Firmware/model mismatch errors (wrong PIT, wrong scatter, BL downgrade)."""
+    def __init__(self, message: str, expected: str = None, actual: str = None, details: dict = None):
+        d = details or {}
+        if expected:
+            d["expected"] = expected
+        if actual:
+            d["actual"] = actual
+        super().__init__(message, code="FIRMWARE_MISMATCH", details=d)
+
+
+class BinaryNotFoundError(BridgeError):
+    """Required binary not found (odin4, DA, firehose, etc.)."""
+    def __init__(self, message: str, binary: str = None, paths: list = None):
+        d = {}
+        if binary:
+            d["binary"] = binary
+        if paths:
+            d["searched_paths"] = paths
+        super().__init__(message, code="BINARY_NOT_FOUND", details=d)
+
+
+class DAError(BridgeError):
+    """Download Agent specific errors (auth failed, checksum zero, version mismatch)."""
+    def __init__(self, message: str, chip: str = None, hw_code: int = None, details: dict = None):
+        d = details or {}
+        if chip:
+            d["chip"] = chip
+        if hw_code:
+            d["hw_code"] = f"0x{hw_code:04X}"
+        super().__init__(message, code="DA_ERROR", details=d)
+
+
+class PartitionError(BridgeError):
+    """Partition operation errors (not found, read/write failed, size mismatch)."""
+    def __init__(self, message: str, partition: str = None, details: dict = None):
+        d = details or {}
+        if partition:
+            d["partition"] = partition
+        super().__init__(message, code="PARTITION_ERROR", details=d)
+
+
+def _classify_bridge_error(stderr: str, args: list) -> BridgeError:
+    """Classify bridge stderr output into specific error types."""
+    s = stderr.lower()
+    # USB errors
+    if any(kw in s for kw in ("usb", "libusb", "permission denied", "could not claim", "device not found", "disconnected", "no device")):
+        return USBError(stderr.strip())
+    # Timeout
+    if "timeout" in s or "timed out" in s:
+        return BridgeTimeout(stderr.strip(), timeout=0)
+    # DA errors
+    if "da" in s and any(kw in s for kw in ("checksum", "auth", "download agent", "preloader", "brom")):
+        return DAError(stderr.strip())
+    # Protocol errors
+    if any(kw in s for kw in ("handshake", "ack", "checksum mismatch", "unexpected", "protocol", "invalid response")):
+        return ProtocolError(stderr.strip())
+    # Firmware mismatch
+    if any(kw in s for kw in ("mismatch", "wrong model", "pit", "bl revision", "downgrade", "not match")):
+        return FirmwareMismatchError(stderr.strip())
+    # Partition errors (check before binary not found to avoid "not found" collision)
+    if any(kw in s for kw in ("partition", "gpt", "scatter", "size mismatch")):
+        return PartitionError(stderr.strip())
+    # Binary not found
+    if any(kw in s for kw in ("not found", "no such file", "binary missing", "odin4 not found", "firehose not found")):
+        return BinaryNotFoundError(stderr.strip())
+    # Generic
+    return BridgeError(stderr.strip())
 
 
 # ---- cooperative cancel (mirrors frp.py) ------------------------------
@@ -82,8 +179,10 @@ def cancel_requested():
 def _run(args, timeout=15):
     bridge_path = Path(BRIDGE)
     if not bridge_path.exists():
-        raise BridgeError(
-            f"rust bridge not built at {BRIDGE}. Run `cargo build --release` first."
+        raise BinaryNotFoundError(
+            f"rust bridge not built at {BRIDGE}. Run `cargo build --release` first.",
+            binary="flashpilot-bridge",
+            paths=[str(bridge_path)]
         )
     proc = subprocess.Popen(
         [str(bridge_path), *args],
@@ -120,6 +219,7 @@ def _run(args, timeout=15):
     drainer = threading.Thread(target=_drain, daemon=True)
     drainer.start()
     out_drainer = threading.Thread(target=_drain_stdout, daemon=True)
+
     out_drainer.start()
 
     try:
@@ -134,7 +234,7 @@ def _run(args, timeout=15):
             if time.monotonic() > deadline:
                 proc.kill()
                 proc.wait()
-                raise BridgeError(f"timed out after {timeout}s")
+                raise BridgeTimeout(f"timed out after {timeout}s", timeout=timeout)
             time.sleep(0.05)
         out_drainer.join()
         stopped.wait(timeout=30)
@@ -143,7 +243,11 @@ def _run(args, timeout=15):
         tail = "\n".join(stderr_lines[-25:])
         if proc.returncode != 0:
             detail = tail.strip() or out.strip() or "bridge exited with error"
-            raise BridgeError(detail + (f"\n[bridge log tail]\n{tail}" if tail else ""))
+            err = _classify_bridge_error(tail, args)
+            if isinstance(err, BridgeError) and err.code == "BRIDGE_ERROR":
+                # Add log tail for generic errors
+                err = BridgeError(detail + (f"\n[bridge log tail]\n{tail}" if tail else ""), code=err.code, details=err.details)
+            raise err
         return out.strip()
     finally:
         if not stopped.is_set():
