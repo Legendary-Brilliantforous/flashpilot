@@ -4370,7 +4370,7 @@ class FrpWindow(QMainWindow):
                     manufacturer = d.get("manufacturer")
                     serial = d.get("serial")
                     chip = d.get("chip")
-                    # Build detailed device info line
+                    # Build detailed device info line for console
                     parts = [f"MTK: 0e8d:{pid:04x} bus={d.get('bus')} addr={d.get('address')} - {name}"]
                     if manufacturer:
                         parts.append(f"mfr={manufacturer}")
@@ -4384,8 +4384,28 @@ class FrpWindow(QMainWindow):
                         ca = chip.get("chip_name")
                         parts.append(f"chip={ca or f'0x{hw:04X}' if hw else 'unknown'}")
                     self._ui.line.emit(" | ".join(parts))
-                self._ui.ui.emit(lambda n=len(devs): self.mtk_status.setText(
-                    f"{n} MediaTek device(s) found"))
+                
+                # Update status label with first device's product name if available
+                first = devs[0]
+                product = first.get("product")
+                manufacturer = first.get("manufacturer")
+                pid = first.get("pid")
+                stage = mtk.pid_stage(pid)
+                st_name, _ = mtk.stage_label(stage)
+                
+                if product and manufacturer:
+                    status = f"{manufacturer} {product} ({st_name})"
+                elif product:
+                    status = f"{product} ({st_name})"
+                elif manufacturer:
+                    status = f"{manufacturer} ({st_name})"
+                else:
+                    status = f"MediaTek 0e8d:{pid:04x} ({st_name})"
+                
+                if len(devs) > 1:
+                    status += f" +{len(devs)-1} more"
+                
+                self._ui.ui.emit(lambda s=status: self.mtk_status.setText(s))
             except bridge.BridgeError as e:
                 self._ui.ui.emit(lambda err=e: self.mtk_status.setText(
                     f"Scan error: {err}"))
