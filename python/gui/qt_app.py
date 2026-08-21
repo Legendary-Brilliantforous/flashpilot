@@ -6592,7 +6592,14 @@ class FrpWindow(QMainWindow):
         return page
 
     def _check_update(self):
-        import subprocess, sys
+        # Run update check in a separate thread to avoid UI freeze
+        if self._update_in_progress:
+            return
+        self._update_in_progress = True
+        threading.Thread(target=self._check_update_thread, daemon=True).start()
+
+    def _check_update_thread(self):
+        import subprocess, json, sys
         self._ui.line.emit("[check] Looking for latest FlashPilot version...")
         try:
             result = subprocess.run(
@@ -6601,9 +6608,9 @@ class FrpWindow(QMainWindow):
             )
             if result.returncode != 0 or not result.stdout.strip():
                 self._ui.line.emit("[check] Failed to reach GitHub API")
-                self._toasts.show_warn("Update check", "Could not connect to update server.")
+                self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "Could not connect to update server."))
                 return
-            data = result.json()
+            data = json.loads(result.stdout)
             latest_tag = data.get("tag_name", "").lstrip("v")
             latest_url = None
             for a in data.get("assets", []):
@@ -6619,17 +6626,19 @@ class FrpWindow(QMainWindow):
                 fpath = os.path.expanduser("~/flashpilot_update.deb")
                 subprocess.run(["curl", "-L", "-o", fpath, latest_url], timeout=60)
                 if os.path.exists(fpath):
-                    self._toasts.show_info(
+                    self._ui.ui.emit(lambda: self._toasts.show_info(
                         "Update available",
                         f"Downloaded {latest_tag}. Run: sudo dpkg -i {fpath}\n\n"
                         "Or visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                    )
+                    ))
             else:
                 self._ui.line.emit(f"[check] You are on the latest version ({latest_tag})")
-                self._toasts.show_info("Up to date", f"FlashPilot {latest_tag} is already installed.")
+                self._ui.ui.emit(lambda: self._toasts.show_info("Up to date", f"FlashPilot {latest_tag} is already installed."))
         except Exception as e:
             self._ui.line.emit(f"[check] Error: {e}")
-            self._toasts.show_warn("Update check", f"Unexpected error: {e}")
+            self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Unexpected error: {e}"))
+        finally:
+            self._update_in_progress = False
 
     @staticmethod
     def _field_label(text):
