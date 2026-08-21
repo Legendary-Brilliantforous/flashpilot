@@ -6330,6 +6330,17 @@ class FrpWindow(QMainWindow):
             self._s_clear,
         )
 
+        # Auto-update preference
+        self._auto_update_cb = QCheckBox("Auto-check for updates at startup")
+        self._auto_update_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
+            f" QCheckBox::indicator {{ width:18px; height:18px; }}"
+            f" QCheckBox::indicator:checked {{ background:{C['accent']}; border:2px solid {C['text']}; border-radius:3px; }}"
+            f" QCheckBox::indicator:unchecked {{ background:{C['panel']}; border:1px solid {C['border']}; border-radius:3px; }}"
+        )
+        self._auto_update_cb.setChecked(self.settings.value("auto_update_check", True, type=bool))
+        bl.addWidget(self._auto_update_cb)
+
         lay.addStretch(1)
         return page
 
@@ -6542,27 +6553,6 @@ class FrpWindow(QMainWindow):
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tag.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
         cl.addWidget(tag)
-
-        # Update section
-        upd_row = QHBoxLayout()
-        upd_btn = QPushButton("Check for Update")
-        upd_btn.setStyleSheet(_btn_ghost())
-        upd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        upd_btn.clicked.connect(self._check_update)
-        upd_row.addWidget(upd_btn)
-        cl.addLayout(upd_row)
-
-# Auto-check checkbox
-        self._auto_update_cb = QCheckBox("Auto-check for updates at startup")
-        self._auto_update_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
-            f" QCheckBox::indicator {{ width:18px; height:18px; }}"
-            f" QCheckBox::indicator:checked {{ background:{C['accent']}; border:2px solid {C['text']}; border-radius:3px; }}"
-            f" QCheckBox::indicator:unchecked {{ background:{C['panel']}; border:1px solid {C['border']}; border-radius:3px; }}"
-        )
-        # Load preference (default: True for user convenience)
-        self._auto_update_cb.setChecked(self.settings.value("auto_update_check", True, type=bool))
-        cl.addWidget(self._auto_update_cb)
 
         lay.addWidget(card)
 
@@ -7094,16 +7084,32 @@ class FrpWindow(QMainWindow):
                      0x0004: "MediaTek Download Agent"}.get(pid, "MediaTek low-level")
             self.orb.set_connected(True)
             self.scene.set_connected(True)
-            mfr = (d.get("manufacturer") or "").lower()
-            prod = (d.get("product") or "").lower()
-            is_samsung_mtk = "samsung" in mfr or "samsung" in prod
+            mfr = d.get("manufacturer") or ""
+            prod = d.get("product") or ""
+            mfr_lower = mfr.lower()
+            prod_lower = prod.lower()
+            is_samsung_mtk = "samsung" in mfr_lower or "samsung" in prod_lower
+            
+            # Use actual manufacturer/product for vendor badge
             if is_samsung_mtk:
                 self.scene.set_vendor("SAMSUNG (MTK)", C["warn"])
+                vendor_display = "SAMSUNG"
+            elif mfr and prod:
+                vendor_display = f"{mfr} {prod}"
+                self.scene.set_vendor(vendor_display.upper(), C["ok"])
+            elif prod:
+                vendor_display = prod
+                self.scene.set_vendor(vendor_display.upper(), C["ok"])
+            elif mfr:
+                vendor_display = mfr
+                self.scene.set_vendor(vendor_display.upper(), C["ok"])
             else:
                 self.scene.set_vendor("MEDIATEK", C["warn"])
+                vendor_display = "MEDIATEK"
+            
             self._set_conn_glow(C["warn"])
             self.conn_state.setText(
-                f"0e8d:{pid:04x} · {stage}\nbus {d['bus']} · addr {d['address']}"
+                f"0e8d:{pid:04x} · {stage}\n{vendor_display}\nbus {d['bus']} · addr {d['address']}"
             )
             self.conn_state.setStyleSheet(
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
