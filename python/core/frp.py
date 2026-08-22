@@ -12,6 +12,7 @@ import threading
 import time
 
 from . import bridge, mtk, mtp, pit
+from . import pitstore
 
 
 class FlowCancelled(RuntimeError):
@@ -176,6 +177,126 @@ def _download_mode_device():
     if mtp.is_adb_composite(d):
         return None
     return d
+
+
+def pit_contract(target=None, log=None, use_cache_on_failure=True):
+    """FlashPilot's PIT safety contract: the DEVICE's own partition table is
+    always the source of truth (the odin4 philosophy).
+
+    Auto-fetches the PIT over the Odin/Thor protocol in a single session,
+    validates it forensically (odin4 checklist + FlashPilot chain analysis)
+    and caches it by model+content-hash. If the USB fetch fails and a cached
+    copy exists for this device, the cache is used with a warning.
+
+    Returns {'raw','path','health','model','from_cache'} or raises RuntimeError.
+    """
+    def _log(msg):
+        if log:
+            log(msg)
+
+    d = _download_mode_device()
+    raw = None
+    from_cache = False
+    path = None
+
+    if target is None and d:
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+    if target:
+        try:
+            resp = json.loads(bridge.odin_pit(target))
+            raw = bytes.fromhex(resp.get("hex", ""))
+        except (bridge.BridgeError, ValueError, KeyError) as e:
+            _log(f"  [pit-contract] live fetch failed: {e}")
+
+    if raw:
+        # Persist to the user-visible dump location AND the content-hash cache.
+        out = os.path.join(tempfile.gettempdir(), "samsung_pit.bin")
+        try:
+            with open(out, "wb") as fh:
+                fh.write(raw)
+            path = out
+        except OSError:
+            pass
+    elif use_cache_on_failure and d is not None:
+        # Fall back to the newest cached PIT for this bus/address device via
+        # any cached model entry (device model may be unknown offline).
+        for cached_model in pitstore.stats()["models"]:
+            cached = pitstore.load_latest(cached_model)
+            if cached:
+                raw = cached
+                from_cache = True
+                _log(f"  [pit-contract] using cached PIT for {cached_model} "
+                     "(live fetch unavailable)")
+                break
+
+    if not raw:
+        raise RuntimeError(
+            "no PIT available: device fetch failed and no cache exists - "
+            "connect the phone in download mode at least once"
+        )
+
+    health = pit.pit_health(raw)
+
+    # Cache under the PIT's own model label (combo labels like COM_TAR2* are
+    # still useful keys because they are stable per platform).
+    try:
+        model = health["stats"]["model"] or "unknown"
+        info = pitstore.store(model, raw)
+        if path is None:
+            path = info["file"]
+    except OSError:
+        model = health["stats"]["model"] or ""
+
+    return {
+        "raw": raw,
+        "path": path,
+        "health": health,
+        "model": model,
+        "from_cache": from_cache,
+    }
+
+
+def map_archives_to_pit(archive_part_names, entries, allow_unknown=False):
+    """odin4-style archive -> PIT mapping.
+
+    Matches every firmware archive entry against PIT partition names /
+    flash filenames (normalized). Returns a report dict:
+
+        { 'matched':   [(archive_name, pit_name, identifier)],
+          'unknown':   [archive_name],      # no PIT match
+          'verdict':   'ok'|'unknown-present',
+          'allow_unknown': bool }
+    """
+    matched = []
+    unknown = []
+    used_names = set()
+    for name in archive_part_names:
+        e = pit.find_partition(entries, name)
+        if e is not None and e.name.lower() not in used_names:
+            used_names.add(e.name.lower())
+            matched.append((name, e.name, e.identifier))
+        else:
+            unknown.append(name)
+    verdict = "ok" if not unknown else "unknown-present"
+    return {"matched": matched, "unknown": unknown,
+            "verdict": verdict, "allow_unknown": allow_unknown}
+
+
+def map_report_lines(mapping):
+    """Console lines for an archive->PIT mapping result (odin4 wording)."""
+    lines = []
+    lines.append(f"  Archive mapping: {len(mapping['matched'])} matched, "
+                 f"{len(mapping['unknown'])} unmatched")
+    for arc, pname, ident in mapping["matched"][:12]:
+        lines.append(f"    {arc:<28} -> {pname} (id {ident})")
+    if len(mapping["matched"]) > 12:
+        lines.append(f"    ... and {len(mapping['matched']) - 12} more")
+    for arc in mapping["unknown"][:8]:
+        lines.append(f"    UNMATCHED: {arc}")
+    if len(mapping["unknown"]) > 8:
+        lines.append(f"    ... and {len(mapping['unknown']) - 8} more")
+    return lines
 
 
 def _wait_download_mode(log, timeout=30):
@@ -3696,13 +3817,51 @@ def flow_preflight():
             ctx["fw_pit_entries"] = entries
             ctx["fw_pit_model"] = model
 
-        # 4. Device in download mode?
+        # 4. Device in download mode? -> run the PIT safety contract
         d = _download_mode_device()
         if not d:
             log("  Device not detected in download mode yet.")
             log("  Connect in download mode to compare PIT & model.")
         else:
             log(f"  Device in download mode: 04e8:{d['pid']:04x} bus={d['bus']} addr={d['address']}")
+
+            # PIT contract: auto-fetch the device's own partition table,
+            # validate it forensically and diff against the firmware PIT.
+            # This is FlashPilot's odin4-style --check-only, always on.
+            try:
+                contract = pit_contract(log=log)
+                health = contract["health"]
+                log(f"  [pit-contract] {health['summary']}")
+                for f in health["findings"]:
+                    if f["severity"] == "fail":
+                        log(f"    FAIL: {f['message']}")
+                        ok = False
+                    elif f["severity"] == "warn":
+                        log(f"    warn: {f['message']}")
+                log(pit.pit_map(contract["raw"]).replace("\n", "\n  "))
+
+                fw_entries = ctx.get("fw_pit_entries")
+                if fw_entries:
+                    # Compare entry-name sets (normalized): firmware must not
+                    # reference partitions the device does not have.
+                    fw_names = {pit.normalize_part_name(e.name) for e in fw_entries}
+                    dev_entries = pit.parse_pit(contract["raw"])
+                    dev_set = {pit.normalize_part_name(e.name) for e in dev_entries}
+                    missing = sorted(fw_names - dev_set)
+                    extra = sorted(dev_set - fw_names)
+                    if missing:
+                        log(f"    firmware needs partitions absent on device: "
+                            f"{missing}")
+                        ok = False
+                    if extra:
+                        log(f"    NOTE: device-only partitions (not in firmware): "
+                            f"{extra[:8]}")
+                    if not missing and not extra:
+                        log("    firmware partition set matches device table")
+            except RuntimeError as e:
+                log(f"  [pit-contract] {e}")
+            except Exception as e:  # never block flashing on tooling errors
+                log(f"  [pit-contract] skipped ({e})")
 
         # 5. USB health
         _check_cdc_acm(log)
@@ -3753,6 +3912,19 @@ def flow_odin_pit_tools():
         ctx["device_pit_path"] = device_pit_path
         ctx["device_pit_entries"] = entries
         ctx["device_pit_model"] = model
+
+        # Forensic health check + storage map (odin4 validation, upgraded)
+        try:
+            pitstore.store(model or "unknown", raw)
+        except OSError:
+            pass
+        health = pit.pit_health(raw)
+        log(f"  Health: {health['summary']}")
+        for f in health["findings"]:
+            mark = {"fail": "FAIL", "warn": "warn", "info": "info"}[f["severity"]]
+            log(f"    [{mark}] {f['message']}")
+        log(pit.pit_map(raw).replace("\n", "\n  "))
+
         log(f"  Device model (from PIT): {model}")
         if model and not _is_device_model(model):
             log("  NOTE: combo/MTK PIT label - this is a MediaTek device (uses a")
@@ -3763,19 +3935,19 @@ def flow_odin_pit_tools():
         for e in entries[:40]:
             log(f"    {e.name}  {e.size_bytes() >> 20} MB")
 
-        # Compare with firmware PIT
+        # Compare with firmware PIT using the diff engine
         fw_entries = ctx.get("fw_pit_entries")
         if fw_entries:
-            fw_names = {e.name for e in fw_entries}
-            dev_names = {e.name for e in entries}
-            missing = fw_names - dev_names
-            extra = dev_names - fw_names
+            fw_names = {pit.normalize_part_name(e.name) for e in fw_entries}
+            dev_names = {pit.normalize_part_name(e.name) for e in entries}
+            missing = sorted(fw_names - dev_names)
+            extra = sorted(dev_names - fw_names)
             if missing or extra:
                 log("  PIT MISMATCH between firmware and device:")
                 if missing:
-                    log(f"    firmware has partitions not in device: {sorted(missing)}")
+                    log(f"    firmware has partitions not in device: {missing}")
                 if extra:
-                    log(f"    device has partitions not in firmware: {sorted(extra)}")
+                    log(f"    device has partitions not in firmware: {sorted(extra)[:10]}")
                 log("  -> If flashing fails, use 'Repartition with firmware PIT'.")
             else:
                 log("  PIT layouts MATCH - no repartition needed.")
