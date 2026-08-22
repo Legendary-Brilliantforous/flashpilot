@@ -473,14 +473,35 @@ fn bcd_version_u16(v: rusb::Version) -> u16 {
     ((major / 10) << 12) | ((major % 10) << 8) | (minor << 4) | sub_minor
 }
 
+/// Parse target string in format "bus:address" or "vid:pid@bus:address"
+fn parse_target(target: &str) -> Result<(u8, u8)> {
+    if target.contains('@') {
+        let parts: Vec<&str> = target.split('@').collect();
+        if parts.len() != 2 {
+            return Err(crate::error::BridgeError::InvalidArgument("invalid target format".into()));
+        }
+        let bus_addr = parts[1];
+        let ba_parts: Vec<&str> = bus_addr.split(':').collect();
+        if ba_parts.len() != 2 {
+            return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address' or 'vid:pid@bus:address'".into()));
+        }
+        let bus: u8 = ba_parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
+        let address: u8 = ba_parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+        Ok((bus, address))
+    } else {
+        let parts: Vec<&str> = target.split(':').collect();
+        if parts.len() != 2 {
+            return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address' or 'vid:pid@bus:address'".into()));
+        }
+        let bus: u8 = parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
+        let address: u8 = parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+        Ok((bus, address))
+    }
+}
+
 /// Set USB configuration on a device
 pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
-    let parts: Vec<&str> = target.split(':').collect();
-    if parts.len() != 2 {
-        return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address'".into()));
-    }
-    let bus: u8 = parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
-    let address: u8 = parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+    let (bus, address) = parse_target(target)?;
     
     let devices = collect_devices(None)?;
     let dev = devices.iter()
@@ -508,12 +529,7 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
 
 /// Detach kernel drivers from all interfaces of a device
 pub fn detach_kernel_drivers(target: &str) -> Result<String> {
-    let parts: Vec<&str> = target.split(':').collect();
-    if parts.len() != 2 {
-        return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address'".into()));
-    }
-    let bus: u8 = parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
-    let address: u8 = parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+    let (bus, address) = parse_target(target)?;
     
     let devices = collect_devices(None)?;
     let dev = devices.iter()

@@ -983,19 +983,22 @@ fn end_sequence_flash(
     }
     dev.send_raw(&[0u8; 0])?;
     // Live-device finding: EndSequenceFlash can return BOOTLOADER_FAIL -5
-    // transiently while the bootloader finishes async md5hdr/boot_update
-    // validation of the PREVIOUS partition. All chunk data is already
-    // written and ACKed at this point - only the finalize failed. Resending
-    // the commit after a short delay succeeds (matches odin4's idempotent
-    // control-frame retries).
-    const COMMIT_RETRIES: u32 = 4;
+    // while the bootloader is STILL ASYNC-HASHING previously written
+    // partitions (boot_update triggers md5hdr regeneration). The more data
+    // was written before, the longer validation takes - observed up to many
+    // seconds after several MiB. All chunk data is fully written and ACKed;
+    // only the finalize is re-attempted, with EXPONENTIAL backoff so slow
+    // eMMC hashing completes. Matches odin4's idempotent control retries.
+    const COMMIT_DELAYS_MS: [u64; 6] = [500, 1000, 2000, 4000, 5000, 6000];
     let mut last_err: Option<OdinError> = None;
-    for attempt in 0..COMMIT_RETRIES {
+    for attempt in 0..=COMMIT_DELAYS_MS.len() {
         if attempt > 0 {
+            let delay = COMMIT_DELAYS_MS[attempt - 1];
             eprintln!(
-                "[flash]   commit retry {attempt} (previous: bootloader busy validating)"
+                "[flash]   commit busy (-5): retry {attempt} after {delay}ms \
+                 (device still validating previous writes)"
             );
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(Duration::from_millis(delay));
         }
         match odin_command(dev, 0x66, 0x03, &payload, 120) {
             Ok(rsp) => match odin_fail_check(&rsp, "EndSequenceFlash", true) {
@@ -1004,7 +1007,15 @@ fn end_sequence_flash(
                     let _ = dev.recv_raw(512, 1);
                     return Ok(());
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    // A non--5 failure is real; stop immediately. -5 keeps
+                    // retrying (validation still running).
+                    let msg = e.to_string();
+                    last_err = Some(e);
+                    if !msg.contains("-5") && !msg.contains("fffffffb") {
+                        break;
+                    }
+                }
             },
             Err(e) => last_err = Some(OdinError(e.to_string())),
         }
@@ -1195,6 +1206,139 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         let _ = writeln!(out, "{}", json!({"error": e, "partition": part}));
                     }
                 }
+            }
+            "flash-batch" => {
+                // Multi-partition write in ONE session, mirroring
+                // odin_flash_multi exactly: SetTotalBytes ONCE with the
+                // GRAND TOTAL of all files, then sequential writes.
+                //
+                // Live-device finding: declaring per-file totals (resetting
+                // 0x64/0x02 before each write) makes the 4th+ commit fail
+                // with BOOTLOADER_FAIL -5 - the bootloader keeps a running
+                // received-byte counter across the session.
+                // {"cmd":"flash-batch","files":[["part","/path"],...],
+                //  "reboot":true}
+                // Emits one JSON line per finished partition.
+                let pit_cache = match AGENT_PIT.get() {
+                    Some(p) => p,
+                    None => {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"error": "no session PIT - run pit-dump first"})
+                        );
+                        let _ = out.flush();
+                        continue;
+                    }
+                };
+                let mut files: Vec<(String, String)> = Vec::new();
+                if let Some(arr) = req.get("files").and_then(|x| x.as_array()) {
+                    for pair in arr {
+                        if let Some(pair_arr) = pair.as_array() {
+                            if pair_arr.len() == 2 {
+                                if let (Some(p), Some(f)) = (
+                                    pair_arr[0].as_str(),
+                                    pair_arr[1].as_str(),
+                                ) {
+                                    files.push((p.to_string(), f.to_string()));
+                                }
+                            }
+                        }
+                    }
+                }
+                if files.is_empty() {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        json!({"error": "flash-batch needs non-empty files"})
+                    );
+                    let _ = out.flush();
+                    continue;
+                }
+                let mut total_bytes = 0u64;
+                let mut stat_err = None;
+                for (_, path) in &files {
+                    match std::fs::metadata(path) {
+                        Ok(m) => total_bytes += m.len(),
+                        Err(e) => {
+                            stat_err = Some(format!("{}: {e}", path));
+                            break;
+                        }
+                    }
+                }
+                if let Some(e) = stat_err {
+                    let _ = writeln!(out, "{}", json!({"error": e}));
+                    let _ = out.flush();
+                    continue;
+                }
+                let want_reboot =
+                    req.get("reboot").and_then(|x| x.as_bool()).unwrap_or(false);
+
+                eprintln!(
+                    "[agent] flash-batch: {} partitions, {} bytes total",
+                    files.len(),
+                    total_bytes
+                );
+                if let Err(e) = set_total_bytes(&dev, total_bytes) {
+                    let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
+                    let _ = out.flush();
+                    continue;
+                }
+
+                let mut failed = None;
+                for (part, path) in &files {
+                    eprintln!("[agent] flashing {part} <- {path}");
+                    let is_large =
+                        matches!(part.as_str(), "super" | "system" | "userdata");
+                    match flash_one_partition(
+                        &dev,
+                        pit_cache,
+                        part,
+                        path,
+                        packet_size,
+                        legacy,
+                        is_large,
+                    ) {
+                        Ok(seqs) => {
+                            let _ = writeln!(
+                                out,
+                                "{}",
+                                json!({
+                                    "done": part,
+                                    "sequences": seqs,
+                                    "progress":
+                                        format!("{}/{}", files.iter().position(|(p, _)| p == part).map(|i| i + 1).unwrap_or(0), files.len())
+                                })
+                            );
+                            let _ = out.flush();
+                        }
+                        Err(e) => {
+                            failed = Some((part.clone(), e.to_string()));
+                            let _ = writeln!(
+                                out,
+                                "{}",
+                                json!({"error": e.to_string(), "partition": part})
+                            );
+                            let _ = out.flush();
+                            break;
+                        }
+                    }
+                }
+                if failed.is_none() && want_reboot {
+                    match reboot_v2(&dev) {
+                        Ok(()) => {
+                            let _ = writeln!(out, "{}", json!({"rebooted": true}));
+                        }
+                        Err(e) => {
+                            let _ = writeln!(
+                                out,
+                                "{}",
+                                json!({"reboot_error": e.to_string()})
+                            );
+                        }
+                    }
+                }
+                let _ = out.flush();
             }
             "reboot" => {
                 let r = reboot_v2(&dev);

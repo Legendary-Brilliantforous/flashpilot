@@ -3139,6 +3139,56 @@ class FrpWindow(QMainWindow):
         hv.addWidget(self._pit_view)
         self._refresh_pit_cache_label()
 
+        # --- Native one-session archive flash -----------------------------
+        hv.addWidget(SectionTitle("NATIVE FLASH (ONE SESSION)"))
+        nf_info = QLabel(
+            "Flash an Odin .tar archive with FlashPilot's own writer - "
+            "extract, decompress, PIT-map and write every partition in a "
+            "single session. No replugging, no odin4 (which cannot talk to "
+            "A14-class devices anyway)."
+        )
+        nf_info.setWordWrap(True)
+        nf_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
+        hv.addWidget(nf_info)
+
+        nf_row = QHBoxLayout()
+        self._nf_tar_edit = QLineEdit()
+        self._nf_tar_edit.setPlaceholderText("Bootloader/AP archive (.tar)...")
+        self._nf_tar_edit.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
+        )
+        nf_row.addWidget(self._nf_tar_edit, 1)
+        nf_browse = QPushButton("Browse...")
+        nf_browse.setStyleSheet(_btn_ghost())
+        nf_browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        nf_browse.setFixedWidth(90)
+        nf_browse.clicked.connect(self._nf_pick_tar)
+        nf_row.addWidget(nf_browse)
+        hv.addLayout(nf_row)
+
+        self._nf_patch_cb = QCheckBox("Patch vbmeta - disable AVB verification")
+        self._nf_patch_cb.setChecked(True)
+        self._nf_patch_cb.setToolTip(
+            "Rewrites the archive's vbmeta flags to 0x03 so mixed-version\n"
+            "bootloaders pass Android Verified Boot. Required when flashing\n"
+            "a BL from a different build than the installed system."
+        )
+        self._nf_patch_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
+            f" QCheckBox::indicator {{ width:16px; height:16px; }}"
+        )
+        hv.addWidget(self._nf_patch_cb)
+
+        nf_btn_row = QHBoxLayout()
+        self._nf_flash_btn = QPushButton("⚡ Flash Archive Now")
+        self._nf_flash_btn.setStyleSheet(_btn_primary())
+        self._nf_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nf_flash_btn.clicked.connect(self._native_flash_clicked)
+        nf_btn_row.addWidget(self._nf_flash_btn)
+        nf_btn_row.addStretch(1)
+        hv.addLayout(nf_btn_row)
+
         # --- Factory reset (ADB + recovery fallback) ---
         hv.addWidget(SectionTitle("FACTORY RESET"))
         fr_row = QHBoxLayout()
@@ -3893,6 +3943,61 @@ class FrpWindow(QMainWindow):
         self._stack.setCurrentIndex(idx)
         self.nav.select(key)
         self.set_status(f"Section: {key.upper()}")
+
+    # ----------------------------- Native one-session flash ---------------
+    def _nf_pick_tar(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Odin archive", "",
+            "Odin archives (*.tar *.tar.md5);;All files (*)",
+        )
+        if path:
+            self._nf_tar_edit.setText(path)
+
+    def _native_flash_clicked(self):
+        if getattr(self, "_nf_busy", False):
+            return
+        tar_path = self._nf_tar_edit.text().strip()
+        if not tar_path or not os.path.isfile(tar_path):
+            self._toasts.show_warn("Native flash", "Pick a .tar archive first")
+            return
+        if not frp._download_mode_device():
+            self._toasts.show_warn(
+                "Native flash", "Put the phone in Download mode first "
+                "(Vol Down + Power, then Vol Up)."
+            )
+            return
+        patch = self._nf_patch_cb.isChecked()
+
+        def do_flash():
+            self.log_line(f"[native-flash] {os.path.basename(tar_path)} "
+                          f"(vbmeta patch={'on' if patch else 'off'})")
+            try:
+                result = frp.flash_archive_native(
+                    tar_path, log=self.log_line, patch_vbmeta=patch,
+                )
+                ok = True
+                summary = (f"flashed {len(result['flashed'])} partitions, "
+                           f"skipped {len(result['skipped'])}, "
+                           f"reboot={result['rebooted']}")
+            except Exception as e:
+                ok = False
+                summary = str(e)
+                self.log_line(f"[native-flash] ERROR: {e}")
+
+            def done():
+                self._nf_busy = False
+                self._nf_flash_btn.setEnabled(True)
+                if ok:
+                    self._toasts.show_ok(
+                        "Flash complete", summary)
+                else:
+                    self._toasts.show_warn("Flash failed", summary)
+
+            self._ui.ui.emit(done)
+
+        self._nf_busy = True
+        self._nf_flash_btn.setEnabled(False)
+        threading.Thread(target=do_flash, daemon=True).start()
 
     # ----------------------------- PIT safety contract --------------------
     def _refresh_pit_cache_label(self):

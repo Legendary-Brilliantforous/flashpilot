@@ -13,61 +13,9 @@ import time
 
 from . import bridge, mtk, mtp, pit
 from . import pitstore
-
-
-class FlowCancelled(RuntimeError):
-    """Raised when the user hits Stop while a flow is running."""
-
-
-_cancel = threading.Event()
-
-
-def request_cancel():
-    _cancel.set()
-
-
-def clear_cancel():
-    _cancel.clear()
-
-
-def cancel_requested():
-    return _cancel.is_set()
-
-
-class Step:
-    def __init__(self, name, func):
-        self.name = name
-        self.func = func
-
-    def run(self, ctx, log):
-        if cancel_requested():
-            raise FlowCancelled(f"cancelled before step {self.name}")
-        log(f"[step] {self.name}")
-        result = self.func(ctx, log)
-        log(f"[done] {self.name}")
-        return result
-
-
-class Flow:
-    def __init__(self, name, steps):
-        self.name = name
-        self.steps = steps
-
-    def run(self, ctx, log):
-        log(f"== running flow: {self.name} ==")
-        # Forward Rust bridge stderr (flash progress, retries, errors) into the
-        # caller's log sink so long operations show live progress on screen.
-        bridge.set_log_hook(log)
-        try:
-            results = []
-            for step in self.steps:
-                results.append(step.run(ctx, log))
-                if cancel_requested():
-                    raise FlowCancelled("cancelled by user")
-            log(f"== flow finished: {self.name} ==")
-            return results
-        finally:
-            bridge.set_log_hook(None)
+# Flow primitives live in flow.py (shared by frp + flashing). Re-export here
+# for backwards-compat so `from .frp import Flow` keeps working.
+from .flow import Flow, Step, FlowCancelled, request_cancel, clear_cancel, cancel_requested  # noqa: F401
 
 
 # Commands that actually clear FRP once a device has adb: mark setup complete
@@ -297,6 +245,179 @@ def map_report_lines(mapping):
     if len(mapping["unknown"]) > 8:
         lines.append(f"    ... and {len(mapping['unknown']) - 8} more")
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Native one-session archive flashing (FlashPilot writer, no odin4 needed)
+# ---------------------------------------------------------------------------
+
+def _extract_archive_images(tar_path, workdir):
+    """Extract a BL/AP tar and lz4-decompress every member IN TAR ORDER.
+    Returns [(member_name, raw_image_path)] - order preserved for flashing."""
+    import subprocess as _sp
+    members = [
+        n for n in _sp.run(
+            ["tar", "-tf", str(tar_path)], capture_output=True, text=True
+        ).stdout.split()
+        if n and not n.endswith("/")
+    ]
+    _sp.run(["tar", "-xf", str(tar_path), "-C", str(workdir)], check=True)
+    out = []
+    for name in members:
+        src = os.path.join(workdir, name)
+        if not os.path.isfile(src):
+            continue
+        if name.endswith(".lz4"):
+            dst = src[:-4]
+            r = _sp.run(["lz4", "-d", "-f", src, dst],
+                        capture_output=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"lz4 decompress failed for {name}")
+            out.append((name, dst))
+        else:
+            out.append((name, src))
+    return out
+
+
+def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
+                         reboot=True, target=None):
+    """Flash an Odin archive (.tar) end-to-end in ONE agent session.
+
+    This is FlashPilot's own writer - no odin4 required (its small-buffer
+    bulk reads LIBUSB_ERROR_OVERFLOW on A14-class MTK Samsungs anyway).
+
+    Flow: extract+lz4-decompress -> launch odin-agent -> pit-dump (session
+    PIT cache) -> map images onto live partitions -> write each in tar
+    order -> optional vbmeta AVB-disable patch -> reboot.
+
+    Returns {'flashed': [(partition, file)], 'skipped': [...], 'rebooted': bool}
+    """
+    def _log(msg):
+        if log:
+            log(msg)
+
+    d = _download_mode_device()
+    if not d:
+        raise RuntimeError("device not in download mode")
+    if target is None:
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+    workdir = tempfile.mkdtemp(prefix="fp_flash_")
+    _log(f"[native-flash] extracting {os.path.basename(tar_path)} ...")
+    images = _extract_archive_images(tar_path, workdir)
+    if not images:
+        raise RuntimeError("archive contains no flashable images")
+
+    # Optional AVB disable on vbmeta images (cross-version BL mixing).
+    if patch_vbmeta:
+        patched = []
+        for name, path in images:
+            base = os.path.basename(path)
+            if base.startswith("vbmeta"):
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                new = _patch_vbmeta_flags(data)
+                if new is not None:
+                    with open(path, "wb") as fh:
+                        fh.write(new)
+                    patched.append(base)
+                    _log(f"[native-flash] patched {base}: AVB verification "
+                         "disabled (flags 0x03)")
+        if not patched:
+            _log("[native-flash] note: no vbmeta image found to patch")
+
+    _log("[native-flash] launching single-session agent ...")
+    proc = subprocess.Popen(
+        [bridge.BRIDGE, "odin-agent", target],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, text=True, bufsize=1,
+    )
+    flashed, skipped, rebooted = [], [], False
+    try:
+        def send(**kw):
+            proc.stdin.write(json.dumps(kw) + "\n")
+            proc.stdin.flush()
+            line = proc.stdout.readline()
+            if not line:
+                raise RuntimeError("agent died mid-flash")
+            resp = json.loads(line)
+            if "error" in resp:
+                raise RuntimeError(
+                    f"{kw.get('cmd')}: {resp['error']}"
+                )
+            return resp
+
+        ready = json.loads(proc.stdout.readline())
+        if ready.get("status") != "ready":
+            raise RuntimeError(f"agent not ready: {ready}")
+        _log(f"[native-flash] session ready ({ready.get('packet_size')}B packets)")
+
+        # Session PIT: caches for all subsequent flash commands.
+        pit_file = os.path.join(workdir, "session.pit")
+        r = send(cmd="pit-dump", out=pit_file)
+        _log(f"[native-flash] device PIT: {r['size']} bytes")
+
+        entries = pit.parse_pit(open(pit_file, "rb").read())
+        files = []
+        for name, img_path in images:
+            entry = pit.find_partition(entries, os.path.basename(name)) or \
+                pit.find_partition(entries, os.path.basename(img_path))
+            if entry is None:
+                _log(f"[native-flash] SKIP {name}: no PIT match")
+                skipped.append(name)
+                continue
+            size = os.path.getsize(img_path)
+            cap = entry.size_bytes()
+            if size > cap:
+                raise RuntimeError(
+                    f"{name}: image {size} exceeds partition "
+                    f"{entry.name} capacity {cap}"
+                )
+            _log(f"[native-flash] queued {entry.name} (id {entry.identifier}) "
+                 f"<- {os.path.basename(img_path)} ({size} B)")
+            files.append([entry.name, img_path])
+
+        if not files:
+            raise RuntimeError("nothing to flash: no archive images matched "
+                               "device partitions")
+
+        # flash-batch mirrors odin_flash_multi exactly: SetTotalBytes ONCE
+        # with the grand total, then sequential writes with streamed progress.
+        # Per-file SetTotalBytes declarations make later commits fail -5.
+        n = len(files)
+        for line_no in range(n):
+            resp = json.loads(proc.stdout.readline() or "{}")
+            if "error" in resp:
+                part = resp.get("partition", "?")
+                raise RuntimeError(
+                    f"flash failed at {part}: {resp['error']}"
+                )
+            if "done" in resp:
+                _log(f"[native-flash]   OK: {resp['done']} "
+                     f"({resp.get('progress', '')})")
+                flashed.append(
+                    (resp["done"],
+                     next((f for p, f in files if p == resp["done"]), ""))
+                )
+        if reboot:
+            final = json.loads(proc.stdout.readline() or "{}")
+            if "rebooted" in final:
+                rebooted = True
+                _log("[native-flash] reboot command sent")
+            elif "reboot_error" in final:
+                _log(f"[native-flash] reboot warning: {final['reboot_error']}")
+    finally:
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+
+    return {"flashed": flashed, "skipped": skipped,
+            "rebooted": rebooted, "workdir": workdir}
 
 
 def _wait_download_mode(log, timeout=30):
@@ -2214,6 +2335,12 @@ def flow_download_mode_frp():
     return Flow("FRP clear (download mode - combo firmware + adb)", steps)
 
 
+# ---------------------------------------------------------------------------
+# Odin / flashing - DEPRECATED LOCATION
+# New code should import from .flashing (canonical). This block is kept
+# for backwards-compat and will be removed once flashing.py owns the
+# implementations (see python/core/flashing.py).
+# ---------------------------------------------------------------------------
 def flow_odin_enable_adb():
     """Enable ADB from download mode - REAL implementation.
 
