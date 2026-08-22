@@ -360,13 +360,30 @@ def odin_model(target, timeout=40):
     return json.loads(_run(["odin-model", target], timeout=timeout))
 
 
-def odin_flash_multi(target, pit_file, specs, reboot=False, timeout=1800):
-    """Flash several partition=image pairs in ONE native Odin session using the
-    Rust protocol implementation - no odin4 binary needed. specs is a list of
-    (partition, image_file) tuples. Returns the parsed bridge JSON."""
-    args = ["odin-flash-multi", target, pit_file, "1" if reboot else "0"]
-    for part, img in specs:
-        args.append(f"{part}={img}")
+def with_usb_retry(func, retries=3, delay=2.0):
+    """Execute a function with transient USB error retry logic."""
+    import time
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            return func()
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            if any(k in msg for k in ("timeout", "busy", "transfer", "pipe", "reset", "resource", "bulk")):
+                if attempt < retries:
+                    time.sleep(delay * attempt)
+                    continue
+            raise
+    raise last_err
+
+
+def select_flash_engine(has_pit=False, is_samsung=True):
+    """Smart selection logic: determine whether native Rust protocol or odin4 is optimal."""
+    if is_samsung and has_pit:
+        return "native"  # Native Odin protocol preferred (fast, no external binary needed)
+    return "odin4"       # Fallback to odin4 for complex tar multi-archive parsing
+
     return json.loads(_run(args, timeout=timeout))
 
 
