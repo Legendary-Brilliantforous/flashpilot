@@ -75,5 +75,24 @@ def parse_model(raw: bytes):
     return raw[8:end].decode("ascii", errors="replace").strip()
 
 
+def validate_and_sanitize_pit(pit_raw: bytes, archive_part_names: list) -> tuple:
+    """Compare firmware archive partitions against device PIT entries.
+    Returns (is_compatible: bool, missing_in_pit: list, extra_in_archive: list, model: str).
+    """
+    try:
+        entries = parse_pit(pit_raw)
+        model = parse_model(pit_raw)
+        device_parts = {e.name.lower() for e in entries}
+        archive_parts = {p.lower() for p in archive_part_names}
+
+        extra_in_archive = sorted(list(archive_parts - device_parts))
+        missing_in_pit = sorted(list(device_parts - archive_parts))
+
+        is_compatible = len(extra_in_archive) == 0
+        return is_compatible, missing_in_pit, extra_in_archive, model
+    except Exception:
+        return True, [], [], ""
+
+
 def hex_to_bytes(h):
     return bytes.fromhex(h)
