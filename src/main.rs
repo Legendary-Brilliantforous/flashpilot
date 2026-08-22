@@ -72,6 +72,7 @@ fn main() {
         eprintln!("  at-send <t> <cmd> [ms]  send AT command over CDC ACM, read reply");
         eprintln!("  mtp-info <t> [ms]      MTP GetDeviceInfo: ops/events/properties supported");
         eprintln!("  odin-connect <t>       open Odin session to Samsung device");
+        eprintln!("  odin-agent <t>         long-lived Odin session (JSON lines on stdin)");
         eprintln!("  odin-pit <t> [out]     read PIT from Samsung device");
         eprintln!("  odin-pit-mtk <t> [out] read PIT from Samsung MTK device");
         eprintln!("  odin-info <t> <pit>    show partition info from PIT");
@@ -553,6 +554,13 @@ fn main() {
                 exit(2);
             }
             odin::odin_send_pit(&args[2], &args[3])
+        }
+        "odin-agent" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge odin-agent <target>");
+                exit(2);
+            }
+            odin::odin_agent(&args[2])
         }
         "odin-flash-multi" => {
             if args.len() < 6 {

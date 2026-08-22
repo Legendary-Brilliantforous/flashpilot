@@ -260,6 +260,86 @@ def detect_usb():
     return json.loads(_run(["detect"]))
 
 
+class OdinSession:
+    """Long-lived Odin session multiplexer.
+
+    Some Loke firmwares allow exactly ONE Odin session per download-mode
+    entry: after one complete session the bootloader goes deaf until the USB
+    device re-enumerates. Spawning a fresh bridge process per command burns
+    that budget. The agent (odin-agent) opens the device ONCE and serves
+    multiple requests over stdin/stdout JSON lines - matching how real Odin
+    works (single process, single session).
+
+    Usage:
+        with bridge.OdinSession(target) as s:
+            pit = s.cmd("pit-dump", out="/tmp/x.pit")
+            model = s.cmd("model")
+    """
+
+    def __init__(self, target, timeout=30):
+        import subprocess as _sp
+        self._proc = _sp.Popen(
+            [str(BRIDGE), "odin-agent", str(target)],
+            stdin=_sp.PIPE, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+            text=True, bufsize=1,
+        )
+        ready = self._readline()
+        if not ready or ready.get("status") != "ready":
+            err = (ready or {}).get("error", "agent did not become ready")
+            self.close(kill=True)
+            raise BridgeError(f"odin-agent: {err}", details=ready or {})
+        self.packet_size = ready.get("packet_size")
+
+    def _readline(self):
+        line = self._proc.stdout.readline()
+        if not line:
+            return None
+        try:
+            return json.loads(line)
+        except ValueError:
+            return {"error": f"unparseable agent output: {line!r}"}
+
+    def cmd(self, command, **kw):
+        if self._proc.poll() is not None:
+            raise BridgeError("odin-agent exited unexpectedly")
+        payload = {"cmd": command, **kw}
+        try:
+            self._proc.stdin.write(json.dumps(payload) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, ValueError) as e:
+            raise BridgeError(f"odin-agent pipe broken: {e}")
+        resp = self._readline()
+        if resp is None:
+            raise BridgeError("odin-agent closed output without response")
+        if "error" in resp:
+            raise BridgeError(f"odin-agent {command}: {resp['error']}",
+                              details=resp)
+        return resp
+
+    def close(self, kill=False):
+        try:
+            if not kill and self._proc.poll() is None:
+                try:
+                    self._proc.stdin.write('{"cmd":"end"}\n')
+                    self._proc.stdin.flush()
+                    self._proc.wait(timeout=10)
+                    return
+                except Exception:
+                    pass
+            if self._proc.poll() is None:
+                self._proc.kill()
+                self._proc.wait(timeout=5)
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
 def detect_all():
     """All USB devices (any VID) - lets the GUI see non-Samsung targets like
     Qualcomm modems that are not in EDL mode."""

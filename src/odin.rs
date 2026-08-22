@@ -990,6 +990,114 @@ fn reset_flash_count(dev: &Device) -> OdinResult<()> {
     odin_fail_check(&rsp, "ResetFlashCount", false)
 }
 
+/// Session-multiplexing Odin agent - THE fix for Loke firmwares that allow
+/// exactly ONE session per download-mode entry.
+///
+/// Real-device finding (live A14-class Samsung): after one complete session,
+/// the bootloader goes deaf until the USB device re-enumerates. Our old
+/// architecture spawned a fresh bridge process per command, so the second
+/// command always failed. Real Odin works because it is a single process
+/// doing everything in one session - this agent does the same.
+///
+/// Protocol (JSON lines on stdin/stdout):
+///   agent prints  {"status":"ready","packet_size":N}     once opened
+///   request       {"cmd":"pit-dump","out":"path","hex":false}
+///   response      {"size":N,"file":"path"[,"hex":"..."]} or {"error":"..."}
+///   request       {"cmd":"model"}          -> {"model":"..."}
+///   request       {"cmd":"reboot"}         -> {"ok":true} then exits
+///   request       {"cmd":"end"}            -> {"bye":true} then exits
+/// EOF also ends the session cleanly.
+pub fn odin_agent(target: &str) -> Result<String> {
+    use std::io::{BufRead, Write};
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
+    let packet_size = begin_session_v2(&dev).map_err(|e| e.to_string())?;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(
+        out,
+        "{}",
+        json!({"status": "ready", "packet_size": packet_size})
+    );
+    let _ = out.flush();
+
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let req: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = writeln!(out, "{}", json!({"error": format!("bad json: {e}")}));
+                let _ = out.flush();
+                continue;
+            }
+        };
+        let cmd = req.get("cmd").and_then(|x| x.as_str()).unwrap_or("");
+        match cmd {
+            "pit-dump" => match dev.dump_pit() {
+                Ok(data) => {
+                    let mut resp = json!({"size": data.len()});
+                    if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
+                        if !o.is_empty() {
+                            match std::fs::write(o, &data) {
+                                Ok(()) => resp["file"] = json!(o),
+                                Err(e) => resp["write_error"] = json!(e.to_string()),
+                            }
+                        }
+                    }
+                    if req.get("hex").and_then(|x| x.as_bool()).unwrap_or(false) {
+                        resp["hex"] = json!(
+                            data.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                        );
+                    }
+                    let _ = writeln!(out, "{resp}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
+                }
+            },
+            "model" => {
+                let mut model = String::new();
+                if let Ok(data) = dev.request_device_type() {
+                    let ascii: String = data
+                        .iter()
+                        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+                        .collect();
+                    model = pick_model(&ascii);
+                }
+                let _ = writeln!(out, "{}", json!({"model": model}));
+            }
+            "reboot" => {
+                let r = reboot_v2(&dev);
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    match r {
+                        Ok(()) => json!({"ok": true}),
+                        Err(e) => json!({"error": e.to_string()}),
+                    }
+                );
+                let _ = out.flush();
+                break;
+            }
+            _ => {
+                let _ = writeln!(out, "{}", json!({"bye": true}));
+                let _ = out.flush();
+                break;
+            }
+        }
+        let _ = out.flush();
+    }
+    if let Err(e) = end_session_v2(&dev) {
+        eprintln!("[agent] end_session warning (non-fatal): {e}");
+    }
+    Ok(json!({"status": "closed"}).to_string())
+}
+
 /// Send the PIT to the device in its own session, then CLOSE THE LOOP:
 /// re-dump the device's PIT and hash-compare it against what was written.
 /// Heimdall pads the outgoing buffer to a 4096-byte multiple; the re-dump is
