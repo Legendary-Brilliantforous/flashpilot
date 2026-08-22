@@ -946,6 +946,37 @@ fn reboot_v2(dev: &Device) -> OdinResult<()> {
     odin_fail_check(&rsp, "Reboot", false)
 }
 
+/// Pick the string-field offsets that decode valid partition names for this
+/// PIT: (32, 64) for Samsung-MTK DA-synthesized tables, (36, 68) for classic
+/// Loke/Exynos PITs. Ties go to the classic layout.
+fn pit_name_offsets(pit: &[u8], entry_count: usize) -> (usize, usize) {
+    let score = |name_off: usize| -> usize {
+        let mut good = 0;
+        for i in 0..entry_count.min(512) {
+            let base = 32 + i * 132;
+            if base + 132 > pit.len() {
+                break;
+            }
+            let field = &pit[base + name_off..base + name_off + 32];
+            match field.iter().position(|&b| b == 0) {
+                Some(end) if end > 0 => {
+                    if field[..end].iter().all(|&b| (0x20..0x7f).contains(&b)) {
+                        good += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        good
+    };
+    let (mtk_score, classic_score) = (score(32), score(36));
+    if classic_score > mtk_score {
+        (36, 68)
+    } else {
+        (32, 64)
+    }
+}
+
 /// Find a PIT entry by partition name and return (binary_type, device_type, identifier).
 fn find_pit_entry(
     pit: &[u8],
@@ -955,22 +986,24 @@ fn find_pit_entry(
         return Err("PIT too small".into());
     }
     let entry_count = u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
-    // PIT layout (matches python/core/pit.py and the real A14M PIT):
-    // 32-byte header (magic @0, count @4, model @8), then 132-byte entries.
-    // Within an entry: binary_type@0, device_type@4, identifier@8, block_size@20,
-    // block_count@24, partition name@32, flash_filename@64.
+    // PIT layout - two variants coexist (both 132-byte entries after a
+    // 32-byte header): classic Loke/Exynos PITs carry an obsolete fileSize
+    // u32 at +32 and strings at +36/+68/+100; Samsung-MTK DA-synthesized
+    // PITs (A14/A06 class) drop that field so strings sit at +32/+64/+96.
+    // Score both against the real bytes and use whichever decodes names.
+    let (name_off, fname_off) = pit_name_offsets(pit, entry_count);
     for i in 0..entry_count {
         let off = 32 + i * 132;
         if off + 132 > pit.len() {
             break;
         }
         let entry = &pit[off..off + 132];
-        let pname_bytes = &entry[32..64];
+        let pname_bytes = &entry[name_off..name_off + 32];
         let pname_end = pname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let pname = String::from_utf8_lossy(&pname_bytes[..pname_end]).to_string();
         // Also match by the PIT flash_filename field (e.g. preloader.img
         // maps to the bootloader partition, lk-verified.img to lk).
-        let fname_bytes = &entry[64..96];
+        let fname_bytes = &entry[fname_off..fname_off + 32];
         let fname_end = fname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let fname = String::from_utf8_lossy(&fname_bytes[..fname_end]).to_string();
         if pname == name || fname == name {
@@ -1228,9 +1261,9 @@ mod tests {
             e[20..24].copy_from_slice(&512u32.to_le_bytes()); // block_size
             e[24..28].copy_from_slice(&8u32.to_le_bytes()); // block_count
             let name = format!("partition{i}");
-            e[32..32 + name.len()].copy_from_slice(name.as_bytes());
+            e[36..36 + name.len()].copy_from_slice(name.as_bytes());
             let fname = format!("{i}.img");
-            e[64..64 + fname.len()].copy_from_slice(fname.as_bytes());
+            e[68..68 + fname.len()].copy_from_slice(fname.as_bytes());
             pit.extend_from_slice(&e);
         }
         pit

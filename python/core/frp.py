@@ -504,14 +504,11 @@ def flow_download_mode_info():
                     model = pm
                     log(f"  Model (PIT header): {model}")
             entries = pit.parse_pit(raw)
-            log("  Partition table:")
-            log("  %-4s %-24s %12s  %s" % ("idx", "name", "size", "device"))
-            for e in entries:
-                if not e.is_flashable():
-                    continue
-                log("  %-4d %-24s %12s  0x%02x"
-                    % (e.index, e.name, _fmt_bytes(e.size_bytes()),
-                       e.device_type))
+            log(f"  PIT layout: {pit.pit_layout(raw)}")
+            # Full Odin/Heimdall-style table: names, start blocks, sizes,
+            # RO/FOTA/secure flags and flash filenames.
+            for line in pit.pit_report(raw).splitlines()[1:]:
+                log(f"  {line}")
         except (bridge.BridgeError, ValueError, KeyError, OSError) as e:
             log(f"  PIT read failed: {e}")
             _odin_diag(log)
