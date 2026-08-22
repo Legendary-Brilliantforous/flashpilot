@@ -982,11 +982,34 @@ fn end_sequence_flash(
         payload[28..32].copy_from_slice(&boot_update.to_le_bytes());
     }
     dev.send_raw(&[0u8; 0])?;
-    let rsp = odin_command(dev, 0x66, 0x03, &payload, 120)?;
-    odin_fail_check(&rsp, "EndSequenceFlash", true)?;
-    // Drain any unexpected bytes after the empty transfer.
-    let _ = dev.recv_raw(512, 1);
-    Ok(())
+    // Live-device finding: EndSequenceFlash can return BOOTLOADER_FAIL -5
+    // transiently while the bootloader finishes async md5hdr/boot_update
+    // validation of the PREVIOUS partition. All chunk data is already
+    // written and ACKed at this point - only the finalize failed. Resending
+    // the commit after a short delay succeeds (matches odin4's idempotent
+    // control-frame retries).
+    const COMMIT_RETRIES: u32 = 4;
+    let mut last_err: Option<OdinError> = None;
+    for attempt in 0..COMMIT_RETRIES {
+        if attempt > 0 {
+            eprintln!(
+                "[flash]   commit retry {attempt} (previous: bootloader busy validating)"
+            );
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        match odin_command(dev, 0x66, 0x03, &payload, 120) {
+            Ok(rsp) => match odin_fail_check(&rsp, "EndSequenceFlash", true) {
+                Ok(()) => {
+                    // Drain any unexpected bytes after the empty transfer.
+                    let _ = dev.recv_raw(512, 1);
+                    return Ok(());
+                }
+                Err(e) => last_err = Some(e),
+            },
+            Err(e) => last_err = Some(OdinError(e.to_string())),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| OdinError("commit failed".into())))
 }
 
 /// Reset flash count (0x64/0x01).
@@ -1012,10 +1035,13 @@ fn reset_flash_count(dev: &Device) -> OdinResult<()> {
 ///   request       {"cmd":"reboot"}         -> {"ok":true} then exits
 ///   request       {"cmd":"end"}            -> {"bye":true} then exits
 /// EOF also ends the session cleanly.
+/// Session PIT cache for the agent's flash command (set by pit-dump).
+static AGENT_PIT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
 pub fn odin_agent(target: &str) -> Result<String> {
     use std::io::{BufRead, Write};
     let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
-    let packet_size = begin_session_v2(&dev).map_err(|e| e.to_string())?;
+    let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
     let mut out = std::io::stdout().lock();
     let _ = writeln!(
         out,
@@ -1053,6 +1079,8 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     let ok = dev
                         .dump_pit()
                         .map(|data| {
+                            // Cache for the session's flash commands.
+                            let _ = AGENT_PIT.set(data.clone());
                             let mut resp = json!({"size": data.len()});
                             if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
                                 if !o.is_empty() {
@@ -1108,6 +1136,65 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     model = pick_model(&ascii);
                 }
                 let _ = writeln!(out, "{}", json!({"model": model}));
+            }
+            "flash" => {
+                // Write a raw image to a partition within this session.
+                // {"cmd":"flash","partition":"bootloader","file":"/tmp/x.img"}
+                // Requires the session PIT: run pit-dump first (cached here).
+                let part = req.get("partition").and_then(|x| x.as_str()).unwrap_or("");
+                let file = req.get("file").and_then(|x| x.as_str()).unwrap_or("");
+                if part.is_empty() || file.is_empty() {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        json!({"error": "flash needs 'partition' and 'file'"})
+                    );
+                    let _ = out.flush();
+                    continue;
+                }
+                let pit_cache: &Vec<u8> = match AGENT_PIT.get() {
+                    Some(p) => p,
+                    None => {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"error": "no session PIT - run pit-dump first"})
+                        );
+                        let _ = out.flush();
+                        continue;
+                    }
+                };
+                eprintln!("[agent] flashing {part} <- {file}");
+                let is_large = matches!(part, "super" | "system" | "userdata");
+                let total = std::fs::metadata(file)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                // Mirror odin_flash_partition: announce total bytes first.
+                if let Err(e) = set_total_bytes(&dev, total) {
+                    let _ = writeln!(out, "{}", json!({"error": e.to_string(), "partition": part}));
+                    let _ = out.flush();
+                    continue;
+                }
+                match flash_one_partition(
+                    &dev,
+                    pit_cache,
+                    part,
+                    file,
+                    packet_size,
+                    legacy,
+                    is_large,
+                ) {
+                    Ok(seqs) => {
+                        let _ = writeln!(
+                            out,
+                            "{}",
+                            json!({"ok": true, "partition": part, "sequences": seqs})
+                        );
+                    }
+                    Err(e) => {
+                        let _ = writeln!(out, "{}", json!({"error": e, "partition": part}));
+                    }
+                }
             }
             "reboot" => {
                 let r = reboot_v2(&dev);
