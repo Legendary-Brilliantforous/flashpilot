@@ -70,7 +70,7 @@ from PyQt6.QtWidgets import (
     QLayout,
 )
 
-from ..core import bridge, frp, mtk, mtp, fus
+from ..core import bridge, frp, mtk, mtp, fus, pit, pitstore
 from .toast import ToastHost
 from .nav import NavRail
 
@@ -2905,7 +2905,7 @@ class FrpWindow(QMainWindow):
         left.addLayout(row)
         conn_lay.addLayout(left, 3)
 
-        # right: live device metric cards (model / mode / interface / adb)
+        # right: live device metric cards (model / mode / interface / adb / pit)
         grid = QGridLayout()
         grid.setSpacing(10)
         grid.setColumnStretch(0, 1)
@@ -2916,6 +2916,7 @@ class FrpWindow(QMainWindow):
             ("USB Mode", C["accent"]),
             ("Interface", C["ok"]),
             ("ADB Status", C["warn"]),
+            ("PIT Health", C["err_dim"]),
         ]
         for i, (name, accent) in enumerate(tiles):
             card = MetricCard(name, "--", accent)
@@ -3096,6 +3097,47 @@ class FrpWindow(QMainWindow):
         info.setWordWrap(True)
         info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
         hv.addWidget(info)
+
+        # --- PIT safety contract (auto-fetch + forensic validation) -------
+        hv.addWidget(SectionTitle("PIT SAFETY CONTRACT"))
+        pit_info = QLabel(
+            "Fetches the partition table straight from the phone (the device "
+            "is always the source of truth), validates it with the odin4 "
+            "checklist plus FlashPilot chain analysis, and caches it by "
+            "content hash. Runs automatically before every flash."
+        )
+        pit_info.setWordWrap(True)
+        pit_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
+        hv.addWidget(pit_info)
+
+        pit_btn_row = QHBoxLayout()
+        self._pit_fetch_btn = QPushButton("Fetch & Verify PIT")
+        self._pit_fetch_btn.setStyleSheet(_btn_primary())
+        self._pit_fetch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pit_fetch_btn.setToolTip(
+            "Auto-fetch PIT from the phone in download mode, validate it and "
+            "show the storage map"
+        )
+        self._pit_fetch_btn.clicked.connect(self._pit_fetch_clicked)
+        pit_btn_row.addWidget(self._pit_fetch_btn)
+        self._pit_cache_lbl = QLabel("")
+        self._pit_cache_lbl.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
+        pit_btn_row.addWidget(self._pit_cache_lbl, 1)
+        hv.addLayout(pit_btn_row)
+
+        self._pit_view = QPlainTextEdit()
+        self._pit_view.setReadOnly(True)
+        self._pit_view.setMaximumHeight(190)
+        self._pit_view.setPlaceholderText(
+            "PIT health, findings and storage map will appear here..."
+        )
+        self._pit_view.setStyleSheet(
+            f"QPlainTextEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; color:{C['text']}; font-size:10px;"
+            f" font-family:'JetBrains Mono','Consolas',monospace; }}"
+        )
+        hv.addWidget(self._pit_view)
+        self._refresh_pit_cache_label()
 
         # --- Factory reset (ADB + recovery fallback) ---
         hv.addWidget(SectionTitle("FACTORY RESET"))
@@ -3851,6 +3893,70 @@ class FrpWindow(QMainWindow):
         self._stack.setCurrentIndex(idx)
         self.nav.select(key)
         self.set_status(f"Section: {key.upper()}")
+
+    # ----------------------------- PIT safety contract --------------------
+    def _refresh_pit_cache_label(self):
+        try:
+            s = pitstore.stats()
+            if s["count"]:
+                self._pit_cache_lbl.setText(
+                    f"cache: {s['count']} table(s) for {', '.join(s['models'][:3])}"
+                )
+            else:
+                self._pit_cache_lbl.setText("cache: empty")
+        except Exception:
+            self._pit_cache_lbl.setText("")
+
+    def _pit_fetch_clicked(self):
+        if getattr(self, "_pit_fetching", False):
+            return
+        d = mtp.find_samsung()
+        in_dl = frp._download_mode_device()
+        if not in_dl and not (d and d.get("pid") == 0x685d
+                              and not mtp.is_adb_composite(d)):
+            self._toasts.show_warn(
+                "PIT fetch", "Put the phone in Download mode first "
+                "(Vol Down + Power, then Vol Up)."
+            )
+            return
+        self._pit_fetching = True
+        self._pit_fetch_btn.setEnabled(False)
+        self._pit_view.setPlainText("Fetching PIT from device...\n")
+        target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+        def work():
+            try:
+                contract = frp.pit_contract(target=target, log=None)
+                health = contract["health"]
+                raw = contract["raw"]
+                text_lines = [f"target: {target}"
+                              + ("  (cached)" if contract["from_cache"] else ""),
+                              health["summary"], ""]
+                for f in health["findings"]:
+                    mark = {"fail": "FAIL", "warn": "warn", "info": "info"}[f["severity"]]
+                    text_lines.append(f"[{mark}] {f['message']}")
+                text_lines.append("")
+                text_lines.append(pit.pit_map(raw))
+                text, verdict = "\n".join(text_lines), health["verdict"]
+                stats = health["stats"]
+            except Exception as e:
+                text, verdict, stats = f"PIT fetch failed: {e}", "fail", {}
+
+            def done():
+                self._pit_fetching = False
+                self._pit_fetch_btn.setEnabled(True)
+                self._pit_view.setPlainText(text)
+                tile = self.info.get("PIT Health")
+                if tile is not None:
+                    n = stats.get("parsed_count", "?")
+                    style = stats.get("style", "-")
+                    tile.set(f"{verdict.upper()} - {n} parts ({style})")
+                self.log_line(f"[pit-contract] {text.splitlines()[1] if len(text.splitlines())>1 else text}")
+                self._refresh_pit_cache_label()
+
+            self._ui.ui.emit(done)
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- Firmware Downloader page --------------
     def _build_fus_page(self):

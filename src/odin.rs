@@ -79,6 +79,52 @@ struct Device {
     out_ep: u8,
 }
 
+impl Device {
+    /// USB-level port reset. Forces the bootloader to re-enumerate without
+    /// touching the cable - the only reliable way to unwedge a Loke that
+    /// stopped answering after a desynced session.
+    fn reset_port(&self) -> bool {
+        self.handle.reset().is_ok()
+    }
+}
+
+/// Open the device and reach LOKE handshake, resilient to wedged sessions.
+///
+/// Escalation ladder on failure:
+///   1. blind EndSession rescue (inside handshake()) - unwedges sessions
+///      left open by a previous process;
+///   2. USB port reset + reopen - forces fresh enumeration without replug.
+fn open_and_handshake(target: &str) -> OdinResult<Device> {
+    let mut last_err = String::from("unknown");
+    for attempt in 0..3 {
+        match open_device(target) {
+            Ok(dev) => match dev.handshake() {
+                Ok(()) => return Ok(dev),
+                Err(e) => {
+                    last_err = e.to_string();
+                    eprintln!("[open] handshake failed (attempt {attempt}): {e}");
+                    if attempt < 2 && dev.reset_port() {
+                        eprintln!("[open] USB port reset issued; waiting for re-enumeration...");
+                        std::thread::sleep(Duration::from_millis(1800));
+                    }
+                    // dev dropped here -> handle closed before reopen
+                }
+            },
+            Err(e) => {
+                // Device may be re-enumerating after our own reset: wait+retry.
+                last_err = e.to_string();
+                eprintln!("[open] device not found (attempt {attempt}): {e}");
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_millis(1200));
+                }
+            }
+        }
+    }
+    err(format!(
+        "{last_err} (rescue incl. USB reset attempted)"
+    ))
+}
+
 fn open_device(target: &str) -> OdinResult<Device> {
     let devices = usb::collect_devices(Some(0x04e8))?;
     let wanted: Vec<&str> = target.split('@').collect();
@@ -183,6 +229,15 @@ impl Device {
         Err(OdinError(last_err.unwrap_or_else(|| "bulk write failed".into())))
     }
 
+    /// Single-shot write with a short timeout - used by the handshake probe
+    /// so a stalled OUT endpoint costs 2s instead of 30s of retries.
+    fn send_raw_fast(&self, data: &[u8]) -> OdinResult<()> {
+        self.handle
+            .write_bulk(self.out_ep, data, Duration::from_secs(2))
+            .map(|_| ())
+            .map_err(|e| OdinError(format!("bulk write: {e}")))
+    }
+
     fn recv_raw(&self, len: usize, timeout: u64) -> OdinResult<Vec<u8>> {
         // Always read into at least a 512-byte buffer: Samsung download mode
         // (and MediaTek variants like the A14/A06) send full max-packet-size
@@ -199,37 +254,68 @@ impl Device {
     }
 
     /// Handshake: send "ODIN", expect "LOKE".
+    ///
+    /// Real-device finding: a process that exits mid-session (or a desynced
+    /// probe) leaves Loke believing a session is still active - it then
+    /// IGNORES the next "ODIN" until the USB device re-enumerates. Recovery
+    /// used to require unplug/replug. We instead send a blind EndSession
+    /// (0x67/0x00) between retry rounds, which unwedges the bootloader
+    /// without touching the cable.
     fn handshake(&self) -> OdinResult<()> {
-        // Drain any leftover frames from a previous session before sending ODIN.
-        for _ in 0..4 {
-            let r = self.recv_raw(512, 1);
-            match r {
-                Ok(_) => continue,
-                Err(_) => break, // no pending data
-            }
-        }
-        for attempt in 0..6 {
-            match self.send_raw(b"ODIN") {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("[handshake] send error attempt {attempt}: {e}");
-                    std::thread::sleep(Duration::from_millis(100 * (attempt as u64 + 1)));
-                    continue;
+        for round in 0..2 {
+            if round > 0 {
+                eprintln!("[handshake] rescue: sending blind EndSession");
+                let _ = self.send_control(CTRL_END_SESSION, &0u32.to_le_bytes());
+                std::thread::sleep(Duration::from_millis(300));
+                // Drain any stale frames the rescue shook loose.
+                for _ in 0..4 {
+                    if self.recv_raw(512, 1).is_err() {
+                        break;
+                    }
                 }
             }
-            match self.recv_raw(7, 5) {
-                Ok(resp) if resp.get(..4) == Some(b"LOKE") => return Ok(()),
-                Ok(resp) => {
-                    eprintln!(
-                        "[handshake] attempt {attempt}: got {:?}, retrying",
-                        resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
-                    );
-                }
-                Err(e) => {
-                    eprintln!("[handshake] recv error attempt {attempt}: {e}");
+            // Drain any leftover frames from a previous session before ODIN.
+            for _ in 0..4 {
+                let r = self.recv_raw(512, 1);
+                match r {
+                    Ok(_) => continue,
+                    Err(_) => break, // no pending data
                 }
             }
-            std::thread::sleep(Duration::from_millis(100 * (attempt as u64 + 1)));
+            let mut last_recv_err: Option<String> = None;
+            let mut write_failed = false;
+            for attempt in 0..4 {
+                match self.send_raw_fast(b"ODIN") {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // A stalled OUT endpoint means the firmware is deaf:
+                        // retrying is pointless - escalate to port reset.
+                        eprintln!("[handshake] send error attempt {attempt}: {e}");
+                        write_failed = true;
+                        break;
+                    }
+                }
+                match self.recv_raw(7, 3) {
+                    Ok(resp) if resp.get(..4) == Some(b"LOKE") => return Ok(()),
+                    Ok(resp) => {
+                        eprintln!(
+                            "[handshake] attempt {attempt}: got {:?}, retrying",
+                            resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+                        );
+                    }
+                    Err(e) => {
+                        last_recv_err = Some(e.to_string());
+                        eprintln!("[handshake] recv error attempt {attempt}: {e}");
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(80 * (attempt as u64 + 1)));
+            }
+            if write_failed {
+                return err("handshake: OUT endpoint stalled (device needs reset)");
+            }
+            if round == 0 && last_recv_err.is_some() {
+                continue; // one rescue round before giving up
+            }
         }
         err("handshake failed after retries (device must be in download mode)")
     }
@@ -434,8 +520,7 @@ fn pick_model(clean: &str) -> String {
 /// 0x69 device-info dump. Runs in its own session so a probe that desyncs
 /// one session (e.g. on old J3 firmware) does not affect other commands.
 pub fn odin_model(target: &str) -> Result<String> {
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     dev.begin_session().map_err(|e| e.to_string())?;
 
     let mut model = String::new();
@@ -477,9 +562,13 @@ pub struct OdinSessionInfo {
 }
 
 pub fn odin_connect(target: &str) -> Result<String> {
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     let packet_size = dev.begin_session().map_err(|e| e.to_string())?;
+    // Close the session - a process that exits with an active session wedges
+    // the bootloader until re-enumeration (real-device finding).
+    if let Err(e) = end_session_v2(&dev) {
+        eprintln!("[connect] end_session warning (non-fatal): {e}");
+    }
     let info = OdinSessionInfo {
         handshake: true,
         session: true,
@@ -490,8 +579,7 @@ pub fn odin_connect(target: &str) -> Result<String> {
 }
 
 pub fn odin_pit(target: &str, out_file: Option<&str>) -> Result<String> {
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     dev.begin_session().map_err(|e| e.to_string())?;
     let pit = dev.dump_pit().map_err(|e| e.to_string())?;
     dev.end_session().ok();
@@ -582,8 +670,7 @@ pub fn odin_pit_mtk(target: &str, out_file: Option<&str>) -> Result<String> {
 /// The 0x64/0x01 and 0x69 probes are intentionally skipped - they desync
 /// the session stream on older devices like the J3.
 pub fn odin_info(target: &str, pit_file: &str) -> Result<String> {
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     let packet_size = dev.begin_session().map_err(|e| e.to_string())?;
     let pit = dev.dump_pit().map_err(|e| e.to_string())?;
     std::fs::write(pit_file, &pit).map_err(|e| e.to_string())?;
@@ -910,8 +997,7 @@ fn reset_flash_count(dev: &Device) -> OdinResult<()> {
 /// false failures. No other tool performs this verification automatically.
 pub fn odin_send_pit(target: &str, pit_file: &str) -> Result<String> {
     let pit = std::fs::read(pit_file).map_err(|e| format!("read pit: {e}"))?;
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     eprintln!("[pit] handshake ok");
     begin_session_v2(&dev).map_err(|e| e.to_string())?;
     eprintln!("[pit] session ok");
@@ -1148,8 +1234,7 @@ pub fn odin_flash_partition(
         .map_err(|e| format!("stat image: {e}"))?
         .len() as usize;
 
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     eprintln!("[flash] handshake ok");
     let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
     eprintln!("[flash] session ok, packet_size={packet_size}, legacy={legacy}");
@@ -1199,8 +1284,7 @@ pub fn odin_flash_multi(
         total_bytes += sz;
     }
 
-    let dev = open_device(target).map_err(|e| e.to_string())?;
-    dev.handshake().map_err(|e| e.to_string())?;
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
     eprintln!("[flash] handshake ok");
     let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
     eprintln!("[flash] session ok, packet_size={packet_size}, legacy={legacy}");
