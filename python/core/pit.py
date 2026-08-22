@@ -30,7 +30,10 @@ class PitEntry:
         return self.block_size * self.block_count
 
     def is_flashable(self):
-        return len(self.name) > 0
+        # Odin flags whitespace-only or dot-prefixed entries as flashable
+        # partitions; treat them as padding/metadata instead.
+        n = self.name.strip()
+        return bool(n) and not n.startswith(".")
 
     def __repr__(self):
         return (
@@ -75,15 +78,43 @@ def parse_model(raw: bytes):
     return raw[8:end].decode("ascii", errors="replace").strip()
 
 
+# Suffixes firmware archives put on image files that must not take part in
+# partition-name matching (Odin and most commercial tools compare raw names
+# and wrongly flag e.g. "boot.img" as missing from the PIT).
+_IMG_SUFFIXES = (".img", ".bin", ".mbn", ".elf", ".lz4", ".ext4", ".raw")
+
+
+def normalize_part_name(name: str):
+    """Lowercase, strip common image suffixes and whitespace so archive
+    entries match their PIT partition ('boot.img' -> 'boot')."""
+    n = name.strip().lower()
+    changed = True
+    while changed and n:
+        changed = False
+        for suf in _IMG_SUFFIXES:
+            if n.endswith(suf):
+                n = n[: -len(suf)]
+                changed = True
+    return n
+
+
 def validate_and_sanitize_pit(pit_raw: bytes, archive_part_names: list) -> tuple:
     """Compare firmware archive partitions against device PIT entries.
-    Returns (is_compatible: bool, missing_in_pit: list, extra_in_archive: list, model: str).
+
+    Names are matched with normalize_part_name() so 'boot.img', 'BOOT' and
+    'boot' all match the PIT entry 'boot' - raw comparisons flag perfectly
+    flashable archives as incompatible (an Odin/commercial-tool complaint).
+
+    Returns (is_compatible: bool, missing_in_pit: list,
+             extra_in_archive: list, model: str).
     """
     try:
         entries = parse_pit(pit_raw)
         model = parse_model(pit_raw)
-        device_parts = {e.name.lower() for e in entries}
-        archive_parts = {p.lower() for p in archive_part_names}
+        device_parts = {normalize_part_name(e.name) for e in entries}
+        device_parts.discard("")
+        archive_parts = {normalize_part_name(p) for p in archive_part_names}
+        archive_parts.discard("")
 
         extra_in_archive = sorted(list(archive_parts - device_parts))
         missing_in_pit = sorted(list(device_parts - archive_parts))

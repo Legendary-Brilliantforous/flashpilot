@@ -16,6 +16,40 @@ pub struct DeviceInfo {
     pub serial: Option<String>,
     pub interfaces: Vec<InterfaceInfo>,
     pub is_samsung: bool,
+    /// Number of USB configurations exposed by the device. Download-mode /
+    /// preloader / EDL devices often report 1; MTP-with-switchable-modes
+    /// devices report 2+. The Python MTK/MTP layer keys off this to decide
+    /// whether a USB-config switch is possible without resetting the phone.
+    #[serde(default)]
+    pub configs: u32,
+    /// The currently active configuration value (0 if none active).
+    #[serde(default)]
+    pub active_config: u8,
+    /// bDeviceClass from the device descriptor (0 = per-interface).
+    #[serde(default)]
+    pub device_class: u8,
+    /// bcdUSB (USB spec version, e.g. 0x0200 / 0x0300).
+    #[serde(default)]
+    pub bcd_usb: u16,
+    /// bcdDevice - chipset/firmware revision, useful to tell preloader
+    /// revisions apart on MediaTek / Unisoc.
+    #[serde(default)]
+    pub bcd_device: u16,
+    /// libusb speed code: 1=low, 2=full, 3=high, 4=super, 5=super+.
+    #[serde(default)]
+    pub device_speed: u8,
+    /// Root-port path like "1-2-3" - survives re-enumeration better than
+    /// bus.address, which changes when the hub renumbers a device.
+    #[serde(default)]
+    pub port_numbers: String,
+    /// bMaxPacketSize0 (endpoint 0 max packet, typically 64).
+    #[serde(default)]
+    pub max_packet_size0: u8,
+    /// Coarse protocol/mode hint computed from VID/PID/interfaces:
+    /// "qualcomm-edl", "mediatek", "samsung-odin", "android-adb",
+    /// "android-mtp", "samsung-hid", "samsung", "other".
+    #[serde(default)]
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -94,6 +94,65 @@ class TestPITParsing:
         entry = PitEntry(data, 0)
         assert not entry.is_flashable()
 
+    def test_junk_names_not_flashable(self):
+        """Whitespace-only and dot-prefixed entries are padding, not partitions."""
+        import struct
+        for junk in ("   ", "..trash", "."):
+            data = struct.pack("<8I", 1, 0x50, 0x100, 1, 1, 512, 10, 0)
+            data += junk.encode() + b"\0" * (32 - len(junk))
+            data += b"x.img\0" + b"\0" * 27
+            data += b"\0" * 32
+            data += struct.pack("<I", 0)
+            assert not PitEntry(data, 0).is_flashable(), junk
+
+
+class TestPITValidation:
+    """Archive-vs-PIT compatibility checks (Odin-style sanitization)."""
+
+    def _make_pit(self, names):
+        import struct
+        pit = bytearray(32 + 132 * max(1, len(names)))
+        pit[0:4] = (0x12349876).to_bytes(4, "little")
+        pit[4:8] = len(names).to_bytes(4, "little")
+        for i, n in enumerate(names):
+            e = bytearray(132)
+            e[32:32 + len(n)] = n.encode()
+            pit[32 + i * 132:32 + (i + 1) * 132] = e
+        return bytes(pit)
+
+    def test_archive_suffix_matches_pit(self):
+        """'boot.img' in the archive must match PIT entry 'boot'."""
+        from python.core.pit import validate_and_sanitize_pit
+        pit = self._make_pit(["boot", "system", "cache"])
+        ok, missing, extra, model = validate_and_sanitize_pit(
+            pit, ["boot.img", "system.img", "cache.img"]
+        )
+        assert ok is True
+        assert extra == []
+
+    def test_case_insensitive_match(self):
+        """Case-only differences ('BOOT' vs 'boot') must not flag."""
+        from python.core.pit import validate_and_sanitize_pit
+        pit = self._make_pit(["BOOT", "system"])
+        ok, _, extra, _ = validate_and_sanitize_pit(pit, ["boot"])
+        assert ok is True
+
+    def test_genuinely_extra_partition_flags(self):
+        """A partition truly absent from the PIT still flags incompatible."""
+        from python.core.pit import validate_and_sanitize_pit
+        pit = self._make_pit(["boot", "system"])
+        ok, _, extra, _ = validate_and_sanitize_pit(pit, ["boot", "modembin"])
+        assert ok is False
+        assert extra == ["modembin"]
+
+    def test_normalize_part_name(self):
+        from python.core.pit import normalize_part_name
+        assert normalize_part_name("Boot.IMG") == "boot"
+        assert normalize_part_name(" modem.bin ") == "modem"
+        assert normalize_part_name("vbmeta") == "vbmeta"
+        # double suffix strips iteratively
+        assert normalize_part_name("radio.img.lz4") == "radio"
+
 
 class TestPITConstants:
     """Verify PIT constants match between Python and Rust."""

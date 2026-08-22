@@ -29,6 +29,11 @@ const FILE_REQUEST_FLASH: u32 = 0x00;
 const PACKET_SIZE: usize = 1024;
 const RECV_PART_SIZE: usize = 512;
 
+/// Sanity ceiling for a PIT dump: 512 entries * 132 B + header is ~67.8 KiB.
+/// Anything above this from the size query means the firmware sent garbage
+/// (or an ack code) instead of a byte count.
+const PIT_MAX_BYTES: usize = 32 + 512 * 132;
+
 #[derive(Debug)]
 struct OdinError(String);
 
@@ -136,9 +141,19 @@ fn open_device(target: &str) -> OdinResult<Device> {
     handle
         .set_auto_detach_kernel_driver(true)
         .map_err(|e| OdinError(format!("auto detach: {e}")))?;
-    handle
-        .claim_interface(iface.number)
-        .map_err(|e| OdinError(format!("claim iface: {e}")))?;
+    // Some download-mode enumerations come up unconfigured (config value 0);
+    // libusb refuses to claim interfaces until a configuration is active.
+    // Setting configuration 1 before claiming mirrors what Windows' usbccgp
+    // does automatically and un-breaks those devices.
+    let claimed = handle.claim_interface(iface.number);
+    if claimed.is_err() {
+        if let Err(e) = handle.set_active_configuration(1) {
+            eprintln!("[odin] set_active_configuration(1): {e}");
+        }
+        handle
+            .claim_interface(iface.number)
+            .map_err(|e| OdinError(format!("claim iface: {e}")))?;
+    }
 
     Ok(Device { handle, in_ep, out_ep })
 }
@@ -281,20 +296,69 @@ impl Device {
     }
 
     fn dump_pit(&self) -> OdinResult<Vec<u8>> {
-        let size = self.request_pit_dump()? as usize;
-        if size == 0 {
-            return err("PIT dump refused (size 0)");
+        let mut size = self.request_pit_dump()? as usize;
+        if size > PIT_MAX_BYTES {
+            // Implausible size: some firmwares return a raw ack instead of a
+            // byte count. Ignore it and fall through to the streaming path,
+            // which stops once the header magic + entry count are satisfied.
+            eprintln!("[pit] implausible PIT size {size}, switching to streaming read");
+            size = 0;
         }
-        let mut pit = Vec::with_capacity(size);
-        let transfer_count = size.div_ceil(RECV_PART_SIZE);
-        for i in 0..transfer_count {
-            let part = self.request_pit_part(i as u32)?;
-            pit.extend_from_slice(&part);
-            if pit.len() >= size {
-                break;
+        let mut pit = Vec::with_capacity(size.max(4096));
+        if size == 0 {
+            // Fallback for bootloaders that ACK the dump request without a
+            // size: stream chunks until we can validate magic + entry count
+            // or the device goes quiet.
+            let mut idle = 0u32;
+            while idle < 3 {
+                match self.request_pit_part(pit.len().div_ceil(RECV_PART_SIZE) as u32) {
+                    Ok(part) if !part.is_empty() => {
+                        idle = 0;
+                        pit.extend_from_slice(&part);
+                        if pit.len() >= 8
+                            && u32::from_le_bytes([pit[0], pit[1], pit[2], pit[3]]) == 0x12349876
+                        {
+                            let count =
+                                u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
+                            let need = 32 + count * 132;
+                            if count > 0 && count <= 512 && pit.len() >= need.min(PIT_MAX_BYTES) {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(_) => idle += 1,
+                    Err(e) => {
+                        eprintln!("[pit] streaming read stopped: {e}");
+                        break;
+                    }
+                }
+            }
+        } else {
+            let transfer_count = size.div_ceil(RECV_PART_SIZE);
+            for i in 0..transfer_count {
+                let part = self.request_pit_part(i as u32)?;
+                pit.extend_from_slice(&part);
+                if pit.len() >= size {
+                    break;
+                }
             }
         }
-        pit.truncate(size);
+        if pit.is_empty() {
+            return err("PIT dump refused (size 0, no streamed data)");
+        }
+        // Trim to the exact PIT length when the header is valid; otherwise
+        // keep whatever arrived (caller-side parsers re-validate).
+        if pit.len() >= 8
+            && u32::from_le_bytes([pit[0], pit[1], pit[2], pit[3]]) == 0x12349876
+        {
+            let count = u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
+            let need = 32 + count * 132;
+            if count <= 512 && pit.len() > need {
+                pit.truncate(need);
+            }
+        } else if size > 0 && pit.len() > size {
+            pit.truncate(size);
+        }
         self.end_pit_transfer()?;
         Ok(pit)
     }

@@ -1203,6 +1203,28 @@ def _fmt_usb_full(d):
         lines.append(f"  Product      : {d['product']}")
     if d.get("serial"):
         lines.append(f"  Serial       : {d['serial']}")
+    # Extended detection fields (populated by flashpilot-bridge): mode hint,
+    # USB speed, physical port path (stable across re-enumeration) and
+    # configuration count (multi-config MTP devices expose a diag config).
+    extras = []
+    if d.get("mode"):
+        extras.append(f"mode={d['mode']}")
+    if d.get("device_speed"):
+        extras.append(
+            f"speed={ {1:'low',2:'full',3:'high',4:'super',5:'super+'}.get(d['device_speed'], d['device_speed']) }"
+        )
+    if d.get("port_numbers"):
+        extras.append(f"port={d['port_numbers']}")
+    if d.get("configs"):
+        cfg = f"configs={d['configs']}"
+        if d.get("active_config"):
+            cfg += f" active={d['active_config']}"
+        extras.append(cfg)
+    if d.get("bcd_device"):
+        v = d["bcd_device"]
+        extras.append(f"bcdDev={v>>8}.{v&0xFF:x}")
+    if extras:
+        lines.append(f"  Detection    : {'  '.join(extras)}")
     for i in d.get("interfaces", []):
         eps = i.get("endpoints", [])
         ep_str = " ".join(
@@ -1227,6 +1249,19 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # Qualcomm EDL - a 05c6 VID composite, separate from the Samsung table.
     if edl_devs:
         return "EDL MODE (Qualcomm Emergency Download)"
+
+    # Check for Samsung Download Mode (Odin mode / HID / download PIDs) FIRST
+    try:
+        hid_targets = bridge.list_samsung_hid()
+        if hid_targets:
+            return "DOWNLOAD MODE (Samsung Odin / Download)"
+    except Exception:
+        pass
+
+    for d in samsung:
+        pid = d.get("pid")
+        if pid in (0x685D, 0x685C, 0x685B, 0x685F) or any(i.get("class") == 3 for i in d.get("interfaces", [])):
+            return "DOWNLOAD MODE (Samsung Odin / Download)"
 
     # Spreadtrum feature-phone download/engineering port (1782:4d00 FDL/BROM).
     for d in (spd_devs or []):

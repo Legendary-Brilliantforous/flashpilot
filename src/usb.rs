@@ -10,6 +10,48 @@ use rusb::{Context, DeviceHandle, UsbContext, Direction, TransferType};
 use std::time::Duration;
 use std::collections::HashMap;
 
+/// Samsung download-mode PIDs (mirrors python/core/frp.py `_ODIN_PIDS`).
+pub const SAMSUNG_ODIN_PIDS: &[u16] = &[0x6601, 0x685d, 0x68c3, 0x68ef, 0x4eee, 0x4eef];
+
+/// Coarse protocol/mode hint so the GUI can label a device without keeping a
+/// VID/PID table in Python. Kept conservative: a PID that is also used by a
+/// normal-boot ADB composite (e.g. 0x685d) still reports "samsung-odin" here;
+/// the Python layer re-checks the ADB signature to disambiguate.
+pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
+    let has_adb = interfaces.iter().any(|i| i.class == 255 && i.subclass == 66 && i.protocol == 1);
+    let has_mtp = interfaces.iter().any(|i| i.class == 6);
+    let has_hid = interfaces.iter().any(|i| i.class == 3);
+
+    match vid {
+        0x05c6 if pid == 0x9008 => "qualcomm-edl".to_string(),
+        0x0e8d => "mediatek".to_string(),
+        0x04e8 => {
+            if SAMSUNG_ODIN_PIDS.contains(&pid) {
+                "samsung-odin".to_string()
+            } else if has_adb {
+                "android-adb".to_string()
+            } else if has_mtp {
+                "android-mtp".to_string()
+            } else if has_hid {
+                "samsung-hid".to_string()
+            } else {
+                "samsung".to_string()
+            }
+        }
+        _ => {
+            if has_adb {
+                "android-adb".to_string()
+            } else if has_mtp {
+                "android-mtp".to_string()
+            } else if has_hid {
+                "hid".to_string()
+            } else {
+                "other".to_string()
+            }
+        }
+    }
+}
+
 /// USB device wrapper
 pub struct UsbDevice {
     handle: DeviceHandle<Context>,
@@ -90,16 +132,61 @@ impl UsbDevice {
             }
         }
 
-        let info = DeviceInfo {
-            vid,
-            pid,
-            bus,
-            address,
-            product: None, // Would need string descriptor
-            manufacturer: None,
-            serial: None,
-            interfaces,
-            is_samsung: vid == 0x04e8,
+        let info = {
+            // Read string descriptors (best effort) so callers get the same
+            // rich info collect_devices() provides.
+            let mut product = None;
+            let mut manufacturer = None;
+            let mut serial = None;
+            if device_desc.manufacturer_string_index().is_some() {
+                manufacturer = handle
+                    .read_manufacturer_string_ascii(&device_desc)
+                    .ok()
+                    .filter(|s| !s.is_empty());
+            }
+            if device_desc.product_string_index().is_some() {
+                product = handle
+                    .read_product_string_ascii(&device_desc)
+                    .ok()
+                    .filter(|s| !s.is_empty());
+            }
+            if device_desc.serial_number_string_index().is_some() {
+                serial = handle
+                    .read_serial_number_string_ascii(&device_desc)
+                    .ok()
+                    .filter(|s| !s.is_empty());
+            }
+
+            DeviceInfo {
+                vid,
+                pid,
+                bus,
+                address,
+                product,
+                manufacturer,
+                serial,
+                is_samsung: vid == 0x04e8,
+                configs: device_desc.num_configurations() as u32,
+                active_config: device
+                    .active_config_descriptor()
+                    .ok()
+                    .map(|c| c.number())
+                    .unwrap_or(0),
+                device_class: device_desc.class_code(),
+                bcd_usb: bcd_version_u16(device_desc.usb_version()),
+                bcd_device: bcd_version_u16(device_desc.device_version()),
+                device_speed: device.speed() as u8,
+                port_numbers: device
+                    .port_numbers()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join("-"),
+                max_packet_size0: device_desc.max_packet_size(),
+                mode: mode_hint(vid, pid, &interfaces),
+                interfaces,
+            }
         };
 
         Ok(Self {
@@ -313,16 +400,37 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
             }
         }
 
+        let vid = desc.vendor_id();
+        let pid = desc.product_id();
         devices.push(DeviceInfo {
-            vid: desc.vendor_id(),
-            pid: desc.product_id(),
+            vid,
+            pid,
             bus: device.bus_number(),
             address: device.address(),
             product,
             manufacturer,
             serial,
+            is_samsung: vid == 0x04e8,
+            configs: desc.num_configurations() as u32,
+            active_config: device
+                .active_config_descriptor()
+                .ok()
+                .map(|c| c.number())
+                .unwrap_or(0),
+            device_class: desc.class_code(),
+            bcd_usb: bcd_version_u16(desc.usb_version()),
+            bcd_device: bcd_version_u16(desc.device_version()),
+            device_speed: device.speed() as u8,
+            port_numbers: device
+                .port_numbers()
+                .unwrap_or_default()
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join("-"),
+            max_packet_size0: desc.max_packet_size(),
+            mode: mode_hint(vid, pid, &interfaces),
             interfaces,
-            is_samsung: desc.vendor_id() == 0x04e8,
         });
     }
 
@@ -356,6 +464,13 @@ pub fn find_bulk_endpoints(device: &DeviceInfo, interface_num: u8) -> Option<(u8
 pub fn detect(vid_filter: Option<u16>) -> Result<String> {
     let devices = collect_devices(vid_filter)?;
     serde_json::to_string_pretty(&devices).map_err(|e| crate::error::BridgeError::Io(e.to_string()))
+}
+
+/// Convert a rusb BCD version back to its raw 0xJJMN encoding (e.g. 2.0 ->
+/// 0x0200) so the JSON contract stays a plain number.
+fn bcd_version_u16(v: rusb::Version) -> u16 {
+    let (major, minor, sub_minor) = (v.0 as u16, v.1 as u16, v.2 as u16);
+    ((major / 10) << 12) | ((major % 10) << 8) | (minor << 4) | sub_minor
 }
 
 /// Set USB configuration on a device
@@ -449,6 +564,15 @@ mod tests {
             serial: None,
             interfaces: Vec::new(),
             is_samsung: true,
+            configs: 1,
+            active_config: 0,
+            device_class: 0,
+            bcd_usb: 0x0200,
+            bcd_device: 0x0100,
+            device_speed: 3,
+            port_numbers: "1-2".into(),
+            max_packet_size0: 64,
+            mode: mode_hint(0x04e8, 0x685d, &[]),
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -460,5 +584,42 @@ mod tests {
         assert_eq!(parsed.pid, 0x685d);
         assert_eq!(parsed.bus, 1);
         assert_eq!(parsed.address, 3);
+        // New detection fields survive the JSON round-trip.
+        assert_eq!(parsed.configs, 1);
+        assert_eq!(parsed.active_config, 0);
+        assert_eq!(parsed.device_speed, 3);
+        assert_eq!(parsed.port_numbers, "1-2");
+        assert_eq!(parsed.mode, "samsung-odin");
+    }
+
+    /// mode_hint must classify the common flashing stages so the GUI can
+    /// label a device without its own VID/PID tables.
+    #[test]
+    fn mode_hint_classifies_flashing_stages() {
+        let adb_iface = |class: u8| InterfaceInfo {
+            number: 0,
+            class,
+            subclass: if class == 255 { 66 } else { 0 },
+            protocol: if class == 255 { 1 } else { 0 },
+            endpoints: Vec::new(),
+        };
+
+        // Qualcomm EDL (Sahara / Firehose)
+        assert_eq!(mode_hint(0x05c6, 0x9008, &[]), "qualcomm-edl");
+        // MediaTek BROM / preloader / DA
+        assert_eq!(mode_hint(0x0e8d, 0x2000, &[]), "mediatek");
+        // Samsung download-mode PIDs
+        for pid in SAMSUNG_ODIN_PIDS {
+            assert_eq!(mode_hint(0x04e8, *pid, &[]), "samsung-odin");
+        }
+        // Normal-boot Samsung composite with ADB wins over generic labels
+        // only when the PID is not an Odin PID (Python disambiguates further).
+        assert_eq!(mode_hint(0x04e8, 0x6860, &[adb_iface(255)]), "android-adb");
+        assert_eq!(mode_hint(0x04e8, 0x6860, &[adb_iface(6)]), "android-mtp");
+        assert_eq!(mode_hint(0x04e8, 0x6860, &[adb_iface(3)]), "samsung-hid");
+        assert_eq!(mode_hint(0x04e8, 0x6860, &[]), "samsung");
+        // Non-Samsung ADB/MTP
+        assert_eq!(mode_hint(0x18d1, 0x4ee7, &[adb_iface(255)]), "android-adb");
+        assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
     }
 }
