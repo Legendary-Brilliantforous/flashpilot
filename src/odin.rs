@@ -378,6 +378,11 @@ impl Device {
 
     fn end_pit_transfer(&self) -> OdinResult<()> {
         self.send_control(CTRL_PIT_FILE, &PIT_REQUEST_END.to_le_bytes())?;
+        // Read the device's end-transfer verification response. Leaving it
+        // queued poisons the NEXT operation in the same session: the stale
+        // {0x65,...} frame gets consumed as PIT data (live-device finding -
+        // second pit-dump came back 16 KB of shifted garbage).
+        let _ = self.recv_raw(512, 5)?;
         Ok(())
     }
 
@@ -1038,29 +1043,62 @@ pub fn odin_agent(target: &str) -> Result<String> {
         };
         let cmd = req.get("cmd").and_then(|x| x.as_str()).unwrap_or("");
         match cmd {
-            "pit-dump" => match dev.dump_pit() {
-                Ok(data) => {
-                    let mut resp = json!({"size": data.len()});
-                    if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
-                        if !o.is_empty() {
-                            match std::fs::write(o, &data) {
-                                Ok(()) => resp["file"] = json!(o),
-                                Err(e) => resp["write_error"] = json!(e.to_string()),
+            "pit-dump" => {
+                // Self-healing: some probes (0x64/0x01 device-type) desync the
+                // bulk stream on certain Loke builds - the next read then gets
+                // a stale control frame. Drain and retry once before failing.
+                let mut attempt = 0;
+                loop {
+                    attempt += 1;
+                    let ok = dev
+                        .dump_pit()
+                        .map(|data| {
+                            let mut resp = json!({"size": data.len()});
+                            if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
+                                if !o.is_empty() {
+                                    match std::fs::write(o, &data) {
+                                        Ok(()) => resp["file"] = json!(o),
+                                        Err(e) => {
+                                            resp["write_error"] = json!(e.to_string())
+                                        }
+                                    }
+                                }
                             }
+                            if req.get("hex").and_then(|x| x.as_bool()).unwrap_or(false) {
+                                resp["hex"] = json!(
+                                    data.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                                );
+                            }
+                            resp
+                        });
+                    match ok {
+                        Ok(resp) => {
+                            let _ = writeln!(out, "{resp}");
+                            break;
+                        }
+                        Err(e) => {
+                            if attempt < 2 && e.to_string().contains("unexpected response") {
+                                eprintln!(
+                                    "[agent] pit-dump desync detected; draining and retrying"
+                                );
+                                for _ in 0..8 {
+                                    if dev.recv_raw(512, 1).is_err() {
+                                        break;
+                                    }
+                                }
+                                continue;
+                            }
+                            let _ =
+                                writeln!(out, "{}", json!({"error": e.to_string()}));
+                            break;
                         }
                     }
-                    if req.get("hex").and_then(|x| x.as_bool()).unwrap_or(false) {
-                        resp["hex"] = json!(
-                            data.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                        );
-                    }
-                    let _ = writeln!(out, "{resp}");
                 }
-                Err(e) => {
-                    let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
-                }
-            },
+            }
             "model" => {
+                // WARNING: this probe poisons the bulk stream on several Loke
+                // builds (J3/A14 class answer garbage like 'd'/'e'). Prefer
+                // reading the model from the PIT header (Unknown+Project).
                 let mut model = String::new();
                 if let Ok(data) = dev.request_device_type() {
                     let ascii: String = data
