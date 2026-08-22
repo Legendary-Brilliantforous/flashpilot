@@ -376,3 +376,260 @@ def pit_report(raw: bytes):
 
 def hex_to_bytes(h):
     return bytes.fromhex(h)
+
+
+# ---------------------------------------------------------------------------
+# Intelligence layer: forensic validation, style detection, diff, map.
+# ---------------------------------------------------------------------------
+
+MAX_SANE_ENTRIES = 512
+
+
+def validate_pit(raw: bytes):
+    """Forensic PIT validation - the odin4 checklist plus FlashPilot's own
+    chain analysis. Returns:
+
+        { 'verdict': 'ok'|'warn'|'fail',
+          'findings': [ {'severity','code','message'}, ... ],
+          'stats': {...} }
+
+    odin4 rejects devices/archives on the FAIL-level findings; FlashPilot
+    surfaces them before anything is written instead of after.
+    """
+    findings = []
+
+    def add(sev, code, msg):
+        findings.append({"severity": sev, "code": code, "message": msg})
+
+    stats = {"declared_count": 0, "parsed_count": 0, "model": "",
+             "style": "unknown", "total_bytes": 0}
+
+    if len(raw) < HEADER_SIZE:
+        add("fail", "PIT_TOO_SHORT", f"PIT too small ({len(raw)} bytes)")
+        return _health_result(findings, stats)
+    magic = struct.unpack_from("<I", raw, HDR_MAGIC_OFF)[0]
+    if magic != PIT_MAGIC:
+        add("fail", "BAD_MAGIC", f"PIT file identifier mismatch: 0x{magic:08x}")
+        return _health_result(findings, stats)
+
+    model, unknown, project, reserved = parse_header(raw)
+    declared = struct.unpack_from("<I", raw, HDR_COUNT_OFF)[0]
+    stats["declared_count"] = declared
+    stats["model"] = model
+
+    if declared == 0:
+        add("warn", "NO_ENTRIES", "PIT declares zero entries")
+    elif declared > MAX_SANE_ENTRIES:
+        add("fail", "COUNT_INSANE",
+            f"Invalid PIT entry count: {declared} (>{MAX_SANE_ENTRIES})")
+
+    # Truncation check (odin4: "PIT truncated: expected at least N bytes")
+    needed = HEADER_SIZE + declared * ENTRY_SIZE
+    if len(raw) < needed:
+        add("fail", "TRUNCATED",
+            f"PIT truncated: expected at least {needed} bytes, got {len(raw)}")
+
+    try:
+        all_entries = []
+        for i in range(min(declared, MAX_SANE_ENTRIES)):
+            off = HEADER_SIZE + i * ENTRY_SIZE
+            if off + ENTRY_SIZE > len(raw):
+                break
+            all_entries.append(PitEntry(raw[off : off + ENTRY_SIZE], i))
+    except Exception as e:  # pragma: no cover - defensive
+        add("fail", "PARSE_ERROR", f"PIT parse error: {e}")
+        return _health_result(findings, stats)
+
+    stats["parsed_count"] = len(all_entries)
+    flashable = [e for e in all_entries if e.is_flashable()]
+
+    seen_ids = {}
+    for e in flashable:
+        if not e.name.strip():
+            add("fail", "EMPTY_NAME",
+                f"PIT entry {e.index} has an empty partition name")
+        elif _clean_str_at(raw, HEADER_SIZE + e.index * ENTRY_SIZE + NAME_OFF) != e.name:
+            add("fail", "INVALID_NAME",
+                f"PIT entry {e.index} has an invalid partition name: {e.name!r}")
+        if e.identifier == 0:
+            add("fail", "IDENTIFIER_ZERO",
+                f"PIT entry '{e.name}' has an invalid identifier (0)")
+        if e.identifier in seen_ids:
+            add("fail", "DUPLICATE_IDENTIFIER",
+                f"PIT contains duplicate partition identifier "
+                f"{e.identifier}: '{seen_ids[e.identifier]}' and '{e.name}'")
+        else:
+            seen_ids[e.identifier] = e.name
+
+    sig = significant_overlaps(flashable)
+    for a, b, blocks in sig[:8]:
+        add("fail", "OVERLAP",
+            f"partitions '{a}' and '{b}' overlap by {blocks} blocks "
+            f"({blocks * SECTOR_SIZE} bytes) - corrupt or foreign table")
+
+    meta_pairs = [p for p in find_overlaps(flashable)
+                  if p not in {(x[0], x[1], x[2]) for x in sig}]
+    for a, b, blocks in meta_pairs[:4]:
+        add("info", "META_CONTAINMENT",
+            f"'{b}' is contained in '{a}' ({blocks} blocks) - normal for "
+            f"platform tables")
+
+    stats["total_bytes"] = sum(e.block_count for e in flashable) * SECTOR_SIZE
+    stats["style"] = pit_style(raw)
+    return _health_result(findings, stats)
+
+
+def _health_result(findings, stats):
+    verdict = "ok"
+    if any(f["severity"] == "fail" for f in findings):
+        verdict = "fail"
+    elif any(f["severity"] == "warn" for f in findings):
+        verdict = "warn"
+    return {"verdict": verdict, "findings": findings, "stats": stats}
+
+
+def pit_style(raw):
+    """Thor's old/new PIT semantic detection.
+
+    'new': blockSizeOrOffset varies between entries -> it carries START
+           BLOCKS (partition geometry present).
+    'old': uniform value -> legacy 'block size' semantics (RO/RW/STL +
+           FOTA/Secure bitmasks apply cleanly to attributes).
+    """
+    prev = None
+    for e in parse_pit(raw):
+        if e.block_size == 0 and e.block_count == 0:
+            continue  # placeholder rows carry no geometry
+        if prev is not None and e.block_size != prev:
+            return "new"
+        prev = e.block_size
+    return "old"
+
+
+def pit_health(raw: bytes):
+    """One-call health check used by flows/GUI: verdict + style + summary."""
+    result = validate_pit(raw)
+    stats = result["stats"]
+    result["summary"] = (
+        f"PIT {result['verdict'].upper()}: {stats['parsed_count']}/"
+        f"{stats['declared_count']} entries, style={stats['style']}, "
+        f"{human_size(stats['total_bytes'])} accounted"
+        + (f", model={stats['model']}" if stats["model"] else "")
+    )
+    return result
+
+
+def pit_map(raw: bytes, width: int = 46):
+    """ASCII storage-map bar with meta regions dimmed and overlaps marked.
+
+    Example:
+        storage map (new-style, 16.2 GB in table):
+        [pppppppp][iiiiiii][mmmmmmmmmm][BBBBBBBBBBBBBBBB>........]
+         pgpt 34B   pit 32B   md5hdr 8126B  bootloader ...
+    """
+    try:
+        entries = [e for e in parse_pit(raw) if e.block_count > 0]
+    except ValueError as e:
+        return f"storage map: unavailable ({e})"
+    style = pit_style(raw)
+    if not entries:
+        return "storage map: no sized partitions"
+
+    max_end = max(e.block_offset + e.block_count for e in entries)
+    total = sum(e.block_count for e in entries) * SECTOR_SIZE
+
+    def char_at(pos):
+        best = None
+        for e in entries:
+            if e.block_offset <= pos < e.block_offset + e.block_count:
+                span = e.block_count
+                if best is None or span < best[1]:
+                    best = (e, span)
+        if best is None:
+            return "."
+        e = best[0]
+        if is_meta_entry(e):
+            c = e.name.strip()[:1].lower() or "?"
+        else:
+            c = e.name.strip()[:1].upper() or "#"
+        return c
+
+    bar = "".join(char_at(i * max_end // width) for i in range(width))
+
+    legend = []
+    for e in sorted(entries, key=lambda x: -x.block_count)[:6]:
+        mark = "*" if is_meta_entry(e) else " "
+        legend.append(
+            f"{mark}{e.name:<14} start={e.block_offset:<9} "
+            f"{e.human_size():>9}"
+        )
+
+    lines = [
+        f"storage map ({style}-style, {human_size(total)} in table):",
+        f"[{bar}]",
+    ]
+    lines.extend(f"  {l}" for l in legend)
+    sig = significant_overlaps(entries)
+    if sig:
+        lines.append(
+            "  !! overlapping data partitions: "
+            + ", ".join(f"{a}<->{b}" for a, b, _ in sig)
+        )
+    return "\n".join(lines)
+
+
+def pit_diff(old_raw: bytes, new_raw: bytes):
+    """Diff two PITs by normalized partition name (identifier fallback).
+
+    Returns {'added': [...], 'removed': [...], 'changed': [...],
+             'unchanged': int}. Changed entries list which of
+    identifier/start/count/attributes/update_attributes moved.
+    """
+    def table(raw):
+        out = {}
+        for e in parse_pit(raw):
+            key = normalize_part_name(e.name) or f"id{e.identifier}"
+            out.setdefault(key, []).append(e)
+        flat = {k: v[0] for k, v in out.items()}
+        return flat
+
+    old_t, new_t = table(old_raw), table(new_raw)
+    added = sorted(set(new_t) - set(old_t))
+    removed = sorted(set(old_t) - set(new_t))
+    changed = []
+    unchanged = 0
+    for key in sorted(set(old_t) & set(new_t)):
+        o, n = old_t[key], new_t[key]
+        deltas = {}
+        for field in ("identifier", "block_offset", "block_count",
+                      "binary_type", "device_type", "attributes",
+                      "update_attributes"):
+            ov, nv = getattr(o, field), getattr(n, field)
+            if ov != nv:
+                deltas[field] = (ov, nv)
+        if deltas:
+            changed.append({"name": key, "changes": deltas})
+        else:
+            unchanged += 1
+    return {"added": added, "removed": removed,
+            "changed": changed, "unchanged": unchanged}
+
+
+def pit_diff_report(old_raw: bytes, new_raw: bytes):
+    """Human-readable diff ('no changes' when identical)."""
+    d = pit_diff(old_raw, new_raw)
+    lines = []
+    if not (d["added"] or d["removed"] or d["changed"]):
+        lines.append("PIT diff: no changes")
+        return "\n".join(lines)
+    if d["added"]:
+        lines.append("added:   " + ", ".join(d["added"]))
+    if d["removed"]:
+        lines.append("removed: " + ", ".join(d["removed"]))
+    for c in d["changed"]:
+        parts = ", ".join(
+            f"{f} {ov}->{nv}" for f, (ov, nv) in c["changes"].items()
+        )
+        lines.append(f"changed: {c['name']}: {parts}")
+    lines.append(f"unchanged: {d['unchanged']} partitions")
+    return "\n".join(lines)

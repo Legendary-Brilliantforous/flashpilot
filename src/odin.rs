@@ -903,7 +903,11 @@ fn reset_flash_count(dev: &Device) -> OdinResult<()> {
     odin_fail_check(&rsp, "ResetFlashCount", false)
 }
 
-/// Send the PIT to the device in its own session (for testing).
+/// Send the PIT to the device in its own session, then CLOSE THE LOOP:
+/// re-dump the device's PIT and hash-compare it against what was written.
+/// Heimdall pads the outgoing buffer to a 4096-byte multiple; the re-dump is
+/// compared over the unpadded length so padding differences never cause
+/// false failures. No other tool performs this verification automatically.
 pub fn odin_send_pit(target: &str, pit_file: &str) -> Result<String> {
     let pit = std::fs::read(pit_file).map_err(|e| format!("read pit: {e}"))?;
     let dev = open_device(target).map_err(|e| e.to_string())?;
@@ -913,21 +917,53 @@ pub fn odin_send_pit(target: &str, pit_file: &str) -> Result<String> {
     eprintln!("[pit] session ok");
     send_pit(&dev, &pit, 15).map_err(|e| e.to_string())?;
     eprintln!("[pit] pit send ok, {} bytes", pit.len());
+
+    // Post-write verification: re-dump from the device and compare.
+    eprintln!("[pit] verifying: re-dumping device PIT...");
+    let redump = dev.dump_pit().unwrap_or_default();
+    let n = pit.len().min(redump.len());
+    let verified = !redump.is_empty()
+        && redump.len() >= pit.len()
+        && pit[..n] == redump[..n];
+    if verified {
+        eprintln!("[pit] verification OK (re-dumped {} bytes match)", redump.len());
+    } else {
+        eprintln!(
+            "[pit] verification MISMATCH: sent {} bytes, re-dumped {} bytes",
+            pit.len(),
+            redump.len()
+        );
+    }
     if let Err(e) = end_session_v2(&dev) {
         eprintln!("[pit] end_session warning (non-fatal): {e}");
     }
-    Ok(format!("{{\"sent\": {}}}", pit.len()))
+    Ok(json!({
+        "sent": pit.len(),
+        "redump": redump.len(),
+        "verified": verified,
+    })
+    .to_string())
 }
 
-/// Send the PIT to the device (RQT_PIT_SET flow) matching odin4:
-/// 0x65/0x00 PIT_SET -> ack; 0x65/0x02 PIT_START(size) -> ack;
-/// bulk-write PIT data -> 8-byte ack; 0x65/0x03 PIT_COMPLETE -> ack.
+/// Send the PIT to the device (RQT_PIT_SET flow) matching odin4, with the
+/// outgoing buffer padded to a 4096-byte multiple like Heimdall's
+/// GetPaddedSize(): 0x65/0x00 PIT_SET -> ack; 0x65/0x02 PIT_START(size of
+/// PADDED buffer) -> ack; bulk-write PIT data -> 8-byte ack;
+/// 0x65/0x03 PIT_COMPLETE -> ack.
 fn send_pit(dev: &Device, pit: &[u8], timeout: u64) -> OdinResult<()> {
+    const PAD_MULTIPLE: usize = 4096;
+    let padded_len = pit.len().div_ceil(PAD_MULTIPLE) * PAD_MULTIPLE;
+    let mut padded = vec![0u8; padded_len];
+    padded[..pit.len()].copy_from_slice(pit);
+    eprintln!(
+        "[pit] sending {} bytes (padded to {padded_len})",
+        pit.len()
+    );
     let rsp = odin_command(dev, 0x65, 0x00, &[], timeout)?;
     odin_fail_check(&rsp, "PitSet", false)?;
-    let rsp = odin_command(dev, 0x65, 0x02, &(pit.len() as u32).to_le_bytes(), timeout)?;
+    let rsp = odin_command(dev, 0x65, 0x02, &(padded_len as u32).to_le_bytes(), timeout)?;
     odin_fail_check(&rsp, "PitStart", false)?;
-    dev.send_raw(pit)?;
+    dev.send_raw(&padded)?;
     let rsp = dev.recv_raw(512, timeout)?;
     odin_fail_check(&rsp, "PitData", false)?;
     let rsp = odin_command(dev, 0x65, 0x03, &[], timeout)?;

@@ -23,8 +23,15 @@ from python.core.pit import (
     parse_header,
     parse_model,
     parse_pit,
+    pit_diff,
+    pit_diff_report,
+    pit_health,
+    pit_map,
     pit_report,
+    pit_style,
+    significant_overlaps,
     validate_and_sanitize_pit,
+    validate_pit,
 )
 
 PIT_DIR = os.path.join(os.path.dirname(__file__), "..", "pit")
@@ -324,3 +331,121 @@ class TestPITConstants:
 
     def test_magic(self):
         assert PIT_MAGIC == 0x12349876
+
+
+class TestPITIntelligence:
+    """Forensic validation, style detection, diff and storage map."""
+
+    def test_validate_healthy_pit_is_ok(self):
+        pit = make_pit([
+            dict(name="boot", flash="boot.img", identifier=1,
+                 block_offset=1024, block_count=512),
+            dict(name="system", flash="system.img", identifier=2,
+                 block_offset=1536, block_count=4096),
+        ])
+        h = validate_pit(pit)
+        assert h["verdict"] == "ok"
+        codes = {f["code"] for f in h["findings"]}
+        assert "OVERLAP" not in codes and "DUPLICATE_IDENTIFIER" not in codes
+
+    def test_validate_bad_magic_fails(self):
+        h = validate_pit(b"BADMAGIC" + b"\0" * 24)
+        assert h["verdict"] == "fail"
+        assert any(f["code"] == "BAD_MAGIC" for f in h["findings"])
+
+    def test_validate_truncated_fails(self):
+        raw = make_pit([dict(name=f"p{i}", identifier=i + 1) for i in range(4)])
+        h = validate_pit(raw[:60])  # cut mid-entries
+        assert any(f["code"] == "TRUNCATED" for f in h["findings"])
+
+    def test_validate_identifier_zero_and_duplicates_fail(self):
+        pit = make_pit([
+            dict(name="a", identifier=0),
+            dict(name="b", identifier=7),
+            dict(name="c", identifier=7),
+        ])
+        codes = {f["code"] for f in validate_pit(pit)["findings"]}
+        assert "IDENTIFIER_ZERO" in codes
+        assert "DUPLICATE_IDENTIFIER" in codes
+
+    def test_validate_data_overlap_fails_meta_ok(self):
+        # data-vs-data overlap -> fail
+        bad = make_pit([
+            dict(name="a", identifier=1, block_offset=1024, block_count=512),
+            dict(name="b", identifier=2, block_offset=1280, block_count=512),
+        ])
+        h = validate_pit(bad)
+        assert h["verdict"] == "fail"
+        assert any(f["code"] == "OVERLAP" for f in h["findings"])
+
+        # bootloader containing meta regions -> info only (real MTK dumps)
+        ok = make_pit([
+            dict(name="bootloader", identifier=80, block_offset=0, block_count=8192),
+            dict(name="pgpt", identifier=70, block_offset=0, block_count=34),
+            dict(name="pit", identifier=71, block_offset=34, block_count=32),
+        ])
+        h2 = validate_pit(ok)
+        assert h2["verdict"] == "ok"
+        assert not any(f["code"] == "OVERLAP" for f in h2["findings"])
+
+    def test_style_detection(self):
+        # varying start blocks -> new-style (like real MTK dumps)
+        new_pit = make_pit([
+            dict(name="pgpt", identifier=70, block_offset=0, block_count=34),
+            dict(name="efs", identifier=1, block_offset=34, block_count=100),
+        ])
+        assert pit_style(new_pit) == "new"
+        # uniform blockSizeOrOffset -> old-style
+        old_pit = make_pit([
+            dict(name="a", identifier=1, block_offset=512, block_count=10),
+            dict(name="b", identifier=2, block_offset=512, block_count=20),
+        ])
+        assert pit_style(old_pit) == "old"
+
+    def test_health_summary(self):
+        raw = self_real_dump()
+        if raw is None:
+            pytest.skip("real PIT fixture not present")
+        h = pit_health(raw)
+        assert h["verdict"] in ("ok", "warn")
+        assert "style=new" in h["summary"]
+        assert h["stats"]["parsed_count"] > 10
+
+    def test_map_renders_with_legend(self):
+        pit = make_pit([
+            dict(name="boot", identifier=1, block_offset=0, block_count=512),
+            dict(name="cache", identifier=2, block_offset=512, block_count=256),
+        ])
+        m = pit_map(pit)
+        assert "[BBB" in m and "CCC" in m  # uppercase initials, meta = lowercase
+        assert "boot" in m and "cache" in m
+
+    def test_diff_added_removed_changed(self):
+        old = make_pit([
+            dict(name="boot", identifier=1, block_offset=0, block_count=512),
+            dict(name="oldpart", identifier=9, block_offset=512, block_count=64),
+        ])
+        new = make_pit([
+            dict(name="boot", identifier=1, block_offset=0, block_count=1024),  # resized
+            dict(name="vendor", identifier=5, block_offset=512, block_count=64),  # added
+        ])
+        d = pit_diff(old, new)
+        assert d["added"] == ["vendor"]
+        assert d["removed"] == ["oldpart"]
+        assert len(d["changed"]) == 1
+        assert d["changed"][0]["name"] == "boot"
+        assert "block_count" in d["changed"][0]["changes"]
+        rep = pit_diff_report(old, new)
+        assert "added:" in rep and "removed:" in rep and "changed: boot" in rep
+
+    def test_diff_identical(self):
+        pit = make_pit([dict(name="boot", identifier=1)])
+        assert "no changes" in pit_diff_report(pit, pit)
+
+
+def self_real_dump():
+    """Load the repo's real A14M dump if present."""
+    path = os.path.join(PIT_DIR, "A14M_MEA_OPEN.pit")
+    if os.path.exists(path):
+        return open(path, "rb").read()
+    return None
