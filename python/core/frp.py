@@ -504,7 +504,6 @@ def flow_download_mode_info():
                     model = pm
                     log(f"  Model (PIT header): {model}")
             entries = pit.parse_pit(raw)
-            log(f"  PIT layout: {pit.pit_layout(raw)}")
             # Full Odin/Heimdall-style table: names, start blocks, sizes,
             # RO/FOTA/secure flags and flash filenames.
             for line in pit.pit_report(raw).splitlines()[1:]:

@@ -564,7 +564,7 @@ pub fn odin_pit_mtk(target: &str, out_file: Option<&str>) -> Result<String> {
             "{{\"size\": {}, \"entries\": {}, \"model\": \"{}\", \"file\": \"{}\"}}",
             pit.len(),
             count,
-            String::from_utf8_lossy(&pit[8..28]).trim_matches('\0'),
+            String::from_utf8_lossy(&pit[8..24]).trim_matches('\0'),
             path
         ));
     }
@@ -946,64 +946,35 @@ fn reboot_v2(dev: &Device) -> OdinResult<()> {
     odin_fail_check(&rsp, "Reboot", false)
 }
 
-/// Pick the string-field offsets that decode valid partition names for this
-/// PIT: (32, 64) for Samsung-MTK DA-synthesized tables, (36, 68) for classic
-/// Loke/Exynos PITs. Ties go to the classic layout.
-fn pit_name_offsets(pit: &[u8], entry_count: usize) -> (usize, usize) {
-    let score = |name_off: usize| -> usize {
-        let mut good = 0;
-        for i in 0..entry_count.min(512) {
-            let base = 32 + i * 132;
-            if base + 132 > pit.len() {
-                break;
-            }
-            let field = &pit[base + name_off..base + name_off + 32];
-            match field.iter().position(|&b| b == 0) {
-                Some(end) if end > 0 => {
-                    if field[..end].iter().all(|&b| (0x20..0x7f).contains(&b)) {
-                        good += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-        good
-    };
-    let (mtk_score, classic_score) = (score(32), score(36));
-    if classic_score > mtk_score {
-        (36, 68)
-    } else {
-        (32, 64)
-    }
-}
-
-/// Find a PIT entry by partition name and return (binary_type, device_type, identifier).
+/// Find a PIT entry by partition name and return
+/// (binary_type, device_type, identifier, blockSizeOrOffset, blockCount).
 fn find_pit_entry(
     pit: &[u8],
     name: &str,
 ) -> std::result::Result<(u32, u32, u32, u32, u32), String> {
-    if pit.len() < 32 {
+    // True PIT layout - verified against Heimdall libpit.h, Thor's extended
+    // parser and our own real device dumps: 28-byte header (magic @0,
+    // count @4, model strings @8..24, reserved @24), then 132-byte entries.
+    // Within an entry: binaryType@0 deviceType@4 identifier@8 attributes@12
+    // updateAttributes@16 blockSizeOrOffset@20 blockCount@24 fileOffset@28
+    // fileSize@32, then partitionName@36 flashFileName@68 deltaFileName@100.
+    const BASE: usize = 28;
+    if pit.len() < BASE {
         return Err("PIT too small".into());
     }
     let entry_count = u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
-    // PIT layout - two variants coexist (both 132-byte entries after a
-    // 32-byte header): classic Loke/Exynos PITs carry an obsolete fileSize
-    // u32 at +32 and strings at +36/+68/+100; Samsung-MTK DA-synthesized
-    // PITs (A14/A06 class) drop that field so strings sit at +32/+64/+96.
-    // Score both against the real bytes and use whichever decodes names.
-    let (name_off, fname_off) = pit_name_offsets(pit, entry_count);
     for i in 0..entry_count {
-        let off = 32 + i * 132;
+        let off = BASE + i * 132;
         if off + 132 > pit.len() {
             break;
         }
         let entry = &pit[off..off + 132];
-        let pname_bytes = &entry[name_off..name_off + 32];
+        let pname_bytes = &entry[36..68];
         let pname_end = pname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let pname = String::from_utf8_lossy(&pname_bytes[..pname_end]).to_string();
         // Also match by the PIT flash_filename field (e.g. preloader.img
         // maps to the bootloader partition, lk-verified.img to lk).
-        let fname_bytes = &entry[fname_off..fname_off + 32];
+        let fname_bytes = &entry[68..100];
         let fname_end = fname_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         let fname = String::from_utf8_lossy(&fname_bytes[..fname_end]).to_string();
         if pname == name || fname == name {
@@ -1250,7 +1221,8 @@ mod tests {
     use super::*;
 
     fn make_pit(entries: usize) -> Vec<u8> {
-        let mut pit = vec![0u8; 32];
+        // True layout: 28-byte header, entries at 28.
+        let mut pit = vec![0u8; 28];
         pit[0..4].copy_from_slice(&0x12349876u32.to_le_bytes());
         pit[4..8].copy_from_slice(&(entries as u32).to_le_bytes());
         for i in 0..entries {
@@ -1258,7 +1230,7 @@ mod tests {
             e[0..4].copy_from_slice(&1u32.to_le_bytes()); // binary_type
             e[4..8].copy_from_slice(&0x50u32.to_le_bytes()); // device_type
             e[8..12].copy_from_slice(&(i as u32).to_le_bytes()); // identifier
-            e[20..24].copy_from_slice(&512u32.to_le_bytes()); // block_size
+            e[20..24].copy_from_slice(&512u32.to_le_bytes()); // blockSizeOrOffset
             e[24..28].copy_from_slice(&8u32.to_le_bytes()); // block_count
             let name = format!("partition{i}");
             e[36..36 + name.len()].copy_from_slice(name.as_bytes());
@@ -1298,16 +1270,17 @@ mod tests {
 
     #[test]
     fn find_pit_entry_real_a14m_pit() {
-        // Regression test against the real firmware PIT in the repo: the first
-        // entry must resolve to binary_type=2, device_type=0x50, identifier=2
-        // (the old offset code read these 4 bytes early and got zeros).
+        // Regression against the real firmware PIT in the repo, decoded with
+        // the true layout (28-byte header): the bootloader partition must
+        // resolve to binary_type=0 (AP), device_type=2 (MMC/eMMC),
+        // identifier=80, start block 0, count 8192.
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/pit/A14M_MEA_OPEN.pit");
         let pit = std::fs::read(path).expect("real PIT present");
-        let (bt, dt, id, _, _) = find_pit_entry(&pit, "bootloader").unwrap();
-        assert_eq!((bt, dt, id), (2, 0x50, 2));
-        // flash_filename fallback lookup also resolves.
+        let (bt, dt, id, bs, bc) = find_pit_entry(&pit, "bootloader").unwrap();
+        assert_eq!((bt, dt, id, bs, bc), (0, 2, 80, 0, 8192));
+        // flash_filename fallback lookup also resolves to the same entry.
         let (bt2, _, id2, _, _) = find_pit_entry(&pit, "preloader.img").unwrap();
-        assert_eq!((bt2, id2), (2, 2));
+        assert_eq!((bt2, id2), (0, 80));
     }
 
     #[test]

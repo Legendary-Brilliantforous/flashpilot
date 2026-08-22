@@ -1,77 +1,110 @@
 """Samsung PIT (Partition Information Table) parsing.
 
-Two entry layouts coexist in the wild (both 132 bytes):
+Layout below is the single true format, cross-verified between Heimdall
+libpit.h/cpp, TheAirBlow/Thor's extended PIT parser, and FlashPilot's own
+real device dumps (pit/A14M_MEA_OPEN.pit, pit/device_2_84.pit):
 
-* Classic Loke/Exynos PITs - documented by Heimdall libpit.h: five u32s,
-  blockSizeOrOffset@20, blockCount@24, obsolete fileOffset@28, obsolete
-  fileSize@32, then strings at +36 (name) / +68 (flash) / +100 (fota).
-* Samsung-MTK DA-synthesized PITs (A14/A06 class, dumped from real devices
-  in pit/A14M_MEA_OPEN.pit): the fileSize field is absent, so strings sit
-  four bytes earlier at +32 / +64 / +96.
+Header - 28 bytes:
+    magic u32   @0   = 0x12349876
+    entryCount  @4
+    Unknown[8]  @8    } model/project string ("COM_TAR2" + "MTK6765")
+    Project[8]  @16   }
+    Reserved u32@24
 
-Reading a PIT with the wrong layout yields empty or garbage partition names
-(silent total failure). parse_pit() therefore scores both layouts against
-the actual bytes and picks the one that decodes valid names.
+Entry - 132 bytes each, starting at offset 28:
+    binaryType        u32  @+0   (0=AP, 1=CP)
+    deviceType        u32  @+4
+    identifier        u32  @+8
+    attributes        u32  @+12
+    updateAttributes  u32  @+16
+    blockSizeOrOffset u32  @+20  ("start block" on new-style PITs)
+    blockCount        u32  @+24
+    fileOffset        u32  @+28  (obsolete)
+    fileSize          u32  @+32  (obsolete)
+    partitionName[32]     @+36
+    flashFileName[32]     @+68
+    deltaFileName[32]     @+100
+
+Earlier revisions of this parser used a 32-byte header, which shifted every
+numeric field one slot late (deviceType read as binaryType, etc.) while the
+partition names happened to still land correctly - masking the bug.
 """
 
 import struct
 
 PIT_MAGIC = 0x12349876
-HEADER_SIZE = 32   # kHeaderDataSize
+HEADER_SIZE = 28   # magic + count + Unknown[8] + Project[8] + Reserved
 ENTRY_SIZE = 132   # kDataSize
 SECTOR_SIZE = 512  # eMMC sector size used for block->byte math
 
-# Entry field offsets shared by both layouts
+# Header offsets
+HDR_MAGIC_OFF = 0
+HDR_COUNT_OFF = 4
+HDR_UNKNOWN_OFF = 8    # 8-byte string
+HDR_PROJECT_OFF = 16   # 8-byte string
+HDR_RESERVED_OFF = 24
+
+# Entry field offsets (relative to the start of each 132-byte entry)
 BINARY_TYPE_OFF = 0
 DEVICE_TYPE_OFF = 4
 IDENTIFIER_OFF = 8
 ATTRIBUTES_OFF = 12
 UPDATE_ATTRIBUTES_OFF = 16
-BLOCK_OFFSET_OFF = 20      # "Partition Block Size/Offset" in Heimdall
+BLOCK_OFFSET_OFF = 20      # blockSizeOrOffset - "start block" on new-style PITs
 BLOCK_COUNT_OFF = 24
-FILE_OFFSET_OFF = 28       # obsolete (classic)
-FILE_SIZE_OFF = 32         # obsolete - only present in the classic layout
+FILE_OFFSET_OFF = 28       # obsolete
+FILE_SIZE_OFF = 32         # obsolete
+NAME_OFF = 36              # partitionName[32]
+FLASH_OFF = 68             # flashFileName[32]
+DELTA_OFF = 100            # deltaFileName[32]
 
-# String-field offsets per layout
-NAME_OFF_CLASSIC = 36      # classic Loke/Exynos (fileSize@32 present)
-NAME_OFF_MTK = 32          # Samsung-MTK DA-synthesized (no fileSize field)
+# Well-known identifiers reserved by Samsung platform tables
+RESERVED_IDENTIFIERS = {70: "pgpt", 71: "pit", 72: "md5hdr"}
+
+# Partition-table metadata regions. On real MTK-synthesized PITs the
+# 'bootloader' entry spans the whole preloader area and CONTAINS pgpt/pit/
+# md5hdr - overlap with these meta partitions is normal, not corruption.
+META_PART_NAMES = {"pgpt", "gpt", "pit", "md5hdr"}
+META_IDENTIFIERS = set(RESERVED_IDENTIFIERS)
 
 BINARY_TYPES = {0: "AP", 1: "CP"}
 DEVICE_TYPES = {0: "OneNAND", 1: "File/FAT", 2: "MMC", 3: "All"}
 
-ATTR_WRITE = 0x1   # set => Read/Write, clear => Read-Only
-ATTR_STL = 0x2
-UPD_FOTA = 0x1
+ATTR_WRITE = 0x1   # old-style: set => Read/Write, clear => Read-Only
+ATTR_STL = 0x2     # old-style: STL flag
+UPD_FOTA = 0x1     # old-style updateAttributes bits
 UPD_SECURE = 0x2
 
 
 class PitEntry:
-    def __init__(self, data, index, name_off=NAME_OFF_MTK):
+    def __init__(self, data, index):
         self.index = index
-        self.name_off = name_off
         (
             self.binary_type,
             self.device_type,
             self.identifier,
             self.attributes,
             self.update_attributes,
-            self.block_size,     # blockSizeOrOffset: start block / byte offset
+            self.block_size,     # blockSizeOrOffset: start block (new-style)
             self.block_count,
             self.file_offset,    # obsolete
         ) = struct.unpack_from("<8I", data, BINARY_TYPE_OFF)
-        if name_off == NAME_OFF_CLASSIC:
-            self.file_size = struct.unpack_from("<I", data, FILE_SIZE_OFF)[0]
-        else:
-            self.file_size = 0
-        self.name = _str_at(data, name_off)
-        self.flash_filename = _str_at(data, name_off + 32)
-        self.fota_filename = _str_at(data, name_off + 64)
+        self.file_size = struct.unpack_from("<I", data, FILE_SIZE_OFF)[0]
+        self.name = _str_at(data, NAME_OFF)
+        self.flash_filename = _str_at(data, FLASH_OFF)
+        self.delta_filename = _str_at(data, DELTA_OFF)
+
+    # Historical alias: third string was widely documented as the FOTA name;
+    # Thor identified it as the delta filename. Same field.
+    @property
+    def fota_filename(self):
+        return self.delta_filename
 
     # ---- semantic helpers -------------------------------------------------
     @property
     def block_offset(self):
-        """Alias for the 'block size or offset' field - on eMMC PITs this is
-        the partition's start block (entries chain start+count -> next)."""
+        """Alias for blockSizeOrOffset - on new-style PITs this chains as the
+        partition's start block."""
         return self.block_size
 
     def size_bytes(self):
@@ -86,7 +119,8 @@ class PitEntry:
         n = self.name.strip()
         return bool(n) and not n.startswith(".")
 
-    # ---- decoded flag properties (Heimdall PrintPit semantics) ------------
+    # ---- decoded flag properties (Heimdall PrintPit semantics; these map to
+    # the OLD-style attribute bitmasks - see pit_style()) ---------------
     @property
     def is_read_only(self):
         return not (self.attributes & ATTR_WRITE)
@@ -115,12 +149,12 @@ class PitEntry:
         return (
             f"PitEntry({self.index}: name={self.name!r} "
             f"file={self.flash_filename!r} device_type={self.device_type:#x} "
-            f"size={self.size_bytes()})"
+            f"identifier={self.identifier} size={self.size_bytes()})"
         )
 
 
 def human_size(n):
-    """Bytes -> compact human string (Heimdall-style)."""
+    """Bytes -> compact human string."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(n) < 1024 or unit == "TB":
             return f"{n:.1f} {unit}" if unit != "B" else f"{n} {unit}"
@@ -134,79 +168,53 @@ def _str_at(data, offset):
     return data[offset:end].decode("ascii", errors="replace")
 
 
-def _clean_name_at(data, off):
-    """Decode a 32-byte NUL-padded string field; return the text only when it
-    is non-empty printable ASCII terminated by NUL or the field end."""
-    if off + 32 > len(data):
+def _clean_str_at(data, offset):
+    """Decode a NUL-padded 32-byte string field; non-empty printable ASCII
+    only (used by validation)."""
+    if offset + 32 > len(data):
         return ""
-    raw = data[off : off + 32]
+    raw = data[offset : offset + 32]
     end = raw.find(b"\x00")
     if end <= 0:
-        return "" if end == 0 else raw.decode("ascii", errors="replace")
+        return ""
     text = raw[:end]
     if all(0x20 <= b < 0x7F for b in text):
         return text.decode("ascii")
     return ""
 
 
-def detect_name_offset(raw: bytes) -> int:
-    """Score both known string layouts against the actual PIT bytes and
-    return the name-field offset (32 = MTK-DA, 36 = classic Loke) that
-    decodes valid partition names. Ties go to the classic layout.
-    """
-    if len(raw) < HEADER_SIZE + ENTRY_SIZE:
-        return NAME_OFF_MTK
-    count = struct.unpack_from("<I", raw, 4)[0]
-    scores = {NAME_OFF_MTK: 0, NAME_OFF_CLASSIC: 0}
-    for off in scores:
-        good = 0
-        for i in range(min(count, 512)):
-            base = HEADER_SIZE + i * ENTRY_SIZE
-            if base + ENTRY_SIZE > len(raw):
-                break
-            if _clean_name_at(raw, base + off):
-                good += 1
-        scores[off] = good
-    return (
-        NAME_OFF_CLASSIC
-        if scores[NAME_OFF_CLASSIC] >= scores[NAME_OFF_MTK] and scores[NAME_OFF_CLASSIC] > 0
-        else NAME_OFF_MTK
-    )
+def parse_header(raw: bytes):
+    """Return (model, unknown, project, reserved) from the 28-byte header."""
+    if len(raw) < HEADER_SIZE:
+        return "", "", "", 0
+    unknown = _str_at(raw[:HEADER_SIZE], HDR_UNKNOWN_OFF)[:8]
+    project = _str_at(raw[:HEADER_SIZE], HDR_PROJECT_OFF)[:8]
+    reserved = struct.unpack_from("<I", raw, HDR_RESERVED_OFF)[0]
+    model = (unknown + project).strip("\x00").strip()
+    return model, unknown.rstrip("\x00"), project.rstrip("\x00"), reserved
 
 
-def pit_layout(raw: bytes):
-    """'mtk' | 'classic' - which entry variant detect_name_offset picked."""
-    return "classic" if detect_name_offset(raw) == NAME_OFF_CLASSIC else "mtk"
+def parse_model(raw: bytes):
+    """Model/project string from the PIT header ('COM_TAR2MTK6765')."""
+    return parse_header(raw)[0]
 
 
-def parse_pit(raw: bytes, name_off=None):
+def parse_pit(raw: bytes):
     if len(raw) < HEADER_SIZE:
         raise ValueError("PIT too short")
-    magic = struct.unpack_from("<I", raw, 0)[0]
+    magic = struct.unpack_from("<I", raw, HDR_MAGIC_OFF)[0]
     if magic != PIT_MAGIC:
         raise ValueError(f"bad PIT magic: {magic:#x}")
-    count = struct.unpack_from("<I", raw, 4)[0]
-    if name_off is None:
-        name_off = detect_name_offset(raw)
+    count = struct.unpack_from("<I", raw, HDR_COUNT_OFF)[0]
     entries = []
     for i in range(count):
         off = HEADER_SIZE + i * ENTRY_SIZE
         if off + ENTRY_SIZE > len(raw):
             break
-        entry = PitEntry(raw[off : off + ENTRY_SIZE], i, name_off=name_off)
+        entry = PitEntry(raw[off : off + ENTRY_SIZE], i)
         if entry.is_flashable():
             entries.append(entry)
     return entries
-
-
-def parse_model(raw: bytes):
-    """Read the model string from the PIT header (offset 8), as Odin does."""
-    if len(raw) < HEADER_SIZE:
-        return ""
-    end = raw.find(b"\x00", 8)
-    if end == -1 or end > 64:
-        end = 64
-    return raw[8:end].decode("ascii", errors="replace").strip()
 
 
 # Suffixes firmware archives put on image files that must not take part in
@@ -277,26 +285,51 @@ def find_partition(entries_or_raw, name: str):
     return None
 
 
+def is_meta_entry(entry):
+    """True for partition-table metadata regions (pgpt/pit/md5hdr)."""
+    return (
+        entry.name.strip().lower() in META_PART_NAMES
+        or entry.identifier in META_IDENTIFIERS
+    )
+
+
 def find_overlaps(entries):
     """Detect partitions whose block ranges collide - a corrupt or foreign
     PIT indicator that Odin happily flashes anyway (brick risk).
 
     Entries with zero block_count are skipped. Returns a list of
-    (name_a, name_b, overlap_blocks) tuples.
+    (name_a, name_b, overlap_blocks) tuples, including meta-partition
+    containment (which is normal) - use significant_overlaps() for the
+    corruption-relevant subset.
     """
     ranges = []
     for e in entries:
         if e.block_count == 0:
             continue
-        ranges.append((e.name, e.block_offset, e.block_offset + e.block_count))
+        ranges.append((e, e.block_offset, e.block_offset + e.block_count))
     ranges.sort(key=lambda r: r[1])
     out = []
     for i in range(1, len(ranges)):
-        prev_name, prev_start, prev_end = ranges[i - 1]
-        name, start, end = ranges[i]
+        prev_e, prev_start, prev_end = ranges[i - 1]
+        cur_e, start, end = ranges[i]
         if start < prev_end:
             overlap = min(prev_end, end) - start
-            out.append((prev_name, name, overlap))
+            out.append((prev_e.name, cur_e.name, overlap))
+    return out
+
+
+def significant_overlaps(entries):
+    """Overlaps that indicate real corruption: collisions where NEITHER side
+    is a known metadata region (pgpt/pit/md5hdr)."""
+    by_name = {e.name: e for e in entries}
+    out = []
+    for a, b, blocks in find_overlaps(entries):
+        ea, eb = by_name.get(a), by_name.get(b)
+        if ea is None or eb is None:
+            out.append((a, b, blocks))
+            continue
+        if not (is_meta_entry(ea) or is_meta_entry(eb)):
+            out.append((a, b, blocks))
     return out
 
 
@@ -307,11 +340,11 @@ def pit_report(raw: bytes):
     entries = parse_pit(raw)
     model = parse_model(raw)
     lines = []
-    header = f"PIT: {len(entries)} partitions  layout={pit_layout(raw)}"
+    header = f"PIT: {len(entries)} partitions"
     if model:
         header += f"  model={model}"
     lines.append(header)
-    overlaps = find_overlaps(entries)
+    overlaps = significant_overlaps(entries)
     if overlaps:
         lines.append(
             "WARNING: overlapping partitions (corrupt/foreign PIT): "

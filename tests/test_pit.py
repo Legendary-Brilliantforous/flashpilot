@@ -1,8 +1,10 @@
 """Tests for PIT parsing (pit.py).
 
-Two real-world entry layouts exist (both 132 bytes): classic Loke/Exynos
-(strings @36/68/100, obsolete fileSize@32) and Samsung-MTK DA-synthesized
-(strings @32/64/96). Fixtures cover both plus the repo's real device dumps.
+Fixtures use the single true layout (verified against Heimdall libpit,
+Thor's extended parser and the repo's real device dumps):
+  header = 28 bytes: magic@0 count@4 Unknown[8]@8 Project[8]@16 Reserved@24
+  entry  = 132 bytes: binType devType ident attr updAttr blockSizeOrOffset@20
+           blockCount@24 fileOffset@28 fileSize@32 name@36 flash@68 delta@100
 """
 import os
 import struct
@@ -14,14 +16,13 @@ from python.core.pit import (
     HEADER_SIZE,
     PIT_MAGIC,
     PitEntry,
-    detect_name_offset,
     find_overlaps,
     find_partition,
     human_size,
     normalize_part_name,
+    parse_header,
     parse_model,
     parse_pit,
-    pit_layout,
     pit_report,
     validate_and_sanitize_pit,
 )
@@ -31,25 +32,26 @@ PIT_DIR = os.path.join(os.path.dirname(__file__), "..", "pit")
 
 def make_entry(name="", flash="", fota="", identifier=0, dev_type=0x50,
                binary_type=1, attributes=1, update_attributes=0,
-               block_offset=0, block_count=0, name_off=32):
+               block_offset=0, block_count=0):
     e = bytearray(ENTRY_SIZE)
-    struct.pack_into("<8I", e, 0, binary_type, dev_type, identifier,
-                     attributes, update_attributes, block_offset, block_count, 0)
-    if name_off == 36:
-        struct.pack_into("<I", e, 32, 0)  # obsolete file size (classic only)
-    e[name_off:name_off + len(name)] = name.encode()
-    e[name_off + 32:name_off + 32 + len(flash)] = flash.encode()
-    e[name_off + 64:name_off + 64 + len(fota)] = fota.encode()
+    struct.pack_into("<9I", e, 0, binary_type, dev_type, identifier,
+                     attributes, update_attributes, block_offset,
+                     block_count, 0, 0)  # 8 fields + obsolete fileOffset + fileSize
+    struct.pack_into("<I", e, 32, 0)  # obsolete fileSize
+    e[36:36 + len(name)] = name.encode()
+    e[68:68 + len(flash)] = flash.encode()
+    e[100:100 + len(fota)] = fota.encode()
     return bytes(e)
 
 
 def make_pit(entries):
-    """entries: list of kwargs dicts (or bytes) -> raw PIT."""
+    """entries: list of kwargs dicts (or raw 132-byte entries) -> raw PIT."""
     pit = bytearray(HEADER_SIZE)
     pit[0:4] = PIT_MAGIC.to_bytes(4, "little")
     pit[4:8] = len(entries).to_bytes(4, "little")
-    pit[8:8 + len("TESTMODEL")] = b"TESTMODEL"
-    for i, spec in enumerate(entries):
+    pit[8:16] = b"COM_TAR2"
+    pit[16:24] = b"MTK6765\x00"
+    for spec in entries:
         if isinstance(spec, (bytes, bytearray)):
             entry = bytes(spec)
         else:
@@ -61,6 +63,13 @@ def make_pit(entries):
 class TestPITParsing:
     """Test PIT binary parsing round-trips and edge cases."""
 
+    def test_parse_header(self):
+        model, unknown, project, reserved = parse_header(make_pit([]))
+        assert model == "COM_TAR2MTK6765"
+        assert unknown == "COM_TAR2"
+        assert project == "MTK6765"
+        assert reserved == 0
+
     def test_parse_model_from_firmware_pit(self):
         """Model string extraction matches Odin behavior."""
         raw = bytes.fromhex(
@@ -70,11 +79,12 @@ class TestPITParsing:
         assert parse_model(raw) == "COM_TAR2MTK6765"
 
     def test_parse_model_empty(self):
+        # Too-short input (< 28-byte header)
         assert parse_model(b"") == ""
-        assert parse_model(b"x" * 31) == ""
-        # Wrong magic
+        assert parse_model(b"x" * 27) == ""
+        # No magic validation in parse_model - it just reads the string area
         raw = bytes.fromhex("0000000039000000" + "434f4d5f544152324d544b363736350000000000000000")
-        assert parse_model(raw) == ""
+        assert parse_model(raw) == "COM_TAR2MTK6765"
 
     def test_parse_pit_valid(self):
         """Parse a synthetic valid PIT and check field extraction."""
@@ -93,55 +103,22 @@ class TestPITParsing:
         assert e_last.name == "sgpt"
         assert e_last.flash_filename == "sgpt.img"
 
-    def test_layout_autodetection(self):
-        """Both real layouts must parse: MTK-DA (names@32) and classic
-        Loke (names@36). Wrong-layout reads yield empty names, which is
-        the silent failure mode this guards against."""
-        mtk = make_pit([dict(name="boot", flash="boot.img"),
-                        dict(name="cache", flash="cache.img")])
-        assert pit_layout(mtk) == "mtk"
-        entries = parse_pit(mtk)
-        assert [e.name for e in entries] == ["boot", "cache"]
+    def test_true_layout_field_positions(self):
+        """Regression: numeric fields must decode unshifted.
 
-        classic = make_pit([
-            dict(name="boot", flash="boot.img", name_off=36),
-            dict(name="cache", flash="cache.img", name_off=36),
-        ])
-        assert pit_layout(classic) == "classic"
-        entries = parse_pit(classic)
-        assert [e.name for e in entries] == ["boot", "cache"]
-        # classic layout carries the obsolete fileSize field at +32
-        assert entries[0].file_size == 0
-
-    def test_real_device_pits_in_repo(self):
-        """Regression against actual device dumps shipped in pit/.
-
-        A14M_MEA_OPEN.pit was dumped from a Samsung MTK device - it uses
-        the MTK-DA layout. These tests fail if layout detection or entry
-        parsing regresses.
+        The old parser used a 32-byte header, shifting every int one field
+        late while names still landed correctly - masking the bug.
         """
-        path = os.path.join(PIT_DIR, "A14M_MEA_OPEN.pit")
-        if not os.path.exists(path):
-            pytest.skip("real PIT fixture not present")
-        raw = open(path, "rb").read()
-        assert pit_layout(raw) == "mtk"
-        entries = parse_pit(raw)
-        assert len(entries) > 10  # 57 declared in header
-        first = find_partition(entries, "bootloader")
-        assert first is not None
-        assert first.flash_filename == "preloader.img"
-        assert first.identifier == 2
-        assert first.block_offset == 0x2000
-
-    def test_real_device_pit_report_renders(self):
-        for fname in ("A14M_MEA_OPEN.pit", "device_2_84.pit"):
-            path = os.path.join(PIT_DIR, fname)
-            if not os.path.exists(path):
-                continue
-            rep = pit_report(open(path, "rb").read())
-            assert f"layout=mtk" in rep
-            assert "bootloader" in rep
-            assert "total:" in rep
+        entry = make_entry(name="boot", flash="boot.img", identifier=80,
+                           binary_type=0, dev_type=2, block_offset=0,
+                           block_count=8192)
+        parsed = PitEntry(entry, 0)
+        assert parsed.binary_type == 0
+        assert parsed.device_type == 2
+        assert parsed.identifier == 80
+        assert parsed.block_offset == 0
+        assert parsed.block_count == 8192
+        assert parsed.size_bytes() == 8192 * 512
 
     def test_parse_pit_invalid_magic(self):
         with pytest.raises(ValueError, match="bad PIT magic"):
@@ -166,7 +143,7 @@ class TestPITParsing:
 
 
 class TestPITFlags:
-    """Heimdall PrintPit flag semantics."""
+    """Heimdall PrintPit flag semantics (old-style attribute bitmasks)."""
 
     @staticmethod
     def _entry(**kw):
@@ -191,6 +168,58 @@ class TestPITFlags:
         cp = self._entry(binary_type=1, dev_type=0)
         assert ap.binary_type_label == "AP" and ap.device_type_label == "MMC"
         assert cp.binary_type_label == "CP" and cp.device_type_label == "OneNAND"
+
+
+class TestRealDevicePITs:
+    """Regressions on actual device dumps shipped in the repo."""
+
+    def _load(self, fname):
+        path = os.path.join(PIT_DIR, fname)
+        if not os.path.exists(path):
+            pytest.skip(f"real PIT fixture not present: {fname}")
+        return open(path, "rb").read()
+
+    def test_a14m_bootloader_decodes_correctly(self):
+        """The A14M dump must yield REAL field values, not shifted ones."""
+        raw = self._load("A14M_MEA_OPEN.pit")
+        entries = parse_pit(raw)
+        assert len(entries) > 10  # 57 declared in header
+        first = find_partition(entries, "bootloader")
+        assert first is not None
+        assert first.flash_filename == "preloader.img"
+        # True values (old shifted parser reported bt=2 dt=0x50 id=2)
+        assert first.binary_type == 0      # AP
+        assert first.device_type == 2      # MMC/eMMC
+        assert first.identifier == 80
+        assert first.block_offset == 0     # start block
+        assert first.block_count == 8192   # 4 MB preloader region
+        assert first.size_bytes() == 4 * 1024 * 1024
+
+    def test_partitions_chain_without_overlap(self):
+        """pgpt+pit+md5hdr chain contiguously; only meta containment overlaps.
+
+        On real MTK dumps the 'bootloader' entry spans the whole preloader
+        area and legitimately CONTAINS pgpt/pit/md5hdr - that must not be
+        flagged as corruption.
+        """
+        from python.core.pit import significant_overlaps
+        raw = self._load("A14M_MEA_OPEN.pit")
+        entries = parse_pit(raw)
+        assert significant_overlaps(entries) == []
+        by_name = {e.name: e for e in entries}
+        pgpt, pitt = by_name["pgpt"], by_name["pit"]
+        md5 = by_name["md5hdr"]
+        assert (pgpt.block_offset, pgpt.block_count) == (0, 34)
+        assert pitt.block_offset == pgpt.block_offset + pgpt.block_count
+        assert md5.block_offset == pitt.block_offset + pitt.block_count
+
+    def test_report_renders_real_dumps(self):
+        for fname in ("A14M_MEA_OPEN.pit", "device_2_84.pit"):
+            rep = pit_report(self._load(fname))
+            assert "model=COM_TAR2MTK6765" in rep
+            assert "bootloader" in rep
+            assert "total:" in rep
+            assert "overlapping" not in rep
 
 
 class TestPITValidation:
@@ -270,7 +299,7 @@ class TestPITTools:
                  attributes=1, block_offset=17408, block_count=8192),
         ])
         rep = pit_report(pit)
-        assert "model=TESTMODEL" in rep
+        assert "model=COM_TAR2MTK6765" in rep
         assert "boot" in rep and "RO" in rep and "FOTA" in rep
         assert "RW" in rep
         assert "total:" in rep
@@ -289,7 +318,8 @@ class TestPITConstants:
     """Verify PIT constants match between Python and Rust."""
 
     def test_header_size(self):
-        assert HEADER_SIZE == 32
+        """28-byte header per Heimdall kHeaderDataSize / Thor's parser."""
+        assert HEADER_SIZE == 28
         assert ENTRY_SIZE == 132
 
     def test_magic(self):
