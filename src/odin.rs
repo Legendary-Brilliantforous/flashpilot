@@ -1225,7 +1225,8 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         let _ = writeln!(
                             out,
                             "{}",
-                            json!({"error": "no session PIT - run pit-dump first"})
+                            json!({"error": "no session PIT - run pit-dump first",
+                                   "batch": "complete"})
                         );
                         let _ = out.flush();
                         continue;
@@ -1250,7 +1251,8 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     let _ = writeln!(
                         out,
                         "{}",
-                        json!({"error": "flash-batch needs non-empty files"})
+                        json!({"error": "flash-batch needs non-empty files",
+                               "batch": "complete"})
                     );
                     let _ = out.flush();
                     continue;
@@ -1267,7 +1269,11 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     }
                 }
                 if let Some(e) = stat_err {
-                    let _ = writeln!(out, "{}", json!({"error": e}));
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        json!({"error": e, "batch": "complete"})
+                    );
                     let _ = out.flush();
                     continue;
                 }
@@ -1338,6 +1344,18 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         }
                     }
                 }
+                // Terminal marker - ALWAYS last, success or failure, so the
+                // peer can stop reading instead of counting expected lines.
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    json!({
+                        "batch": "complete",
+                        "flashed": files.len() - failed.as_ref().map_or(0, |_| 1),
+                        "failed_partition":
+                            failed.as_ref().map(|(p, _)| p.clone()),
+                    })
+                );
                 let _ = out.flush();
             }
             "reboot" => {

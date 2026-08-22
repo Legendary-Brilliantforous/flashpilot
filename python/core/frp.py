@@ -327,10 +327,12 @@ def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
             _log("[native-flash] note: no vbmeta image found to patch")
 
     _log("[native-flash] launching single-session agent ...")
+    stderr_path = os.path.join(workdir, "agent_stderr.log")
+    stderr_fh = open(stderr_path, "w")
     proc = subprocess.Popen(
         [bridge.BRIDGE, "odin-agent", target],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, text=True, bufsize=1,
+        stderr=stderr_fh, text=True, bufsize=1,
     )
     flashed, skipped, rebooted = [], [], False
     try:
@@ -381,12 +383,27 @@ def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
             raise RuntimeError("nothing to flash: no archive images matched "
                                "device partitions")
 
+        # SEND the batch request, then stream results until the terminal
+        # {"batch":"complete"} marker (never count expected lines - errors
+        # mid-batch change the line count).
+        proc.stdin.write(json.dumps({
+            "cmd": "flash-batch", "files": files, "reboot": reboot,
+        }) + "\n")
+        proc.stdin.flush()
+
         # flash-batch mirrors odin_flash_multi exactly: SetTotalBytes ONCE
-        # with the grand total, then sequential writes with streamed progress.
-        # Per-file SetTotalBytes declarations make later commits fail -5.
-        n = len(files)
-        for line_no in range(n):
-            resp = json.loads(proc.stdout.readline() or "{}")
+        # with the grand total, then sequential writes. The agent streams one
+        # JSON line per finished partition and ALWAYS ends with a terminal
+        # {"batch": "complete"} marker - read until we see it (never count).
+        for line in iter(proc.stdout.readline, ""):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                resp = json.loads(line)
+            except ValueError:
+                _log(f"[native-flash] agent noise: {line[:120]}")
+                continue
             if "error" in resp:
                 part = resp.get("partition", "?")
                 raise RuntimeError(
@@ -399,13 +416,26 @@ def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
                     (resp["done"],
                      next((f for p, f in files if p == resp["done"]), ""))
                 )
+            if resp.get("batch") == "complete":
+                if resp.get("failed_partition"):
+                    raise RuntimeError(
+                        f"batch aborted at {resp['failed_partition']}"
+                    )
+                break
+        else:
+            raise RuntimeError("agent stream ended without batch marker")
+
         if reboot:
-            final = json.loads(proc.stdout.readline() or "{}")
-            if "rebooted" in final:
-                rebooted = True
-                _log("[native-flash] reboot command sent")
-            elif "reboot_error" in final:
-                _log(f"[native-flash] reboot warning: {final['reboot_error']}")
+            # reboot result arrives as its own line after the batch
+            final_line = proc.stdout.readline()
+            if final_line:
+                final = json.loads(final_line)
+                if "rebooted" in final:
+                    rebooted = True
+                    _log("[native-flash] reboot command sent")
+                elif "reboot_error" in final:
+                    _log(f"[native-flash] reboot warning: "
+                         f"{final['reboot_error']}")
     finally:
         try:
             proc.stdin.close()
