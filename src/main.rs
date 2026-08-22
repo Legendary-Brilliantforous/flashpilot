@@ -48,6 +48,7 @@ fn main() {
         eprintln!("  mtk-exploit <t> <type> [payload]  BROM exploit (mtk_bypass|kamakiri2|dump_preloader|patch_da|custom)");
         eprintln!("  mtk-gpt <t> <da>       list device GPT partition table by name (no scatter)");
         eprintln!("  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)");
+        eprintln!("  mtk-flash-samsung <t> <da> <fw_dir>  flash Samsung firmware dir (AP/BL etc, no scatter, via GPT)");
         eprintln!("  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)");
         eprintln!("  mtk-frp-gpt <t> <da>  FRP bypass resolving lock partitions from device GPT (no scatter)");
         eprintln!("  qcom-detect            detect Qualcomm EDL devices");
@@ -156,6 +157,13 @@ fn main() {
                 }
             }
             mtk_da::mtk_flash_part_cli(&target, &da, &entries)
+        }
+        "mtk-flash-samsung" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge mtk-flash-samsung <target> <da_file> <firmware_dir>");
+                exit(2);
+            }
+            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
         }
         "mtk-read-part" => {
             if args.len() < 6 {

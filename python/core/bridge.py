@@ -358,6 +358,12 @@ def mtk_scatter_gpt(da, out_file, timeout=600):
     return _run(["mtk-scatter-gpt", "auto", da, out_file], timeout=timeout)
 
 
+def mtk_flash_samsung(da, fw_dir, timeout=1800):
+    """Flash a Samsung firmware directory (extracted AP/BL/CP/CSC, no scatter)
+    via MTK GPT. Caller must extract tar.md5 and decompress .lz4 first."""
+    return _run(["mtk-flash-samsung", "auto", da, fw_dir], timeout=timeout)
+
+
 def list_samsung_hid():
     return json.loads(_run(["hid-list"]))
 

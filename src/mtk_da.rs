@@ -1042,6 +1042,62 @@ pub fn mtk_frp_bypass(target: &str, da_path: &str, scatter_path: &str) -> Result
     mtk_flash_flow(target, da_path, scatter_path, "", ops)
 }
 
+/// `mtk-flash-samsung <target> <da> <firmware_dir>` — flash a Samsung
+/// firmware directory (extracted AP/BL/CP/CSC tar, no scatter) by writing each
+/// `*.img` / `*.bin` via GPT partition names. Samsung firmware has no scatter;
+/// this resolves addresses from the device's own GPT (like mtk-flash-part).
+pub fn mtk_flash_samsung(target: &str, da_path: &str, fw_dir: &str) -> Result<String> {
+    let fw = std::path::Path::new(fw_dir);
+    if !fw.is_dir() {
+        return Err(BridgeError::InvalidArgument(format!("firmware dir not found: {fw_dir}")));
+    }
+    // collect partition images (already decompressed .img/.bin; Python extracts .lz4 first)
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for e in std::fs::read_dir(fw).map_err(|e| format!("read fw_dir: {e}"))? {
+        let e = e.map_err(|e| format!("dir entry: {e}"))?;
+        let p = e.path();
+        if !p.is_file() { continue; }
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if ext != "img" && ext != "bin" { continue; }
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        if stem.is_empty() { continue; }
+        // skip hidden / meta partitions that will brick if overwritten raw
+        if matches!(stem.as_str(), "gpt" | "pgpt" | "preloader" | "preloader_raw") { continue; }
+        entries.push((stem, p.to_string_lossy().to_string()));
+    }
+    if entries.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no partition images found in firmware dir (need *.img / *.bin - extract Samsung tar and decompress .lz4 first)".to_string(),
+        ));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!("Device in {} mode, need BROM/Preloader", stage)));
+    }
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+    let mut da = DaSession::new(session);
+    da.upload_da(da_path)?;
+
+    let mut out = Vec::new();
+    out.push(format!("MTK Samsung flash (GPT, no scatter) - {} partition(s) from {}", entries.len(), fw_dir));
+    for (name, file) in &entries {
+        out.push(format!("Writing '{name}' from {}...", std::path::Path::new(file).file_name().unwrap().to_string_lossy()));
+        da.write_partition_by_name(name, file).map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed{
+                cmd:0, sub:0, reason: format!("write '{name}': {e}"),
+            })
+        })?;
+        out.push(format!("  '{name}' OK"));
+    }
+    let _ = da.reboot(0);
+    out.push("Flash complete - device rebooted.".to_string());
+    Ok(out.join("\n"))
+}
+
 /// `mtk-frp-gpt <target> <da>` — FRP bypass without a scatter file: resolves
 /// lock partitions from the device GPT and formats / zero-fills them.
 pub fn mtk_frp_bypass_gpt(target: &str, da_path: &str) -> Result<String> {

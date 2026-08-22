@@ -982,13 +982,12 @@ fn end_sequence_flash(
         payload[28..32].copy_from_slice(&boot_update.to_le_bytes());
     }
     dev.send_raw(&[0u8; 0])?;
-    // Live-device finding: EndSequenceFlash can return BOOTLOADER_FAIL -5
-    // while the bootloader is STILL ASYNC-HASHING previously written
-    // partitions (boot_update triggers md5hdr regeneration). The more data
-    // was written before, the longer validation takes - observed up to many
-    // seconds after several MiB. All chunk data is fully written and ACKed;
-    // only the finalize is re-attempted, with EXPONENTIAL backoff so slow
-    // eMMC hashing completes. Matches odin4's idempotent control retries.
+    // Live-device finding: EndSequenceFlash can return BOOTLOADER_FAIL (-5)
+    // while the bootloader finishes async md5hdr/boot_update validation of
+    // previously written partitions. All chunk data is already written and
+    // ACKed - only the finalize failed, and resending it after a delay
+    // succeeds. Retry with exponential backoff; ONLY ack -5 is retryable,
+    // everything else (rid/ack mismatch etc.) is fatal.
     const COMMIT_DELAYS_MS: [u64; 6] = [500, 1000, 2000, 4000, 5000, 6000];
     let mut last_err: Option<OdinError> = None;
     for attempt in 0..=COMMIT_DELAYS_MS.len() {
@@ -1001,23 +1000,32 @@ fn end_sequence_flash(
             std::thread::sleep(Duration::from_millis(delay));
         }
         match odin_command(dev, 0x66, 0x03, &payload, 120) {
-            Ok(rsp) => match odin_fail_check(&rsp, "EndSequenceFlash", true) {
-                Ok(()) => {
-                    // Drain any unexpected bytes after the empty transfer.
-                    let _ = dev.recv_raw(512, 1);
-                    return Ok(());
-                }
-                Err(e) => {
-                    // A non--5 failure is real; stop immediately. -5 keeps
-                    // retrying (validation still running).
-                    let msg = e.to_string();
-                    last_err = Some(e);
-                    if !msg.contains("-5") && !msg.contains("fffffffb") {
-                        break;
+            Ok(rsp) => {
+                if rsp.len() >= 8 {
+                    let rid = u32::from_le_bytes([rsp[0], rsp[1], rsp[2], rsp[3]]);
+                    let ack = u32::from_le_bytes([rsp[4], rsp[5], rsp[6], rsp[7]]);
+                    let ack_i32 = ack as i32;
+                    if rid == 0xFFFF_FFFF && ack_i32 == -5 {
+                        // Transient "busy validating" - retryable.
+                        eprintln!(
+                            "[flash]   EndSequenceFlash ack -5 (device busy)"
+                        );
+                        last_err = Some(OdinError(
+                            "EndSequenceFlash: ack -5 (busy)".into(),
+                        ));
+                        continue;
                     }
                 }
-            },
-            Err(e) => last_err = Some(OdinError(e.to_string())),
+                match odin_fail_check(&rsp, "EndSequenceFlash", true) {
+                    Ok(()) => {
+                        // Drain any unexpected bytes after the empty transfer.
+                        let _ = dev.recv_raw(512, 1);
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => return Err(OdinError(e.to_string())),
         }
     }
     Err(last_err.unwrap_or_else(|| OdinError("commit failed".into())))
@@ -1186,7 +1194,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     let _ = out.flush();
                     continue;
                 }
-                match flash_one_partition(
+                match flash_one_partition_ext(
                     &dev,
                     pit_cache,
                     part,
@@ -1194,6 +1202,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     packet_size,
                     legacy,
                     is_large,
+                    true, // single-partition flash = session last
                 ) {
                     Ok(seqs) => {
                         let _ = writeln!(
@@ -1292,11 +1301,19 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 }
 
                 let mut failed = None;
-                for (part, path) in &files {
+                for (pos, (part, path)) in files.iter().enumerate() {
                     eprintln!("[agent] flashing {part} <- {path}");
                     let is_large =
                         matches!(part.as_str(), "super" | "system" | "userdata");
-                    match flash_one_partition(
+                    // is_last=1 ONLY on the batch's final partition - Loke
+                    // closes the flash context on is_last and the next
+                    // commit then fails deterministically with -5.
+                    let session_last = pos + 1 == files.len();
+                    // One full retry of a failed partition: transient
+                    // bootloader-busy states can abort a commit; rewriting
+                    // the same content into the same session has succeeded
+                    // live where immediate failure was deterministic.
+                    let mut result = flash_one_partition_ext(
                         &dev,
                         pit_cache,
                         part,
@@ -1304,7 +1321,25 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         packet_size,
                         legacy,
                         is_large,
-                    ) {
+                        session_last,
+                    );
+                    if result.is_err() {
+                        eprintln!(
+                            "[agent] {part} failed once - rewriting partition"
+                        );
+                        std::thread::sleep(Duration::from_millis(1000));
+                        result = flash_one_partition_ext(
+                            &dev,
+                            pit_cache,
+                            part,
+                            path,
+                            packet_size,
+                            legacy,
+                            is_large,
+                            session_last,
+                        );
+                    }
+                    match result {
                         Ok(seqs) => {
                             let _ = writeln!(
                                 out,
@@ -1518,6 +1553,25 @@ fn flash_one_partition(
     legacy: bool,
     large: bool,
 ) -> std::result::Result<u32, String> {
+    flash_one_partition_ext(
+        dev, pit, partition, image_file, packet_size, legacy, large, true,
+    )
+}
+
+/// `session_last`: mark this partition's final sequence with is_last=1 ONLY
+/// when it is the LAST partition of the whole session. Live-device finding:
+/// Loke interprets is_last=1 as "finalize the session" - sending it on every
+/// partition makes the NEXT commit fail deterministically with -5.
+fn flash_one_partition_ext(
+    dev: &Device,
+    pit: &[u8],
+    partition: &str,
+    image_file: &str,
+    packet_size: u32,
+    legacy: bool,
+    large: bool,
+    session_last: bool,
+) -> std::result::Result<u32, String> {
     let (binary_type, device_type, identifier, _block_size, _block_count) =
         find_pit_entry(pit, partition).map_err(|e| e.to_string())?;
 
@@ -1588,7 +1642,7 @@ fn flash_one_partition(
             }
         }
 
-        let is_last = if sent >= total { 1 } else { 0 };
+        let is_last = if sent >= total && session_last { 1 } else { 0 };
         let mut final_size = real_size;
         if is_last == 1 && large {
             // Large partitions (super/system/userdata) get the last real_size
@@ -1636,9 +1690,17 @@ pub fn odin_flash_partition(
 
     set_total_bytes(&dev, total as u64).map_err(|e| e.to_string())?;
     let is_large = matches!(partition, "super" | "system" | "userdata");
-    let sequences =
-        flash_one_partition(&dev, &pit, partition, image_file, packet_size, legacy, is_large)
-            .map_err(|e| e.to_string())?;
+    let sequences = flash_one_partition_ext(
+        &dev,
+        &pit,
+        partition,
+        image_file,
+        packet_size,
+        legacy,
+        is_large,
+        true, // single-partition flash = session last
+    )
+    .map_err(|e| e.to_string())?;
 
     if let Err(e) = end_session_v2(&dev) {
         // EndSession (0x67/0x00) can return BOOTLOADER_FAIL on some devices
@@ -1694,11 +1756,24 @@ pub fn odin_flash_multi(
     eprintln!("[flash] set_total_bytes ok ({total_bytes} bytes total)");
 
     let mut results = Vec::new();
-    for (partition, image_file) in files {
-        let is_large = matches!(*partition, "super" | "system" | "userdata");
-        let sequences =
-            flash_one_partition(&dev, &pit, partition, image_file, packet_size, legacy, is_large)
-                .map_err(|e| e.to_string())?;
+    for (idx, (partition, image_file)) in files.iter().enumerate() {
+        let is_large =
+            matches!(*partition, "super" | "system" | "userdata");
+        // is_last=1 only on the session's true final partition (live-device
+        // finding: per-partition is_last closes the flash context and the
+        // NEXT commit fails -5).
+        let session_last = idx + 1 == files.len();
+        let sequences = flash_one_partition_ext(
+            &dev,
+            &pit,
+            partition,
+            image_file,
+            packet_size,
+            legacy,
+            is_large,
+            session_last,
+        )
+        .map_err(|e| e.to_string())?;
         results.push((partition.to_string(), sequences));
     }
 

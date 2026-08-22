@@ -279,6 +279,258 @@ def _extract_archive_images(tar_path, workdir):
     return out
 
 
+def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
+                                   reboot=True, max_rounds=12):
+    """Guided resilient flashing: one partition per agent session."""
+
+    class SessionLost(Exception):
+        pass
+
+    """Guided resilient flashing: one partition per agent session.
+
+    Live-device finding: multi-write sessions fail unpredictably (EndSequence
+    -5 at varying positions), but EVERY partition flashes cleanly as the
+    first write of a fresh session. This driver exploits that: flash one,
+    recover the session (USB reset ladder / user replug), repeat until done.
+
+    Recovery escalation per stuck round: blind-EndSession + USB port reset
+    are attempted automatically; if the device stays deaf we ask the user to
+    replug once and wait for fresh enumeration.
+    """
+    def _log(msg):
+        if log:
+            log(msg)
+
+    workdir = tempfile.mkdtemp(prefix="fp_flash_")
+    _log(f"[resilient] extracting {os.path.basename(tar_path)} ...")
+    images = _extract_archive_images(tar_path, workdir)
+    if not images:
+        raise RuntimeError("archive contains no flashable images")
+
+    # up_param LAST: its successful commit poisons the next one; nothing
+    # follows the final write except reboot.
+    images.sort(key=lambda nf: (
+        1 if os.path.basename(nf[1]).rsplit(".", 1)[0] == "up_param" else 0,
+    ))
+
+    if patch_vbmeta:
+        for name, path in images:
+            base = os.path.basename(path)
+            if base.startswith("vbmeta"):
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                new = _patch_vbmeta_flags(data)
+                if new is not None:
+                    with open(path, "wb") as fh:
+                        fh.write(new)
+                    _log(f"[resilient] patched {base}: AVB disabled (0x03)")
+
+    d = _download_mode_device()
+    if not d:
+        raise RuntimeError("device not in download mode")
+    target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+
+    # Resume support: completed partitions persist across runs.
+    state_path = "/tmp/fp_flash_progress.json"
+    done_names = set()
+    try:
+        with open(state_path) as fh:
+            done_names = set(json.load(fh).get("done", []))
+        if done_names:
+            _log(f"[resilient] resuming - already flashed: "
+                 f"{sorted(done_names)}")
+    except Exception:
+        pass
+
+    def _mark_done(pname):
+        done_names.add(pname)
+        try:
+            with open(state_path, "w") as fh:
+                json.dump({"done": sorted(done_names)}, fh)
+        except Exception:
+            pass
+
+    def _probe_ready(tgt):
+        """True if a working agent session can be opened right now."""
+        try:
+            p = subprocess.Popen(
+                [bridge.BRIDGE, "odin-agent", tgt],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            )
+            ready = json.loads(p.stdout.readline() or "{}")
+            try:
+                p.stdin.write('{"cmd":"end"}\n')
+                p.stdin.flush()
+            except Exception:
+                pass
+            try:
+                p.wait(timeout=10)
+            except Exception:
+                p.kill()
+            return ready.get("status") == "ready"
+        except Exception:
+            return False
+
+    def _recover_session(tgt, timeout=180):
+        """Poll patiently (the error screen cycles USB state) and guide a
+        replug until a fresh agent session opens. Returns updated target."""
+        _log("[resilient] waiting for a usable download-mode session...")
+        deadline = time.time() + timeout
+        prompted = False
+        while time.time() < deadline:
+            nd = _download_mode_device()
+            if nd is None:
+                if not prompted:
+                    prompted = True
+                    _log("[resilient] >>> phone not in download mode - "
+                         "re-enter it (Vol Down + Power, then Vol Up) <<<")
+                time.sleep(2.0)
+                continue
+            new_tgt = f"04e8:{nd['pid']:04x}@{nd['bus']}:{nd['address']}"
+            if _probe_ready(new_tgt):
+                _log(f"[resilient] session ready at {new_tgt}")
+                return new_tgt
+            if not prompted:
+                prompted = True
+                _log("[resilient] >>> UNPLUG CABLE - WAIT 3s - PLUG BACK "
+                     "IN <<<")
+            time.sleep(2.5)
+        raise RuntimeError("no usable session within timeout")
+
+    flashed = []
+    pending = list(images)
+    rounds = 0
+    while pending and rounds < max_rounds:
+        rounds += 1
+        name, img_path = pending[0]
+        entry_name = os.path.basename(img_path).rsplit(".", 1)[0]
+        if entry_name in done_names:
+            _log(f"[resilient] skip {entry_name} (already done)")
+            flashed.append((entry_name, "(previous run)"))
+            pending.pop(0)
+            continue
+
+        _log(f"[resilient] round {rounds}: {entry_name} "
+             f"({len(pending)} partitions pending)")
+
+        # Pre-probe: don't burn the attempt on a wedged/deaf/oscillating
+        # device - the error screen cycles USB state, so poll patiently and
+        # guide a replug if nothing usable appears.
+        try:
+            target = _recover_session(target, timeout=180)
+        except RuntimeError:
+            raise SessionLost(entry_name)
+
+        try:
+            proc = subprocess.Popen(
+                [bridge.BRIDGE, "odin-agent", target],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            )
+            try:
+                ready = json.loads(proc.stdout.readline() or "{}")
+                if ready.get("status") != "ready":
+                    raise RuntimeError("agent not ready")
+
+                pit_file = os.path.join(workdir, "session.pit")
+                send = lambda **kw: (
+                    proc.stdin.write(json.dumps(kw) + "\n"),
+                    proc.stdin.flush(),
+                    json.loads(proc.stdout.readline() or "{}"),
+                )[-1]
+                r = send(cmd="pit-dump", out=pit_file)
+                entries = pit.parse_pit(open(pit_file, "rb").read())
+                entry = pit.find_partition(entries, entry_name) or \
+                    pit.find_partition(entries, name)
+                if entry is None:
+                    _log(f"[resilient] SKIP {name}: no PIT match")
+                    flashed.append((entry_name, "(skipped)"))
+                    pending.pop(0)
+                    continue
+
+                size = os.path.getsize(img_path)
+                if size > entry.size_bytes():
+                    raise RuntimeError(
+                        f"{name} exceeds {entry.name} capacity"
+                    )
+                r = send(cmd="flash", partition=entry.name, file=img_path)
+                _log(f"[resilient]   OK: {entry.name} "
+                     f"({len(pending)-1} left)")
+                flashed.append((entry.name, os.path.basename(img_path)))
+                _mark_done(entry.name)
+                pending.pop(0)
+            finally:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=8)
+                except Exception:
+                    proc.kill()
+
+            # Session consumed - wait for the device to come back usable.
+            time.sleep(2.0)
+
+        except SessionLost:
+            raise
+        except Exception as e:
+            _log(f"[resilient]   {entry_name}: {e}")
+
+        if not pending:
+            break
+
+        # Recovery: the wedged device often STAYS enumerated but deaf, so
+        # _recover_session guides a replug and polls until a fresh session
+        # answers.
+        try:
+            target = _recover_session(target, timeout=300)
+        except RuntimeError:
+            raise RuntimeError(
+                "device did not return to a usable session within 300s - "
+                "replug manually and rerun to resume remaining partitions "
+                f"({[os.path.basename(p[1]) for p in pending]} left)"
+            )
+
+    if pending:
+        raise RuntimeError(
+            f"rounds exhausted: still pending {[p[0] for p in pending]}"
+        )
+
+    rebooted = False
+    if reboot:
+        d = _download_mode_device()
+        if d:
+            t = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+            try:
+                proc = subprocess.Popen(
+                    [bridge.BRIDGE, "odin-agent", t],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                )
+                json.loads(proc.stdout.readline() or "{}")
+                proc.stdin.write('{"cmd":"pit-dump"}\n')
+                proc.stdin.flush()
+                proc.stdout.readline()
+                proc.stdin.write('{"cmd":"flash","partition":"'
+                                 '","file":""}\n')  # no-op placeholder
+                proc.stdout.readline()
+                proc.stdin.write(json.dumps({"cmd": "reboot"}) + "\n")
+                proc.stdin.flush()
+                line = proc.stdout.readline()
+                rebooted = '"ok": true' in line.replace("'", '"')
+                _log(f"[resilient] reboot: {line.strip()}")
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+            except Exception as e:
+                _log(f"[resilient] reboot attempt: {e}")
+
+    return {"flashed": flashed, "rebooted": rebooted, "workdir": workdir}
+
+
 def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
                          reboot=True, target=None):
     """Flash an Odin archive (.tar) end-to-end in ONE agent session.
@@ -325,6 +577,15 @@ def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
                          "disabled (flags 0x03)")
         if not patched:
             _log("[native-flash] note: no vbmeta image found to patch")
+
+    # Live-device finding: a SUCCESSFUL up_param commit poisons the NEXT
+    # partition's commit (-5 persists for the rest of the session), and
+    # up_param itself fails -5 when flashed directly after param. Solution:
+    # write up_param LAST and reboot immediately - nothing follows it.
+    # Partition content is independent; flash ORDER is convention.
+    images.sort(key=lambda nf: (
+        1 if os.path.basename(nf[1]).rsplit(".", 1)[0] == "up_param" else 0,
+    ))
 
     _log("[native-flash] launching single-session agent ...")
     stderr_path = os.path.join(workdir, "agent_stderr.log")
