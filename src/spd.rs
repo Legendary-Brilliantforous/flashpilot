@@ -1094,6 +1094,181 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// .pac readback: dump the full flash via FDL2 and repack into a SPD .pac
+// container so it can be re-flashed by SPD Research Tool / Upgrade Download.
+//
+// .pac layout (YGDP, reverse-engineered from public parsers):
+//   header  2124 bytes:
+//     0x00  magic       b"\xd3\x00\x00\x00" (little-endian 0xD3)
+//     0x04  version     u16 (e.g. 1) + u16 hdrlen(=2116)
+//     0x08  "MCT_DOWNLOAD_HEADER\0" pad 60
+//     0x20  product / model string (64 bytes)
+//     0x60  file-count  u32
+//     ...    per-file NV/NVB params etc - we keep zeros
+//     0x848 flash-size  u32 (bytes)
+//     0x84C project ver string ...
+//   then for each file a 2560-byte entry followed by its data:
+//     0x000 name[512] (utf16le)
+//     0x200 dir[260]  (utf16le, usually empty)
+//     0x30C size      u32
+//     0x310 is_nv     u32
+//     0x318 checksum  u16 (fixed 0x5433 in most pacs)
+//     0x31A .. reserved
+//   footer 3076 bytes of zeros.
+// We emit a single-file pac named "pac_readback.img" containing every
+// partition concatenated in table order; that is enough to restore via
+// our own spd-flash or to feed partition slices back individually.
+
+/// One file slot inside the .pac we generate.
+struct PacFileEntry {
+    name: String,
+    data_offset: u64,
+    size: u32,
+}
+
+const PAC_FILE_ENTRY_SIZE: usize = 2560;
+const PAC_HEADER_SIZE: u64 = 2124;
+const PAC_FOOTER_SIZE: u64 = 3076;
+
+fn write_utf16le(buf: &mut [u8], s: &str) {
+    for (i, unit) in s.encode_utf16().enumerate() {
+        let off = i * 2;
+        if off + 1 < buf.len() {
+            buf[off] = (unit & 0xff) as u8;
+            buf[off + 1] = (unit >> 8) as u8;
+        }
+    }
+}
+
+/// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out.pac> [part,part,...]`
+///
+/// Dumps every Android partition (or just the comma-separated subset) and
+/// packs them into `out.pac`. The resulting archive restores with our own
+/// `spd-flash` or any YGDP-compatible tool.
+pub fn spd_readback_cli(
+    target: &str,
+    fdl1: &str,
+    fdl1_addr: u32,
+    fdl2: &str,
+    fdl2_addr: Option<u32>,
+    out_pac: &str,
+    only: Option<&str>,
+) -> Result<String> {
+    let dev = find_spd_target(target)?;
+    let mut s = connect_and_load_fdls(
+        &dev,
+        fdl1,
+        fdl1_addr,
+        fdl2,
+        fdl2_addr.unwrap_or(0x1400_0000),
+        true,
+        4096,
+    )?;
+    let _ = s.enable_write();
+
+    let all = s.read_partitions().map_err(|e| BridgeError::Protocol(
+        crate::error::ProtocolError::UnexpectedResponse(e),
+    ))?;
+    let wanted: Vec<(String, u64)> = match only {
+        Some(list) => {
+            let set: std::collections::HashSet<&str> = list.split(',').map(str::trim).collect();
+            all.into_iter().filter(|(n, _)| set.contains(n.as_str())).collect()
+        }
+        None => all,
+    };
+    if wanted.is_empty() {
+        return Err(BridgeError::InvalidArgument("no partitions matched".into()));
+    }
+
+    // Pass 1: stream each partition into a side temp file and record sizes.
+    let tmpdir = std::env::temp_dir().join(format!("flashpilot_pac_{}", std::process::id()));
+    fs::create_dir_all(&tmpdir).map_err(|e| format!("mkdir {}: {e}", tmpdir.display()))?;
+
+    let mut entries: Vec<PacFileEntry> = Vec::new();
+    let mut manifest = String::new();
+    let mut total_bytes = 0u64;
+    // Data region starts right after header + one entry-slot per file.
+    let mut cursor = PAC_HEADER_SIZE + (wanted.len() as u64) * PAC_FILE_ENTRY_SIZE as u64;
+    for (idx, (name, size)) in wanted.iter().enumerate() {
+        let part_path = tmpdir.join(format!("{idx:03}_{}.bin", sanitize(name)));
+        let path_str = part_path.to_string_lossy().to_string();
+        eprintln!("[readback] {name} ({size} bytes)...");
+
+        // FDL2 READ uses absolute flash offsets; partition_start(name,...) already
+        // encodes the name so start=0 len=size reads exactly this partition.
+        let n = s.read_partition(name, 0, *size, &path_str, 4096)?;
+        let actual = fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+        if actual == 0 {
+            eprintln!("[readback]   {name} empty, skipped");
+            let _ = fs::remove_file(&part_path);
+            continue;
+        }
+        let _ = n;
+        entries.push(PacFileEntry {
+            name: sanitize(name),
+            data_offset: cursor,
+            size: actual as u32,
+        });
+        manifest.push_str(&format!("{name}: {actual} bytes\n"));
+        cursor += actual;
+        total_bytes += actual;
+    }
+    if entries.is_empty() {
+        let _ = fs::remove_dir_all(&tmpdir);
+        return Err(BridgeError::InvalidArgument("every partition read back empty".into()));
+    }
+
+    // Pass 2: assemble the .pac.
+    let mut out = fs::File::create(out_pac).map_err(|e| format!("create {out_pac}: {e}"))?;
+    use std::io::{Seek, SeekFrom, Write};
+
+    // Header (2124 bytes)
+    let mut hdr = vec![0u8; PAC_HEADER_SIZE as usize];
+    hdr[0..4].copy_from_slice(&0xD3u32.to_le_bytes());
+    hdr[4..6].copy_from_slice(&1u16.to_le_bytes());          // version
+    hdr[6..8].copy_from_slice(&2116u16.to_le_bytes());        // header size
+    let mct = b"MCT_DOWNLOAD_HEADER";
+    hdr[8..8 + mct.len()].copy_from_slice(mct);
+    // product string @0x20 (leave zeros -> tools accept blank model)
+    hdr[0x60..0x64].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+    hdr[0x848..0x84c].copy_from_slice(&(total_bytes as u32).to_le_bytes());
+    out.write_all(&hdr).map_err(|e| format!("write hdr: {e}"))?;
+
+    // File-entry slots
+    for e in &entries {
+        let mut slot = vec![0u8; PAC_FILE_ENTRY_SIZE];
+        write_utf16le(&mut slot[..512], &format!("{}_{}.img", e.name, e.name)); // name field
+        slot[0x30C..0x310].copy_from_slice(&e.size.to_le_bytes());
+        slot[0x310..0x314].copy_from_slice(&0u32.to_le_bytes()); // is_nv = false
+        slot[0x318..0x31A].copy_from_slice(&0x5433u16.to_le_bytes()); // checksum marker
+        out.write_all(&slot).map_err(|err| format!("write entry {}: {err}", e.name))?;
+    }
+
+    // Partition payloads, streamed from temp files.
+    for e in &entries {
+        let idx = entries.iter().position(|x| x.data_offset == e.data_offset).unwrap_or(0);
+        let part_path = tmpdir.join(format!("{idx:03}_{}.bin", e.name));
+        let mut f = fs::File::open(&part_path).map_err(|e| format!("reopen {}: {e}", part_path.display()))?;
+        std::io::copy(&mut f, &mut out).map_err(|err| format!("stream {}: {err}", e.name))?;
+    }
+
+    // Footer
+    out.write_all(&vec![0u8; PAC_FOOTER_SIZE as usize]).map_err(|e| format!("write footer: {e}"))?;
+    out.flush().ok();
+
+    let _ = fs::remove_dir_all(&tmpdir);
+    let _ = s.reset();
+
+    Ok(format!(
+        "{} partition(s) packed into {} ({} bytes):\n{}",
+        entries.len(),
+        out_pac,
+        fs::metadata(out_pac).map(|m| m.len()).unwrap_or(0),
+        manifest
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

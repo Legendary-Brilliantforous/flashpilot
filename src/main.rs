@@ -59,6 +59,7 @@ fn main() {
         eprintln!("  spd-backup <t> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out_dir>  list partitions + dump");
         eprintln!("  spd-partitions <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]  list Android partition table");
         eprintln!("  spd-flash <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...  write partitions/regions");
+        eprintln!("  spd-readback <t> <fdl1> <a1> <fdl2> [a2] <out.pac> [parts]  dump flash to a .pac archive");
         eprintln!("  spd-reset <t>          reset device to normal mode");        eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
         eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
@@ -435,9 +436,24 @@ fn main() {
             }
             spd::spd_reset_cli(&args[2])
         }
+        "spd-readback" => {
+            // spd-readback <t> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part]
+            if args.len() < 8 {
+                eprintln!("usage: flashpilot-bridge spd-readback <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part,...]");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let fdl1 = args[3].clone();
+            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let fdl2 = args[5].clone();
+            let fdl2_addr = u32::from_str_radix(args[6].trim_start_matches("0x"), 16).ok();
+            let out_pac = args[7].clone();
+            let only = args.get(8).map(|s| s.as_str());
+            spd::spd_readback_cli(&target, &fdl1, fdl1_addr, &fdl2, fdl2_addr, &out_pac, only)
+        }
         "spd-flash" => {
             // spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...
-            if args.len() < 6 {
+            if args.len() < 5 {
                 eprintln!("usage: flashpilot-bridge spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...");
                 exit(2);
             }
