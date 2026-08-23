@@ -127,6 +127,33 @@ def _download_mode_device():
     return d
 
 
+def wait_clean_download_mode(log_fn=None, timeout=3600, tag="smart"):
+    """PASSIVE wait (no USB sessions consumed): poll until a Samsung device
+    is in download mode with a FULLY enumerated configuration (interfaces
+    present, active config set). Returns bridge target string.
+
+    Passive matters: each enumeration allows exactly ONE Odin session, so
+    probing with agent sessions would burn the very session we need.
+    """
+    def _emit(msg):
+        if log_fn:
+            log_fn(msg)
+
+    _emit(f"[{tag}] waiting for device in download mode ...")
+    deadline = time.time() + timeout
+    prompted = False
+    while time.time() < deadline:
+        nd = _download_mode_device()
+        if nd and nd.get("interfaces") and nd.get("active_config"):
+            return f"04e8:{nd['pid']:04x}@{nd['bus']}:{nd['address']}"
+        if not prompted:
+            prompted = True
+            _emit(f"[{tag}] >>> power the phone OFF, then enter Download "
+                  "Mode (Vol Down + Power, then Vol Up) <<<")
+        time.sleep(2.0)
+    raise RuntimeError("timed out waiting for download-mode device")
+
+
 def pit_contract(target=None, log=None, use_cache_on_failure=True):
     """FlashPilot's PIT safety contract: the DEVICE's own partition table is
     always the source of truth (the odin4 philosophy).
@@ -348,30 +375,6 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
         except Exception:
             pass
 
-    def _wait_clean_download_mode(log_fn, timeout=3600):
-        """PASSIVE wait (no USB sessions consumed): poll until a Samsung
-        device is in download mode with a FULLY enumerated configuration
-        (interfaces present, active config set). Returns bridge target."""
-        _log("[resilient] waiting for device in download mode...")
-        deadline = time.time() + timeout
-        prompted = False
-        while time.time() < deadline:
-            nd = _download_mode_device()
-            if nd and nd.get("interfaces") and nd.get("active_config"):
-                return f"04e8:{nd['pid']:04x}@{nd['bus']}:{nd['address']}"
-            if not prompted:
-                prompted = True
-                log_fn(
-                    "[resilient] >>> power the phone OFF, then enter "
-                    "Download Mode (Vol Down + Power, then Vol Up) <<<"
-                )
-            # Half-enumerated states (no interfaces) need a re-entry; nudge
-            # once per minute.
-            if nd and not prompted:
-                pass
-            time.sleep(2.0)
-        raise RuntimeError("timed out waiting for download-mode device")
-
     def _probe_ready(tgt):
         """True if a working agent session can be opened right now."""
         try:
@@ -440,7 +443,7 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
         # Each enumeration allows exactly ONE Odin session; burning it on a
         # probe kills the real flash. Just watch for a fully-enumerated
         # download-mode device and grab its session directly.
-        target = _wait_clean_download_mode(_log)
+        target = wait_clean_download_mode(log_fn=_log, tag='resilient')
 
         try:
             proc = subprocess.Popen(
@@ -542,6 +545,300 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
                 _log(f"[resilient] reboot attempt: {e}")
 
     return {"flashed": flashed, "rebooted": rebooted, "workdir": workdir}
+
+
+def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
+    """Smart archive flashing: BULK FIRST, then bit-by-bit rescue.
+
+    Phase 1 (one session): extract -> lz4-decompress -> AVB-patch ->
+        open THE single Odin session -> pit-dump -> PIT-validate + map
+        EVERY image -> SetTotalBytes(grand total) -> flash-batch all.
+    Phase 2 (per straggler): any partition whose commit failed (-5 etc.)
+        is retried individually - PASSIVE wait for the user to reboot +
+        re-enter Download Mode, then a fresh one-write session per
+        partition. up_param goes last (a successful up_param commit
+        poisons subsequent writes).
+
+    Every write is mapped through the LIVE device PIT dumped in the same
+    session - the right image always lands on the right partition.
+    Resume-safe via /tmp/fp_flash_progress.json.
+    """
+    def _log(msg):
+        if log:
+            log(msg)
+
+    state_path = "/tmp/fp_flash_progress.json"
+    done = set()
+    try:
+        with open(state_path) as fh:
+            done = set(json.load(fh).get("done", []))
+        if done:
+            _log(f"[smart] resuming - already flashed: {sorted(done)}")
+    except Exception:
+        pass
+
+    def _mark(pname):
+        done.add(pname)
+        try:
+            with open(state_path, "w") as fh:
+                json.dump({"done": sorted(done)}, fh)
+        except Exception:
+            pass
+
+    workdir = tempfile.mkdtemp(prefix="fp_smart_")
+    _log(f"[smart] extracting {os.path.basename(tar_path)} ...")
+    images = _extract_archive_images(tar_path, workdir)
+    if not images:
+        raise RuntimeError("archive contains no flashable images")
+
+    patched_any = False
+    for name, path in images:
+        base = os.path.basename(path)
+        if patch_vbmeta and base.startswith("vbmeta"):
+            with open(path, "rb") as fh:
+                data = fh.read()
+            new = _patch_vbmeta_flags(data)
+            if new is not None:
+                with open(path, "wb") as fh:
+                    fh.write(new)
+                patched_any = True
+                _log(f"[smart] patched {base}: AVB disabled (0x03)")
+    if patch_vbmeta and not patched_any:
+        _log("[smart] note: no vbmeta image found to patch")
+
+    # Bulk order: tar order with up_param forced last (its successful
+    # commit poisons subsequent writes on this Loke build).
+    def _order_key(nf):
+        base = os.path.basename(nf[1]).rsplit(".", 1)[0]
+        return (1 if base == "up_param" else 0,)
+    images.sort(key=_order_key)
+
+    def _open_agent_session(retries=10):
+        """Passive-wait for download mode, then open THE single session.
+        Retries: fresh enumerations can be half-ready on first sight."""
+        last = None
+        for _ in range(retries):
+            try:
+                target = wait_clean_download_mode(
+                    log_fn=_log, tag="smart", timeout=45,
+                )
+            except RuntimeError as e:
+                last = e
+                time.sleep(2.0)
+                continue
+            proc = subprocess.Popen(
+                [bridge.BRIDGE, "odin-agent", target],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            )
+            ready = json.loads(proc.stdout.readline() or "{}")
+            if ready.get("status") == "ready":
+                return proc
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            last = RuntimeError("session died before ready")
+            _log("[smart] session not usable yet - waiting ...")
+            time.sleep(3.0)
+        raise last or RuntimeError("could not open session")
+
+    def _send(proc, **kw):
+        proc.stdin.write(json.dumps(kw) + "\n")
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        if not line:
+            raise RuntimeError("agent died mid-command")
+        resp = json.loads(line)
+        if "error" in resp:
+            raise RuntimeError(resp["error"])
+        return resp
+
+    flashed = []          # (partition, filename)
+    stragglers = []       # [(entry_name, img_path)] for phase 2
+    skipped = []
+
+    # ------------------------- PHASE 1: bulk -------------------------------
+    _log("[smart] PHASE 1: bulk flash (all partitions, one session)")
+    proc = None
+    pit_sha = None
+    try:
+        proc = _open_agent_session()
+
+        pit_file = os.path.join(workdir, "bulk.pit")
+        r = _send(proc, cmd="pit-dump", out=pit_file)
+        raw_pit = open(pit_file, "rb").read()
+        pit_sha = hashlib.sha256(raw_pit).hexdigest()
+        health = pit.pit_health(raw_pit)
+        _log(f"[smart] device PIT: {r['size']}B | {health['summary']}")
+        if health["verdict"] == "fail":
+            raise RuntimeError(
+                "device PIT failed forensic validation - refusing to flash"
+            )
+        entries = pit.parse_pit(raw_pit)
+
+        files = []
+        for name, img_path in images:
+            entry = pit.find_partition(entries, os.path.basename(name)) or \
+                pit.find_partition(entries, os.path.basename(img_path))
+            if entry is None:
+                _log(f"[smart] SKIP {name}: no PIT match")
+                skipped.append(name)
+                continue
+            if entry.name in done:
+                _log(f"[smart] SKIP {entry.name}: already flashed "
+                     "(resume)")
+                continue
+            size = os.path.getsize(img_path)
+            if size > entry.size_bytes():
+                raise RuntimeError(
+                    f"{name} ({size}B) exceeds {entry.name} "
+                    f"capacity {entry.size_bytes()}B - wrong model?"
+                )
+            files.append([entry.name, img_path])
+
+        if not files:
+            raise RuntimeError("nothing matched the device PIT")
+
+        # Streamed batch: read until terminal marker; record per-partition
+        # outcome instead of aborting on first error.
+        proc.stdin.write(json.dumps({
+            "cmd": "flash-batch", "files": files, "reboot": False,
+        }) + "\n")
+        proc.stdin.flush()
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                resp = json.loads(line)
+            except ValueError:
+                continue
+            if "done" in resp:
+                pname = resp["done"]
+                fname = next((f for p, f in files if p == pname), "")
+                _log(f"[smart]   OK: {pname} ({resp.get('progress','')})")
+                flashed.append((pname, fname))
+                _mark(pname)
+            elif "error" in resp:
+                pname = resp.get("partition", "?")
+                _log(f"[smart]   FAIL: {pname}: {resp['error']}")
+                stragglers.append((pname,
+                                   next((f for p, f in files if p == pname),
+                                        "")))
+            if resp.get("batch") == "complete":
+                break
+    finally:
+        if proc:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=8)
+            except Exception:
+                proc.kill()
+
+    # Map straggler names back to image paths for phase 2.
+    retry = []
+    for pname, _fname in stragglers:
+        if pname in done:
+            continue
+        for name, img_path in images:
+            e = None
+            try:
+                e = pit.find_partition(
+                    pit.parse_pit(open(os.path.join(workdir, "bulk.pit"),
+                                       "rb").read()), pname)
+            except Exception:
+                pass
+            if e and e.name == pname:
+                retry.append((pname, img_path))
+                break
+        else:
+            # match by image basename fallback
+            for name, img_path in images:
+                if os.path.basename(img_path).rsplit(".", 1)[0] == pname \
+                        or pname in name:
+                    retry.append((pname, img_path))
+                    break
+    # de-duplicate preserving order
+    seen = set()
+    retry = [x for x in retry if not (x[0] in seen or seen.add(x[0]))]
+
+    # --------------------- PHASE 2: stragglers -----------------------------
+    if retry:
+        _log(f"[smart] PHASE 2: rescuing {len(retry)} straggler(s) "
+             f"bit-by-bit: {[p for p, _ in retry]}")
+
+    for pname, img_path in retry:
+        if reboot and pname != [p for p, _ in retry][-1]:
+            pass  # reboot handled after loop
+        _log(f"[smart] rescue: {pname}")
+        _log("[smart] >>> REBOOT PHONE + RE-ENTER DOWNLOAD MODE <<<")
+        proc = None
+        try:
+            proc = _open_agent_session()
+            pit_file = os.path.join(workdir, f"rescue_{pname}.pit")
+            r = _send(proc, cmd="pit-dump", out=pit_file)
+            raw2 = open(pit_file, "rb").read()
+            sha2 = hashlib.sha256(raw2).hexdigest()
+            if pit_sha and sha2 != pit_sha:
+                _log("[smart] WARNING: device PIT changed between sessions!")
+            entry = pit.find_partition(raw2, pname)
+            if entry is None or entry.name.lower() != pname.lower():
+                raise RuntimeError(
+                    f"{pname} not found in fresh device PIT "
+                    "(stale/partial dump?)"
+                )
+            if entry.size_bytes() <= 0:
+                raise RuntimeError(f"{pname}: zero capacity in fresh PIT")
+            size = os.path.getsize(img_path)
+            if size > entry.size_bytes():
+                raise RuntimeError(f"{pname} image exceeds capacity")
+            r = _send(proc, cmd="flash", partition=pname, file=img_path)
+            _log(f"[smart]   OK: {pname} (rescued)")
+            flashed.append((pname, os.path.basename(img_path)))
+            _mark(pname)
+        except Exception as e:
+            _log(f"[smart]   rescue failed for {pname}: {e}")
+            raise RuntimeError(
+                f"partition {pname} could not be flashed even in a fresh "
+                f"session - rerun to retry"
+            )
+        finally:
+            if proc:
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=8)
+                except Exception:
+                    proc.kill()
+
+    # --------------------------- reboot ------------------------------------
+    rebooted = False
+    if reboot:
+        try:
+            _log("[smart] rebooting device ...")
+            proc = _open_agent_session()
+            _send(proc, cmd="pit-dump")
+            r = _send(proc, cmd="reboot")
+            rebooted = True
+            _log(f"[smart] reboot: {r}")
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+        except Exception as e:
+            _log(f"[smart] reboot command failed ({e}) - reboot manually")
+
+    return {"flashed": flashed, "skipped": skipped,
+            "rebooted": rebooted, "workdir": workdir}
 
 
 def flash_archive_native(tar_path, log=None, patch_vbmeta=False,
