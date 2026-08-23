@@ -140,8 +140,11 @@ find "$STAGE/usr/share/flashpilot" -type f ! -name "*.sh" -exec chmod 0644 {} +
 find "$STAGE/usr/share/flashpilot" -type f -name "*.sh" -exec chmod 0755 {} +
 find "$STAGE/usr/share/flashpilot" -type d -exec chmod 0755 {} +
 
-# 6. Udev rules (Samsung VID 04e8 -> plugdev users get device access).
+# 6. Udev rules: Samsung (04e8), MediaTek (0e8d), Spreadtrum/UNISOC (1782)
+#    -> plugdev users get device access without sudo.
 install -m 0644 root/60-odin4.rules "$STAGE/usr/lib/udev/rules.d/60-odin4.rules"
+install -m 0644 root/60-flashpilot-mtk.rules "$STAGE/usr/lib/udev/rules.d/60-flashpilot-mtk.rules"
+install -m 0644 root/60-flashpilot-spd.rules "$STAGE/usr/lib/udev/rules.d/60-flashpilot-spd.rules"
 
 # 7. Launcher.
 install -m 0755 packaging/launcher.sh "$STAGE/usr/bin/flashpilot"

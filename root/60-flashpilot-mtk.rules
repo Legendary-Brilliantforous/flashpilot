@@ -1,0 +1,3 @@
+# FlashPilot - MediaTek BROM/Preloader/DA access (plugdev)
+# 0e8d:2000 = BROM, 0e8d:0003 = preloader, 0e8d:0004/1004 = DA, 0e8d:2008+ = ADB composite
+SUBSYSTEM=="usb", ATTR{idVendor}=="0e8d", MODE="0660", GROUP="plugdev"

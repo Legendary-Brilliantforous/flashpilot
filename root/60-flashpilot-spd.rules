@@ -1,0 +1,3 @@
+# FlashPilot - Spreadtrum / UNISOC BROM + FDL download mode access (plugdev)
+# 1782:4d00 = BROM/FDL download window, 1782:4001 and other PIDs = normal mode
+SUBSYSTEM=="usb", ATTR{idVendor}=="1782", MODE="0660", GROUP="plugdev"
