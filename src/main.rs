@@ -61,6 +61,7 @@ fn main() {
         eprintln!("  spd-flash <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...  write partitions/regions");
         eprintln!("  spd-readback <t> <fdl1> <a1> <fdl2> [a2] <out.pac> [parts]  dump flash to a .pac archive");
         eprintln!("  spd-boot <t> <fdl1> <a1> [fdl2] [a2] <recovery|fastboot|normal>  reboot to target via misc BCB");
+        eprintln!("  spd-spl-patch <t> <fdl1> <a1> <fdl2> [a2] <part> <out> [--hint 0xA,0xB]  SPL signcheck bypass + DHTB rehash");
         eprintln!("  spd-reset <t>          reset device to normal mode");
         eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
@@ -452,6 +453,43 @@ fn main() {
             let out_pac = args[7].clone();
             let only = args.get(8).map(|s| s.as_str());
             spd::spd_readback_cli(&target, &fdl1, fdl1_addr, &fdl2, fdl2_addr, &out_pac, only)
+        }
+        "spd-spl-patch" => {
+            // spd-spl-patch <t> <fdl1> <a1> <fdl2> [a2] <part> <out.img> [--hint 0xA,0xB]
+            if args.len() < 9 {
+                eprintln!("usage: flashpilot-bridge spd-spl-patch <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <part> <out.img> [--hint 0xADDR,...]");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let fdl1 = args[3].clone();
+            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let fdl2 = args[5].clone();
+            let mut idx = 6;
+            let fdl2_addr = if !args[idx].starts_with("--")
+                && u32::from_str_radix(args[idx].trim_start_matches("0x"), 16).is_ok()
+            {
+                let v = u32::from_str_radix(args[idx].trim_start_matches("0x"), 16).ok();
+                idx += 1;
+                v
+            } else {
+                None
+            };
+            let part = args[idx].clone();
+            let out_img = args[idx + 1].clone();
+            let mut hints: Vec<u32> = Vec::new();
+            for a in &args[idx + 2..] {
+                if let Some(h) = a.strip_prefix("--hint") {
+                    for tok in h.trim_start_matches('=').split(',') {
+                        if let Ok(v) = u32::from_str_radix(tok.trim().trim_start_matches("0x"), 16) {
+                            hints.push(v);
+                        }
+                    }
+                }
+            }
+            spd::spd_spl_patch_cli(
+                &target, &fdl1, fdl1_addr, &fdl2, fdl2_addr,
+                &part, &out_img, &hints,
+            )
         }
         "spd-boot" => {
             // spd-boot <target> <mode> | spd-boot <t> <fdl1> <a1> [fdl2] [a2] <mode>

