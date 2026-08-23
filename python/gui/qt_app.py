@@ -3969,10 +3969,10 @@ class FrpWindow(QMainWindow):
         patch = self._nf_patch_cb.isChecked()
 
         def do_flash():
-            self.log_line(f"[native-flash] {os.path.basename(tar_path)} "
+            self.log_line(f"[smart-flash] {os.path.basename(tar_path)} "
                           f"(vbmeta patch={'on' if patch else 'off'})")
             try:
-                result = frp.flash_archive_native(
+                result = frp.flash_archive_smart(
                     tar_path, log=self.log_line, patch_vbmeta=patch,
                 )
                 ok = True
@@ -3982,7 +3982,7 @@ class FrpWindow(QMainWindow):
             except Exception as e:
                 ok = False
                 summary = str(e)
-                self.log_line(f"[native-flash] ERROR: {e}")
+                self.log_line(f"[smart-flash] ERROR: {e}")
 
             def done():
                 self._nf_busy = False
@@ -5797,6 +5797,17 @@ class FrpWindow(QMainWindow):
         self.spd_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.spd_detect_btn.clicked.connect(self._spd_detect)
         det_row.addWidget(self.spd_detect_btn)
+        self.spd_brom_watch_btn = QPushButton("👁 Watch for BROM (3 min)")
+        self.spd_brom_watch_btn.setStyleSheet(_btn_ghost())
+        self.spd_brom_watch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spd_brom_watch_btn.setToolTip(
+            "Unisoc BROM (1782:4d00) only appears for ~2s when a powered-off\n"
+            "phone is plugged with the boot key held. This watcher polls every\n"
+            "400ms and auto-fills the target when it catches the window.\n"
+            "Steps: power off → hold VOL- → plug USB while watching."
+        )
+        self.spd_brom_watch_btn.clicked.connect(self._spd_brom_watch)
+        det_row.addWidget(self.spd_brom_watch_btn)
         self.spd_status = QLabel("No SPD download device detected")
         self.spd_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
         det_row.addWidget(self.spd_status, 1)
@@ -6016,14 +6027,86 @@ class FrpWindow(QMainWindow):
                         f"SPD: 1782:{d.get('pid', 0):04x} bus={d.get('bus')} "
                         f"addr={d.get('address')} - {d.get('stage', '')}"
                     )
-                self._ui.ui.emit(lambda n=len(parsed): self.spd_status.setText(
-                    f"{n} SPD device(s) found"))
+                # Show first device name like commercial tools (SPD Flash Tool)
+                first = parsed[0]
+                pid = first.get("pid", 0)
+                stage = first.get("stage", "")
+                prod = first.get("product")
+                mfr = first.get("manufacturer")
+                dl = bool(first.get("download"))
+
+                if dl:
+                    mode = "BROM/FDL"
+                elif pid == 0x4001:
+                    mode = "normal/PTP"
+                else:
+                    mode = "other"
+
+                if prod and mfr:
+                    status = f"{mfr} {prod} · 1782:{pid:04x} ({mode})"
+                elif prod:
+                    status = f"{prod} · 1782:{pid:04x} ({mode})"
+                else:
+                    status = f"Unisoc 1782:{pid:04x} ({mode})"
+
+                if len(parsed) > 1:
+                    status += f" +{len(parsed)-1} more"
+                self._ui.ui.emit(lambda s=status: self.spd_status.setText(s))
             except bridge.BridgeError as e:
                 self._ui.ui.emit(lambda err=e: self.spd_status.setText(
                     f"Scan error: {err}"))
             except Exception as e:  # noqa: BLE001
                 self._ui.ui.emit(lambda err=e: self.spd_status.setText(
                     f"Scan error: {err}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _spd_brom_watch(self):
+        """Commercial-style BROM watcher: polls spd-detect every 400ms for the
+        short-lived 1782:4d00 window that appears when a powered-off Unisoc
+        phone is plugged with Vol-/boot key held. Auto-stops on catch."""
+        if getattr(self, "_spd_watch_active", False):
+            self._ui.line.emit("[spd] BROM watch already running - press Stop")
+            return
+        self._spd_watch_active = True
+        self.spd_status.setText("Watching for BROM... hold boot key + plug USB")
+        self._ui.line.emit("[spd] BROM watch started - power off, hold VOL- , plug USB")
+
+        def work():
+            import json as _json
+            import time as _time
+            caught = None
+            deadline = _time.monotonic() + 180.0
+            while _time.monotonic() < deadline and self._spd_watch_active:
+                try:
+                    devs = bridge._run(["spd-detect"], timeout=5)
+                    parsed = _json.loads(devs or "[]")
+                    dl = [d for d in parsed if d.get("download")]
+                    if dl:
+                        d = dl[0]
+                        caught = f"{d['bus']}:{d['address']}"
+                        pid = d.get("pid", 0)
+                        self._last_spd_target = caught
+                        def on_catch(t=caught, p=pid):
+                            self.spd_status.setText(f"BROM CAUGHT @ {t} (1782:{p:04x}) - ready")
+                            self.show_toast("SPD BROM detected!", f"Target {t}", "success")
+                            self._append_console(f"[spd] === BROM WINDOW CAUGHT @ {t} (1782:{p:04x}) ===")
+                            self._append_console("[spd] Run Get Device Info / FRP Reset / Format NOW (window closes on reboot)")
+                        self._ui.ui.emit(on_catch)
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+                _time.sleep(0.4)
+
+            if not caught:
+                def on_timeout():
+                    if self._spd_watch_active:
+                        self.spd_status.setText("BROM watch timeout (3 min) - retry with VOL- held")
+                        self._append_console("[spd] BROM watch timed out after 3 minutes")
+                    self._spd_watch_active = False
+                self._ui.ui.emit(on_timeout)
+            else:
+                self._spd_watch_active = False
 
         threading.Thread(target=work, daemon=True).start()
 
