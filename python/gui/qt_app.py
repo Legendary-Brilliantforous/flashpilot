@@ -6347,6 +6347,16 @@ class FrpWindow(QMainWindow):
                     self._ui.line.emit("[error] SPD: no download device")
                     self._ui.ui.emit(self._spd_reset_ui)
                     return
+                # Safety net: back up boot-critical partitions before writing.
+                try:
+                    from python.core.safety import preflash_backup
+                    a2v = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
+                    preflash_backup("spd", bridge, lambda m: self._ui.line.emit(m),
+                                    target=tgt, fdl1=fdl1, a1=a1,
+                                    fdl2=fdl2 or "", a2=a2v)
+                except Exception as e:  # noqa: BLE001
+                    self._ui.line.emit(f"[safety] backup skipped: {e}")
+
                 args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
                 if fdl2:
                     a2 = self._spd_addr(self.spd_fdl2_addr) or 0
