@@ -325,10 +325,8 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
                         fh.write(new)
                     _log(f"[resilient] patched {base}: AVB disabled (0x03)")
 
-    d = _download_mode_device()
-    if not d:
-        raise RuntimeError("device not in download mode")
-    target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
+    # No upfront device requirement: the loop below waits passively for
+    # each Download Mode entry (user reboots the phone between writes).
 
     # Resume support: completed partitions persist across runs.
     state_path = "/tmp/fp_flash_progress.json"
@@ -349,6 +347,30 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
                 json.dump({"done": sorted(done_names)}, fh)
         except Exception:
             pass
+
+    def _wait_clean_download_mode(log_fn, timeout=3600):
+        """PASSIVE wait (no USB sessions consumed): poll until a Samsung
+        device is in download mode with a FULLY enumerated configuration
+        (interfaces present, active config set). Returns bridge target."""
+        _log("[resilient] waiting for device in download mode...")
+        deadline = time.time() + timeout
+        prompted = False
+        while time.time() < deadline:
+            nd = _download_mode_device()
+            if nd and nd.get("interfaces") and nd.get("active_config"):
+                return f"04e8:{nd['pid']:04x}@{nd['bus']}:{nd['address']}"
+            if not prompted:
+                prompted = True
+                log_fn(
+                    "[resilient] >>> power the phone OFF, then enter "
+                    "Download Mode (Vol Down + Power, then Vol Up) <<<"
+                )
+            # Half-enumerated states (no interfaces) need a re-entry; nudge
+            # once per minute.
+            if nd and not prompted:
+                pass
+            time.sleep(2.0)
+        raise RuntimeError("timed out waiting for download-mode device")
 
     def _probe_ready(tgt):
         """True if a working agent session can be opened right now."""
@@ -414,13 +436,11 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
         _log(f"[resilient] round {rounds}: {entry_name} "
              f"({len(pending)} partitions pending)")
 
-        # Pre-probe: don't burn the attempt on a wedged/deaf/oscillating
-        # device - the error screen cycles USB state, so poll patiently and
-        # guide a replug if nothing usable appears.
-        try:
-            target = _recover_session(target, timeout=180)
-        except RuntimeError:
-            raise SessionLost(entry_name)
+        # Pre-flash wait: PASSIVE only - never probe with agent sessions!
+        # Each enumeration allows exactly ONE Odin session; burning it on a
+        # probe kills the real flash. Just watch for a fully-enumerated
+        # download-mode device and grab its session directly.
+        target = _wait_clean_download_mode(_log)
 
         try:
             proc = subprocess.Popen(
@@ -481,17 +501,10 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
         if not pending:
             break
 
-        # Recovery: the wedged device often STAYS enumerated but deaf, so
-        # _recover_session guides a replug and polls until a fresh session
-        # answers.
-        try:
-            target = _recover_session(target, timeout=300)
-        except RuntimeError:
-            raise RuntimeError(
-                "device did not return to a usable session within 300s - "
-                "replug manually and rerun to resume remaining partitions "
-                f"({[os.path.basename(p[1]) for p in pending]} left)"
-            )
+        # Session consumed. The phone will NOT answer again until the user
+        # reboots it and re-enters download mode - wait passively.
+        _log("[resilient] >>> NOW: reboot the phone and re-enter Download "
+             "Mode (Vol Down + Power, then Vol Up) <<<")
 
     if pending:
         raise RuntimeError(
