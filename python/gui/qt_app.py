@@ -5898,6 +5898,29 @@ class FrpWindow(QMainWindow):
         self.spd_stop_btn.setToolTip("Cancel the running SPD operation")
         acts_row2.addWidget(self.spd_stop_btn)
         acts.addLayout(acts_row2)
+
+        # Reboot targets row (commercial-style: Recovery / Fastboot / Normal)
+        acts_row3 = QHBoxLayout()
+        acts_row3.setSpacing(10)
+        for label, mode in (
+            ("Reboot → Recovery", "recovery"),
+            ("Reboot → Fastboot", "fastboot"),
+            ("Reset (Normal)", "normal"),
+        ):
+            b = QPushButton(label)
+            b.setStyleSheet(_btn_ghost())
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(
+                f"Reboot the download-mode Unisoc device into {mode}.\n"
+                + ("Writes 'boot-recovery' to the misc BCB via FDL2, then resets.\n"
+                   if mode != "normal" else
+                   "Plain BSL NORMAL_RESET - works from bare BROM, no FDLs.\n")
+                + ("Needs FDL1+FDL2." if mode != "normal" else "")
+            )
+            b.clicked.connect(lambda _=False, m=mode: self._spd_boot(m))
+            acts_row3.addWidget(b)
+        acts_row3.addStretch(1)
+        acts.addLayout(acts_row3)
         lay.addLayout(acts)
 
         self.spd_fw_dir = QLineEdit()
@@ -6165,6 +6188,38 @@ class FrpWindow(QMainWindow):
                     f"Read error: {err}"))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _spd_boot(self, mode):
+        """Reboot download-mode device into recovery / fastboot / normal."""
+        tgt = self._spd_resolve_target()
+        if not tgt:
+            self._ui.line.emit("[warn] SPD boot: no download device detected")
+            self._toasts.show_warn("No SPD device", "Catch the BROM window first")
+            return
+        if mode == "normal":
+            # Bare-BROM path: no FDLs needed.
+            self._spd_run(["spd-boot", tgt, "normal"], timeout=60)
+            return
+        fdl1 = self._spd_require_files()
+        if not fdl1:
+            return
+        a1 = self._spd_addr(self.spd_fdl1_addr)
+        if a1 is None:
+            return
+        fdl2 = self.spd_files["fdl2"].text().strip()
+        args = ["spd-boot", tgt, fdl1, f"0x{a1:x}"]
+        if fdl2:
+            a2 = self._spd_addr(self.spd_fdl2_addr)
+            args += [fdl2] + ([f"0x{a2:x}"] if a2 is not None else [])
+        label = "Recovery" if mode == "recovery" else "Fastboot"
+        self._confirm_overlay(
+            f"Reboot to {label}",
+            f"Write 'boot-{label.lower()}' into the misc BCB and reset the\n"
+            f"device so it boots straight into {label}?\n\n"
+            "Needs FDL1+FDL2 (misc is only writable after FDL2 runs).",
+            confirm_label=f"Boot {label}",
+            on_confirm=lambda: self._spd_run(args + [mode], timeout=120),
+        )
 
     def _spd_format(self):
         fdl1 = self._spd_require_files()
