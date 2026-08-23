@@ -60,7 +60,9 @@ fn main() {
         eprintln!("  spd-partitions <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]  list Android partition table");
         eprintln!("  spd-flash <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...  write partitions/regions");
         eprintln!("  spd-readback <t> <fdl1> <a1> <fdl2> [a2] <out.pac> [parts]  dump flash to a .pac archive");
-        eprintln!("  spd-reset <t>          reset device to normal mode");        eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
+        eprintln!("  spd-boot <t> <fdl1> <a1> [fdl2] [a2] <recovery|fastboot|normal>  reboot to target via misc BCB");
+        eprintln!("  spd-reset <t>          reset device to normal mode");
+        eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
         eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
         eprintln!("  qcom-backup <t> <prog> <out>  backup partitions via Firehose");
@@ -450,6 +452,41 @@ fn main() {
             let out_pac = args[7].clone();
             let only = args.get(8).map(|s| s.as_str());
             spd::spd_readback_cli(&target, &fdl1, fdl1_addr, &fdl2, fdl2_addr, &out_pac, only)
+        }
+        "spd-boot" => {
+            // spd-boot <target> <mode> | spd-boot <t> <fdl1> <a1> [fdl2] [a2] <mode>
+            // BROM-only path (no FDLs): plain NORMAL_RESET (normal mode only).
+            if args.len() == 4 && args[3] == "normal" {
+                let dev_target = args[2].clone();
+                match spd::spd_reset_cli(&dev_target) {
+                    Ok(v) => println!("{v}"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        exit(1);
+                    }
+                }
+                return;
+            }
+            if args.len() < 8 {
+                eprintln!("usage: flashpilot-bridge spd-boot <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <recovery|fastboot|normal>");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let fdl1 = args[3].clone();
+            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let mut rest = &args[5..];
+            let mut fdl2: Option<String> = None;
+            let mut fdl2_addr: Option<u32> = None;
+            if !rest.is_empty() && !matches!(rest[0].as_str(), "recovery" | "fastboot" | "normal") {
+                fdl2 = Some(rest[0].clone());
+                rest = &rest[1..];
+                if !rest.is_empty() && !matches!(rest[0].as_str(), "recovery" | "fastboot" | "normal") {
+                    fdl2_addr = u32::from_str_radix(rest[0].trim_start_matches("0x"), 16).ok();
+                    rest = &rest[1..];
+                }
+            }
+            let mode = rest.first().cloned().unwrap_or_default();
+            spd::spd_boot_cli(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &mode)
         }
         "spd-flash" => {
             // spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...

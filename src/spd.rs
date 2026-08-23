@@ -966,6 +966,117 @@ pub fn spd_reset_cli(target: &str) -> Result<String> {
     }
 }
 
+/// `spd-boot <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <mode>` —
+/// reboot a download-mode Unisoc device into recovery / fastboot / normal.
+///
+/// How it works (no FDL2 needed for the BROM-only variant):
+/// * BROM itself has no boot-target command - it only NORMAL_RESETs.
+/// * The boot target on Unisoc lives in the **misc** partition's BCB
+///   ("boot once" command block, same as Android's `adb reboot recovery`).
+/// * So: load FDL1 (+FDL2 when given) -> read 2KB of `misc` via FDL flash
+///   read -> patch the BCB command field -> write it back -> NORMAL_RESET.
+///   LK reads misc at boot and honors `boot-recovery` / `boot-fastboot`.
+pub fn spd_boot_cli(
+    target: &str,
+    fdl1: &str,
+    fdl1_addr: u32,
+    fdl2: Option<&str>,
+    fdl2_addr: Option<u32>,
+    mode: &str,
+) -> Result<String> {
+    let command = match mode {
+        "recovery" => "boot-recovery",
+        "fastboot" | "bootloader" => "boot-fastboot",
+        "normal" => {
+            // plain reset, no misc patch needed
+            let dev = find_spd_target(target)?;
+            let s = open_session(&dev)?;
+            return match s.reset() {
+                Ok(_) => Ok("Device reset to normal mode.".to_string()),
+                Err(e) => Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::UnexpectedResponse(e),
+                )),
+            };
+        }
+        other => {
+            return Err(BridgeError::InvalidArgument(format!(
+                "unknown boot mode '{other}' (recovery|fastboot|normal)"
+            )));
+        }
+    };
+
+    const BCB_MAGIC: &[u8; 8] = b"BCB\0\0\0\0\0";
+    const MISC_READ_LEN: u64 = 2048;
+    let dev = find_spd_target(target)?;
+    let mut s = connect_and_load_fdls(
+        &dev,
+        fdl1,
+        fdl1_addr,
+        fdl2.unwrap_or("none"),
+        fdl2_addr.unwrap_or(0x1400_0000),
+        true,
+        528,
+    )?;
+
+    // Locate misc in the partition table. Feature-phone FDL1-only sessions
+    // have no table -> tell the user FDL2 is required for this operation.
+    let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(
+        crate::error::ProtocolError::UnexpectedResponse(e),
+    ))?;
+    let misc_size = parts
+        .iter()
+        .find(|(n, _)| n == "misc" || n == "misc_a")
+        .map(|(_, sz)| *sz)
+        .ok_or_else(|| BridgeError::InvalidArgument(
+            "partition 'misc' not found in device partition table".into(),
+        ))?;
+    let read_len = MISC_READ_LEN.min(misc_size);
+
+    // Read current BCB so we preserve recovery command args if present.
+    let tmp = std::env::temp_dir().join(format!("flashpilot_misc_{}.bin", std::process::id()));
+    s.read_partition("misc", 0, read_len, &tmp.to_string_lossy(), 528)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let mut bcb = fs::read(&tmp).unwrap_or_else(|_| vec![0u8; read_len as usize]);
+    let _ = fs::remove_file(&tmp);
+    if bcb.len() < read_len as usize {
+        bcb.resize(read_len as usize, 0);
+    }
+
+    // Android BCB layout: magic[8] command[32] status[32] recovery[768] stage[32] reserved[]
+    if &bcb[0..8] != BCB_MAGIC && bcb[..3.min(bcb.len())].to_ascii_uppercase() != *b"BCB" {
+        eprintln!("[spd-boot] no BCB magic in misc head - writing fresh BCB");
+        for b in bcb.iter_mut() { *b = 0; }
+        bcb[0..3].copy_from_slice(b"BCB");
+    }
+    // command field @8..40, NUL-terminated
+    for b in bcb[8..40].iter_mut() { *b = 0; }
+    let cmd_bytes = command.as_bytes();
+    bcb[8..8 + cmd_bytes.len()].copy_from_slice(cmd_bytes);
+
+    // Write patched BCB back (write_raw targets the partition start by name).
+    let patched = std::env::temp_dir().join(format!("flashpilot_misc_patched_{}.bin", std::process::id()));
+    fs::write(&patched, &bcb).map_err(|e| format!("write {}: {e}", patched.display()))?;
+    s.write_partition("misc", &patched.to_string_lossy(), 528)
+        .or_else(|_| {
+            // Some FDL2 builds expose raw-region writes instead; fall back to
+            // write_partition_by_name-style aliasing used by spd_flash_cli.
+            s.write_partition("misc_a", &patched.to_string_lossy(), 528)
+        })
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("write misc: {e}"),
+        }))?;
+    let _ = fs::remove_file(&patched);
+
+    s.reset().map_err(|e| BridgeError::Protocol(
+        crate::error::ProtocolError::UnexpectedResponse(e),
+    ))?;
+    Ok(format!(
+        "BCB command set to '{command}' and device reset - booting into {mode}."
+    ))
+}
+
 /// `spd-flash <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...` —
 /// load FDLs, enable write, then write each `partition=image` entry.
 /// Raw flash regions can be targeted with a hex address instead of a name
