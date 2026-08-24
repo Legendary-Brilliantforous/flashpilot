@@ -8031,6 +8031,46 @@ class FrpWindow(QMainWindow):
             # (1.2.1-beta does not beat running 1.2.1; it beats 1.2.0).
             newer_beta = bool(beta_tag) and beta_tuple > current_tuple
 
+            # Check if user is running a beta version
+            if current_alpha:
+                # User is on beta - warn them and show stable version
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit(f"[check] You are running beta version {current}")
+                    except Exception:
+                        pass
+                
+                if stable_tag:
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] Latest stable version is {stable_tag}")
+                        except Exception:
+                            pass
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.ui.emit(lambda cur=current, stable=stable_tag: self._toasts.show_warn(
+                                "Beta version warning",
+                                f"You are running beta version {cur}.\n\n"
+                                f"⚠️ Warning: Beta versions may contain bugs and cause instability.\n\n"
+                                f"Latest stable version: {stable}\n\n"
+                                f"If you experience issues, consider switching to the stable version.\n\n"
+                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                            ))
+                        except Exception:
+                            pass
+                else:
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.ui.emit(lambda cur=current: self._toasts.show_warn(
+                                "Beta version warning",
+                                f"You are running beta version {cur}.\n\n"
+                                f"⚠️ Warning: Beta versions may contain bugs and cause instability.\n\n"
+                                f"No stable version available yet.\n\n"
+                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                            ))
+                        except Exception:
+                            pass
+            
             if newer_stable:
                 if hasattr(self, "_ui") and self._ui:
                     note = " (promotes your beta install)" if promote_to_stable else ""
@@ -8069,15 +8109,24 @@ class FrpWindow(QMainWindow):
                     except Exception:
                         pass
             else:
-                # No newer stable version - user is on latest stable
-                if hasattr(self, "_ui") and self._ui:
-                    try:
-                        self._ui.line.emit(f"[check] You are on the latest stable version ({current})")
-                    except Exception:
-                        pass
+                # No newer stable version
+                if current_alpha:
+                    # User is on beta but no newer stable available
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] You are on beta version {current}, latest stable is {stable_tag or 'unknown'}")
+                        except Exception:
+                            pass
+                else:
+                    # User is on latest stable
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] You are on the latest stable version ({current})")
+                        except Exception:
+                            pass
                 
                 # Check for beta availability even when on latest stable
-                if newer_beta:
+                if newer_beta and not current_alpha:
                     if hasattr(self, "_ui") and self._ui:
                         try:
                             self._ui.line.emit(f"[check] Beta version {beta_tag} is available for testing")
