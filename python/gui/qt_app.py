@@ -3101,12 +3101,13 @@ class FrpWindow(QMainWindow):
         # --- XOS/Transsion unlock (secret codes) --------------------------
         hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
         xos_info = QLabel(
-            "Enable ADB on a locked Transsion phone - the dialer code requires\n"
-            "the FULL Dialer app (emergency pad does NOT dispatch secret codes\n"
-            "on XOS 13+ SPD builds). OOBE/FRP path: connect WiFi → tap the\n"
-            "privacy-policy link on the Agreement page → Chrome opens → follow\n"
-            "any tel: link → real Dialer appears → dial *#*#49#*#* → ADB on.\n"
-            "Alternate code on some models: *#85#. Then plug USB and authorize."
+            "Enable ADB on a factory-reset (FRP) Transsion phone:\n"
+            "① Welcome → select language & country → connect WiFi → Next\n"
+            "② On the Agreement page tap the 'Personalized Recommendations'\n"
+            "    privacy-policy link → Chrome opens\n"
+            "③ In Chrome type 'frpbypass' → on that site find the DIALER link\n"
+            "    and open it → the real phone Dialer appears despite OOBE lock\n"
+            "④ Dial *#*#49#*#* → ADB enables persistently. Plug USB, authorize."
         )
         xos_info.setWordWrap(True)
         xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
@@ -4055,11 +4056,12 @@ class FrpWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
 
         chain = QLabel(
-            "⚠️ EMERGENCY PAD DOES NOT DISPATCH SECRET CODES on XOS 13+ (SPD).\n"
-            "Reach the REAL Dialer via OOBE: WiFi → privacy link → Chrome →\n"
-            "follow any tel: link → dialer opens → dial the code.\n"
-            "Alternate code on some Transsion models: *#85#\n"
-            "(MTK-based Tecno/Infinix builds may accept #*#49#*# in emergency mode.)"
+            "EXACT CHAIN (factory-reset / FRP phones):\n"
+            "Welcome → language & country → WiFi → Next →\n"
+            "tap 'Personalized Recommendations' privacy link → Chrome →\n"
+            "type 'frpbypass' → open the DIALER link on that site →\n"
+            "real Dialer opens → dial *#*#49#*#* → ADB on.\n"
+            "(The lock-screen emergency pad does NOT process secret codes.)"
         )
         chain.setWordWrap(True)
         chain.setStyleSheet(f"color:{C['warn']}; font-size:11px; font-weight:600; padding:6px;")
