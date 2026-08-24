@@ -8068,70 +8068,55 @@ class FrpWindow(QMainWindow):
                         ))
                     except Exception:
                         pass
-            elif beta_tag and beta_tuple > current_tuple and (not stable_tag or stable_tuple <= current_tuple):
-                if hasattr(self, "_ui") and self._ui:
-                    try:
-                        self._ui.line.emit(f"[check] You are on the latest stable version. Beta version {beta_tag} is also available.")
-                    except Exception:
-                        pass
-                latest_url = None
-                for a in latest_beta.get("assets", []):
-                    if a["name"].endswith("_amd64.deb"):
-                        latest_url = a["browser_download_url"]
-                        break
-                if latest_url and auto_download:
-                    fpath = os.path.expanduser("~/flashpilot_update.deb")
-                    try:
-                        urllib.request.urlretrieve(latest_url, fpath)
-                        if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
-                            try:
-                                self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag} to {fpath}")
-                            except Exception:
-                                pass
-                    except Exception as dl_err:
-                        if hasattr(self, "_ui") and self._ui:
-                            try:
-                                self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
-                            except Exception:
-                                pass
-                if hasattr(self, "_ui") and self._ui:
-                    try:
-                        self._ui.ui.emit(lambda tag=beta_tag, ad=auto_download, url=latest_url: self._toasts.show_info(
-                            "Beta version available",
-                            f"You are on the latest stable version. Beta release {tag} is available.\n\n"
-                            f"{'Downloaded to ~/flashpilot_update.deb.\n\n' if ad and url else ''}"
-                            "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                        ))
-                    except Exception:
-                        pass
             else:
+                # No newer stable version - user is on latest stable
                 if hasattr(self, "_ui") and self._ui:
                     try:
-                        self._ui.line.emit(f"[check] You are on the latest version ({current})")
-                        # Probe for python-tier drift (light patch) before
-                        # declaring fully up-to-date. Silent on failure.
+                        self._ui.line.emit(f"[check] You are on the latest stable version ({current})")
+                    except Exception:
+                        pass
+                
+                # Check for beta availability even when on latest stable
+                if newer_beta:
+                    if hasattr(self, "_ui") and self._ui:
                         try:
-                            from python.core import updater as _upd
-                            st = _upd.check(timeout=8)
-                            if st.get("status") == "python":
-                                loc = (st.get("local_sha") or "unknown")[:12]
-                                rem = (st.get("remote_sha") or "?")[:12]
-                                self._ui.line.emit(
-                                    f"[check] Python patch available ({loc} -> {rem}) - "
-                                    "use Settings > Apply Python Patch."
-                                )
-                                if not getattr(self, "_last_check_was_auto", False):
-                                    self._ui.ui.emit(lambda: self._toasts.show_info(
-                                        "Light patch available",
-                                        "Python-only changes detected.\nSettings > Apply Python Patch…"
-                                    ))
+                            self._ui.line.emit(f"[check] Beta version {beta_tag} is available for testing")
                         except Exception:
                             pass
-                        # Only pop up "Up to date" for manual checks; silent for auto
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.ui.emit(lambda tag=beta_tag: self._toasts.show_warn(
+                                "Beta version available",
+                                f"You are on the latest stable version ({current}).\n\n"
+                                f"Beta release {tag} is available for testing.\n\n"
+                                f"⚠️ Warning: Beta versions may contain bugs and should be used for testing only.\n\n"
+                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                            ))
+                        except Exception:
+                            pass
+                
+                # Probe for python-tier drift (light patch) before
+                # declaring fully up-to-date. Silent on failure.
+                try:
+                    from python.core import updater as _upd
+                    st = _upd.check(timeout=8)
+                    if st.get("status") == "python":
+                        loc = (st.get("local_sha") or "unknown")[:12]
+                        rem = (st.get("remote_sha") or "?")[:12]
+                        self._ui.line.emit(
+                            f"[check] Python patch available ({loc} -> {rem}) - "
+                            "use Settings > Apply Python Patch."
+                        )
                         if not getattr(self, "_last_check_was_auto", False):
-                            self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
-                    except Exception:
-                        pass
+                            self._ui.ui.emit(lambda: self._toasts.show_info(
+                                "Light patch available",
+                                "Python-only changes detected.\nSettings > Apply Python Patch…"
+                            ))
+                except Exception:
+                    pass
+                # Only pop up "Up to date" for manual checks; silent for auto
+                if not getattr(self, "_last_check_was_auto", False):
+                    self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
         except Exception as e:
             if hasattr(self, "_ui") and self._ui:
                 try:
