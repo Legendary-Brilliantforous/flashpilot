@@ -5921,6 +5921,127 @@ class FrpWindow(QMainWindow):
             acts_row3.addWidget(b)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
+
+        # --- Advanced: magic64 signature-preserving packer (fused SoCs) ---
+        adv_box = QFrame()
+        adv_box.setObjectName("spdadv")
+        adv_box.setStyleSheet(
+            f"QFrame#spdadv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['warn']};"
+            f" border-radius: 9px; }}"
+        )
+        adv_lay = QVBoxLayout(adv_box)
+        adv_lay.setContentsMargins(12, 8, 12, 10)
+        adv_lay.setSpacing(6)
+
+        _adv_title = QLabel("MAGIC64 — SIGNATURE-PRESERVING RUNTIME PATCH (FUSED SoC)")
+        _adv_title.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; font-size:11px;")
+        adv_lay.addWidget(_adv_title)
+
+        # stock image row
+        stock_row = QHBoxLayout()
+        stock_lbl = QLabel("Stock image")
+        stock_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
+        stock_row.addWidget(stock_lbl)
+        self.spd_magic_stock = QLineEdit()
+        self.spd_magic_stock.setPlaceholderText("uboot.img read via Backup Partitions / spd-readback...")
+        self.spd_magic_stock.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        stock_row.addWidget(self.spd_magic_stock, 1)
+        stock_btn = QPushButton("Browse...")
+        stock_btn.setStyleSheet(_btn_ghost())
+        stock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        stock_btn.setFixedWidth(90)
+        stock_btn.clicked.connect(lambda: self._spd_browse(
+            self.spd_magic_stock, "stock image", "Images (*.img *.bin);;All files (*)"))
+        stock_row.addWidget(stock_btn)
+        adv_lay.addLayout(stock_row)
+
+        # patches row
+        patch_row = QHBoxLayout()
+        patch_lbl = QLabel("Patches")
+        patch_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
+        patch_row.addWidget(patch_lbl)
+        self.spd_magic_patches = QLineEdit()
+        self.spd_magic_patches.setPlaceholderText("off=word; off=word ... e.g. 0xafe8=0xd503201f; 0x604c0=0xd503201f")
+        self.spd_magic_patches.setToolTip(
+            "Runtime patches applied by the shellcode after the SPL's RSA check\n"
+            "passes. Format: hexOffset=hexWord, semicolon-separated.\n"
+            "Offsets are RELATIVE TO PAYLOAD START (file offset minus 0x200).\n"
+            "Known UMS9620/T820 presets:\n"
+            "  0xafe8=0xd503201f   remove unlock warning + power-button pause\n"
+            "  0xb2a4=0xd503201f   remove SKIP VERIFY (UART)\n"
+            "  0xb2ac=0xd503201f   remove SKIP VERIFY (screen)\n"
+            "  0x604c0=0xd503201f  force lock status = UNLOCKED\n"
+            "Wrong offsets corrupt memory at boot - verify in Ghidra first."
+        )
+        self.spd_magic_patches.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        patch_row.addWidget(self.spd_magic_patches, 1)
+        adv_lay.addLayout(patch_row)
+
+        # load base row
+        lb_row = QHBoxLayout()
+        lb_lbl = QLabel("Load base")
+        lb_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
+        lb_row.addWidget(lb_lbl)
+        self.spd_magic_load_base = QLineEdit("0xB5000000")
+        self.spd_magic_load_base.setToolTip(
+            "Payload runtime address (text base). UMS9620 default 0xB5000000\n"
+            "= PAC XML image base 0xB4FFFE00 + 0x200 header.\n"
+            "Wrong load-base writes patches to random memory at boot."
+        )
+        self.spd_magic_load_base.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
+        )
+        self.spd_magic_load_base.setMaximumWidth(160)
+        lb_row.addWidget(self.spd_magic_load_base)
+        lb_row.addStretch(1)
+        adv_lay.addLayout(lb_row)
+
+        # actions row
+        mpb_row = QHBoxLayout()
+        self.spd_magic_pack_btn = QPushButton("🪄 Pack (no flash)")
+        self.spd_magic_pack_btn.setStyleSheet(_btn_primary())
+        self.spd_magic_pack_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spd_magic_pack_btn.setToolTip(
+            "Produce a magic64-packed copy next to the stock image.\n"
+            "NEVER flashes anything - review the log then use Flash Firmware\n"
+            "with the packed file to deliver it."
+        )
+        self.spd_magic_pack_btn.clicked.connect(self._spd_magic_pack)
+        mpb_row.addWidget(self.spd_magic_pack_btn)
+
+        self.spd_magic_flash_btn = QPushButton("Flash Packed Image")
+        self.spd_magic_flash_btn.setStyleSheet(_btn_ghost())
+        self.spd_magic_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spd_magic_flash_btn.setToolTip(
+            "Two-step confirmation for the packed output. Refuses unless the\n"
+            "packed file exists and ends with _magic.img (safety marker)."
+        )
+        self.spd_magic_flash_btn.clicked.connect(self._spd_magic_flash)
+        mpb_row.addWidget(self.spd_magic_flash_btn)
+        mpb_row.addStretch(1)
+        adv_lay.addLayout(mpb_row)
+
+        adv_lay.addWidget(_risk_banner(
+            "magic64 keeps the signed payload untouched so the SPL check still "
+            "passes - but wrong load-base/offsets corrupt memory AT BOOT. "
+            "Always keep the stock image."
+        ))
+        lay.addWidget(adv_box)
         lay.addLayout(acts)
 
         self.spd_fw_dir = QLineEdit()
@@ -6188,6 +6309,94 @@ class FrpWindow(QMainWindow):
                     f"Read error: {err}"))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _spd_magic_pack(self):
+        """Pack the stock image with magic64 framing (file transform only)."""
+        stock = self.spd_magic_stock.text().strip()
+        if not stock or not os.path.isfile(stock):
+            self._toasts.show_warn("No stock image", "Select the image you read back from the device")
+            return
+        spec = self.spd_magic_patches.text().strip()
+        if not spec:
+            self._toasts.show_warn("No patches", "Enter at least one off=word patch")
+            return
+        try:
+            lb = int(self.spd_magic_load_base.text().strip(), 0)
+        except ValueError:
+            self._toasts.show_error("Bad load base", "Load base must be hex like 0xB5000000")
+            return
+
+        patch_args = []
+        for tok in spec.split(";"):
+            tok = tok.strip()
+            if tok:
+                patch_args.append(tok)
+
+        out_img = os.path.splitext(stock)[0] + "_magic.img"
+        args = ["spd-magic-pack", stock, out_img,
+                "--load-base", hex(lb)]
+        for p in patch_args:
+            args += ["--patch", p]
+
+        self._ui.line.emit(f"[magic64] packing {os.path.basename(stock)} -> {os.path.basename(out_img)}")
+
+        def work():
+            try:
+                out = bridge._run(args, timeout=60)
+                self._ui.line.emit(out or "(no output)")
+                def ok():
+                    self._toasts.show_ok("magic64 packed",
+                                         "Review offsets, then Flash Packed Image")
+                    self.spd_status.setText(f"Packed: {os.path.basename(out_img)}")
+                self._ui.ui.emit(ok)
+            except bridge.BridgeError as e:
+                err = str(e)
+                def fail():
+                    self._ui.line.emit(f"[error] magic64: {err}")
+                    self._toasts.show_error("Pack failed", err)
+                self._ui.ui.emit(fail)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _spd_magic_flash(self):
+        """Flash the packed image - gated on the _magic.img safety marker."""
+        packed = os.path.splitext(self.spd_magic_stock.text().strip())[0] + "_magic.img"
+        if not packed.endswith("_magic.img") or not os.path.isfile(packed):
+            self._toasts.show_warn("Nothing to flash",
+                                   "Run Pack first - only _magic.img outputs are flashable here")
+            return
+        fdl1 = self._spd_require_files()
+        if not fdl1:
+            return
+        a1 = self._spd_addr(self.spd_fdl1_addr)
+        if a1 is None:
+            return
+        tgt = self._spd_resolve_target()
+        if not tgt:
+            self._toasts.show_warn("No SPD device", "Catch the BROM window first")
+            return
+
+        # partition name from stock filename (uboot.img -> uboot)
+        base = os.path.basename(self.spd_magic_stock.text().strip())
+        part = os.path.splitext(base)[0].lower()
+
+        fdl2 = self.spd_files["fdl2"].text().strip()
+        args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
+        if fdl2:
+            a2v = self._spd_addr(self.spd_fdl2_addr)
+            args += [fdl2] + ([f"0x{a2v:x}"] if a2v is not None else [])
+        args.append(f"{part}={packed}")
+
+        self._confirm_overlay(
+            f"Flash {part} (magic64)",
+            f"Write the PACKED image over '{part}'?\n\n"
+            f"  {packed}\n\n"
+            "The signed payload is untouched so SPL verification passes,\n"
+            "but wrong load-base/offsets corrupt memory at boot.\n"
+            "Keep the stock image for recovery via BROM.",
+            confirm_label=f"Flash {part}",
+            on_confirm=lambda: self._spd_run(args, timeout=900),
+        )
 
     def _spd_boot(self, mode):
         """Reboot download-mode device into recovery / fastboot / normal."""
