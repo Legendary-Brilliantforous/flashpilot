@@ -62,6 +62,7 @@ fn main() {
         eprintln!("  spd-readback <t> <fdl1> <a1> <fdl2> [a2] <out.pac> [parts]  dump flash to a .pac archive");
         eprintln!("  spd-boot <t> <fdl1> <a1> [fdl2] [a2] <recovery|fastboot|normal>  reboot to target via misc BCB");
         eprintln!("  spd-spl-patch <t> <fdl1> <a1> <fdl2> [a2] <part> <out> [--hint 0xA,0xB]  SPL signcheck bypass + DHTB rehash");
+        eprintln!("  spd-magic-pack <in> <out> [--load-base 0xA] --patch off=word  signature-preserving runtime patch (magic64)");
         eprintln!("  spd-reset <t>          reset device to normal mode");
         eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
@@ -490,6 +491,40 @@ fn main() {
                 &target, &fdl1, fdl1_addr, &fdl2, fdl2_addr,
                 &part, &out_img, &hints,
             )
+        }
+        "spd-magic-pack" => {
+            // spd-magic-pack <in.img> <out.img> [--load-base 0xB5000000] --patch off=word ...
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge spd-magic-pack <in.img> <out.img> [--load-base 0xADDR] --patch 0xOFF=0xWORD [--patch ...]");
+                exit(2);
+            }
+            let in_img = args[2].clone();
+            let out_img = args[3].clone();
+            let mut load_base: u32 = 0xB500_0000;
+            let mut patch_specs: Vec<String> = Vec::new();
+            let mut i = 4;
+            while i < args.len() {
+                let a = &args[i];
+                if a == "--load-base" && i + 1 < args.len() {
+                    load_base = u32::from_str_radix(
+                        args[i + 1].trim_start_matches("0x"), 16,
+                    ).unwrap_or(0xB500_0000);
+                    i += 2;
+                } else if let Some(rest) = a.strip_prefix("--patch") {
+                    let spec = rest.trim_start_matches('=').to_string();
+                    if spec.is_empty() && i + 1 < args.len() {
+                        patch_specs.push(args[i + 1].clone());
+                        i += 2;
+                    } else {
+                        patch_specs.push(spec);
+                        i += 1;
+                    }
+                } else {
+                    eprintln!("unknown arg '{a}'");
+                    exit(2);
+                }
+            }
+            spd::spd_magic_pack_cli(&in_img, &out_img, load_base, &patch_specs)
         }
         "spd-boot" => {
             // spd-boot <target> <mode> | spd-boot <t> <fdl1> <a1> [fdl2] [a2] <mode>

