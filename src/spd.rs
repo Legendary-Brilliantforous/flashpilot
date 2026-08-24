@@ -2064,3 +2064,158 @@ mod magic64_tests {
         assert_eq!(s1.len(), MAGIC64_SHELLCODE_LEN);
     }
 }
+
+#[cfg(test)]
+mod magic64_safety_tests {
+    use super::*;
+
+    /// A device never sees this function's output unless pack() succeeded.
+    /// These tests enumerate every way a bad image could reach the flash
+    /// path and assert each one is rejected BEFORE any bytes are produced.
+
+    /// Build a minimal valid DHTB+SIMGHDR image like a real uboot partition.
+    /// Trailing zero padding of ADD_LENGTH is included so magic packing fits.
+    fn make_signed_image(payload_size: usize) -> Vec<u8> {
+        let mut payload = vec![0xA5u8; payload_size];
+        payload[0..4].copy_from_slice(&0x14000000u32.to_le_bytes()); // b .
+        let mut img = vec![0u8; 0x200];
+        img[0..4].copy_from_slice(b"DHTB");
+        img[0x30..0x34].copy_from_slice(&(payload_size as u32).to_le_bytes());
+        img.extend_from_slice(&payload);
+        let mut foot = vec![0u8; MAGIC64_FOOTER_LEN];
+        foot[0..7].copy_from_slice(b"SIMGHDR");
+        foot[0x18..0x20].copy_from_slice(&0x200u64.to_le_bytes());
+        foot[0x20..0x28].copy_from_slice(&0x1000u64.to_le_bytes());
+        foot[0x28..0x30].copy_from_slice(&0x400u64.to_le_bytes());
+        img.extend_from_slice(&foot);
+        img.extend_from_slice(&vec![0xCCu8; 0x400]);
+        img.extend_from_slice(&vec![0u8; MAGIC64_ADD_LENGTH]);
+        img
+    }
+
+    #[test]
+    fn rejects_truncated_header() {
+        for n in [0usize, 4, 0x30, 0x1FF, 0x20F] {
+            let img = vec![0u8; n];
+            assert!(
+                magic64_pack(&img, &[], 0xB500_0000).is_err(),
+                "len {n} must not pass"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_dhtb() {
+        for magic in [b"HTBD", b"DHTX", b"\0\0\0\0", b"MAGY"] {
+            let mut img = make_signed_image(0x800);
+            img[0..4].copy_from_slice(magic);
+            assert!(magic64_pack(&img, &[], 0xB500_0000).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_footer_beyond_eof() {
+        // header claims a payload size that overruns the file
+        let mut img = make_signed_image(0x800);
+        img[0x30..0x34].copy_from_slice(&0xFFFFFF00u32.to_le_bytes());
+        assert!(magic64_pack(&img, &[], 0xB500_0000).is_err(),
+                "oversized mImgSize must be refused, not read OOB");
+    }
+
+    #[test]
+    fn rejects_missing_simghdr() {
+        let mut img = make_signed_image(0x800);
+        let foot = 0x200 + 0x800;
+        img[foot..foot + 8].copy_from_slice(b"XXXXXXXX");
+        assert!(magic64_pack(&img, &[], 0xB500_0000).is_err());
+    }
+
+    #[test]
+    fn signed_payload_never_modified() {
+        // The core safety property: whatever happens around it, the byte range
+        // covered by the RSA signature must come out identical.
+        let size = 0x2000;
+        let orig = make_signed_image(size);
+        let patches = [
+            MagicPatch { code_offset: 0x10, word: 0xd503201f },
+            MagicPatch { code_offset: 0x7f00, word: 0xd503201f },
+            MagicPatch { code_offset: 0x1abc, word: 0x14000000 },
+        ];
+        let out = magic64_pack(&orig, &patches, 0xB500_0000).unwrap();
+        assert_eq!(
+            out[0x210..0x210 + size],
+            orig[0x200..0x200 + size],
+            "signature-covered region changed - SPL would reject on device"
+        );
+    }
+
+    #[test]
+    fn entry_jump_is_only_signed_region_touch() {
+        // The single instruction at 0x200 (jump) sits OUTSIDE the signature
+        // coverage (payload starts at 0x210 in packed layout). Assert nothing
+        // else before 0x210 differs from the input's corresponding area except
+        // the deliberate mImgSize bump.
+        let size = 0x1000;
+        let orig = make_signed_image(size);
+        let out = magic64_pack(
+            &orig,
+            &[MagicPatch { code_offset: 0x100, word: 0 }],
+            0xB500_0000,
+        )
+        .unwrap();
+        // header identical except size field at 0x30
+        for i in 0..0x200 {
+            if i >= 0x30 && i < 0x34 {
+                continue;
+            }
+            assert_eq!(out[i], orig[i], "header byte {i:#x} unexpectedly modified");
+        }
+        // jump word + zero pad occupy exactly 0x10 bytes; then payload copy
+        assert_eq!(out[0x204..0x210], [0u8; 12]);
+    }
+
+    #[test]
+    fn patch_table_bounds_are_enforced() {
+        // 0x80/12 = 10 entries max plus terminator
+        let many: Vec<MagicPatch> = (0..11)
+            .map(|i| MagicPatch { code_offset: i * 4, word: i })
+            .collect();
+        assert!(magic64_pack(&make_signed_image(0x800), &many, 0xB500_0000).is_err(),
+                "11 entries must exceed table space and refuse");
+        let ok: Vec<MagicPatch> = (0..9)
+            .map(|i| MagicPatch { code_offset: i * 4, word: i })
+            .collect();
+        assert!(magic64_pack(&make_signed_image(0x800), &ok, 0xB500_0000).is_ok());
+    }
+
+    #[test]
+    fn overflow_refuses_rather_than_silently_dropping() {
+        // Image with NO trailing padding: framing cannot fit -> must fail loud,
+        // because silently truncating non-zero data bricks the device.
+        let mut img = make_signed_image(0x400);
+        // fill the trailing cert region with non-zero so there is no spare room
+        let tail_start = 0x200 + 0x400 + MAGIC64_FOOTER_LEN;
+        for b in img[tail_start..].iter_mut() {
+            *b = 0xEE;
+        }
+        assert!(
+            magic64_pack(&img, &[MagicPatch { code_offset: 8, word: 1 }], 0xB500_0000)
+                .is_err(),
+            "non-zero overflow must refuse instead of truncating"
+        );
+    }
+
+    #[test]
+    fn output_length_always_equals_input_partition_size() {
+        for size in [0x800usize, 0x4000, 0x10000] {
+            let orig = make_signed_image(size);
+            let out = magic64_pack(
+                &orig,
+                &[MagicPatch { code_offset: 4, word: 0xd503201f }],
+                0xB500_0000,
+            )
+            .unwrap_or_else(|e| panic!("size {size:#x}: {e}"));
+            assert_eq!(out.len(), orig.len(), "flashers write fixed partitions");
+        }
+    }
+}
