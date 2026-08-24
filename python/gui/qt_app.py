@@ -7979,7 +7979,7 @@ class FrpWindow(QMainWindow):
                         self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "No release info found on GitHub."))
                 return
 
-            current = "1.2.1"
+            current = "1.2.0"
             current_tuple, _ = _parse_version(current)
 
             stables = [r for r in releases if not r.get("prerelease", False)]
