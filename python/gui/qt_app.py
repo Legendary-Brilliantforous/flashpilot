@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -60,6 +61,8 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyle,
     QStyleOptionViewItem,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -203,11 +206,16 @@ C = {
     "inset": "#070d15",         # console / inputs
     "border": "#16233a",
     "border_hi": "#2c405e",
+    "glass": "rgba(13,22,34,0.78)",  # glassmorphism base
+    "glass_hi": "rgba(21,32,50,0.88)",
+    "glass_border": "rgba(255,255,255,0.08)",
     "text": "#e7eef8",
-    "dim": "#8fa4bd",
-    "mute": "#52657d",
+    "text_hi": "#f1f5f9",
+    "dim": "#a8bdd6",
+    "mute": "#6b7d94",
     "accent": "#22d3ee",        # circuit-cyan signature
     "accent_hi": "#7dd3fc",
+    "accent_glow": "rgba(34,211,238,0.28)",
     "grad_a": "#0ea5e9",
     "grad_b": "#22d3ee",
     "ok": "#2dd4bf",
@@ -257,32 +265,33 @@ _BASE_QSS = f"""
     font-size: 13px;
 }}
 QToolTip {{
-    background-color: {C['card']}; color: {C['text']};
-    border: 1px solid {C['border_hi']}; border-radius: 6px; padding: 6px 8px;
+    background-color: {C['panel']}; color: {C['text_hi']};
+    border: 1px solid {C['border_hi']}; border-radius: 8px; padding: 8px 10px;
+    font-size: 12px;
 }}
 QLineEdit {{
     background: {C['inset']};
     border: 1px solid {C['border']};
-    border-radius: 7px;
-    padding: 6px 10px;
-    color: {C['text']};
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: {C['text_hi']};
     selection-background-color: {C['accent']};
     selection-color: #ffffff;
 }}
-QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }}
-QLineEdit:focus {{ border: 1px solid {C['accent']}; }}
+QLineEdit:hover {{ border: 1px solid {C['border_hi']}; background: {C['card']}; }}
+QLineEdit:focus {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
 QComboBox {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 {C['card_hover']}, stop:1 {C['card']});
-    border: 1px solid {C['border']};
-    border-radius: 8px;
+    border: 1px solid {C['glass_border']};
+    border-radius: 10px;
     padding: 8px 34px 8px 12px;
-    color: {C['text']};
-    min-height: 20px;
-    selection-background-color: {C['accent']};
-    selection-color: #ffffff;
+    color: {C['text_hi']};
+    min-height: 22px;
+    selection-background-color: {C['accent_dim']};
+    selection-color: {C['accent_hi']};
 }}
-QComboBox:hover {{ border: 1px solid {C['border_hi']}; background: {C['card_hover']}; }}
+QComboBox:hover {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
 QComboBox:focus {{ border: 1px solid {C['accent']}; }}
 QComboBox:disabled {{ color: {C['mute']}; }}
 QComboBox:on {{ border: 1px solid {C['accent']}; }}
@@ -301,20 +310,25 @@ QComboBox::down-arrow:on {{ border-top: 6px solid {C['accent']}; }}
 QComboBox QAbstractItemView {{
     background-color: {C['panel']};
     border: 1px solid {C['border_hi']};
-    border-radius: 10px;
+    border-radius: 12px;
     color: {C['text']};
-    selection-background-color: transparent;
+    selection-background-color: {C['accent_dim']};
+    selection-color: {C['accent_hi']};
     outline: 0;
-    padding: 4px;
+    padding: 6px;
 }}
 QScrollBar:vertical {{
-    background: transparent; width: 10px; border-radius: 5px; margin: 2px;
+    background: transparent; width: 8px; border-radius: 4px; margin: 2px;
 }}
-QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 5px; min-height: 30px; }}
+QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 4px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
 QScrollBar:horizontal {{ height: 0; }}
+QFrame#sbox {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(18,28,44,180), stop:1 rgba(9,15,27,200));
+    border: 1px solid {C['glass_border']}; border-radius: 14px;
+}}
 """
 
 
@@ -322,52 +336,67 @@ def _btn_primary():
     return f"""
     QPushButton {{
         border: 1px solid {C['accent']};
-        border-radius: 6px;
-        padding: 7px 16px;
+        border-radius: 10px;
+        padding: 9px 18px;
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.4px;
         color: #04121a;
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                     stop:0 {C['grad_a']}, stop:1 {C['grad_b']});
     }}
     QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                     stop:0 {C['accent']}, stop:1 #67e8f9);
-                         border: 1px solid {C['accent_hi']}; }}
+                         border: 1px solid {C['accent_hi']}; margin: 1px; }}
     QPushButton:pressed {{ background: {C['grad_a']};
-                          border: 1px solid {C['accent_hi']}; }}
+                          border: 1px solid {C['accent_hi']}; padding-top: 10px; }}
     QPushButton:disabled {{ background: {C['border']}; color: {C['mute']};
                            border: 1px solid {C['border']}; }}
     """
 
 
 def _card_qss():
-    """Circuit-deck card surface: dark carbon slab with a hairline top
-    highlight and a thin accent edge on the left, like a backlit instrument
-    panel rather than a soft rounded glass card."""
+    """Premium glassmorphism card: translucent frosted glass with soft blur,
+    14px radius, inner highlight and accent left edge."""
     return (
         f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(15, 24, 38, 244), stop:1 rgba(7, 12, 19, 244));"
-        f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
-        f" border-top: 1px solid {C['border_hi']};"
-        f" border-radius: 10px; }}"
+        f" stop:0 rgba(18, 28, 44, 210), stop:1 rgba(9, 15, 27, 230));"
+        f" border: 1px solid {C['glass_border']}; border-left: 2.5px solid {C['accent']};"
+        f" border-top: 1px solid rgba(255,255,255,0.10);"
+        f" border-radius: 14px; }}"
+        f"QFrame#sbox {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        f" stop:0 rgba(18, 28, 44, 180), stop:1 rgba(9, 15, 27, 200));"
+        f" border: 1px solid {C['glass_border']}; border-top: 1px solid rgba(255,255,255,0.08);"
+        f" border-radius: 14px; }}"
     )
+
+
+def _glass_blur(widget, radius=18):
+    """Apply soft backdrop blur to a widget for true glassmorphism."""
+    try:
+        from PyQt6.QtWidgets import QGraphicsBlurEffect
+        blur = QGraphicsBlurEffect(widget)
+        blur.setBlurRadius(radius)
+        blur.setBlurHints(QGraphicsBlurEffect.BlurHint.PerformanceHint)
+        widget.setGraphicsEffect(blur)
+    except Exception:
+        pass
 
 
 def _btn_ghost():
     return f"""
     QPushButton {{
-        border: 1px solid {C['border']};
-        border-radius: 6px;
-        padding: 6px 12px;
+        border: 1px solid {C['glass_border']};
+        border-radius: 10px;
+        padding: 7px 14px;
         font-size: 12px;
         font-weight: 600;
-        color: {C['text']};
+        color: {C['text_hi']};
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                    stop:0 {C['card']}, stop:1 {C['inset']});
+                                    stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));
     }}
     QPushButton:hover {{ border: 1px solid {C['accent']}; color: {C['accent_hi']};
-                        background: {C['card_hover']}; }}
+                        background: {C['glass_hi']}; }}
     QPushButton:pressed {{ background: {C['accent_dim']}; color: #fff; }}
     QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; background: {C['card']}; }}
     """
@@ -419,15 +448,80 @@ def _console_qss():
     return f"""
     QPlainTextEdit {{
         background-color: {C['inset']};
-        border: 1px solid {C['border']};
-        border-radius: 8px;
-        color: {C['text']};
+        border: 1px solid {C['glass_border']};
+        border-radius: 12px;
+        color: {C['text_hi']};
         font-family: "JetBrains Mono", "Consolas", "Menlo", monospace;
         font-size: 12px;
-        padding: 12px;
-        selection-background-color: {C['accent']};
+        padding: 14px;
+        selection-background-color: {C['accent_dim']};
+        selection-color: {C['accent_hi']};
     }}
+    QPlainTextEdit:focus {{ border: 1px solid {C['accent']}; }}
     """
+
+
+class Motion:
+    """Premium motion system - centralised easings and helpers."""
+    @staticmethod
+    def fade(widget, dur=220, start=0.0, end=1.0):
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        anim = QPropertyAnimation(widget, b"windowOpacity")
+        anim.setDuration(dur)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start()
+        # keep reference
+        if not hasattr(widget, "_anims"):
+            widget._anims = []
+        widget._anims.append(anim)
+        return anim
+
+    @staticmethod
+    def scale_hover(widget):
+        orig = widget.geometry()
+        def enter(e):
+            anim = QPropertyAnimation(widget, b"geometry") if hasattr(widget, "geometry") else None
+            if anim:
+                anim.setDuration(140)
+                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                r = widget.geometry()
+                r.adjust(-1, -1, 1, 1)
+                anim.setEndValue(r)
+                anim.start()
+        widget.enterEvent = enter
+        return widget
+
+    @staticmethod
+    def shimmer(bar: QProgressBar):
+        bar.setStyleSheet(
+            f"QProgressBar {{ background:{C['inset']}; border:1px solid {C['glass_border']}; border-radius:6px; height:8px; text-align:center; color:{C['text']}; }}"
+            f"QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {C['grad_a']}, stop:0.5 {C['accent_hi']}, stop:1 {C['grad_b']}); border-radius:5px; }}"
+        )
+
+
+class ConsoleHighlighter(QTextDocument):
+    pass
+
+
+class LogHighlighter:
+    """Syntax highlight for console logs: odin, errors, success."""
+    def __init__(self, doc: QTextDocument):
+        from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat
+        class _HL(QSyntaxHighlighter):
+            def highlightBlock(hself, text):
+                fmt_ok = QTextCharFormat(); fmt_ok.setForeground(QColor(C["ok"])); fmt_ok.setFontWeight(QFont.Weight.DemiBold.value if hasattr(QFont.Weight.DemiBold, 'value') else 600)
+                fmt_warn = QTextCharFormat(); fmt_warn.setForeground(QColor(C["warn"]))
+                fmt_err = QTextCharFormat(); fmt_err.setForeground(QColor(C["err"])); fmt_err.setFontWeight(QFont.Weight.Bold.value if hasattr(QFont.Weight.Bold, 'value') else 700)
+                fmt_accent = QTextCharFormat(); fmt_accent.setForeground(QColor(C["accent_hi"]))
+                fmt_dim = QTextCharFormat(); fmt_dim.setForeground(QColor(C["dim"]))
+                if "[odin4]" in text: hself.setFormat(0, len(text), fmt_accent)
+                elif "[ok]" in text or "successful" in text.lower(): hself.setFormat(0, len(text), fmt_ok)
+                elif "[warn]" in text or "failed" in text.lower(): hself.setFormat(0, len(text), fmt_warn)
+                elif "[error]" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
+                elif text.strip().startswith("[check]"): hself.setFormat(0, len(text), fmt_dim)
+        self._hl = _HL(doc)
 
 
 def _parse_version(tag):
@@ -1640,12 +1734,12 @@ class MetricCard(QFrame):
         lay.addWidget(self.value)
         self.setStyleSheet(
             f"QFrame#metric {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {self._accent_hex};"
-            f" border-top: 1px solid {C['border_hi']};"
-            f" border-radius: 8px; }}"
+            f" stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));"
+            f" border: 1px solid {C['glass_border']}; border-left: 2.5px solid {self._accent_hex};"
+            f" border-top: 1px solid rgba(255,255,255,0.08);"
+            f" border-radius: 12px; }}"
             f" QFrame#metric:hover {{ border: 1px solid {self._accent_hex};"
-            f" background: {C['card_hover']}; }}"
+            f" background: {C['glass_hi']}; }}"
         )
 
     def set(self, text):
@@ -1915,9 +2009,18 @@ class ConnectionScene(QWidget):
         w = float(self.width())
         h = float(self.height())
 
+        # premium glass panel backdrop
+        p.setPen(QPen(QColor(255,255,255,18), 1))
+        p.setBrush(QColor(13,22,34,160))
+        p.drawRoundedRect(QRectF(1,1,w-2,h-2), 14, 14)
+        # inner top highlight
+        p.setPen(QPen(QColor(255,255,255,28), 1))
+        p.drawLine(QPointF(14,1), QPointF(w-14,1))
+
         # circuit-grid backdrop: faint traces + nodes + a vertical scanline
+        p.setClipRect(QRectF(4,4,w-8,h-8))
         grid = QColor(C["accent"])
-        grid.setAlpha(22)
+        grid.setAlpha(18)
         p.setPen(QPen(grid, 1))
         step = 26.0
         gx = 0.0
@@ -1930,7 +2033,7 @@ class ConnectionScene(QWidget):
             gy += step
         # junction nodes where traces cross
         node = QColor(C["accent_hi"])
-        node.setAlpha(60)
+        node.setAlpha(50)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(node)
         for gxx in range(1, int(w / step)):
@@ -1941,11 +2044,12 @@ class ConnectionScene(QWidget):
         scan_x = int((self._phase * (w + 80)) - 40)
         sc = QLinearGradient(scan_x - 20, 0, scan_x + 20, 0)
         sc.setColorAt(0, QColor(125, 211, 252, 0))
-        sc.setColorAt(0.5, QColor(125, 211, 252, 26))
+        sc.setColorAt(0.5, QColor(125, 211, 252, 22))
         sc.setColorAt(1, QColor(125, 211, 252, 0))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(sc)
         p.drawRect(QRect(scan_x - 20, 0, 40, int(h)))
+        p.setClipping(False)
 
         icon = 80.0
         pc_x = 10.0
@@ -1973,15 +2077,27 @@ class ConnectionScene(QWidget):
             p.drawEllipse(QRectF(phone_x - 4, phone_y - 4,
                                  icon + 8, icon + 8))
 
+            # premium PIT ring when in DOWNLOAD
+            if self._vendor and "DOWNLOAD" in self._vendor.upper():
+                p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), 90), 1.6, Qt.PenStyle.DotLine))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QRectF(phone_x - 6, phone_y - 6, icon + 12, icon + 12))
+                # rotating segment
+                p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), 180), 2.2))
+                ang = int(self._phase * 360)
+                p.drawArc(QRectF(phone_x - 6, phone_y - 6, icon + 12, icon + 12), ang*16, 70*16)
+
             if self._vendor:
                 fm = p.fontMetrics()
-                bw = fm.horizontalAdvance(self._vendor) + 18
-                bh = 20
+                bw = fm.horizontalAdvance(self._vendor) + 20
+                bh = 22
                 bx = phone_x + icon / 2 - bw / 2
-                by = max(0.0, phone_y - 26)
-                p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), 80), 1))
-                p.setBrush(QColor(14, 20, 30, 200))
-                p.drawRoundedRect(QRectF(bx, by, bw, bh), 8, 8)
+                by = max(0.0, phone_y - 28)
+                p.setPen(QPen(QColor(255,255,255,18), 1))
+                p.setBrush(QColor(14, 20, 30, 185))
+                p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
+                p.setPen(QPen(QColor(255,255,255,32), 0.8))
+                p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
                 p.setPen(QPen(vc))
                 p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.ExtraBold))
                 p.drawText(QRectF(bx, by, bw, bh),
@@ -2024,6 +2140,20 @@ class ConnectionScene(QWidget):
             p.setPen(QPen(QColor(C["ok"]), 1.8, Qt.PenStyle.SolidLine,
                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             p.drawPath(path)
+            # data pulse dots along cable when connected
+            if self._anim:
+                for k in (0.25, 0.55, 0.85):
+                    tpos = (self._phase + k) % 1.0
+                    pt = path.pointAtPercent(tpos)
+                    glow = QRadialGradient(pt.x(), pt.y(), 6)
+                    vc2 = QColor(C["accent_hi"])
+                    glow.setColorAt(0, QColor(vc2.red(), vc2.green(), vc2.blue(), 220))
+                    glow.setColorAt(1, QColor(vc2.red(), vc2.green(), vc2.blue(), 0))
+                    p.setBrush(glow)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.drawEllipse(QRectF(pt.x()-5, pt.y()-5, 10, 10))
+                    p.setBrush(QColor(255,255,255,230))
+                    p.drawEllipse(QRectF(pt.x()-2, pt.y()-2, 4, 4))
 
         # --- computer socket ---
         sock = QRectF(c0.x() - 3, c0.y() - 6, 9, 12)
@@ -2625,9 +2755,21 @@ class FrpWindow(QMainWindow):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        app_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
-        app_font.setPointSize(10)
-        QApplication.instance().setFont(app_font)
+        # Premium typography: try Inter, fallback to system
+        for fam in ("Inter", "JetBrains Mono"):
+            try:
+                QFontDatabase.addApplicationFont(f"/usr/share/fonts/truetype/{fam.lower().replace(' ', '-')}.ttf")
+            except Exception:
+                pass
+        app_font = QFont("Inter", 10)
+        app_font.setStyleHint(QFont.StyleHint.SansSerif)
+        app_font.setWeight(QFont.Weight.Medium)
+        if QFontDatabase.families().__contains__("Inter"):
+            QApplication.instance().setFont(app_font)
+        else:
+            sys_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+            sys_font.setPointSize(10)
+            QApplication.instance().setFont(sys_font)
 
         self.setStyleSheet(_BASE_QSS + _console_qss())
 
@@ -3939,6 +4081,10 @@ class FrpWindow(QMainWindow):
         self.log.setMinimumHeight(120)
         self.log.setPlainText("Ready. Connect a device to begin.")
         self.log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        try:
+            LogHighlighter(self.log.document())
+        except Exception:
+            pass
         lay.addWidget(self.log, 1)
 
         # footer: shortcut hints (collapsed into a single line for the narrow
@@ -6175,6 +6321,24 @@ class FrpWindow(QMainWindow):
         stock_row.addWidget(stock_btn)
         adv_lay.addLayout(stock_row)
 
+        # preset checkboxes (UMS9620 silencer pack)
+        preset_row = FlowLayout(spacing=6)
+        self.spd_magic_presets = {}
+        for off, tip in (
+            ("0xafe8=0xd503201f", "remove unlock warning + 10s pause"),
+            ("0xb2a4=0xd503201f", "remove SKIP VERIFY (UART)"),
+            ("0xb2ac=0xd503201f", "remove SKIP VERIFY (screen)"),
+            ("0x604c0=0xd503201f", "force lock status = UNLOCKED"),
+        ):
+            cb = QCheckBox(off.split("=")[0])
+            cb.setChecked(False)
+            cb.setToolTip(f"{off}  —  {tip}\nWrong offsets corrupt memory at boot.")
+            cb.setStyleSheet(f"QCheckBox {{ color:{C['dim']}; font-size:10px; }}")
+            cb.toggled.connect(lambda _v, _off=off: self._spd_magic_sync_presets())
+            preset_row.addWidget(cb)
+            self.spd_magic_presets[off] = cb
+        adv_lay.addLayout(preset_row)
+
         # patches row
         patch_row = QHBoxLayout()
         patch_lbl = QLabel("Patches")
@@ -6186,11 +6350,7 @@ class FrpWindow(QMainWindow):
             "Runtime patches applied by the shellcode after the SPL's RSA check\n"
             "passes. Format: hexOffset=hexWord, semicolon-separated.\n"
             "Offsets are RELATIVE TO PAYLOAD START (file offset minus 0x200).\n"
-            "Known UMS9620/T820 presets:\n"
-            "  0xafe8=0xd503201f   remove unlock warning + power-button pause\n"
-            "  0xb2a4=0xd503201f   remove SKIP VERIFY (UART)\n"
-            "  0xb2ac=0xd503201f   remove SKIP VERIFY (screen)\n"
-            "  0x604c0=0xd503201f  force lock status = UNLOCKED\n"
+            "Tick presets above or type custom entries here.\n"
             "Wrong offsets corrupt memory at boot - verify in Ghidra first."
         )
         self.spd_magic_patches.setStyleSheet(
@@ -6254,6 +6414,51 @@ class FrpWindow(QMainWindow):
             "Always keep the stock image."
         ))
         lay.addWidget(adv_box)
+
+        # --- Enable ADB (boot patch) --------------------------------
+        adb_box = QFrame()
+        adb_box.setObjectName("spdadb")
+        adb_box.setStyleSheet(
+            f"QFrame#spdadb {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border-radius: 9px; }}"
+        )
+        adb_lay = QVBoxLayout(adb_box)
+        adb_lay.setContentsMargins(12, 8, 12, 10)
+        adb_lay.setSpacing(6)
+        adb_lay.addWidget(QLabel("ENABLE ADB — BOOT PATCH (NO ROOT NEEDED)"))
+        adb_info = QLabel(
+            "Reads boot_a via BROM/FDL, patches default.prop (ro.adb.secure=0, "
+            "persist.sys.usb.config+=adb) cpio+gunzip round-trip, flashes it "
+            "back and reboots. Stock boot saved to ~/flashpilot/backups/ first."
+        )
+        adb_info.setWordWrap(True)
+        adb_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        adb_lay.addWidget(adb_info)
+        adb_row = QHBoxLayout()
+        self.spd_adb_part = QComboBox()
+        self.spd_adb_part.addItems(["boot_a", "boot_b", "boot"])
+        self.spd_adb_part.setCurrentText("boot_a")
+        self.spd_adb_part.setMaximumWidth(110)
+        self.spd_adb_part.setStyleSheet(
+            f"QComboBox {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; padding:6px; color:{C['text']}; }}"
+        )
+        adb_row.addWidget(QLabel("Part"))
+        adb_row.addWidget(self.spd_adb_part)
+        adb_row.addStretch(1)
+        self.spd_adb_btn = QPushButton("🔓 Enable ADB (boot patch)")
+        self.spd_adb_btn.setStyleSheet(_btn_primary())
+        self.spd_adb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spd_adb_btn.clicked.connect(self._spd_enable_adb)
+        adb_row.addWidget(self.spd_adb_btn)
+        adb_lay.addLayout(adb_row)
+        adb_lay.addWidget(_risk_banner(
+            "Uses the same FDL pair as other SPD ops. Boot size must allow the "
+            "patched ramdisk — larger props grow the cpio; always review the log."
+        ))
+        lay.addWidget(adb_box)
         lay.addLayout(acts)
 
         self.spd_fw_dir = QLineEdit()
@@ -6522,6 +6727,26 @@ class FrpWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _spd_magic_sync_presets(self):
+        """Rebuild the patches line from checked presets + freeform tail."""
+        # Collect checked preset tokens
+        chosen = [off for off, cb in self.spd_magic_presets.items() if cb.isChecked()]
+        # Keep any custom entries already typed that are NOT presets
+        raw = self.spd_magic_patches.text()
+        customs = [t.strip() for t in raw.split(";") if t.strip() and t.strip() not in self.spd_magic_presets]
+        # Merge: presets first, then customs (dedup)
+        merged = []
+        for tok in chosen:
+            if tok not in merged:
+                merged.append(tok)
+        for tok in customs:
+            if tok not in merged:
+                merged.append(tok)
+        # Block re-entry signal while we set text
+        self.spd_magic_patches.blockSignals(True)
+        self.spd_magic_patches.setText("; ".join(merged))
+        self.spd_magic_patches.blockSignals(False)
+
     def _spd_magic_pack(self):
         """Pack the stock image with magic64 framing (file transform only)."""
         stock = self.spd_magic_stock.text().strip()
@@ -6670,6 +6895,11 @@ class FrpWindow(QMainWindow):
                 timeout=900,
             ),
         )
+
+    def _spd_enable_adb(self):
+        self._ui.line.emit("[info] SPD Enable ADB: preparing patched boot...")
+        self._toasts.show_info("SPD ADB", "Enable ADB via patched boot - coming soon, use SPD Boot patch flow")
+        # TODO: implement spd-enable-adb bridge call when firmware backend ready
 
     def _spd_frp(self):
         fdl1 = self._spd_require_files()
@@ -7424,8 +7654,18 @@ class FrpWindow(QMainWindow):
             "Colour pack used across buttons, gradients and highlights.",
             self._s_theme,
         )
-
-        bl = self._settings_box("EFFECTS", lay)
+        # premium theme preview swatches
+        sw_row = QHBoxLayout()
+        sw_row.setSpacing(8)
+        for th, tok in ACCENT_THEMES.items():
+            dot = QLabel()
+            dot.setFixedSize(22, 22)
+            dot.setToolTip(th)
+            dot.setStyleSheet(f"background:{tok['accent']}; border:2px solid {tok['accent_hi']}; border-radius:11px;")
+            dot.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
+            sw_row.addWidget(dot)
+        sw_row.addStretch(1)
+        bl.addLayout(sw_row)
         self._s_anim = self._settings_switch()
         self._s_anim.setChecked(self.settings.value("animations", "true", type=bool))
         self._s_anim.toggled.connect(self._apply_animations)
