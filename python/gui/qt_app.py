@@ -7670,6 +7670,28 @@ class FrpWindow(QMainWindow):
             self._check_updates_btn,
         )
 
+        # Two-tier light patch (python-only) button
+        self._apply_patch_btn = QPushButton("Apply Python Patch…")
+        self._apply_patch_btn.setStyleSheet(
+            f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
+            f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
+            f" QPushButton:hover {{ border-color:{C['accent']}; }}"
+            f" QPushButton:disabled {{ color:{C['mute']}; }}"
+        )
+        self._apply_patch_btn.setFixedWidth(200)
+        self._apply_patch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._apply_patch_btn.setToolTip(
+            "Tier-1 update: pulls only the python/ tree from GitHub main when\n"
+            "no bridge/packaging changes are involved (~200 KB, no full .deb).\n"
+            "Requires a restart afterwards."
+        )
+        self._apply_patch_btn.clicked.connect(self._apply_python_patch_clicked)
+        self._settings_row(
+            bl, "Light patch (python only)",
+            "Fast tier-1 update when only python code changed upstream.",
+            self._apply_patch_btn,
+        )
+
         lay.addStretch(1)
         return page
 
@@ -8069,6 +8091,25 @@ class FrpWindow(QMainWindow):
                 if hasattr(self, "_ui") and self._ui:
                     try:
                         self._ui.line.emit(f"[check] You are on the latest version ({current})")
+                        # Probe for python-tier drift (light patch) before
+                        # declaring fully up-to-date. Silent on failure.
+                        try:
+                            from python.core import updater as _upd
+                            st = _upd.check(timeout=8)
+                            if st.get("status") == "python":
+                                loc = (st.get("local_sha") or "unknown")[:12]
+                                rem = (st.get("remote_sha") or "?")[:12]
+                                self._ui.line.emit(
+                                    f"[check] Python patch available ({loc} -> {rem}) - "
+                                    "use Settings > Apply Python Patch."
+                                )
+                                if not getattr(self, "_last_check_was_auto", False):
+                                    self._ui.ui.emit(lambda: self._toasts.show_info(
+                                        "Light patch available",
+                                        "Python-only changes detected.\nSettings > Apply Python Patch…"
+                                    ))
+                        except Exception:
+                            pass
                         # Only pop up "Up to date" for manual checks; silent for auto
                         if not getattr(self, "_last_check_was_auto", False):
                             self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
@@ -8097,6 +8138,51 @@ class FrpWindow(QMainWindow):
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(True)
             self._check_updates_btn.setText("Check for Updates Now")
+
+    # ---- two-tier updater (python light patch) -------------------------
+    def _apply_python_patch_clicked(self):
+        """Confirm + apply the tier-1 python-only patch from GitHub main."""
+        try:
+            from python.core import updater
+        except Exception as e:
+            self.show_toast("Updater unavailable", str(e), "error")
+            return
+        if updater.is_dev_checkout():
+            self.show_toast("Dev checkout", "Light patch applies only to installed builds.", "warn")
+            return
+        self._confirm_overlay(
+            "Apply Python Patch",
+            "Download the latest python/ tree from GitHub main (~200 KB) and "
+            "swap it over the installed copy?\n\n"
+            "Rust bridge and packaging are untouched. A restart is required "
+            "afterwards. pkexec will ask for your password.",
+            confirm_label="Patch",
+            on_confirm=lambda: self._apply_python_patch_work(),
+        )
+
+    def _apply_python_patch_work(self):
+        def work():
+            try:
+                from python.core import updater
+                self._ui.line.emit("[update] staging python patch ...")
+                tmpdir, sha = updater.stage_python_patch()
+                self._ui.line.emit(f"[update] staged {sha[:12]} - applying via pkexec ...")
+                updater.apply_python_patch(tmpdir, sha)
+                self._ui.line.emit(f"[update] python patched to {sha[:12]}. Restart FlashPilot.")
+                def ok():
+                    self._toasts.show_ok(
+                        "Patch applied",
+                        f"Python updated to {sha[:12]}.\nRestart FlashPilot to finish."
+                    )
+                self._ui.ui.emit(ok)
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+                def fail():
+                    self._toasts.show_error("Patch failed", err)
+                    self._ui.line.emit(f"[update] error: {err}")
+                self._ui.ui.emit(fail)
+
+        threading.Thread(target=work, daemon=True).start()
 
     @staticmethod
     def _field_label(text):
