@@ -2813,10 +2813,15 @@ class FrpWindow(QMainWindow):
         self._adb_timer.start(3000)
         self._update_net_in_progress = False
 
-        # Auto-check for updates on startup (respected if checkbox is checked) - disabled by default to prevent startup close race
+        # Separate flags: model refresh and update check must not block each other
+        self._model_refresh_in_progress = False
         self._update_in_progress = False
+        self._update_check_in_progress = False
         if self.settings.value("auto_update_check", False, type=bool):
-            QTimer.singleShot(8000, self._check_update)
+            self._auto_update_timer = QTimer(self)
+            self._auto_update_timer.setSingleShot(True)
+            self._auto_update_timer.timeout.connect(self._check_update)
+            self._auto_update_timer.start(15000)
 
         self._install_shortcuts()
         self.refresh_device()
@@ -7629,7 +7634,7 @@ class FrpWindow(QMainWindow):
         bl = self._settings_box("UPDATES & RELEASES", lay)
         self._auto_update_cb = self._settings_switch()
         self._auto_update_cb.setChecked(
-            self.settings.value("auto_update_check", True, type=bool)
+            self.settings.value("auto_update_check", False, type=bool)
         )
         self._auto_update_cb.toggled.connect(lambda on: self.settings.setValue("auto_update_check", on))
         self._settings_row(
@@ -7916,21 +7921,27 @@ class FrpWindow(QMainWindow):
         return page
 
     def _check_update(self):
-        # Run update check in a separate thread to avoid UI freeze
-        if self._update_in_progress:
+        # Auto-check: silent, must not block model refresh or close window
+        if self._update_check_in_progress:
             return
-        self._update_in_progress = True
+        # Don't run auto-check if window is not visible yet (startup race)
+        if not self.isVisible():
+            QTimer.singleShot(5000, self._check_update)
+            return
+        self._update_check_in_progress = True
+        self._last_check_was_auto = True
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(False)
             self._check_updates_btn.setText("Checking...")
         threading.Thread(target=self._check_update_thread, daemon=True).start()
 
     def _manual_check_update(self):
-        if self._update_in_progress:
+        if self._update_check_in_progress:
             if hasattr(self, "_toasts") and self._toasts:
                 self._toasts.show_warn("Update check", "Update check already in progress.")
             return
-        self._update_in_progress = True
+        self._update_check_in_progress = True
+        self._last_check_was_auto = False
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(False)
             self._check_updates_btn.setText("Checking...")
@@ -7956,14 +7967,16 @@ class FrpWindow(QMainWindow):
             except Exception as net_err:
                 if hasattr(self, "_ui") and self._ui:
                     self._ui.line.emit(f"[check] Failed to reach GitHub API: {net_err}")
-                    self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Could not connect to update server: {net_err}"))
+                    if not getattr(self, "_last_check_was_auto", False):
+                        self._ui.ui.emit(lambda _e=net_err: self._toasts.show_warn("Update check", f"Could not connect to update server: {_e}"))
                 return
 
             releases = json.loads(body)
             if not isinstance(releases, list) or not releases:
                 if hasattr(self, "_ui") and self._ui:
                     self._ui.line.emit("[check] No release info found")
-                    self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "No release info found on GitHub."))
+                    if not getattr(self, "_last_check_was_auto", False):
+                        self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "No release info found on GitHub."))
                 return
 
             current = "1.2.1"
@@ -8056,7 +8069,9 @@ class FrpWindow(QMainWindow):
                 if hasattr(self, "_ui") and self._ui:
                     try:
                         self._ui.line.emit(f"[check] You are on the latest version ({current})")
-                        self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
+                        # Only pop up "Up to date" for manual checks; silent for auto
+                        if not getattr(self, "_last_check_was_auto", False):
+                            self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
                     except Exception:
                         pass
         except Exception as e:
@@ -8065,11 +8080,18 @@ class FrpWindow(QMainWindow):
                     self._ui.line.emit(f"[check] Update check error: {e}")
                 except Exception:
                     pass
-                self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Error: {e}"))
+                try:
+                    self._ui.ui.emit(lambda _e=e: self._toasts.show_warn("Update check", f"Error: {_e}"))
+                except Exception:
+                    pass
         finally:
+            self._update_check_in_progress = False
             self._update_in_progress = False
             if hasattr(self, "_ui") and self._ui:
-                self._ui.ui.emit(lambda: self._reset_update_btn())
+                try:
+                    self._ui.ui.emit(lambda: self._reset_update_btn())
+                except Exception:
+                    pass
 
     def _reset_update_btn(self):
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
@@ -8594,7 +8616,7 @@ class FrpWindow(QMainWindow):
         if not connected:
             self._cached_model = None
             self._cached_adb_status = None
-            self._update_in_progress = False
+            self._model_refresh_in_progress = False
             self._last_pid = None
             for name in self.info:
                 self.info[name].set("--")
@@ -8614,11 +8636,11 @@ class FrpWindow(QMainWindow):
         """Background probe for the real model + adb state. Reruns on a timer
         so it picks up the phone's 'Allow USB debugging' acceptance without
         needing a USB re-enumeration."""
-        if self._update_in_progress:
+        if self._model_refresh_in_progress:
             return
         if not self._last_pid:
             return
-        self._update_in_progress = True
+        self._model_refresh_in_progress = True
         pid = self._last_pid
         current_adb = self.info["ADB Status"].value.text()
         # Only show a transient "Checking..." on the first resolution; keep the
@@ -8689,6 +8711,7 @@ class FrpWindow(QMainWindow):
             except bridge.BridgeError:
                 self._ui.metric.emit("ADB Status", "Error")
             finally:
+                self._model_refresh_in_progress = False
                 self._update_in_progress = False
 
         threading.Thread(target=work, daemon=True).start()
