@@ -3098,6 +3098,37 @@ class FrpWindow(QMainWindow):
         info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
         hv.addWidget(info)
 
+        # --- XOS/Transsion unlock (secret codes) --------------------------
+        hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
+        xos_info = QLabel(
+            "Enable ADB on a locked Transsion phone during OOBE: connect WiFi → "
+            "tap the privacy-policy link on the Agreement page → Chrome opens → "
+            "follow any tel: link so the dialer appears → dial *#*#49#*#* → "
+            "ADB turns on persistently. Plug in USB and authorize."
+        )
+        xos_info.setWordWrap(True)
+        xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
+        hv.addWidget(xos_info)
+
+        xos_row = QHBoxLayout()
+        codes_btn = QPushButton("📋 Secret Codes Reference")
+        codes_btn.setStyleSheet(_btn_ghost())
+        codes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        codes_btn.setToolTip("Full code table for Transsion/XOS devices")
+        codes_btn.clicked.connect(self._show_secret_codes)
+        xos_row.addWidget(codes_btn)
+        triage_btn = QPushButton("🔎 ADB Triage")
+        triage_btn.setStyleSheet(_btn_primary())
+        triage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        triage_btn.setToolTip(
+            "Probe the connected device over ADB: lock enforcement state, root, "
+            "partition access, FRP markers - tells you which flow to use next."
+        )
+        triage_btn.clicked.connect(self._adb_triage)
+        xos_row.addWidget(triage_btn)
+        xos_row.addStretch(1)
+        hv.addLayout(xos_row)
+
         # --- PIT safety contract (auto-fetch + forensic validation) -------
         hv.addWidget(SectionTitle("PIT SAFETY CONTRACT"))
         pit_info = QLabel(
@@ -4011,6 +4042,180 @@ class FrpWindow(QMainWindow):
                 self._pit_cache_lbl.setText("cache: empty")
         except Exception:
             self._pit_cache_lbl.setText("")
+
+    def _show_secret_codes(self):
+        """Show the Transsion/XOS secret code reference table."""
+        import json
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Transsion/XOS Secret Codes (Infinix · Tecno · itel)")
+        dlg.setMinimumSize(760, 560)
+        dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
+        lay = QVBoxLayout(dlg)
+
+        chain = QLabel(
+            "🔓 OOBE access chain:  WiFi → tap privacy link on Agreement page → "
+            "Chrome opens → follow any tel: link → dialer appears → dial the code"
+        )
+        chain.setWordWrap(True)
+        chain.setStyleSheet(f"color:{C['warn']}; font-size:11px; font-weight:600; padding:6px;")
+        lay.addWidget(chain)
+
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Code", "Action", "Verified"])
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setColumnWidth(0, 170)
+        table.setColumnWidth(1, 380)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setStyleSheet(
+            f"QTableWidget {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; color:{C['text']}; gridline-color:{C['border']}; }}"
+            f" QHeaderView::section {{ background:{C['card']}; color:{C['accent_hi']};"
+            f" border:none; padding:6px; font-weight:700; }}"
+        )
+        try:
+            codes_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), "docs", "secret_codes_xos.json")
+            with open(codes_path) as f:
+                data = json.load(f)
+            entries = data.get("codes", [])
+        except Exception:
+            entries = [
+                {"code": "*#*#49#*#*", "action": "Enable persistent ADB", "verified": True},
+                {"code": "*#*#83781#*#*", "action": "EngineerMode main menu", "verified": False},
+            ]
+        table.setRowCount(len(entries))
+        for r, e in enumerate(entries):
+            c0 = QTableWidgetItem(e.get("code", ""))
+            f0 = c0.font(); f0.setBold(e.get("verified", False)); c0.setFont(f0)
+            table.setItem(r, 0, c0)
+            table.setItem(r, 1, QTableWidgetItem(e.get("action", "")))
+            v = "✅ field-tested" if e.get("verified") else "manifest"
+            table.setItem(r, 2, QTableWidgetItem(v))
+        lay.addWidget(table)
+
+        note = QLabel(
+            "Note: direct SECRET_CODE broadcast from shell is denied by the system - "
+            "the real dialer is required. *#*#49#*#* sets persist.sys.usb.config=adb "
+            "(survives reboot and setup wizard)."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{C['dim']}; font-size:10px; padding:6px;")
+        lay.addWidget(note)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(_btn_ghost())
+        close_btn.clicked.connect(dlg.accept)
+        bl = QHBoxLayout()
+        bl.addStretch(1); bl.addWidget(close_btn)
+        lay.addLayout(bl)
+        dlg.exec()
+
+    def _adb_triage(self):
+        """Probe connected ADB device: lock state, root, partition access."""
+        if not _flow_start("ADB triage", destructive=False):
+            self.show_toast(_flow_busy_msg(), "warning")
+            return
+
+        def work():
+            lines = []
+            emit = lambda m: self._ui.line.emit(m)
+            try:
+                devs = [d for d in bridge.adb_status() if d["state"] == "device"]
+                if not devs:
+                    self._ui.ui.emit(lambda: self.show_toast(
+                        "No authorized ADB device", "Enable ADB first", "warning"))
+                    _flow_end()
+                    return
+                serial = devs[0]["serial"]
+                sh = lambda c: bridge.adb_shell(c, timeout=10).strip()
+                lines.append("=" * 60)
+                lines.append("ADB DEVICE TRIAGE")
+                lines.append("=" * 60)
+                lines.append(f"Serial : {serial}")
+
+                model = ""
+                brand = ""
+                android = ""
+                try:
+                    model = sh("getprop ro.product.model")
+                    brand = sh("getprop ro.product.brand")
+                    android = sh("getprop ro.build.version.release")
+                    fp = sh("getprop ro.build.fingerprint")
+                    patch = sh("getprop ro.build.version.security_patch")
+                    lines.append(f"Device : {brand} {model} (Android {android})")
+                    lines.append(f"Fingerprint: {fp}")
+                    lines.append(f"Security patch: {patch}")
+                except Exception as e:
+                    lines.append(f"(prop read failed: {e})")
+
+                # root check
+                su = ""
+                try:
+                    su = sh("su -c id")
+                except Exception:
+                    pass
+                lines.append(f"Root   : {'YES' if 'uid=0' in su else 'no'}")
+
+                # lock enforcement - Quality 0 means no security enforced
+                try:
+                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10)
+                    quality = None
+                    ctype = None
+                    for ln in lock_dump.splitlines():
+                        if "Quality:" in ln:
+                            quality = ln.split("Quality:")[1].strip()
+                        if "CredentialType:" in ln:
+                            ctype = ln.split("CredentialType:")[1].strip()
+                    enforced = quality not in ("0", None)
+                    lines.append(f"Lock   : type={ctype} quality={quality} -> "
+                                 f"{'ENFORCED (needs bypass)' if enforced else 'NOT ENFORCED (device open)'}")
+                except Exception as e:
+                    lines.append(f"Lock   : unknown ({e})")
+
+                # partition access
+                can_dd = False
+                try:
+                    outp = bridge.adb_shell(
+                        "dd if=/dev/block/by-name/misc bs=512 count=1 2>/dev/null | wc -c",
+                        timeout=10).strip()
+                    can_dd = outp not in ("0", "")
+                except Exception:
+                    pass
+                lines.append(f"Block access: {'yes (root-level I/O possible)' if can_dd else 'no (SELinux blocks shell)'}")
+
+                # FRP state markers
+                try:
+                    prov = sh("settings get global device_provisioned")
+                    setup = sh("settings get secure user_setup_complete")
+                    in_oobe = prov == "0" or setup == "0"
+                    lines.append(f"OOBE   : {'STILL IN SETUP WIZARD (FRP likely active)' if in_oobe else 'completed'}")
+                except Exception as e:
+                    lines.append(f"OOBE   : unknown ({e})")
+
+                lines.append("")
+                if not enforced:
+                    lines.append("VERDICT: Device is open. Proceed with data/FRP work directly.")
+                elif su:
+                    lines.append("VERDICT: Rooted. Remove lock via locksettings clear or /data/system.")
+                else:
+                    lines.append("VERDICT: Locked without root. Use boot.img patch (spd_adb.py),")
+                    lines.append("         BROM route (FDL pair / magic64), or vendor tricks.")
+
+                text = "\n".join(lines)
+                emit(text)
+                self._ui.ui.emit(lambda t=text: (
+                    self._append_console(t),
+                    self._pit_view.setPlainText(t[-1800:]),
+                ))
+            except Exception as e:
+                err = str(e)
+                self._ui.ui.emit(lambda m=err: self.show_toast("Triage failed", m, "error"))
+            finally:
+                _flow_end()
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _pit_fetch_clicked(self):
         if getattr(self, "_pit_fetching", False):
