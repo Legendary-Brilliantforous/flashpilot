@@ -336,20 +336,20 @@ def _btn_primary():
     return f"""
     QPushButton {{
         border: 1px solid {C['accent']};
-        border-radius: 10px;
-        padding: 9px 18px;
+        border-radius: 8px;
+        padding: 7px 16px;
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.4px;
+        letter-spacing: 0.3px;
         color: #04121a;
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                     stop:0 {C['grad_a']}, stop:1 {C['grad_b']});
     }}
     QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                     stop:0 {C['accent']}, stop:1 #67e8f9);
-                         border: 1px solid {C['accent_hi']}; margin: 1px; }}
+                         border: 1px solid {C['accent_hi']}; }}
     QPushButton:pressed {{ background: {C['grad_a']};
-                          border: 1px solid {C['accent_hi']}; padding-top: 10px; }}
+                          border: 1px solid {C['accent_hi']}; }}
     QPushButton:disabled {{ background: {C['border']}; color: {C['mute']};
                            border: 1px solid {C['border']}; }}
     """
@@ -386,17 +386,17 @@ def _glass_blur(widget, radius=18):
 def _btn_ghost():
     return f"""
     QPushButton {{
-        border: 1px solid {C['glass_border']};
-        border-radius: 10px;
-        padding: 7px 14px;
+        border: 1px solid {C['border']};
+        border-radius: 8px;
+        padding: 6px 12px;
         font-size: 12px;
         font-weight: 600;
-        color: {C['text_hi']};
+        color: {C['text']};
         background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                    stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));
+                                    stop:0 {C['card']}, stop:1 {C['inset']});
     }}
     QPushButton:hover {{ border: 1px solid {C['accent']}; color: {C['accent_hi']};
-                        background: {C['glass_hi']}; }}
+                        background: {C['card_hover']}; }}
     QPushButton:pressed {{ background: {C['accent_dim']}; color: #fff; }}
     QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; background: {C['card']}; }}
     """
@@ -2813,9 +2813,9 @@ class FrpWindow(QMainWindow):
         self._adb_timer.start(3000)
         self._update_net_in_progress = False
 
-        # Auto-check for updates on startup (respected if checkbox is checked) - delayed to avoid startup race
+        # Auto-check for updates on startup (respected if checkbox is checked) - disabled by default to prevent startup close race
         self._update_in_progress = False
-        if self.settings.value("auto_update_check", True, type=bool):
+        if self.settings.value("auto_update_check", False, type=bool):
             QTimer.singleShot(8000, self._check_update)
 
         self._install_shortcuts()
@@ -4279,7 +4279,6 @@ class FrpWindow(QMainWindow):
                 if not devs:
                     self._ui.ui.emit(lambda: self.show_toast(
                         "No authorized ADB device", "Enable ADB first", "warning"))
-                    _flow_end()
                     return
                 serial = devs[0]["serial"]
                 sh = lambda c: bridge.adb_shell(c, timeout=10).strip()
