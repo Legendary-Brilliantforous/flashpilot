@@ -2813,10 +2813,10 @@ class FrpWindow(QMainWindow):
         self._adb_timer.start(3000)
         self._update_net_in_progress = False
 
-        # Auto-check for updates on startup (respected if checkbox is checked)
+        # Auto-check for updates on startup (respected if checkbox is checked) - delayed to avoid startup race
         self._update_in_progress = False
         if self.settings.value("auto_update_check", True, type=bool):
-            QTimer.singleShot(2000, self._check_update)
+            QTimer.singleShot(8000, self._check_update)
 
         self._install_shortcuts()
         self.refresh_device()
@@ -6867,6 +6867,73 @@ class FrpWindow(QMainWindow):
             on_confirm=lambda: self._spd_run(args + [mode], timeout=120),
         )
 
+    def _spd_enable_adb(self):
+        """Enable ADB on an SPD phone via boot.img ramdisk patch (Path 1)."""
+        fdl1 = self._spd_require_files()
+        if not fdl1:
+            return
+        a1 = self._spd_addr(self.spd_fdl1_addr)
+        if a1 is None:
+            return
+        fdl2 = self.spd_files["fdl2"].text().strip()
+        part = self.spd_adb_part.currentText().strip()
+        tgt = self._spd_resolve_target()
+        if not tgt:
+            self._ui.line.emit("[warn] SPD ADB: no download device detected")
+            self._toasts.show_warn("No SPD device", "Catch the BROM window first")
+            return
+
+        if not _flow_start("SPD ADB enable", destructive=True):
+            self._ui.status.emit("Busy: " + _flow_busy_msg())
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            return
+
+        def work():
+            try:
+                # Import the boot-patch helper.
+                try:
+                    from python.core.spd_adb import enable_adb_via_boot_patch
+                except Exception:
+                    import importlib
+                    from python.core import spd_adb as _sa
+                    importlib.reload(_sa)
+                    enable_adb_via_boot_patch = _sa.enable_adb_via_boot_patch
+
+                self._ui.line.emit(f"[adb] reading {part} via BROM/FDL ...")
+                backup_dir = os.path.expanduser("~/flashpilot/backups")
+                res = enable_adb_via_boot_patch(
+                    bridge, tgt, fdl1, a1,
+                    fdl2=fdl2 or None,
+                    a2=self._spd_addr(self.spd_fdl2_addr) if fdl2 else None,
+                    part=part,
+                    backup_dir=backup_dir,
+                    log=lambda m: self._ui.line.emit(m),
+                )
+                self._ui.line.emit(f"[adb] patched image: {res['patched']}")
+                self._ui.line.emit(
+                    "[adb] boot.img patched + flashed. Reboot the device; "
+                    "ro.adb.secure=0 so ADB should come up. If a dialog shows, "
+                    "tap Allow once."
+                )
+                self._ui.status.emit("SPD: ADB enable complete")
+                self._ui.toast.emit("ok", "SPD ADB", "boot patched + flashed")
+            except bridge.BridgeError as e:
+                self._ui.line.emit(f"[error] SPD ADB: {e}")
+                self._ui.toast.emit("error", "SPD ADB", str(e))
+            except Exception as e:  # noqa: BLE001
+                self._ui.line.emit(f"[error] SPD ADB: {e}")
+                self._ui.toast.emit("error", "SPD ADB", str(e))
+            finally:
+                _flow_end()
+                bridge.clear_cancel()
+                self._ui.ui.emit(self._spd_reset_ui)
+
+        bridge.clear_cancel()
+        self.spd_stop_btn.setEnabled(True)
+        self.spd_progress.setVisible(True)
+        self.spd_progress.setValue(150)
+        threading.Thread(target=work, daemon=True).start()
+
     def _spd_format(self):
         fdl1 = self._spd_require_files()
         if not fdl1:
@@ -7873,10 +7940,13 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=self._check_update_thread, daemon=True).start()
 
     def _check_update_thread(self):
-        import urllib.request, json, sys
+        import urllib.request, json, sys, subprocess
         try:
             if hasattr(self, "_ui") and self._ui:
-                self._ui.line.emit("[check] Looking for latest FlashPilot version...")
+                try:
+                    self._ui.line.emit("[check] Looking for latest FlashPilot version...")
+                except Exception:
+                    pass
             req = urllib.request.Request(
                 "https://api.github.com/repos/Legendary-Brilliantforous/flashpilot/releases",
                 headers={"User-Agent": "FlashPilot"}
@@ -7926,23 +7996,33 @@ class FrpWindow(QMainWindow):
                     fpath = os.path.expanduser("~/flashpilot_update.deb")
                     try:
                         urllib.request.urlretrieve(latest_url, fpath)
-                        if os.path.exists(fpath):
-                            if hasattr(self, "_ui") and self._ui:
-                                self._ui.line.emit(f"[check] Automatically downloaded {stable_tag}. Installing via pkexec...")
-                            subprocess.Popen(["pkexec", "dpkg", "-i", fpath])
+                        if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
+                            except Exception:
+                                pass
                     except Exception as dl_err:
                         if hasattr(self, "_ui") and self._ui:
-                            self._ui.line.emit(f"[check] Auto-download/install failed: {dl_err}")
+                            try:
+                                self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                            except Exception:
+                                pass
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.ui.emit(lambda: self._toasts.show_info(
-                        "Stable update available",
-                        f"New stable version {stable_tag} is available.\n\n"
-                        f"{'Installing automatically (password prompt may appear).\n\n' if auto_download and latest_url else 'Downloaded to ~/flashpilot_update.deb. Run: sudo dpkg -i ~/flashpilot_update.deb\n\n'}"
-                        "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                    ))
+                    try:
+                        self._ui.ui.emit(lambda tag=stable_tag, ad=auto_download, url=latest_url: self._toasts.show_info(
+                            "Stable update available",
+                            f"New stable version {tag} is available.\n\n"
+                            f"{'Downloaded to ~/flashpilot_update.deb.\n\n' if ad and url else ''}"
+                            "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                        ))
+                    except Exception:
+                        pass
             elif beta_tag and beta_tuple > current_tuple and (not stable_tag or stable_tuple <= current_tuple):
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.line.emit(f"[check] You are on the latest stable version. Beta version {beta_tag} is also available.")
+                    try:
+                        self._ui.line.emit(f"[check] You are on the latest stable version. Beta version {beta_tag} is also available.")
+                    except Exception:
+                        pass
                 latest_url = None
                 for a in latest_beta.get("assets", []):
                     if a["name"].endswith("_amd64.deb"):
@@ -7952,27 +8032,40 @@ class FrpWindow(QMainWindow):
                     fpath = os.path.expanduser("~/flashpilot_update.deb")
                     try:
                         urllib.request.urlretrieve(latest_url, fpath)
-                        if os.path.exists(fpath):
-                            if hasattr(self, "_ui") and self._ui:
-                                self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag}. Installing via pkexec...")
-                            subprocess.Popen(["pkexec", "dpkg", "-i", fpath])
+                        if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag} to {fpath}")
+                            except Exception:
+                                pass
                     except Exception as dl_err:
                         if hasattr(self, "_ui") and self._ui:
-                            self._ui.line.emit(f"[check] Auto-download/install failed: {dl_err}")
+                            try:
+                                self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                            except Exception:
+                                pass
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.ui.emit(lambda: self._toasts.show_info(
-                        "Beta version available",
-                        f"You are on the latest stable version. Beta release {beta_tag} is available.\n\n"
-                        f"{'Installing automatically (password prompt may appear).\n\n' if auto_download and latest_url else ''}"
-                        "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                    ))
+                    try:
+                        self._ui.ui.emit(lambda tag=beta_tag, ad=auto_download, url=latest_url: self._toasts.show_info(
+                            "Beta version available",
+                            f"You are on the latest stable version. Beta release {tag} is available.\n\n"
+                            f"{'Downloaded to ~/flashpilot_update.deb.\n\n' if ad and url else ''}"
+                            "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                        ))
+                    except Exception:
+                        pass
             else:
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.line.emit(f"[check] You are on the latest version ({current})")
-                    self._ui.ui.emit(lambda: self._toasts.show_info("Up to date", f"FlashPilot {current} is already installed."))
+                    try:
+                        self._ui.line.emit(f"[check] You are on the latest version ({current})")
+                        self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
+                    except Exception:
+                        pass
         except Exception as e:
             if hasattr(self, "_ui") and self._ui:
-                self._ui.line.emit(f"[check] Update check error: {e}")
+                try:
+                    self._ui.line.emit(f"[check] Update check error: {e}")
+                except Exception:
+                    pass
                 self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", f"Error: {e}"))
         finally:
             self._update_in_progress = False
