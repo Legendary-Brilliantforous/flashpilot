@@ -3101,10 +3101,11 @@ class FrpWindow(QMainWindow):
         # --- XOS/Transsion unlock (secret codes) --------------------------
         hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
         xos_info = QLabel(
-            "Enable ADB on a locked Transsion phone during OOBE: connect WiFi → "
-            "tap the privacy-policy link on the Agreement page → Chrome opens → "
-            "follow any tel: link so the dialer appears → dial *#*#49#*#* → "
-            "ADB turns on persistently. Plug in USB and authorize."
+            "Enable ADB on a locked Transsion phone - TWO paths:\n"
+            "① LOCK SCREEN (fastest): Emergency call → dial *#*#49#*#* → ADB on.\n"
+            "② OOBE/FRP (setup wizard): connect WiFi → tap privacy-policy link →\n"
+            "    Chrome opens → follow any tel: link → dialer appears → dial code.\n"
+            "Then plug USB and authorize. Code sets persist.sys.usb.config=adb."
         )
         xos_info.setWordWrap(True)
         xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
@@ -4053,8 +4054,9 @@ class FrpWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
 
         chain = QLabel(
-            "🔓 OOBE access chain:  WiFi → tap privacy link on Agreement page → "
-            "Chrome opens → follow any tel: link → dialer appears → dial the code"
+            "🔓 ACCESS PATHS (no unlock needed):\n"
+            "① LOCK SCREEN: Emergency call → dial the code directly\n"
+            "② SETUP WIZARD (FRP): WiFi → tap privacy link → Chrome → tel: link → dialer"
         )
         chain.setWordWrap(True)
         chain.setStyleSheet(f"color:{C['warn']}; font-size:11px; font-weight:600; padding:6px;")
