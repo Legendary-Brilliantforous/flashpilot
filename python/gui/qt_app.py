@@ -3101,11 +3101,12 @@ class FrpWindow(QMainWindow):
         # --- XOS/Transsion unlock (secret codes) --------------------------
         hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
         xos_info = QLabel(
-            "Enable ADB on a locked Transsion phone - TWO paths:\n"
-            "① LOCK SCREEN (fastest): Emergency call → dial *#*#49#*#* → ADB on.\n"
-            "② OOBE/FRP (setup wizard): connect WiFi → tap privacy-policy link →\n"
-            "    Chrome opens → follow any tel: link → dialer appears → dial code.\n"
-            "Then plug USB and authorize. Code sets persist.sys.usb.config=adb."
+            "Enable ADB on a locked Transsion phone - the dialer code requires\n"
+            "the FULL Dialer app (emergency pad does NOT dispatch secret codes\n"
+            "on XOS 13+ SPD builds). OOBE/FRP path: connect WiFi → tap the\n"
+            "privacy-policy link on the Agreement page → Chrome opens → follow\n"
+            "any tel: link → real Dialer appears → dial *#*#49#*#* → ADB on.\n"
+            "Alternate code on some models: *#85#. Then plug USB and authorize."
         )
         xos_info.setWordWrap(True)
         xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
@@ -4054,9 +4055,11 @@ class FrpWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
 
         chain = QLabel(
-            "🔓 ACCESS PATHS (no unlock needed):\n"
-            "① LOCK SCREEN: Emergency call → dial the code directly\n"
-            "② SETUP WIZARD (FRP): WiFi → tap privacy link → Chrome → tel: link → dialer"
+            "⚠️ EMERGENCY PAD DOES NOT DISPATCH SECRET CODES on XOS 13+ (SPD).\n"
+            "Reach the REAL Dialer via OOBE: WiFi → privacy link → Chrome →\n"
+            "follow any tel: link → dialer opens → dial the code.\n"
+            "Alternate code on some Transsion models: *#85#\n"
+            "(MTK-based Tecno/Infinix builds may accept #*#49#*# in emergency mode.)"
         )
         chain.setWordWrap(True)
         chain.setStyleSheet(f"color:{C['warn']}; font-size:11px; font-weight:600; padding:6px;")
