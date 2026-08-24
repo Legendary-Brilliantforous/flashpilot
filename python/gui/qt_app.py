@@ -74,6 +74,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core import bridge, frp, mtk, mtp, fus, pit, pitstore
+from ..core import APP_VERSION
 from .toast import ToastHost
 from .nav import NavRail
 
@@ -2712,7 +2713,7 @@ class SplashScreen(QWidget):
         p.drawText(
             QRectF(0, 352, w, 16),
             Qt.AlignmentFlag.AlignCenter,
-            "v1.2.0  |  Legendary-Brilliantforous",
+            f"v{APP_VERSION}  |  Legendary-Brilliantforous",
         )
 
         p.end()
@@ -8001,8 +8002,8 @@ class FrpWindow(QMainWindow):
                         self._ui.ui.emit(lambda: self._toasts.show_warn("Update check", "No release info found on GitHub."))
                 return
 
-            current = "1.2.0"
-            current_tuple, _ = _parse_version(current)
+            from python.core import APP_VERSION as current
+            current_tuple, current_alpha = _parse_version(current)
 
             stables = [r for r in releases if not r.get("prerelease", False)]
             betas = [r for r in releases if r.get("prerelease", False)]
@@ -8018,9 +8019,25 @@ class FrpWindow(QMainWindow):
 
             auto_download = self.settings.value("auto_download_update", False, type=bool)
 
-            if stable_tag and stable_tuple > current_tuple:
+            # Upgrade detection:
+            #  - a strictly higher numeric always upgrades
+            #  - running a beta (alpha set) with the SAME numeric as a new
+            #    stable is also an upgrade: promote beta -> final.
+            promote_to_stable = bool(current_alpha) and stable_tuple == current_tuple
+            newer_stable = bool(stable_tag) and (
+                stable_tuple > current_tuple or promote_to_stable
+            )
+            # Beta upgrade only when numerically higher than what we run
+            # (1.2.1-beta does not beat running 1.2.1; it beats 1.2.0).
+            newer_beta = bool(beta_tag) and beta_tuple > current_tuple
+
+            if newer_stable:
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.line.emit(f"[check] New stable version available: {stable_tag}")
+                    note = " (promotes your beta install)" if promote_to_stable else ""
+                    try:
+                        self._ui.line.emit(f"[check] New stable version available: {stable_tag}{note}")
+                    except Exception:
+                        pass
                 latest_url = None
                 for a in latest_stable.get("assets", []):
                     if a["name"].endswith("_amd64.deb"):
