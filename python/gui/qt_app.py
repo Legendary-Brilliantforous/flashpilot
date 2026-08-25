@@ -1712,6 +1712,8 @@ class FlashPilotWindow(QMainWindow):
         QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh_device)
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.refresh_device)
         QShortcut(QKeySequence("Ctrl+Escape"), self).activated.connect(self.on_stop)
+        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(
+            lambda: self._on_section("settings"))
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
@@ -1805,6 +1807,20 @@ class FlashPilotWindow(QMainWindow):
         self.global_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.global_stop_btn.setToolTip("Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD")
         self.global_stop_btn.clicked.connect(self.on_stop)
+
+        # Header Settings — frees the rail slot (TFT-style top-right gear)
+        self.settings_btn = QPushButton("⚙")
+        self.settings_btn.setFixedSize(32, 32)
+        self.settings_btn.setToolTip("Settings (Ctrl+,)")
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setStyleSheet(
+            "QPushButton { color:#cbd5e1; background:rgba(255,255,255,8);"
+            " border:1px solid rgba(255,255,255,12); border-radius:16px;"
+            " font-size:15px; font-weight:800; }"
+            "QPushButton:hover { background:#334155; color:#fff; }"
+        )
+        self.settings_btn.clicked.connect(lambda: self._on_section("settings"))
+        tb.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.global_stop_btn.setFixedHeight(32)
         self.global_stop_btn.setMinimumWidth(110)
         tb.addWidget(self.global_stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -1838,14 +1854,11 @@ class FlashPilotWindow(QMainWindow):
         nav_items += [(f"dev_{b['key']}", b.get('icon', '▣'), b['label'])
                       for b in device_pages.BRANDS]
         nav_items += [
-            ("quick", "⚡", "Quick Actions"),
+            ("general", "⚡", "General"),
             ("fus", "⬇", "Firmware Downloader"),
             ("mtk", "▣", "MTK Tools"),
             ("qc", "◈", "Qualcomm"),
             ("spd", "✦", "SPD / Unisoc"),
-            ("battery", "⚡", "Battery Repair"),
-            ("network", "📶", "Network Repair"),
-            ("settings", "⚙", "Settings"),
         ]
         self.nav = NavRail(nav_items)
         self.nav.section_selected.connect(self._on_section)
@@ -1883,18 +1896,38 @@ class FlashPilotWindow(QMainWindow):
             self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
             self._section_index[f"dev_{b['key']}"] = len(self._section_index)
 
-        for key, builder in (
-            ("quick", self._build_quick_page),
-            ("fus", self._build_fus_page),
-            ("mtk", self._build_mtk_page),
-            ("qc", self._build_qc_page),
-            ("spd", self._build_spd_page),
-            ("battery", self._build_battery_page),
-            ("network", self._build_network_page),
-            ("settings", self._build_settings_page),
+        # General = Quick + Battery + Network behind sub-tabs (frees 2 rail slots)
+        gen = QWidget()
+        gen.setStyleSheet("background: transparent;")
+        gv = QVBoxLayout(gen)
+        gv.setContentsMargins(0, 0, 0, 0)
+        gv.setSpacing(8)
+        gen_tabs = SamsungSubTabs(
+            [("quick", "QUICK"), ("battery", "BATTERY"), ("network", "NETWORK")]
+        )
+        gv.addWidget(gen_tabs)
+        gen_stack = QStackedWidget()
+        gen_stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        for b in (self._build_quick_page, self._build_battery_page,
+                  self._build_network_page):
+            gen_stack.addWidget(b())
+        gen_keys = ["quick", "battery", "network"]
+        gen_tabs.tab_selected.connect(
+            lambda k: gen_stack.setCurrentIndex(gen_keys.index(k) if k in gen_keys else 0)
+        )
+        gv.addWidget(gen_stack, 1)
+
+        for key, widget in (
+            ("general", gen),
+            ("fus", self._build_fus_page()),
+            ("mtk", self._build_mtk_page()),
+            ("qc", self._build_qc_page()),
+            ("spd", self._build_spd_page()),
+            ("settings", self._build_settings_page()),
         ):
-            self._stack.addWidget(builder())
+            self._stack.addWidget(widget)
             self._section_index[key] = len(self._section_index)
+        self._gen_stack = gen_stack
 
         # Connection banner shared by every section so the computer-cable-phone
         # scene (and its live animation) is visible on Samsung / MTK / Qualcomm.
