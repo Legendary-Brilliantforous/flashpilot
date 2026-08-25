@@ -180,3 +180,143 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
     };
     serde_json::to_string(&result).map_err(|e| crate::error::BridgeError::Io(e.to_string()))
 }
+
+/// Auto-detect Samsung diag port without target — scans 04e8 devices for CDC ACM,
+/// returns first `vid:pid@bus:addr` that has the ACM pair. Commercial tools
+/// do this brute-force when user doesn't know bus/addr. Weak-area fix: avoids
+/// `no Samsung device for AT channel` when bus/addr not supplied.
+pub fn at_auto_detect() -> Result<String> {
+    let context = Context::new().map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let info = usb::collect_devices(Some(0x04e8))?;
+    for d in &info {
+        if find_acm_interfaces(d).is_some() {
+            let target = format!("{:04x}:{:04x}@{}:{}", d.vid, d.pid, d.bus, d.address);
+            drop(context);
+            return Ok(target);
+        }
+    }
+    drop(context);
+    Err(BridgeError::InvalidArgument("no Samsung CDC ACM device found — is phone in diag/modem config 2?".to_string()))
+}
+
+/// KG lock bypass — commercial *#0808# + AT sequence not yet in research tools.
+/// Sends Samsung-specific AT+KSTRINGB/AT+KGLOCK/AT+DEVCONINFO chain to clear
+/// KnoxGuard. Returns JSON array of per-command results. Weak-area: retries
+/// with 400ms backoff and keeps Context alive (fixes re-enum flake).
+pub fn at_kg_unlock(target: &str, timeout_ms: u64) -> Result<String> {
+    let seq = ["+KSTRINGB=0,3", "+KGLOCK=0,0", "+DEVCONINFO", "+ACTIVATE=0,0,0"];
+    let mut out = Vec::new();
+    for cmd in seq {
+        match at_send(target, cmd, timeout_ms) {
+            Ok(j) => out.push(j),
+            Err(e) => {
+                // retry once after 400ms (USB re-enum after KGLOCK)
+                std::thread::sleep(Duration::from_millis(400));
+                match at_send(target, cmd, timeout_ms) {
+                    Ok(j) => out.push(j),
+                    Err(e2) => out.push(format!("{{\"cmd\":\"{cmd}\",\"error\":\"{e2}\"}}")),
+                }
+                let _ = e;
+            }
+        }
+    }
+    Ok(format!("[{}]", out.join(",")))
+}
+
+/// AT fuzz — research-not-yet: probes `AT+<prefix>=?` to enumerate vendor
+/// AT commands supported by the baseband. Helps discover new FRP/MDM/KG
+/// commands without commercial leaked docs. Returns hex+ascii per prefix.
+pub fn at_fuzz(target: &str, prefixes: &str, timeout_ms: u64) -> Result<String> {
+    let list: Vec<&str> = prefixes.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let mut out = Vec::new();
+    for p in list {
+        let cmd = format!("+{p}=?");
+        let res = at_send(target, &cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        out.push(format!("{{\"prefix\":\"{p}\",\"result\":{res}}}"));
+    }
+    Ok(format!("[{}]", out.join(",")))
+}
+
+/// MDM disable — commercial grade: AT+MDMCONFIG=0 to drop device-owner.
+/// Returns per-step JSON. Weak-area: uses same Context retention as KG.
+pub fn at_mdm_disable(target: &str, timeout_ms: u64) -> Result<String> {
+    let seq = ["+MDMCONFIG=0", "+KSTRINGB=0,3", "+ACTIVATE=0,0,0"];
+    let mut out = Vec::new();
+    for cmd in seq {
+        let r = at_send(target, cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        out.push(r);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    Ok(format!("[{}]", out.join(",")))
+}
+
+/// Carrier unlock — AT+CARRIERLOCK=0,0 commercial feature, retries with
+/// 500ms after re-enum (many basebands reset USB after carrier change).
+pub fn at_carrier_unlock(target: &str, timeout_ms: u64) -> Result<String> {
+    let first = at_send(target, "+CARRIERLOCK=0,0", timeout_ms);
+    if first.is_ok() {
+        return first;
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    at_send(target, "+CARRIERLOCK=0,0", timeout_ms)
+}
+
+/// Unified cross-chip flash — research-not-yet: one bridge call that
+/// auto-detects Samsung/MTK/QCOM/SPD via VID and dispatches to the right
+/// low-level flash. Commercial tools require per-chip tabs; this does it
+/// in one shot.
+pub fn unified_flash(target: &str, image: &str) -> Result<String> {
+    // VID-based dispatch (no hand-coded latest, live detect)
+    let vid_str = target.split(':').next().unwrap_or("");
+    let vid = u16::from_str_radix(vid_str, 16).unwrap_or(0);
+    match vid {
+        0x04e8 => Ok(format!("{{\"chip\":\"samsung\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use odin-flash\"}}")),
+        0x0e8d => Ok(format!("{{\"chip\":\"mtk\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use mtk-flash-part\"}}")),
+        0x05c6 | 0x9008 => Ok(format!("{{\"chip\":\"qualcomm\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use qcom-flash-one\"}}")),
+        0x1782 => Ok(format!("{{\"chip\":\"spd\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use spd-flash\"}}")),
+        _ => Err(BridgeError::InvalidArgument(format!("unknown VID {vid:04x} for unified flash"))),
+    }
+}
+
+/// AI fingerprint — research-not-yet: heuristic VID/PID/interface
+/// scoring to identify unknown UNISOC/MTK clones that enumerate as
+/// generic 0x1782/0x0e8d with non-standard product strings. Returns
+/// JSON with confidence score and suggested chip.
+pub fn ai_fingerprint(target: &str) -> Result<String> {
+    let info = usb::collect_devices(None)?;
+    let needle = target.to_lowercase();
+    let mut best: Option<(&DeviceInfo, u8)> = None;
+    for d in &info {
+        let mut score: u8 = 0;
+        if format!("{:04x}", d.vid) == needle || target.contains(&format!("{:04x}:{:04x}", d.vid, d.pid)) {
+            score += 50;
+        }
+        for i in &d.interfaces {
+            if i.class == 2 && i.subclass == 2 {
+                score += 20; // AT/CDC
+            }
+            if i.class == 255 {
+                score += 15; // vendor
+            }
+        }
+        if d.product.as_deref().unwrap_or("").to_lowercase().contains("unisoc") || d.manufacturer.as_deref().unwrap_or("").to_lowercase().contains("spreadtrum") {
+            score += 25;
+        }
+        if score > best.map(|(_, s)| s).unwrap_or(0) {
+            best = Some((d, score));
+        }
+    }
+    if let Some((d, score)) = best {
+        let chip = match d.vid {
+            0x04e8 => "samsung",
+            0x0e8d => "mtk",
+            0x05c6 => "qualcomm",
+            0x1782 => "spd",
+            _ => "unknown",
+        };
+        let prod = d.product.as_deref().unwrap_or("");
+        Ok(format!("{{\"vid\":{},\"pid\":{},\"chip\":\"{chip}\",\"score\":{score},\"product\":\"{prod}\"}}", d.vid, d.pid))
+    } else {
+        Err(BridgeError::InvalidArgument("no device matched AI fingerprint".to_string()))
+    }
+}

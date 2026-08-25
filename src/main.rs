@@ -82,6 +82,13 @@ fn main() {
         eprintln!("  usb-config <t> <idx>   set USB configuration <idx> on target");
         eprintln!("  usb-detach-kernel <t>  detach kernel drivers (cdc_acm) from all interfaces");
         eprintln!("  at-send <t> <cmd> [ms]  send AT command over CDC ACM, read reply");
+        eprintln!("  at-auto-detect        auto-detect Samsung CDC ACM diag port (no target needed)");
+        eprintln!("  at-kg-unlock <t> [ms] KG lock bypass via AT+KSTRINGB/KGLOCK sequence");
+        eprintln!("  at-fuzz <t> <p1,p2> [ms] fuzz AT prefixes (e.g. KSTRINGB,KGLOCK,DEVCONINFO)");
+        eprintln!("  at-mdm-disable <t> [ms] MDM disable via AT+MDMCONFIG");
+        eprintln!("  at-carrier-unlock <t> [ms] carrier unlock via AT+CARRIERLOCK");
+        eprintln!("  unified-flash <t> <image>  auto-detect chip VID and dispatch flash");
+        eprintln!("  ai-fingerprint <t>        AI heuristic VID/PID/interface fingerprint for clones");
         eprintln!("  mtp-info <t> [ms]      MTP GetDeviceInfo: ops/events/properties supported");
         eprintln!("  odin-connect <t>       open Odin session to Samsung device");
         eprintln!("  odin-agent <t>         long-lived Odin session (JSON lines on stdin)");
@@ -708,6 +715,53 @@ fn main() {
             }
             let timeout_ms = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3000);
             at::at_send(&args[2], &args[3], timeout_ms)
+        }
+        "at-auto-detect" => at::at_auto_detect(),
+        "at-kg-unlock" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-kg-unlock <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4000);
+            at::at_kg_unlock(&args[2], timeout_ms)
+        }
+        "at-fuzz" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge at-fuzz <target> <p1,p2,...> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(2000);
+            at::at_fuzz(&args[2], &args[3], timeout_ms)
+        }
+        "at-mdm-disable" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-mdm-disable <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3500);
+            at::at_mdm_disable(&args[2], timeout_ms)
+        }
+        "at-carrier-unlock" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-carrier-unlock <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3500);
+            at::at_carrier_unlock(&args[2], timeout_ms)
+        }
+        "unified-flash" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge unified-flash <target> <image>");
+                exit(2);
+            }
+            at::unified_flash(&args[2], &args[3])
+        }
+        "ai-fingerprint" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge ai-fingerprint <target>");
+                exit(2);
+            }
+            at::ai_fingerprint(&args[2])
         }
         "mtp-info" => {
             if args.len() < 3 {
