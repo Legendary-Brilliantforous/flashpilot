@@ -31,7 +31,7 @@ class _NavButton(QPushButton):
         self._active = False
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(44)
+        self.setFixedHeight(34)
         self.setStyleSheet("QPushButton { border: none; background: transparent; }")
 
     def set_active(self, active):
@@ -86,8 +86,8 @@ class NavRail(QFrame):
         self.setFixedWidth(168)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 10, 8, 10)
-        lay.setSpacing(4)
+        lay.setContentsMargins(6, 8, 6, 8)
+        lay.setSpacing(1)
 
         brand = QPushButton("flashpilot FLASHING")
         brand.setEnabled(False)
@@ -102,7 +102,7 @@ class NavRail(QFrame):
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {_BORDER};")
         lay.addWidget(sep)
-        lay.addSpacing(4)
+        lay.addSpacing(2)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)

@@ -1852,7 +1852,7 @@ class FlashPilotWindow(QMainWindow):
         self._section_index = {"samsung": 0}
         nav_items = [("samsung", "◉", "Samsung")]
         nav_items += [(f"dev_{b['key']}", b.get('icon', '▣'), b['label'])
-                      for b in device_pages.BRANDS]
+                      for b in device_pages.BRANDS if b["key"] != "samsung"]
         nav_items += [
             ("general", "⚡", "General"),
             ("fus", "⬇", "Firmware Downloader"),
@@ -1892,7 +1892,11 @@ class FlashPilotWindow(QMainWindow):
         self._stack.addWidget(dash)
 
         # Brand drill-down pages (level 2/3 live inside each stack entry).
+        # Samsung's Supported-Devices lives INSIDE the Samsung hub instead.
+        self._device_stacks = getattr(self, "_device_stacks", {})
         for b in device_pages.BRANDS:
+            if b["key"] == "samsung":
+                continue
             self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
             self._section_index[f"dev_{b['key']}"] = len(self._section_index)
 
@@ -2054,15 +2058,14 @@ class FlashPilotWindow(QMainWindow):
         self.stop_btn.setVisible(False)
         lay.addLayout(top_row)
 
-        # TFT-style sub-tabs so the operations are split into focused views
-        # instead of one congested scrollable column.
+        # TFT-style hub: SUPPORTED | ODIN FLASH | UNLOCK | ADVANCED FLASH | TOOLS.
+        # Unlock opens its own inner tab row (FRP / MDM / CARRIER / SCREEN LOCK).
         self.samsung_tabs = SamsungSubTabs(
             [
-                ("flash", "FLASH"),
-                ("frp", "FRP"),
-                ("lock", "SCREEN LOCK"),
-                ("mdm", "MDM"),
-                ("carrier", "CARRIER LOCK"),
+                ("supported", "SUPPORTED DEVICES"),
+                ("flash", "ODIN FLASH"),
+                ("unlock", "UNLOCK"),
+                ("adv", "ADVANCED FLASH"),
                 ("tools", "INFO & TOOLS"),
             ]
         )
@@ -2092,29 +2095,70 @@ class FlashPilotWindow(QMainWindow):
             "FLASH OPTIONS", self.options_panel, accent=C["warn"],
             collapsed=True
         )
-        self._adv_sec = CollapsibleSection(
-            "ADVANCED FLASH", self.adv_panel, accent=C["ok"],
-            collapsed=True
-        )
         fh_lay.addWidget(self._firmware_sec)
         fh_lay.addWidget(self._options_sec)
-        fh_lay.addWidget(self._adv_sec)
         fh_lay.addStretch(1)
         flash_scroll.setWidget(flash_host)
         fp_lay.addWidget(flash_scroll)
         self.samsung_stack.addWidget(flash_page)
 
-        frp_page = self._build_ops_flow_page(["FRP bypass"])
-        self.samsung_stack.addWidget(frp_page)
+        # SUPPORTED DEVICES — reuse the devices drill-down (level2/3) here
+        from . import devices as _dp
+        self._device_stacks.setdefault("samsung", None)
+        if self._device_stacks.get("samsung") is None:
+            self._device_stacks["samsung"] = _dp.build_brand_page(self, "samsung")
+        self.samsung_stack.addWidget(self._device_stacks["samsung"])
 
-        lock_page = self._build_ops_flow_page(["Screen lock remove"])
-        self.samsung_stack.addWidget(lock_page)
+        # UNLOCK — nested tabs: FRP / MDM / CARRIER / SCREEN LOCK
+        unlock_wrap = QWidget()
+        unlock_wrap.setStyleSheet("background: transparent;")
+        uv = QVBoxLayout(unlock_wrap)
+        uv.setContentsMargins(0, 0, 0, 0)
+        uv.setSpacing(8)
+        unlock_tabs = SamsungSubTabs(
+            [("frp", "FRP"), ("mdm", "MDM"),
+             ("carrier", "CARRIER LOCK"), ("lock", "SCREEN LOCK")]
+        )
+        uv.addWidget(unlock_tabs)
+        unlock_stack = QStackedWidget()
+        unlock_stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        u_keys = ["frp", "mdm", "carrier", "lock"]
+        u_pages = {
+            "frp": self._build_ops_flow_page(["FRP bypass"]),
+            "mdm": self._build_ops_flow_page(["MDM unlock"]),
+            "carrier": self._build_ops_flow_page(["Carrier lock"]),
+            "lock": self._build_ops_flow_page(["Screen lock remove"]),
+        }
+        for k in u_keys:
+            unlock_stack.addWidget(u_pages[k])
+        unlock_tabs.tab_selected.connect(
+            lambda k: unlock_stack.setCurrentIndex(
+                u_keys.index(k) if k in u_keys else 0)
+        )
+        uv.addWidget(unlock_stack, 1)
+        self._unlock_stack = unlock_stack
+        self.samsung_stack.addWidget(unlock_wrap)
 
-        mdm_page = self._build_ops_flow_page(["MDM unlock"])
-        self.samsung_stack.addWidget(mdm_page)
-
-        carrier_page = self._build_ops_flow_page(["Carrier lock"])
-        self.samsung_stack.addWidget(carrier_page)
+        # ADVANCED FLASH — dedicated tab (was collapsed section on FLASH)
+        adv_page = QWidget()
+        adv_page.setStyleSheet("background: transparent;")
+        av = QVBoxLayout(adv_page)
+        av.setContentsMargins(0, 0, 0, 0)
+        av.setSpacing(8)
+        adv_scroll = self._ops_scroll_area()
+        adv_host = QWidget()
+        adv_host.setStyleSheet("background: transparent;")
+        ah = QVBoxLayout(adv_host)
+        ah.setContentsMargins(0, 0, 0, 0)
+        ah.setSpacing(8)
+        self._adv_sec = CollapsibleSection(
+            "ADVANCED FLASH", self.adv_panel, accent=C["ok"], collapsed=False
+        )
+        ah.addWidget(self._adv_sec)
+        ah.addStretch(1)
+        adv_scroll.setWidget(adv_host)
+        av.addWidget(adv_scroll)
+        self.samsung_stack.addWidget(adv_page)
 
         utils_body = QWidget()
         utils_body.setStyleSheet("background: transparent;")
@@ -2165,8 +2209,8 @@ class FlashPilotWindow(QMainWindow):
         return panel
 
     def _on_samsung_tab(self, key):
-        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3,
-                 "carrier": 4, "tools": 5}.get(key, 0)
+        index = {"supported": 1, "flash": 0, "unlock": 2,
+                 "adv": 3, "tools": 4}.get(key, 0)
         self.samsung_stack.setCurrentIndex(index)
 
     def _build_quick_page(self):
