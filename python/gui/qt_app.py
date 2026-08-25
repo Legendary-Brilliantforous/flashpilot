@@ -1987,7 +1987,7 @@ class FlashPilotWindow(QMainWindow):
         left = QVBoxLayout()
         left.setSpacing(4)
         self.scene = ConnectionScene()
-        self.scene.setMinimumHeight(108)
+        self.scene.setMinimumHeight(64)
         left.addWidget(self.scene, 1)
 
         row = QHBoxLayout()
@@ -2983,8 +2983,8 @@ class FlashPilotWindow(QMainWindow):
             f" QFrame#console:hover {{ border: 1px solid {C['border_hi']};"
             f" background: rgba(15, 23, 35, 235); }}"
         )
-        panel.setMinimumWidth(360)
-        panel.setMaximumWidth(430)
+        panel.setMinimumWidth(330)
+        panel.setMaximumWidth(380)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(10)

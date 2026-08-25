@@ -31,7 +31,8 @@ class _NavButton(QPushButton):
         self._active = False
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(34)
+        f = self.font(); f.setPixelSize(11); self.setFont(f)
+        self.setFixedHeight(30)
         self.setStyleSheet("QPushButton { border: none; background: transparent; }")
 
     def set_active(self, active):
@@ -86,23 +87,13 @@ class NavRail(QFrame):
         self.setFixedWidth(168)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 8, 6, 8)
-        lay.setSpacing(1)
-
-        brand = QPushButton("flashpilot FLASHING")
-        brand.setEnabled(False)
-        brand.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none;"
-            f" color: {_MUTE}; font-size: 10px; font-weight: 800;"
-            f" letter-spacing: 2px; text-align: left; padding: 2px 12px; }}"
-        )
-        lay.addWidget(brand)
+        lay.setContentsMargins(4, 4, 4, 2)
+        lay.setSpacing(0)
 
         sep = QFrame()
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {_BORDER};")
         lay.addWidget(sep)
-        lay.addSpacing(2)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
@@ -118,20 +109,6 @@ class NavRail(QFrame):
 
         lay.addStretch(1)
 
-        foot = QFrame()
-        foot.setFixedHeight(1)
-        foot.setStyleSheet(f"background: {_BORDER};")
-        lay.addWidget(foot)
-        lay.addSpacing(2)
-
-        v = QPushButton("v1.3  ·  Rust core")
-        v.setEnabled(False)
-        v.setStyleSheet(
-            f"QPushButton {{ background: transparent; border: none;"
-            f" color: {_MUTE}; font-size: 9px; letter-spacing: 1px;"
-            f" text-align: left; padding: 2px 12px; }}"
-        )
-        lay.addWidget(v)
 
     def select(self, key):
         if key in self._buttons:

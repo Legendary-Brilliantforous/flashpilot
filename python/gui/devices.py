@@ -76,7 +76,7 @@ def _card(text, sub="", accent=None, clickable=True):
         f"QFrame:hover {{ border-color: {accent}; }}"
     )
     lay = QVBoxLayout(card)
-    lay.setContentsMargins(14, 10, 14, 10)
+    lay.setContentsMargins(10, 7, 10, 7)
     lay.setSpacing(4)
     t = QLabel(text)
     t.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800;"
@@ -105,8 +105,8 @@ def build_brand_page(win, key):
     grid_page = QWidget()
     grid_page.setStyleSheet("background: transparent;")
     outer = QVBoxLayout(grid_page)
-    outer.setContentsMargins(16, 14, 16, 14)
-    outer.setSpacing(10)
+    outer.setContentsMargins(10, 8, 10, 8)
+    outer.setSpacing(6)
 
     head = QLabel(f"{brand.get('icon','')}  {brand['label']} — pick a model")
     head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
@@ -120,7 +120,7 @@ def build_brand_page(win, key):
     host.setStyleSheet("background: transparent;")
     grid = QGridLayout(host)
     grid.setContentsMargins(0, 0, 0, 0)
-    grid.setSpacing(12)
+    grid.setSpacing(8)
 
     for i, m in enumerate(models):
         researched = m.get("status") == "researched"
@@ -164,8 +164,8 @@ def _build_model_page(win, brand, m, back):
     page = QWidget()
     page.setStyleSheet("background: transparent;")
     v = QVBoxLayout(page)
-    v.setContentsMargins(16, 14, 16, 14)
-    v.setSpacing(12)
+    v.setContentsMargins(10, 8, 10, 8)
+    v.setSpacing(8)
 
     top = QHBoxLayout()
     back_btn = QPushButton("← Back")
@@ -201,7 +201,7 @@ def _build_model_page(win, brand, m, back):
     v.addWidget(acts_title)
 
     grid = QGridLayout()
-    grid.setSpacing(12)
+    grid.setSpacing(8)
     actions = m.get("actions", []) or []
     if not actions:
         empty = QLabel("No wired actions yet for this model — research in progress.")
@@ -222,10 +222,10 @@ def _build_model_page(win, brand, m, back):
                     " border:none; border-radius:9px; padding:12px 18px;"
                     " font-weight:900; font-size:13px; }"
                 )
-                btn.setFixedHeight(52)
+                btn.setFixedHeight(42)
         else:
             btn.setStyleSheet(_btn_primary() if enabled else _btn_ghost())
-            btn.setFixedHeight(48)
+            btn.setFixedHeight(40)
         btn.setEnabled(bool(researched))  # researched models are live
         btn.setToolTip(tip if enabled else
                        f"{tip}\n(GUI preview — wiring lands in a following step)")
