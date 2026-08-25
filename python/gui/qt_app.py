@@ -258,9 +258,101 @@ ACCENT_THEMES = {
         "accent": "#ef4444", "accent_hi": "#f87171",
         "grad_a": "#dc2626", "grad_b": "#f97316", "accent_dim": "#3d1b1e",
     },
+    "Sunset": {
+        "accent": "#f97316", "accent_hi": "#fdba74",
+        "grad_a": "#ea580c", "grad_b": "#ec4899", "accent_dim": "#3d2314",
+    },
+    "Arctic": {
+        "accent": "#06b6d4", "accent_hi": "#67e8f9",
+        "grad_a": "#0891b2", "grad_b": "#22d3ee", "accent_dim": "#0e2f3d",
+    },
+    "Midnight": {
+        "accent": "#6366f1", "accent_hi": "#a5b4fc",
+        "grad_a": "#4f46e5", "grad_b": "#8b5cf6", "accent_dim": "#1e1b4b",
+    },
+    "Graphite": {
+        "accent": "#94a3b8", "accent_hi": "#cbd5e1",
+        "grad_a": "#475569", "grad_b": "#94a3b8", "accent_dim": "#1e293b",
+    },
 }
 
 _BASE_QSS = f"""
+* {{
+    font-family: "Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+}}
+QToolTip {{
+    background-color: {C['panel']}; color: {C['text_hi']};
+    border: 1px solid {C['border_hi']}; border-radius: 8px; padding: 8px 10px;
+    font-size: 12px;
+}}
+QLineEdit {{
+    background: {C['inset']};
+    border: 1px solid {C['border']};
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: {C['text_hi']};
+    selection-background-color: {C['accent']};
+    selection-color: #ffffff;
+}}
+QLineEdit:hover {{ border: 1px solid {C['border_hi']}; background: {C['card']}; }}
+QLineEdit:focus {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
+QComboBox {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 {C['card_hover']}, stop:1 {C['card']});
+    border: 1px solid {C['glass_border']};
+    border-radius: 10px;
+    padding: 8px 34px 8px 12px;
+    color: {C['text_hi']};
+    min-height: 22px;
+    selection-background-color: {C['accent_dim']};
+    selection-color: {C['accent_hi']};
+}}
+QComboBox:hover {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
+QComboBox:focus {{ border: 1px solid {C['accent']}; }}
+QComboBox:disabled {{ color: {C['mute']}; }}
+QComboBox:on {{ border: 1px solid {C['accent']}; }}
+QComboBox::drop-down {{
+    border: none; width: 30px;
+    subcontrol-origin: padding; subcontrol-position: center right;
+    background: transparent;
+}}
+QComboBox::down-arrow {{
+    image: none; width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid {C['dim']};
+}}
+QComboBox::down-arrow:on {{ border-top: 6px solid {C['accent']}; }}
+QComboBox QAbstractItemView {{
+    background-color: {C['panel']};
+    border: 1px solid {C['border_hi']};
+    border-radius: 12px;
+    color: {C['text']};
+    selection-background-color: {C['accent_dim']};
+    selection-color: {C['accent_hi']};
+    outline: 0;
+    padding: 6px;
+}}
+QScrollBar:vertical {{
+    background: transparent; width: 8px; border-radius: 4px; margin: 2px;
+}}
+QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 4px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+QScrollBar:horizontal {{ height: 0; }}
+QFrame#sbox {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(18,28,44,180), stop:1 rgba(9,15,27,200));
+    border: 1px solid {C['glass_border']}; border-radius: 14px;
+}}
+"""
+
+
+def _get_base_qss():
+    """Regenerate base QSS with current C values — so theme changes affect
+    the whole app, not just the accent line."""
+    return f"""
 * {{
     font-family: "Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
     font-size: 13px;
@@ -8328,9 +8420,10 @@ class FrpWindow(QMainWindow):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
+        lay.setSpacing(14)
 
-        bl = self._settings_box("THEME", lay)
+        # THEME — advanced grid with live whole-app preview (10 themes)
+        bl = self._settings_box("THEME — whole-app accent (live)", lay)
         self._s_theme = QComboBox()
         self._s_theme.addItems(list(ACCENT_THEMES))
         self._s_theme.setCurrentText(
@@ -8340,37 +8433,128 @@ class FrpWindow(QMainWindow):
         self._s_theme.currentTextChanged.connect(self._apply_theme)
         self._settings_row(
             bl, "Accent theme",
-            "Colour pack used across buttons, gradients and highlights.",
+            "Changes buttons, cards, console, shimmer, cable/ORB — whole app, not just the top line. Live.",
             self._s_theme,
         )
-        # premium theme preview swatches
-        sw_row = QHBoxLayout()
-        sw_row.setSpacing(8)
-        for th, tok in ACCENT_THEMES.items():
-            dot = QLabel()
-            dot.setFixedSize(22, 22)
-            dot.setToolTip(th)
-            dot.setStyleSheet(f"background:{tok['accent']}; border:2px solid {tok['accent_hi']}; border-radius:11px;")
-            dot.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
-            sw_row.addWidget(dot)
-        sw_row.addStretch(1)
-        bl.addLayout(sw_row)
+        # Premium theme preview — 10 cards with gradient + name, click to apply
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        for idx, (th, tok) in enumerate(ACCENT_THEMES.items()):
+            card = QFrame()
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            card.setFixedHeight(54)
+            card.setStyleSheet(
+                f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['grad_b']});"
+                f" border: 2px solid {tok['accent_hi'] if self.settings.value('theme')==th else tok['border'] if 'border' in tok else 'rgba(255,255,255,20)'};"
+                f" border-radius: 10px; }}"
+            )
+            # Tooltip with hex
+            card.setToolTip(f"{th}\n{tok['accent']} → {tok['grad_b']}")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(10, 8, 10, 8)
+            cl.setSpacing(2)
+            name = QLabel(th)
+            name.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 800; background: transparent; border: none;")
+            hexlbl = QLabel(f"{tok['accent']} → {tok['grad_b']}")
+            hexlbl.setStyleSheet("color: rgba(255,255,255,200); font-size: 9px; background: transparent; border: none;")
+            cl.addWidget(name)
+            cl.addWidget(hexlbl)
+            # Click applies theme and rebuilds whole app
+            card.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
+            r, c = divmod(idx, 5)
+            grid.addWidget(card, r, c)
+        bl.addLayout(grid)
+        # Live preview hint
+        hint = QLabel("Tip: theme now recolors the entire window — buttons, cards, console, cable & orb, not just the accent strip.")
+        hint.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        hint.setWordWrap(True)
+        bl.addWidget(hint)
+
+        # ANIMATIONS — granular, not single switch
+        bl2 = self._settings_box("ANIMATIONS — granular", lay)
         self._s_anim = self._settings_switch()
         self._s_anim.setChecked(self.settings.value("animations", "true", type=bool))
         self._s_anim.toggled.connect(self._apply_animations)
         self._settings_row(
-            bl, "Animated effects",
-            "Live cable pulse, status orb and shimmer sweeps.",
+            bl2, "Master animations",
+            "Global toggle — disables all motion when off.",
             self._s_anim,
         )
+        # Granular toggles
+        self._s_anim_cable = self._settings_switch()
+        self._s_anim_cable.setChecked(self.settings.value("anim_cable", "true", type=bool))
+        self._s_anim_cable.toggled.connect(lambda on: self.settings.setValue("anim_cable", on))
+        self._settings_row(bl2, "Cable pulse", "Animated data flow in the connection banner.", self._s_anim_cable)
+        self._s_anim_orb = self._settings_switch()
+        self._s_anim_orb.setChecked(self.settings.value("anim_orb", "true", type=bool))
+        self._s_anim_orb.toggled.connect(lambda on: (self.settings.setValue("anim_orb", on), self.orb.set_animations(bool(on) and self._s_anim.isChecked())))
+        self._settings_row(bl2, "Status orb", "Pulsing LED orb next to connection state.", self._s_anim_orb)
+        self._s_anim_shimmer = self._settings_switch()
+        self._s_anim_shimmer.setChecked(self.settings.value("anim_shimmer", "true", type=bool))
+        self._s_anim_shimmer.toggled.connect(lambda on: self.settings.setValue("anim_shimmer", on))
+        self._settings_row(bl2, "Shimmer bar", "Progress shimmer during flash.", self._s_anim_shimmer)
+        self._s_anim_toast = self._settings_switch()
+        self._s_anim_toast.setChecked(self.settings.value("anim_toast", "true", type=bool))
+        self._s_anim_toast.toggled.connect(lambda on: self.settings.setValue("anim_toast", on))
+        self._settings_row(bl2, "Toast slide", "Slide-in animation for notifications.", self._s_anim_toast)
+        self._s_anim_window = self._settings_switch()
+        self._s_anim_window.setChecked(self.settings.value("anim_window", "true", type=bool))
+        self._s_anim_window.toggled.connect(lambda on: self.settings.setValue("anim_window", on))
+        self._settings_row(bl2, "Window fade", "Fade-in on splash and dialogs.", self._s_anim_window)
+
         self._s_blur = self._settings_switch()
         self._s_blur.setChecked(self.settings.value("blur", "true", type=bool))
         self._s_blur.toggled.connect(self._apply_blur)
         self._settings_row(
-            bl, "Window glow / shadow",
+            bl2, "Window glow / shadow",
             "Drop shadow and halo around the main window.",
             self._s_blur,
         )
+
+        # SHORTCUTS — table with all shortcuts, editable hint
+        bl3 = self._settings_box("SHORTCUTS", lay)
+        shortcuts = [
+            ("F5 / Ctrl+R", "Re-scan USB / ADB"),
+            ("Ctrl+Enter", "Run selected operation"),
+            ("Ctrl+L", "Clear console"),
+            ("Ctrl+S", "Save console log"),
+            ("Ctrl+F", "Find in console"),
+            ("Ctrl+Shift+C", "Copy console"),
+            ("Ctrl+Esc", "Stop any operation (global)"),
+        ]
+        for k, d in shortcuts:
+            row = QHBoxLayout()
+            chip = QLabel(k)
+            chip.setStyleSheet(
+                f"color:{C['dim']}; font-weight:700; font-size:10px;"
+                f" background:{C['card_hover']}; border:1px solid {C['border']};"
+                f" border-radius:6px; padding:3px 8px;"
+            )
+            chip.setFixedWidth(130)
+            desc = QLabel(d)
+            desc.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+            row.addWidget(chip)
+            row.addWidget(desc, 1)
+            bl3.addLayout(row)
+        sc_hint = QLabel("Shortcuts are fixed in this build — custom key mapping is planned. Use Settings → Tools → Reset to restore defaults.")
+        sc_hint.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
+        sc_hint.setWordWrap(True)
+        bl3.addWidget(sc_hint)
+
+        # UI DENSITY / FONT — more UI improvements
+        bl4 = self._settings_box("UI DENSITY", lay)
+        self._s_density = QComboBox()
+        self._s_density.addItems(["Comfortable", "Compact", "Spacious"])
+        self._s_density.setCurrentText(self.settings.value("density", "Comfortable"))
+        self._style_combo(self._s_density)
+        self._s_density.currentTextChanged.connect(lambda v: self.settings.setValue("density", v))
+        self._settings_row(bl4, "Layout density", "Compact saves vertical space, Spacious adds padding.", self._s_density)
+        self._s_font = QSpinBox()
+        self._s_font.setRange(8, 16)
+        self._s_font.setValue(int(self.settings.value("font_size", 13)))
+        self._s_font.setSuffix(" px")
+        self._s_font.valueChanged.connect(lambda v: self.settings.setValue("font_size", int(v)))
+        self._settings_row(bl4, "Base font size", "Applies to console and cards (restart to fully apply).", self._s_font)
 
         lay.addStretch(1)
         return page
@@ -8383,10 +8567,48 @@ class FrpWindow(QMainWindow):
         self._ui.line.emit(f"[settings] theme -> {name}")
 
     def _rebuild_theme(self):
-        self._toasts.show_ok("Theme applied", "Restyled accent & gradients")
-        self.setStyleSheet(_BASE_QSS + _console_qss())
-        for combo in (self._s_theme,):
-            self._style_combo(combo)
+        self._toasts.show_ok("Theme applied", f"Restyled whole app — {self.settings.value('theme', 'Neon Circuit')}")
+        # Regenerate QSS with current C so whole app recolors, not just the accent line
+        try:
+            self.setStyleSheet(_get_base_qss() + _console_qss())
+        except Exception:
+            self.setStyleSheet(_BASE_QSS + _console_qss())
+        # Accent strip (top line)
+        if hasattr(self, "_accent_strip") and self._accent_strip:
+            try:
+                self._accent_strip.update()
+            except Exception:
+                pass
+        # Root card border-top
+        if hasattr(self, "_root") and self._root:
+            try:
+                self._root.setStyleSheet(
+                    f"QFrame#root {{ background: rgba(5, 9, 15, 244);"
+                    f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['accent']};"
+                    f" border-radius: 12px; }}"
+                )
+            except Exception:
+                pass
+        # Connection banner
+        if hasattr(self, "_conn") and self._conn:
+            try:
+                self._set_conn_glow(None)
+            except Exception:
+                pass
+        # Restyle combos and button gradients that captured C at creation
+        for combo in (getattr(self, "_s_theme", None),):
+            if combo:
+                try:
+                    self._style_combo(combo)
+                except Exception:
+                    pass
+        # Force full repaint so cards/buttons pick up new gradients
+        try:
+            self.update()
+            for w in self.findChildren(QFrame):
+                w.update()
+        except Exception:
+            pass
 
     def _apply_animations(self, on):
         self.settings.setValue("animations", on)
