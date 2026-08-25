@@ -45,7 +45,7 @@ BRAND_BY_KEY = {b["key"]: b for b in BRANDS}
 def _tok():
     """Lazy token/style import — avoids circular import with qt_app until
     theme.py extraction lands in a later step."""
-    from .qt_app import C, _btn_ghost, _btn_primary, _btn_danger
+    from .theme import C, _btn_ghost, _btn_primary, _btn_danger
     return C, _btn_ghost, _btn_primary, _btn_danger
 
 _ACTION_META = {
