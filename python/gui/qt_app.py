@@ -76,6 +76,7 @@ from PyQt6.QtWidgets import (
 from ..core import bridge, frp, mtk, mtp, fus, pit, pitstore
 from ..core import APP_VERSION
 from .toast import ToastHost
+from . import devices as device_pages
 from .nav import NavRail
 
 # ---------------------------------------------------------------------------
@@ -3167,22 +3168,40 @@ class FrpWindow(QMainWindow):
         body.setContentsMargins(18, 4, 18, 14)
         body.setSpacing(14)
 
-        self.nav = NavRail(
-            [
-                ("samsung", "◉", "Samsung"),
-                ("quick", "⚡", "Quick Actions"),
-                ("fus", "⬇", "Firmware Downloader"),
-                ("mtk", "▣", "MTK Tools"),
-                ("qc", "◈", "Qualcomm"),
-                ("spd", "✦", "SPD / Unisoc"),
-                ("battery", "⚡", "Battery Repair"),
-                ("network", "📶", "Network Repair"),
-                ("settings", "⚙", "Settings"),
-            ]
-        )
+        # Dynamic nav: samsung + every supported brand (data-driven) + tools.
+        self._section_index = {"samsung": 0}
+        nav_items = [("samsung", "◉", "Samsung")]
+        nav_items += [(f"dev_{b['key']}", b.get('icon', '▣'), b['label'])
+                      for b in device_pages.BRANDS]
+        nav_items += [
+            ("quick", "⚡", "Quick Actions"),
+            ("fus", "⬇", "Firmware Downloader"),
+            ("mtk", "▣", "MTK Tools"),
+            ("qc", "◈", "Qualcomm"),
+            ("spd", "✦", "SPD / Unisoc"),
+            ("battery", "⚡", "Battery Repair"),
+            ("network", "📶", "Network Repair"),
+            ("settings", "⚙", "Settings"),
+        ]
+        self.nav = NavRail(nav_items)
         self.nav.section_selected.connect(self._on_section)
-        body.addWidget(self.nav)
 
+        # Rail can now exceed viewport height — make it scrollable.
+        from PyQt6.QtWidgets import QScrollArea as _NavScroll
+        nav_wrap = _NavScroll()
+        nav_wrap.setWidgetResizable(True)
+        nav_wrap.setFrameShape(QFrame.Shape.NoFrame)
+        nav_wrap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        nav_wrap.setStyleSheet("QScrollArea { background: transparent; }")
+        nav_wrap.setWidget(self.nav)
+        try:
+            w = self.nav.width() or self.nav.sizeHint().width()
+        except Exception:
+            w = 170
+        nav_wrap.setFixedWidth(max(150, min(200, w + 12)))
+        body.addWidget(nav_wrap)
+
+        self._device_stacks = {}
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("QStackedWidget { background: transparent; }")
 
@@ -3195,14 +3214,23 @@ class FrpWindow(QMainWindow):
         dash_lay.addWidget(self._build_right(), 1)
         self._stack.addWidget(dash)
 
-        self._stack.addWidget(self._build_quick_page())
-        self._stack.addWidget(self._build_fus_page())
-        self._stack.addWidget(self._build_mtk_page())
-        self._stack.addWidget(self._build_qc_page())
-        self._stack.addWidget(self._build_spd_page())
-        self._stack.addWidget(self._build_battery_page())
-        self._stack.addWidget(self._build_network_page())
-        self._stack.addWidget(self._build_settings_page())
+        # Brand drill-down pages (level 2/3 live inside each stack entry).
+        for b in device_pages.BRANDS:
+            self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
+            self._section_index[f"dev_{b['key']}"] = len(self._section_index)
+
+        for key, builder in (
+            ("quick", self._build_quick_page),
+            ("fus", self._build_fus_page),
+            ("mtk", self._build_mtk_page),
+            ("qc", self._build_qc_page),
+            ("spd", self._build_spd_page),
+            ("battery", self._build_battery_page),
+            ("network", self._build_network_page),
+            ("settings", self._build_settings_page),
+        ):
+            self._stack.addWidget(builder())
+            self._section_index[key] = len(self._section_index)
 
         # Connection banner shared by every section so the computer-cable-phone
         # scene (and its live animation) is visible on Samsung / MTK / Qualcomm.
@@ -4356,9 +4384,7 @@ class FrpWindow(QMainWindow):
 
     # ----------------------------- section switching ----------------------
     def _on_section(self, key):
-        order = {"samsung": 0, "quick": 1, "fus": 2, "mtk": 3, "qc": 4, "spd": 5,
-                 "battery": 6, "network": 7, "settings": 8}
-        idx = order.get(key, 0)
+        idx = getattr(self, "_section_index", {}).get(key, 0)
         self._stack.setCurrentIndex(idx)
         self.nav.select(key)
         self.set_status(f"Section: {key.upper()}")
