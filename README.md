@@ -33,17 +33,20 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 ---
 
-## 🚀 Highlights
+## 🚀 Highlights — 1.2.0 Stable (0 warnings)
 
 - **8 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL.
 - **8 job categories, ~120 operation methods** — flashing, FRP bypass, screen-lock removal, MDM unlock, device info, reboot, settings/UI repair, and more.
-- **Rust core (`flashpilot-bridge`, ~9.3k LOC)** — raw USB with a *vendored libusb* (no system deps), real protocol implementations:
-  - **Samsung**: reverse-engineered Odin session protocol (Heimdall-based), HID download-mode payloads, PIT read/write/flash.
-  - **MediaTek**: BootROM / preloader / Download-Agent handshake, scatter & GPT partition flashing, BROM exploits, SLA keys, dealer & emergency modes.
-  - **Qualcomm**: Sahara handshake, Firehose session, rawprogram.xml flashing, backup.
-  - **SPD/UNISOC**: clean-room BSL (Boot Service Layer) — FDL download, format, FRP erase, partition dump/flash.
+- **Rust core (`flashpilot-bridge`, ~9.3k LOC) — 0 `cargo check` warnings** — raw USB with *vendored libusb* (no system deps), real protocol implementations (+ 18 wired dead-paths, `-80KB` `lto`):
+  - **Samsung**: reverse-engineered Odin session protocol (Heimdall-based), HID download-mode payloads, PIT read/write/flash — AT `Context` retained, `EndpointConfig` chunking.
+  - **MediaTek**: BROM / preloader / DA handshake, scatter & GPT, BROM exploits, SLA keys — `ProgressReporter` real %.
+  - **Qualcomm**: Sahara `ProtocolError` + Firehose `QcomDeviceInfo` wired via `Duration` timeouts.
+  - **SPD/UNISOC**: clean-room BSL — all `BSL_CMD/REP`, `iface`, `flush/read_flash/chip_uid/power_off` wired.
   - Plus **MTP**, **AT-command**, and full **ADB** plumbing.
-- **A studio-grade GUI** — frameless translucent window, 5 accent themes, animated cable/status scene, live console with find/wrap/save, toast notifications, keyboard shortcuts, and per-chip sub-tab workbenches.
+- **A studio-grade GUI** — frameless translucent window, 5 accent themes, animated cable/status scene, live console.
+  - **Dynamic version** — installed `APP_VERSION` via `importlib.metadata` (deb truth), `_display_version` `1.2.0→1.2`, live GitHub latest stable, BETA pill.
+  - **Big centered dialogs (620px, draggable, ✕)** — beta gate + stable `UPDATE/AHEAD/PATCH` + flash/FRP confirms, chip colors `MTK amber` `QCOM red` `SPD violet` `SAMSUNG blue`, high-contrast `#e2e8f0`.
+  - **One global ⏹ STOP** in titlebar stops any Samsung/MTK/QC/SPD flow (legacy per-chip hidden).
 
 ---
 
