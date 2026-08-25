@@ -226,10 +226,10 @@ def _build_model_page(win, brand, m, back):
         else:
             btn.setStyleSheet(_btn_primary() if enabled else _btn_ghost())
             btn.setFixedHeight(48)
-        btn.setEnabled(act == "info")  # Device Check wired now; rest next steps
+        btn.setEnabled(bool(researched))  # researched models are live
         btn.setToolTip(tip if enabled else
                        f"{tip}\n(GUI preview — wiring lands in a following step)")
-        btn.clicked.connect(lambda _=False, a=act, mm=m: _dispatch(win, a, mm))
+        btn.clicked.connect(lambda _=False, a=act, bl=brand['label'], mm=m: _dispatch(win, a, bl, mm))
         r, c = divmod(i, 3)
         grid.addWidget(btn, r, c)
 
@@ -249,8 +249,6 @@ def _build_model_page(win, brand, m, back):
     return page
 
 
-def _dispatch(win, act, m):
-    """Only safe, already-wired action runs today."""
-    if act == "info":
-        win.refresh_device()
-    # frp/backup/flash/adb_enable/kg_unlock land in wiring steps — no-op now
+def _dispatch(win, act, brand_label, m):
+    """Route every action through the window's engine-aware router."""
+    win.start_model_action(act, brand_label, m)

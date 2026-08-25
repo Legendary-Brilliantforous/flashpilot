@@ -4389,6 +4389,96 @@ class FrpWindow(QMainWindow):
         self.nav.select(key)
         self.set_status(f"Section: {key.upper()}")
 
+    # --------------------- model action router (devices drill-down) --------
+    def start_model_action(self, act, brand_label, meta):
+        """Wire a Devices drill-down action to the real engine for its chip.
+
+        act: frp | info | backup | flash | adb_enable | kg_unlock
+        meta: model dict from supported_devices.json (engine, vid, ...)
+        Only researched models reach here with enabled buttons; guards below
+        keep un-researched or missing-input cases safe and guided."""
+        engine = (meta.get("engine") or "").lower()
+        label = f"{brand_label} {meta.get('model','')}"
+        self.log_line(f"[device] {label}: {act} via {engine or 'n/a'}")
+
+        if act == "info":
+            self.refresh_device()
+            return
+
+        if act == "kg_unlock":
+            # Samsung AT KnoxGuard chain through the bridge
+            try:
+                from python.core import mtp as _mtp
+                d = _mtp.find_samsung()
+                if not d:
+                    raise RuntimeError("no Samsung device on USB")
+                tgt = _mtp.target(d)
+                out = bridge._run(["at-kg-unlock", tgt, "4000"], timeout=30)
+                self.log_line(f"[kg] {out}")
+                self._toasts.show_ok("KG unlock", f"{label}: chain sent — check phone")
+            except Exception as e:  # noqa: BLE001
+                self._toasts.show_error("KG unlock failed", str(e))
+            return
+
+        if engine == "spd":
+            self._on_section("spd")
+            have_fdl = bool(self.spd_files["fdl1"].text().strip())
+            if not have_fdl:
+                self._toasts.show_warn(
+                    f"{label} · {act}",
+                    "Load this model's FDL1/FDL2 binaries on the SPD tab "
+                    "(they are model-specific) then press the action again.",
+                )
+                return
+            if act == "frp":
+                self._spd_frp()
+            elif act == "backup":
+                from PyQt6.QtWidgets import QFileDialog
+                out_dir = QFileDialog.getExistingDirectory(
+                    self, "Backup output folder",
+                    self.settings.value("default_dir", os.path.expanduser("~/Downloads")),
+                )
+                if not out_dir:
+                    return
+                a1 = self._spd_addr(self.spd_fdl1_addr)
+                fdl1 = self.spd_files["fdl1"].text().strip()
+                fdl2 = self.spd_files["fdl2"].text().strip()
+                args = ["spd-backup", self._spd_resolve_target() or "", fdl1,
+                        f"0x{a1:x}" if a1 is not None else "0x0"]
+                if fdl2:
+                    a2 = self._spd_addr(self.spd_fdl2_addr)
+                    args += [fdl2, f"0x{a2:x}" if a2 is not None else "0x0"]
+                args.append(out_dir)
+                self._spd_run(args, timeout=3600)
+            elif act == "adb_enable":
+                self._spd_enable_adb()
+            else:
+                self._toasts.show_info(f"{label} · {act}",
+                                       "Wiring lands in the next step.")
+            return
+
+        # Samsung / Odin engines
+        if act == "frp":
+            try:
+                methods = frp.methods_for("FRP bypass", "Download mode")
+                method = methods[0] if methods else "download_frp"
+            except Exception:
+                method = "download_frp"
+            self._run_ops_flow("FRP bypass", "Download mode", method,
+                               f"{label} · FRP bypass (download mode)")
+        elif act == "backup":
+            self._run_ops_flow("Odin Flashing (Advanced)", "Download mode",
+                               "odin_efs_backup", f"{label} · EFS backup")
+        elif act == "flash":
+            self._on_section("samsung")
+            self._toasts.show_info(
+                f"{label} · Flash",
+                "Load AP/BL/CP/CSC in Samsung ▸ FLASH slots, then Flash — "
+                "PIT safety contract runs automatically.")
+        else:
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
+
     # ----------------------------- Native one-session flash ---------------
     def _nf_pick_tar(self):
         path, _ = QFileDialog.getOpenFileName(
