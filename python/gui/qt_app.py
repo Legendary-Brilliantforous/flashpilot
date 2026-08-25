@@ -543,6 +543,37 @@ def _parse_version(tag):
     return tuple(num_parts), alpha
 
 
+def _display_version(tag):
+    """Display version: strips trailing '.0' patches.
+    1.2.0 -> 1.2, 1.2.1 -> 1.2.1, 1.2.0-beta -> 1.2-beta, 2.0.0 -> 2.0.
+    Preserves prerelease suffix (-beta, -rc1, etc.) exactly."""
+    if not tag:
+        return ""
+    t = tag.lstrip("v")
+    parts = t.split("-", 1)
+    numeric = parts[0]
+    suffix = f"-{parts[1]}" if len(parts) > 1 else ""
+    # Split numeric, strip trailing zeros but keep at least major.minor
+    nums = numeric.split(".")
+    # Remove trailing "0" segments while we have >2 parts
+    while len(nums) > 2 and nums[-1] == "0":
+        nums.pop()
+    # Special case: 1.0.0 -> 1.0, 2.0 stays 2.0 etc.
+    clean = ".".join(nums)
+    return f"{clean}{suffix}"
+
+
+def _is_beta_version(tag):
+    """True if version string denotes a beta/prerelease."""
+    if not tag:
+        return False
+    _, alpha = _parse_version(tag)
+    if not alpha:
+        return False
+    low = alpha.lower()
+    return any(k in low for k in ("beta", "alpha", "rc", "pre"))
+
+
 class LogBridge(QObject):
     line = pyqtSignal(str)
     status = pyqtSignal(str)
@@ -920,7 +951,20 @@ def _draw_phone(size, connected):
     return pix
 
 
-def _draw_logo(size):
+def _draw_logo(size, version=None):
+    """Draw the FlashPilot hex logo. When *version* is a beta (e.g. 1.2.1-beta)
+    a 'BETA' pill + the display version is painted onto the pixmap so the
+    launcher / window icon itself advertises the channel. Display version
+    strips trailing .0 -> 1.2.0 shows as 1.2, 1.2.1 stays 1.2.1."""
+    # Resolve version to show on the logo: explicit arg else current app version
+    try:
+        _ver = version if version is not None else APP_VERSION
+    except Exception:
+        _ver = version or ""
+    _is_beta = _is_beta_version(_ver) if _ver else False
+    _disp = _display_version(_ver) if _ver else ""
+    # For stable the logo stays clean; for beta we reserve a bottom strip
+    # so the pill doesn't overlap the hex art.
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
@@ -1034,7 +1078,59 @@ def _draw_logo(size):
     p.setBrush(inner_core)
     p.setPen(Qt.PenStyle.NoPen)
     p.drawEllipse(QRectF(s * 0.42, s * 0.42, s * 0.16, s * 0.16))
-    
+
+    # ---- BETA badge + version (only when running a beta build) ----
+    if _is_beta and s >= 28:
+        # Use the display version without the redundant trailing .0
+        # e.g. 1.2.0-beta -> 1.2-beta, displayed as "BETA  1.2"
+        ver_text = _disp
+        # For very small icons (title bar ~34px) keep the badge compact
+        if s < 48:
+            # Small corner pill: just "BETA"
+            pill_w, pill_h = s * 0.52, s * 0.22
+            pill_x, pill_y = s - pill_w - s * 0.04, s * 0.04
+            grad = QLinearGradient(pill_x, pill_y, pill_x + pill_w, pill_y)
+            grad.setColorAt(0, QColor("#f59e0b"))
+            grad.setColorAt(1, QColor("#ea580c"))
+            p.setBrush(grad)
+            p.setPen(QPen(QColor("#fef3c7"), s * 0.008))
+            p.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
+            p.setPen(QPen(QColor("#ffffff")))
+            f = QFont("Inter", max(4, int(s * 0.09)), QFont.Weight.ExtraBold)
+            p.setFont(f)
+            p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
+                       Qt.AlignmentFlag.AlignCenter, "BETA")
+        else:
+            # Larger logo: pill at bottom with "BETA  •  v1.2" (or v1.2.1)
+            vlabel = ver_text if ver_text else _ver
+            # Ensure v prefix for version
+            if vlabel and not vlabel.lower().startswith("v"):
+                vlabel = f"v{vlabel}"
+            label = f"BETA  {vlabel}" if vlabel else "BETA"
+            # Measure to size pill
+            f = QFont("Inter", max(5, int(s * 0.07)), QFont.Weight.ExtraBold)
+            fm = QFontMetricsF(f)
+            tw = fm.horizontalAdvance(label)
+            pill_w = tw + s * 0.18
+            pill_h = s * 0.15
+            pill_x = (s - pill_w) / 2
+            pill_y = s - pill_h - s * 0.06
+            # Pill background
+            grad = QLinearGradient(pill_x, pill_y, pill_x + pill_w, pill_y + pill_h)
+            grad.setColorAt(0, QColor("#f59e0b"))
+            grad.setColorAt(0.5, QColor("#ea580c"))
+            grad.setColorAt(1, QColor("#dc2626"))
+            p.setBrush(grad)
+            p.setPen(QPen(QColor("#fef3c7"), s * 0.01))
+            # shadow
+            p.setOpacity(0.85)
+            p.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
+            p.setOpacity(1.0)
+            p.setPen(QPen(QColor("#ffffff")))
+            p.setFont(f)
+            p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
+                       Qt.AlignmentFlag.AlignCenter, label)
+
     p.end()
     return pix
 
@@ -2707,13 +2803,15 @@ class SplashScreen(QWidget):
             chips,
         )
 
-        # Version info
+        # Version info - beta shows beta tag + exact display version
         p.setFont(QFont("JetBrains Mono", 8))
         p.setPen(QPen(QColor(C["mute"])))
+        _ver_disp = _display_version(APP_VERSION)
+        _beta_suffix = "  BETA" if _is_beta_version(APP_VERSION) else ""
         p.drawText(
             QRectF(0, 352, w, 16),
             Qt.AlignmentFlag.AlignCenter,
-            f"v{APP_VERSION}  |  Legendary-Brilliantforous",
+            f"v{_ver_disp}{_beta_suffix}  |  Legendary-Brilliantforous",
         )
 
         p.end()
@@ -2830,6 +2928,12 @@ class FrpWindow(QMainWindow):
             f"FlashPilot — console ready "
             f"({_time.strftime('%Y-%m-%d %H:%M:%S')})"
         )
+        # Beta gate: the installed version IS the beta channel (what the user
+        # downloaded). Latest stable is never hand-coded — it is fetched live
+        # from GitHub in _check_update_thread. Show the acceptance dialog once
+        # per beta version so the risk text is never "out of focus" toast.
+        if _is_beta_version(APP_VERSION):
+            QTimer.singleShot(1200, lambda: self._show_beta_risk_dialog(APP_VERSION, ""))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2910,11 +3014,18 @@ class FrpWindow(QMainWindow):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(0)
-        title = QLabel("flashpilot FLASHING TOOL")
+        _disp_ver = _display_version(APP_VERSION)
+        _is_beta_tb = _is_beta_version(APP_VERSION)
+        title_text = "flashpilot FLASHING TOOL"
+        if _is_beta_tb:
+            title_text += f"  —  BETA  v{_disp_ver}"
+        title = QLabel(title_text)
         title.setStyleSheet(
             f"color:{C['text']}; font-size:16px; font-weight:800; letter-spacing:1.5px;"
+            + (" color: #fbbf24;" if _is_beta_tb else "")
         )
-        sub = QLabel("FRP bypass · screen lock · download mode & ADB tooling")
+        sub = QLabel("FRP bypass · screen lock · download mode & ADB tooling"
+                     + ("  •  BETA build" if _is_beta_tb else ""))
         sub.setStyleSheet(
             f"color:{C['mute']}; font-size:10px;"
             f" font-family:'JetBrains Mono','Consolas',monospace;"
@@ -2924,6 +3035,26 @@ class FrpWindow(QMainWindow):
         tb.addLayout(title_box)
 
         tb.addStretch(1)
+
+        # Global Stop — single button outside any chip card, stops ANY process
+        self.global_stop_btn = QPushButton("⏹  STOP")
+        self.global_stop_btn.setEnabled(False)
+        self.global_stop_btn.setStyleSheet(
+            "QPushButton { color: #ffffff; background: #334155; border: 1px solid #475569; border-radius: 8px; padding: 6px 16px; font-weight: 900; font-size: 12px; letter-spacing: 0.8px; }"
+            "QPushButton:enabled { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #dc2626, stop:1 #ef4444); border-color: #ef4444; }"
+            "QPushButton:hover:enabled { background: #ef4444; border-color: #f87171; }"
+            "QPushButton:disabled { color: #64748b; background: #1e293b; border-color: #334155; }"
+        )
+        self.global_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.global_stop_btn.setToolTip("Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD")
+        self.global_stop_btn.clicked.connect(self.on_stop)
+        self.global_stop_btn.setFixedHeight(32)
+        self.global_stop_btn.setMinimumWidth(110)
+        tb.addWidget(self.global_stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # Auto-sync: single global STOP reflects any chip flow (same _FLOW_LABEL)
+        self._global_stop_timer = QTimer(self)
+        self._global_stop_timer.timeout.connect(lambda: self.global_stop_btn.setEnabled(_FLOW_LABEL[0] is not None))
+        self._global_stop_timer.start(150)
 
         self.badge = ModeBadge()
         tb.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -3102,6 +3233,8 @@ class FrpWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.on_stop)
         self.stop_btn.setToolTip("Cancel the running operation")
         top_row.addWidget(self.stop_btn)
+        # Legacy per-chip Stop hidden — global STOP in titlebar is the single entry point
+        self.stop_btn.setVisible(False)
         lay.addLayout(top_row)
 
         # TFT-style sub-tabs so the operations are split into focused views
@@ -4274,28 +4407,36 @@ class FrpWindow(QMainWindow):
     def _adb_triage(self):
         """Probe connected ADB device: lock state, root, partition access."""
         if not _flow_start("ADB triage", destructive=False):
-            self.show_toast(_flow_busy_msg(), "warning")
+            try:
+                self.show_toast(_flow_busy_msg(), "warning")
+            except Exception:
+                pass
             return
 
         def work():
             lines = []
-            emit = lambda m: self._ui.line.emit(m)
+            emit = lambda m: self._ui.line.emit(m) if hasattr(self, "_ui") else None
+            enforced = False
+            su = ""
             try:
-                devs = [d for d in bridge.adb_status() if d["state"] == "device"]
+                try:
+                    devs = bridge.adb_status()
+                except Exception as e:
+                    self._ui.ui.emit(lambda _e=str(e): self.show_toast("ADB unavailable", _e, "error"))
+                    return
+                devs = [d for d in devs if d.get("state") == "device"]
                 if not devs:
                     self._ui.ui.emit(lambda: self.show_toast(
                         "No authorized ADB device", "Enable ADB first", "warning"))
+                    emit("[warn] ADB triage: no authorized device — enable USB debugging and tap Allow")
                     return
-                serial = devs[0]["serial"]
+                serial = devs[0].get("serial", "?")
                 sh = lambda c: bridge.adb_shell(c, timeout=10).strip()
                 lines.append("=" * 60)
                 lines.append("ADB DEVICE TRIAGE")
                 lines.append("=" * 60)
                 lines.append(f"Serial : {serial}")
 
-                model = ""
-                brand = ""
-                android = ""
                 try:
                     model = sh("getprop ro.product.model")
                     brand = sh("getprop ro.product.brand")
@@ -4309,14 +4450,14 @@ class FrpWindow(QMainWindow):
                     lines.append(f"(prop read failed: {e})")
 
                 # root check
-                su = ""
                 try:
                     su = sh("su -c id")
                 except Exception:
-                    pass
+                    su = ""
                 lines.append(f"Root   : {'YES' if 'uid=0' in su else 'no'}")
 
                 # lock enforcement - Quality 0 means no security enforced
+                enforced = False
                 try:
                     lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10)
                     quality = None
@@ -4326,11 +4467,12 @@ class FrpWindow(QMainWindow):
                             quality = ln.split("Quality:")[1].strip()
                         if "CredentialType:" in ln:
                             ctype = ln.split("CredentialType:")[1].strip()
-                    enforced = quality not in ("0", None)
+                    enforced = quality not in ("0", None, "")
                     lines.append(f"Lock   : type={ctype} quality={quality} -> "
                                  f"{'ENFORCED (needs bypass)' if enforced else 'NOT ENFORCED (device open)'}")
                 except Exception as e:
                     lines.append(f"Lock   : unknown ({e})")
+                    enforced = False
 
                 # partition access
                 can_dd = False
@@ -4355,7 +4497,7 @@ class FrpWindow(QMainWindow):
                 lines.append("")
                 if not enforced:
                     lines.append("VERDICT: Device is open. Proceed with data/FRP work directly.")
-                elif su:
+                elif su and "uid=0" in su:
                     lines.append("VERDICT: Rooted. Remove lock via locksettings clear or /data/system.")
                 else:
                     lines.append("VERDICT: Locked without root. Use boot.img patch (spd_adb.py),")
@@ -4363,15 +4505,26 @@ class FrpWindow(QMainWindow):
 
                 text = "\n".join(lines)
                 emit(text)
-                self._ui.ui.emit(lambda t=text: (
-                    self._append_console(t),
-                    self._pit_view.setPlainText(t[-1800:]),
-                ))
+                # Update pit_view on UI thread (secondary view); primary log already via emit
+                def _update_view(t=text):
+                    try:
+                        if hasattr(self, "_pit_view") and self._pit_view:
+                            self._pit_view.setPlainText(t[-1800:])
+                    except Exception:
+                        pass
+                self._ui.ui.emit(_update_view)
             except Exception as e:
                 err = str(e)
-                self._ui.ui.emit(lambda m=err: self.show_toast("Triage failed", m, "error"))
+                try:
+                    self._ui.ui.emit(lambda m=err: self.show_toast("Triage failed", m, "error"))
+                    emit(f"[error] Triage failed: {err}")
+                except Exception:
+                    pass
             finally:
-                _flow_end()
+                try:
+                    _flow_end()
+                except Exception:
+                    pass
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5034,6 +5187,7 @@ class FrpWindow(QMainWindow):
         self.mtk_stop_btn.clicked.connect(self._mtk_stop)
         self.mtk_stop_btn.setToolTip("Cancel the running MTK operation")
         acts_row2.addWidget(self.mtk_stop_btn)
+        self.mtk_stop_btn.setVisible(False)
         acts.addLayout(acts_row2)
         acts_row3 = QHBoxLayout()
         acts_row3.setSpacing(10)
@@ -5715,6 +5869,7 @@ class FrpWindow(QMainWindow):
         self.qc_stop_btn.clicked.connect(self._qc_stop)
         self.qc_stop_btn.setToolTip("Cancel the running Qualcomm operation")
         acts_row2.addWidget(self.qc_stop_btn)
+        self.qc_stop_btn.setVisible(False)
         acts.addLayout(acts_row2)
         lay.addLayout(acts)
 
@@ -6047,58 +6202,143 @@ class FrpWindow(QMainWindow):
             ),
         )
 
-    def _confirm_overlay(self, title, text, confirm_label, on_confirm):
-        """Non-blocking in-window confirmation. The native QMessageBox modal
-        can hang on frameless/translucent Wayland windows, so we render our
-        own dimmed overlay card (same approach as the toast system)."""
+    def _confirm_overlay(self, title, text, confirm_label, on_confirm, chip=None):
+        """Big centered confirmation — same UX as beta/update dialogs (620px,
+        draggable, high-contrast, X to close). Color is chip-based so flashing
+        vs high-risk operations are instantly distinguishable."""
+        # Chip → pill + gradient (base on chip)
+        chip_map = {
+            "mtk": ("MTK", ("#f59e0b", "#ea580c")),
+            "mediatek": ("MTK", ("#f59e0b", "#ea580c")),
+            "qualcomm": ("QUALCOMM", ("#dc2626", "#f97316")),
+            "qcom": ("QUALCOMM", ("#dc2626", "#f97316")),
+            "edl": ("QUALCOMM", ("#dc2626", "#f97316")),
+            "firehose": ("QUALCOMM", ("#dc2626", "#f97316")),
+            "spd": ("SPD", ("#8b5cf6", "#a78bfa")),
+            "unisoc": ("SPD", ("#8b5cf6", "#a78bfa")),
+            "spreadtrum": ("SPD", ("#8b5cf6", "#a78bfa")),
+            "frp": ("FRP", ("#ef4444", "#f97316")),
+            "mdm": ("MDM", ("#ef4444", "#f97316")),
+            "wipe": ("WIPE", ("#ef4444", "#dc2626")),
+            "nvram": ("NVRAM", ("#8b5cf6", "#ec4899")),
+            "lock": ("LOCK", ("#f59e0b", "#ef4444")),
+            "samsung": ("SAMSUNG", ("#0ea5e9", "#22d3ee")),
+            "odin": ("SAMSUNG", ("#0ea5e9", "#22d3ee")),
+            "flash": ("FLASH", ("#0ea5e9", "#22d3ee")),
+        }
+        detected_chip = chip or ""
+        if not detected_chip:
+            low = f"{title} {text} {confirm_label}".lower()
+            for k in chip_map:
+                if k in low:
+                    detected_chip = k
+                    break
+            if not detected_chip:
+                # Heuristic: flashing / risk keywords
+                if "flash" in low or "odin" in low:
+                    detected_chip = "samsung"
+                elif "frp" in low or "mdm" in low or "erase" in low or "wipe" in low:
+                    detected_chip = "frp"
+                else:
+                    detected_chip = "flash"
+        pill_text, grad = chip_map.get(detected_chip, ("FLASH", ("#0ea5e9", "#22d3ee")))
+        accent = grad[0]
+
         overlay = QFrame(self._root)
         overlay.setObjectName("confirmOverlay")
-        overlay.setStyleSheet(
-            f"QFrame#confirmOverlay {{ background: rgba(5, 8, 13, 185);"
-            f" border-radius: 18px; }}"
-        )
+        overlay.setStyleSheet("QFrame#confirmOverlay { background: rgba(4, 9, 18, 215); border-radius: 18px; }")
         overlay.setGeometry(0, 0, self._root.width(), self._root.height())
 
         card = QFrame(overlay)
         card.setObjectName("confirmCard")
-        card.setFixedWidth(400)
+        card.setFixedWidth(620)
+        card.setMinimumHeight(300)
         card.setStyleSheet(
-            f"QFrame#confirmCard {{ background: {C['card']};"
-            f" border: 1px solid {C['border_hi']}; border-radius: 14px; }}"
+            f"QFrame#confirmCard {{ background: {C['card']}; border: 1px solid {accent}; border-top: 2px solid {accent}; border-radius: 16px; }}"
         )
         shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(36)
-        shadow.setOffset(0, 10)
-        shadow.setColor(QColor(0, 0, 0, 180))
+        shadow.setBlurRadius(42)
+        shadow.setOffset(0, 14)
+        shadow.setColor(QColor(0, 0, 0, 220))
         card.setGraphicsEffect(shadow)
+        card._drag_pos = None  # type: ignore
 
         v = QVBoxLayout(card)
-        v.setContentsMargins(22, 20, 22, 18)
+        v.setContentsMargins(26, 18, 26, 20)
         v.setSpacing(14)
 
-        t = QLabel(title)
-        t.setStyleSheet(
-            f"color:{C['text']}; font-size:15px; font-weight:800;"
+        # Header with pill + title + X (draggable)
+        hdr_wrap = QFrame()
+        hdr_wrap.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_wrap)
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(10)
+        pill = QLabel(f" {pill_text} ")
+        pill.setStyleSheet(
+            f"color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[0]}, stop:1 {grad[1]});"
+            " border-radius: 7px; padding: 4px 12px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
         )
-        v.addWidget(t)
+        pill.setFixedHeight(24)
+        hdr.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        t = QLabel(title)
+        t.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 800;")
+        t.setWordWrap(True)
+        hdr.addWidget(t, 1)
+        x_btn = QPushButton("✕")
+        x_btn.setFixedSize(28, 28)
+        x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        x_btn.setStyleSheet(
+            "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
+            "QPushButton:hover { background: #334155; color: #ffffff; }"
+        )
+        x_btn.setToolTip("Close")
+        hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
+        v.addWidget(hdr_wrap)
+
+        # Draggable header
+        def _start_drag(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                card._drag_pos = e.globalPosition().toPoint() - card.pos()  # type: ignore
+
+        def _do_drag(e):
+            if getattr(card, "_drag_pos", None) is not None and e.buttons() & Qt.MouseButton.LeftButton:
+                np = e.globalPosition().toPoint() - card._drag_pos  # type: ignore
+                np.setX(max(0, min(np.x(), overlay.width() - card.width())))
+                np.setY(max(0, min(np.y(), overlay.height() - card.height())))
+                card.move(np)
+
+        def _end_drag(e):
+            card._drag_pos = None  # type: ignore
+
+        for wdg in (hdr_wrap, t, pill):
+            wdg.setCursor(Qt.CursorShape.OpenHandCursor)
+            wdg.mousePressEvent = _start_drag  # type: ignore
+            wdg.mouseMoveEvent = _do_drag  # type: ignore
+            wdg.mouseReleaseEvent = _end_drag  # type: ignore
 
         m = QLabel(text)
-        m.setStyleSheet(f"color:{C['dim']}; font-size:12px; line-height:140%;")
+        m.setStyleSheet("color: #e2e8f0; font-size: 13px; font-weight: 500; line-height: 145%;")
         m.setWordWrap(True)
+        m.setTextFormat(Qt.TextFormat.PlainText)
         v.addWidget(m)
 
         btns = QHBoxLayout()
-        btns.setSpacing(10)
+        btns.setSpacing(12)
 
         cancel = QPushButton("Cancel")
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(110)
+        cancel.setFixedWidth(120)
 
         ok = QPushButton(confirm_label)
-        ok.setStyleSheet(_btn_danger())
+        # Chip-colored confirm button (high-risk = red/orange, flash = blue)
+        ok.setStyleSheet(
+            f"QPushButton {{ color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[0]}, stop:1 {grad[1]});"
+            " border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+            f"QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[1]}, stop:1 {grad[0]}); }}"
+        )
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(140)
+        ok.setFixedWidth(180)
         ok.setFocus()
 
         def close():
@@ -6106,14 +6346,226 @@ class FrpWindow(QMainWindow):
             overlay.deleteLater()
 
         cancel.clicked.connect(close)
+        x_btn.clicked.connect(close)
         ok.clicked.connect(lambda: (close(), on_confirm()))
         btns.addStretch(1)
         btns.addWidget(cancel)
         btns.addWidget(ok)
         v.addLayout(btns)
 
-        # center the card inside the overlay (recomputed on resize)
         def center():
+            card.adjustSize()
+            max_h = overlay.height() - 32
+            if card.height() > max_h:
+                card.setFixedHeight(max_h)
+            card.move((overlay.width() - card.width()) // 2, (overlay.height() - card.height()) // 2)
+
+        def on_resize(e):
+            QFrame.resizeEvent(overlay, e)
+            center()
+
+        overlay.resizeEvent = on_resize  # type: ignore
+        center()
+        overlay.show()
+        overlay.raise_()
+        ok.setFocus()
+
+    def _show_beta_risk_dialog(self, cur, stable_tag):
+        """Beta acceptance gate — replaces the easy-to-miss toast.
+
+        Shows a blocking in-window card that requires an explicit
+        'I accept the risk' checkbox. Persists per-version acceptance in
+        QSettings so the user is not nagged every launch, but each new
+        beta version requires a fresh acceptance. Text is rendered at
+        high contrast (no translucency blur) so it never looks
+        'out of focus'."""
+        key = f"beta_risk_accepted_{cur}"
+        if self.settings.value(key, False, type=bool):
+            return
+        # Settings: first_install (default) shows once per beta version,
+        # every_boot shows on every launch. Bigger than toast (320px) -> 620px.
+        mode = self.settings.value("beta_warning_mode", "first_install")
+        if mode == "first_install" and self.settings.value(key, False, type=bool):
+            return
+        # Prevent stacking multiple beta dialogs if update check fires twice
+        if getattr(self, "_beta_dialog_open", False):
+            return
+        self._beta_dialog_open = True
+
+        overlay = QFrame(self._root)
+        overlay.setObjectName("betaOverlay")
+        overlay.setStyleSheet(
+            "QFrame#betaOverlay { background: rgba(4, 9, 18, 215); border-radius: 18px; }"
+        )
+        overlay.setGeometry(0, 0, self._root.width(), self._root.height())
+
+        card = QFrame(overlay)
+        card.setObjectName("betaCard")
+        card.setFixedWidth(620)
+        card.setMinimumHeight(380)
+        card.setStyleSheet(
+            f"QFrame#betaCard {{ background: {C['card']};"
+            f" border: 1px solid #f59e0b; border-top: 2px solid #f59e0b; border-radius: 16px; }}"
+        )
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(42)
+        shadow.setOffset(0, 14)
+        shadow.setColor(QColor(0, 0, 0, 220))
+        card.setGraphicsEffect(shadow)
+        # Make card movable — drag the header
+        card._drag_pos = None  # type: ignore
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(26, 18, 26, 22)
+        v.setSpacing(14)
+
+        # Header row with BETA pill + title + X close (all high-contrast, draggable)
+        hdr_wrap = QFrame()
+        hdr_wrap.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_wrap)
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(10)
+        pill = QLabel(" BETA ")
+        pill.setStyleSheet(
+            "color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #f59e0b, stop:1 #dc2626);"
+            " border-radius: 7px; padding: 3px 10px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
+        )
+        pill.setFixedHeight(24)
+        hdr.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        title = QLabel("Pre-release build — accept the risk to continue")
+        title.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 800;")
+        title.setWordWrap(True)
+        hdr.addWidget(title, 1)
+        # X button — closes app (same as Cancel/Exit per spec)
+        x_btn = QPushButton("✕")
+        x_btn.setFixedSize(28, 28)
+        x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        x_btn.setStyleSheet(
+            "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
+            "QPushButton:hover { background: #dc2626; color: #ffffff; border-color: #dc2626; }"
+        )
+        x_btn.setToolTip("Exit application")
+        hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
+        v.addWidget(hdr_wrap)
+        # Make header draggable
+        def _start_drag(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                card._drag_pos = e.globalPosition().toPoint() - card.pos()  # type: ignore
+        def _do_drag(e):
+            if getattr(card, "_drag_pos", None) is not None and e.buttons() & Qt.MouseButton.LeftButton:
+                np = e.globalPosition().toPoint() - card._drag_pos  # type: ignore
+                np.setX(max(0, min(np.x(), overlay.width() - card.width())))
+                np.setY(max(0, min(np.y(), overlay.height() - card.height())))
+                card.move(np)
+        def _end_drag(e):
+            card._drag_pos = None  # type: ignore
+        # Attach to header area (hdr_wrap) and also card for convenience
+        for wdg in (hdr_wrap, title, pill):
+            wdg.setCursor(Qt.CursorShape.OpenHandCursor)
+            wdg.mousePressEvent = _start_drag  # type: ignore
+            wdg.mouseMoveEvent = _do_drag  # type: ignore
+            wdg.mouseReleaseEvent = _end_drag  # type: ignore
+
+        # Version line — installed (downloaded) vs latest stable on GitHub (dynamic, never hand-coded)
+        disp_cur = _display_version(cur)
+        disp_stable = _display_version(stable_tag) if stable_tag else "none yet"
+        ver_line = QLabel(
+            f"You downloaded <b style='color:#fbbf24;'>{cur}</b>  (display v{disp_cur}).<br>"
+            f"Latest <b>stable</b> on GitHub is <b style='color:#7dd3fc;'>{stable_tag or '—'}</b> (display v{disp_stable})."
+        )
+        ver_line.setTextFormat(Qt.TextFormat.RichText)
+        ver_line.setWordWrap(True)
+        ver_line.setStyleSheet("color: #e2e8f0; font-size: 13px; font-weight: 600; line-height: 145%;")
+        v.addWidget(ver_line)
+
+        body = QLabel(
+            "Beta builds are for testing only. They may contain bugs, incomplete\n"
+            "features, or instabilities that can affect flashing and device data.\n\n"
+            "• Back up your device and firmware before flashing\n"
+            "• Do not use a beta on a primary / daily-driver phone\n"
+            "• Report issues at github.com/Legendary-Brilliantforous/flashpilot"
+        )
+        body.setStyleSheet("color: #e2e8f0; font-size: 12.5px; font-weight: 500; letter-spacing: 0.2px;")
+        body.setWordWrap(True)
+        v.addWidget(body)
+
+        # Checkbox gate — must be high-contrast
+        from PyQt6.QtWidgets import QCheckBox
+
+        cb = QCheckBox("I understand this beta may be unstable and I accept the risk.")
+        cb.setStyleSheet(
+            "QCheckBox { color: #f8fafc; font-size: 12.5px; font-weight: 700; spacing: 10px; }"
+            "QCheckBox::indicator { width: 19px; height: 19px; border: 1px solid #64748b; border-radius: 5px; background: #0f172a; }"
+            "QCheckBox::indicator:checked { background: #f59e0b; border-color: #f59e0b; image: none; }"
+        )
+        v.addWidget(cb)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(12)
+        cancel = QPushButton("Exit")
+        cancel.setStyleSheet(_btn_ghost())
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.setFixedWidth(120)
+        cancel.setToolTip("Close the application")
+        accept = QPushButton("OK — I Accept")
+        accept.setEnabled(False)
+        accept.setStyleSheet(
+            "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #f59e0b, stop:1 #ea580c);"
+            " border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+            "QPushButton:disabled { background: #334155; color: #94a3b8; }"
+            "QPushButton:hover:!disabled { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #fbbf24, stop:1 #f59e0b); }"
+        )
+        accept.setCursor(Qt.CursorShape.PointingHandCursor)
+        accept.setFixedWidth(190)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(accept)
+        v.addLayout(btns)
+
+        hint = QLabel("Tip: you can change this in Settings → Updates → Beta warning (first install / every boot).")
+        hint.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        hint.setWordWrap(True)
+        v.addWidget(hint)
+
+        def close_only():
+            overlay.hide()
+            overlay.deleteLater()
+            self._beta_dialog_open = False
+
+        def close_and_exit():
+            close_only()
+            # Spec: Exit/Cancel closes the app
+            QTimer.singleShot(50, lambda: self.close())
+
+        def on_accept():
+            if self.settings.value("beta_warning_mode", "first_install") == "first_install":
+                self.settings.setValue(key, True)
+            try:
+                self._ui.line.emit(f"[check] Beta risk accepted for {cur} — continuing")
+            except Exception:
+                pass
+            close_only()
+
+        def on_cancel():
+            try:
+                self._ui.line.emit(f"[check] Beta risk declined for {cur} — exiting")
+            except Exception:
+                pass
+            close_and_exit()
+
+        cb.toggled.connect(lambda checked: accept.setEnabled(checked))
+        cancel.clicked.connect(on_cancel)
+        x_btn.clicked.connect(on_cancel)
+        accept.clicked.connect(on_accept)
+
+        def center():
+            card.adjustSize()
+            # ensure card height fits overlay even on small screens, keep centered
+            max_h = overlay.height() - 32
+            if card.height() > max_h:
+                card.setFixedHeight(max_h)
+            else:
+                card.setMinimumHeight(360)
             card.move(
                 (overlay.width() - card.width()) // 2,
                 (overlay.height() - card.height()) // 2,
@@ -6124,6 +6576,130 @@ class FrpWindow(QMainWindow):
             center()
 
         overlay.resizeEvent = on_resize
+        center()
+        overlay.show()
+        overlay.raise_()
+        cb.setFocus()
+
+    def _show_centered_notice(self, title, message, pill="INFO", pill_grad=(" #0ea5e9", "#22d3ee"), ok_label="OK"):
+        """Generic big centered notice for stable channels — same UX as beta
+        dialog (620px, draggable, X to close, high-contrast text) so stable
+        toasts don't look 'not good enough' next to the beta gate."""
+        # Dedupe rapid re-entry (manual + auto firing together)
+        if getattr(self, "_centered_open", False):
+            return
+        self._centered_open = True  # type: ignore
+        overlay = QFrame(self._root)
+        overlay.setObjectName("centeredOverlay")
+        overlay.setStyleSheet("QFrame#centeredOverlay { background: rgba(4, 9, 18, 205); border-radius: 18px; }")
+        overlay.setGeometry(0, 0, self._root.width(), self._root.height())
+
+        card = QFrame(overlay)
+        card.setObjectName("centeredCard")
+        card.setFixedWidth(600)
+        card.setMinimumHeight(260)
+        accent = pill_grad[0].strip()
+        card.setStyleSheet(
+            f"QFrame#centeredCard {{ background: {C['card']}; border: 1px solid {accent}; border-top: 2px solid {accent}; border-radius: 16px; }}"
+        )
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(40)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(0, 0, 0, 210))
+        card.setGraphicsEffect(shadow)
+        card._drag_pos = None  # type: ignore
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(26, 18, 26, 20)
+        v.setSpacing(14)
+
+        hdr_wrap = QFrame()
+        hdr_wrap.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_wrap)
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(10)
+        pill_lbl = QLabel(f" {pill} ")
+        # pill_grad contains two stops
+        pill_lbl.setStyleSheet(
+            f"color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {pill_grad[0]}, stop:1 {pill_grad[1]});"
+            " border-radius: 7px; padding: 4px 12px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
+        )
+        pill_lbl.setFixedHeight(24)
+        hdr.addWidget(pill_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        t = QLabel(title)
+        t.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 800;")
+        t.setWordWrap(True)
+        hdr.addWidget(t, 1)
+        x_btn = QPushButton("✕")
+        x_btn.setFixedSize(28, 28)
+        x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        x_btn.setStyleSheet(
+            "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
+            "QPushButton:hover { background: #334155; color: #ffffff; }"
+        )
+        hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
+        v.addWidget(hdr_wrap)
+
+        # Draggable header
+        def _start_drag(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                card._drag_pos = e.globalPosition().toPoint() - card.pos()  # type: ignore
+
+        def _do_drag(e):
+            if getattr(card, "_drag_pos", None) is not None and e.buttons() & Qt.MouseButton.LeftButton:
+                np = e.globalPosition().toPoint() - card._drag_pos  # type: ignore
+                np.setX(max(0, min(np.x(), overlay.width() - card.width())))
+                np.setY(max(0, min(np.y(), overlay.height() - card.height())))
+                card.move(np)
+
+        def _end_drag(e):
+            card._drag_pos = None  # type: ignore
+
+        for wdg in (hdr_wrap, t, pill_lbl):
+            wdg.setCursor(Qt.CursorShape.OpenHandCursor)
+            wdg.mousePressEvent = _start_drag  # type: ignore
+            wdg.mouseMoveEvent = _do_drag  # type: ignore
+            wdg.mouseReleaseEvent = _end_drag  # type: ignore
+
+        msg = QLabel(message)
+        msg.setWordWrap(True)
+        msg.setTextFormat(Qt.TextFormat.PlainText)
+        msg.setStyleSheet("color: #e2e8f0; font-size: 13px; font-weight: 500; line-height: 145%;")
+        v.addWidget(msg)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(12)
+        ok = QPushButton(ok_label)
+        ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok.setFixedWidth(160)
+        ok.setStyleSheet(
+            "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0ea5e9, stop:1 #22d3ee); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+            "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #38bdf8, stop:1 #22d3ee); }"
+        )
+        btns.addStretch(1)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+
+        def close():
+            overlay.hide()
+            overlay.deleteLater()
+            self._centered_open = False  # type: ignore
+
+        x_btn.clicked.connect(close)
+        ok.clicked.connect(close)
+
+        def center():
+            card.adjustSize()
+            max_h = overlay.height() - 32
+            if card.height() > max_h:
+                card.setFixedHeight(max_h)
+            card.move((overlay.width() - card.width()) // 2, (overlay.height() - card.height()) // 2)
+
+        def on_resize(e):
+            QFrame.resizeEvent(overlay, e)
+            center()
+
+        overlay.resizeEvent = on_resize  # type: ignore
         center()
         overlay.show()
         overlay.raise_()
@@ -6260,6 +6836,7 @@ class FrpWindow(QMainWindow):
         self.spd_stop_btn.clicked.connect(self._spd_stop)
         self.spd_stop_btn.setToolTip("Cancel the running SPD operation")
         acts_row2.addWidget(self.spd_stop_btn)
+        self.spd_stop_btn.setVisible(False)
         acts.addLayout(acts_row2)
 
         # Reboot targets row (commercial-style: Recovery / Fastboot / Normal)
@@ -7693,6 +8270,18 @@ class FrpWindow(QMainWindow):
             self._apply_patch_btn,
         )
 
+        # Beta warning frequency — first_install (default) vs every_boot
+        self._beta_every_boot = self._settings_switch()
+        self._beta_every_boot.setChecked(
+            self.settings.value("beta_warning_mode", "first_install") == "every_boot"
+        )
+        self._beta_every_boot.toggled.connect(self._apply_beta_warning_mode)
+        self._settings_row(
+            bl, "Beta warning on every boot",
+            "ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version.",
+            self._beta_every_boot,
+        )
+
         lay.addStretch(1)
         return page
 
@@ -7727,6 +8316,12 @@ class FrpWindow(QMainWindow):
         self.settings.setValue("clear_on_run", on)
         if getattr(self, "clear_on_run", None) is not None:
             self.clear_on_run.setChecked(on)
+
+    def _apply_beta_warning_mode(self, on):
+        # on==True => every_boot, off => first_install (default)
+        mode = "every_boot" if on else "first_install"
+        self.settings.setValue("beta_warning_mode", mode)
+        self._ui.line.emit(f"[settings] beta warning mode -> {mode}")
 
     # --- Appearance --------------------------------------------------------
     def _build_settings_appearance(self):
@@ -7904,9 +8499,35 @@ class FrpWindow(QMainWindow):
             f"color:{C['text']}; font-size:17px; font-weight:800; letter-spacing:1px;"
         )
         cl.addWidget(name)
-        ver = QLabel("Version 1.2  ·  Rust core + PyQt6")
+        _disp = _display_version(APP_VERSION)
+        _beta = _is_beta_version(APP_VERSION)
+        ver_text = f"Version {_disp}  ·  Rust core + PyQt6"
+        if _beta:
+            ver_text += "  ·  BETA"
+            # Beta pill badge
+            badge = QLabel("  BETA  ")
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setStyleSheet(
+                "color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                " stop:0 #f59e0b, stop:1 #dc2626);"
+                " border-radius: 6px; padding: 2px 8px; font-size: 9px; font-weight: 800; letter-spacing: 1px;"
+            )
+            # container for badge
+            badge_wrap = QHBoxLayout()
+            badge_wrap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge_wrap.addStretch()
+            badge_wrap.addWidget(badge)
+            badge_wrap.addStretch()
+            bw = QWidget()
+            bw.setLayout(badge_wrap)
+            bw.setStyleSheet("background: transparent;")
+            cl.addWidget(bw)
+        ver = QLabel(ver_text)
         ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ver.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        ver.setStyleSheet(
+            f"color:{C['dim']}; font-size:11px;"
+            + (" color: #fbbf24;" if _beta else "")
+        )
         cl.addWidget(ver)
         tag = QLabel(
             "Samsung · MediaTek · Qualcomm low-level flashing & repair\n"
@@ -7989,9 +8610,26 @@ class FrpWindow(QMainWindow):
                     body = resp.read().decode("utf-8")
             except Exception as net_err:
                 if hasattr(self, "_ui") and self._ui:
-                    self._ui.line.emit(f"[check] Failed to reach GitHub API: {net_err}")
+                    err_str = str(net_err).lower()
+                    is_offline = any(k in err_str for k in (
+                        "name resolution", "temporary failure", "network is unreachable",
+                        "no route to host", "connection refused", "timed out",
+                        "timeout", "offline", "name or service not known",
+                        "getaddrinfo failed", "network unreachable"
+                    )) or isinstance(net_err, OSError)
+                    if is_offline:
+                        self._ui.line.emit("[check] Offline — no internet connection, skipping update check.")
+                    else:
+                        self._ui.line.emit(f"[check] Could not reach update server: {net_err}")
                     if not getattr(self, "_last_check_was_auto", False):
-                        self._ui.ui.emit(lambda _e=net_err: self._toasts.show_warn("Update check", f"Could not connect to update server: {_e}"))
+                        if is_offline:
+                            self._ui.ui.emit(lambda: self._toasts.show_info(
+                                "Offline",
+                                "No internet connection — could not check for updates.\n"
+                                "Your installed version remains available offline."
+                            ))
+                        else:
+                            self._ui.ui.emit(lambda _e=net_err: self._toasts.show_warn("Update check", f"Could not connect to update server: {_e}"))
                 return
 
             releases = json.loads(body)
@@ -8004,18 +8642,31 @@ class FrpWindow(QMainWindow):
 
             from python.core import APP_VERSION as current
             current_tuple, current_alpha = _parse_version(current)
+            # Filter drafts and pick the *highest version* on each channel, not
+            # just releases[0] (API order is publish date, not semver).
+            def _pick_latest(cands):
+                best = None
+                best_t = (0, 0, 0)
+                best_alpha = ""
+                for r in cands:
+                    tag = r.get("tag_name", "").lstrip("v")
+                    t, a = _parse_version(tag)
+                    if t > best_t or (t == best_t and not best_alpha and a):
+                        # prefer higher numeric; for equal numeric keep first seen
+                        best, best_t, best_alpha = r, t, a
+                return best
 
-            stables = [r for r in releases if not r.get("prerelease", False)]
-            betas = [r for r in releases if r.get("prerelease", False)]
+            stables = [r for r in releases if not r.get("prerelease", False) and not r.get("draft", False)]
+            betas = [r for r in releases if r.get("prerelease", False) and not r.get("draft", False)]
 
-            latest_stable = stables[0] if stables else None
-            latest_beta = betas[0] if betas else None
+            latest_stable = _pick_latest(stables) if stables else None
+            latest_beta = _pick_latest(betas) if betas else None
 
             stable_tag = latest_stable.get("tag_name", "").lstrip("v") if latest_stable else ""
             beta_tag = latest_beta.get("tag_name", "").lstrip("v") if latest_beta else ""
 
             stable_tuple, _ = _parse_version(stable_tag) if stable_tag else ((0, 0, 0), "")
-            beta_tuple, _ = _parse_version(beta_tag) if beta_tag else ((0, 0, 0), "")
+            beta_tuple, beta_alpha = _parse_version(beta_tag) if beta_tag else ((0, 0, 0), "")
 
             auto_download = self.settings.value("auto_download_update", False, type=bool)
 
@@ -8027,47 +8678,39 @@ class FrpWindow(QMainWindow):
             newer_stable = bool(stable_tag) and (
                 stable_tuple > current_tuple or promote_to_stable
             )
+            ahead_of_stable = bool(stable_tag) and stable_tuple < current_tuple and not promote_to_stable
             # Beta upgrade only when numerically higher than what we run
             # (1.2.1-beta does not beat running 1.2.1; it beats 1.2.0).
-            newer_beta = bool(beta_tag) and beta_tuple > current_tuple
+            # Also treat same numeric but beta alpha newer (beta.1 -> beta.2) as update.
+            newer_beta = False
+            if beta_tag:
+                if beta_tuple > current_tuple:
+                    newer_beta = True
+                elif beta_tuple == current_tuple and current_alpha and beta_alpha != current_alpha:
+                    # same numeric but different prerelease (e.g. installed beta.1, beta.2 available)
+                    # stable (no alpha) is never upgraded to beta of same numeric
+                    newer_beta = beta_tag != current
 
-            # Check if user is running a beta version
+            # Check if user is running a beta version – always warn and show
+            # the real latest stable (1.2.0) vs beta (1.2.1-beta.1) distinction.
             if current_alpha:
                 # User is on beta - warn them and show stable version
                 if hasattr(self, "_ui") and self._ui:
                     try:
-                        self._ui.line.emit(f"[check] You are running beta version {current}")
+                        self._ui.line.emit(f"[check] You are running beta version {current} (latest stable is {stable_tag or 'unknown'})")
                     except Exception:
                         pass
                 
                 if stable_tag:
                     if hasattr(self, "_ui") and self._ui:
                         try:
-                            self._ui.line.emit(f"[check] Latest stable version is {stable_tag}")
-                        except Exception:
-                            pass
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda cur=current, stable=stable_tag: self._toasts.show_warn(
-                                "Beta version warning",
-                                f"You are running beta version {cur}.\n\n"
-                                f"⚠️ Warning: Beta versions may contain bugs and cause instability.\n\n"
-                                f"Latest stable version: {stable}\n\n"
-                                f"If you experience issues, consider switching to the stable version.\n\n"
-                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                            ))
+                            self._ui.ui.emit(lambda cur=current, stable=stable_tag: self._show_beta_risk_dialog(cur, stable))
                         except Exception:
                             pass
                 else:
                     if hasattr(self, "_ui") and self._ui:
                         try:
-                            self._ui.ui.emit(lambda cur=current: self._toasts.show_warn(
-                                "Beta version warning",
-                                f"You are running beta version {cur}.\n\n"
-                                f"⚠️ Warning: Beta versions may contain bugs and cause instability.\n\n"
-                                f"No stable version available yet.\n\n"
-                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                            ))
+                            self._ui.ui.emit(lambda cur=current: self._show_beta_risk_dialog(cur, ""))
                         except Exception:
                             pass
             
@@ -8075,7 +8718,7 @@ class FrpWindow(QMainWindow):
                 if hasattr(self, "_ui") and self._ui:
                     note = " (promotes your beta install)" if promote_to_stable else ""
                     try:
-                        self._ui.line.emit(f"[check] New stable version available: {stable_tag}{note}")
+                        self._ui.line.emit(f"[check] New stable version available: {stable_tag}{note} (you run {current})")
                     except Exception:
                         pass
                 latest_url = None
@@ -8100,49 +8743,86 @@ class FrpWindow(QMainWindow):
                                 pass
                 if hasattr(self, "_ui") and self._ui:
                     try:
-                        self._ui.ui.emit(lambda tag=stable_tag, ad=auto_download, url=latest_url: self._toasts.show_info(
+                        dl_msg = "Downloaded to ~/flashpilot_update.deb.\n\n" if auto_download and latest_url else ""
+                        self._ui.ui.emit(lambda tag=stable_tag, ad=dl_msg: self._show_centered_notice(
                             "Stable update available",
-                            f"New stable version {tag} is available.\n\n"
-                            f"{'Downloaded to ~/flashpilot_update.deb.\n\n' if ad and url else ''}"
-                            "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                            f"New stable version {tag} is available.\n\n{ad}Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                            pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
                         ))
                     except Exception:
                         pass
             else:
-                # No newer stable version
+                # No newer stable version – distinguish ahead / up-to-date / beta
                 if current_alpha:
-                    # User is on beta but no newer stable available
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.line.emit(f"[check] You are on beta version {current}, latest stable is {stable_tag or 'unknown'}")
-                        except Exception:
-                            pass
+                    # User is on beta
+                    if ahead_of_stable:
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] You are on beta {current}, ahead of latest stable {stable_tag or 'unknown'} — no stable update yet")
+                            except Exception:
+                                pass
+                    else:
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] You are on beta version {current}, latest stable is {stable_tag or 'unknown'}")
+                            except Exception:
+                                pass
                 else:
-                    # User is on latest stable
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.line.emit(f"[check] You are on the latest stable version ({current})")
-                        except Exception:
-                            pass
-                
-                # Check for beta availability even when on latest stable
-                if newer_beta and not current_alpha:
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.line.emit(f"[check] Beta version {beta_tag} is available for testing")
-                        except Exception:
-                            pass
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda tag=beta_tag: self._toasts.show_warn(
-                                "Beta version available",
-                                f"You are on the latest stable version ({current}).\n\n"
-                                f"Beta release {tag} is available for testing.\n\n"
-                                f"⚠️ Warning: Beta versions may contain bugs and should be used for testing only.\n\n"
-                                "Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                    if ahead_of_stable:
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] You are running {current} — ahead of latest stable {stable_tag} (pre-release/dev build)")
+                            except Exception:
+                                pass
+                        # For manual checks, still tell user they are ahead — centered, big, movable
+                        if not getattr(self, "_last_check_was_auto", False):
+                            self._ui.ui.emit(lambda cur=current, st=stable_tag: self._show_centered_notice(
+                                "Ahead of stable",
+                                f"You run {cur}, which is newer than the latest stable {st} on GitHub.\n"
+                                f"You're on a pre-release/dev build — stable updates will appear when published.",
+                                pill="AHEAD", pill_grad=("#8b5cf6", "#22d3ee"), ok_label="OK"
                             ))
-                        except Exception:
-                            pass
+                    else:
+                        # User is on latest stable
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] You are on the latest stable version ({current})")
+                            except Exception:
+                                pass
+                
+                # Beta channel notice
+                if newer_beta:
+                    if current_alpha:
+                        # Already on beta but newer beta available
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] Newer beta available: {beta_tag} (you run {current})")
+                            except Exception:
+                                pass
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.ui.emit(lambda tag=beta_tag, cur=current: self._show_centered_notice(
+                                    "Beta update available",
+                                    f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                ))
+                            except Exception:
+                                pass
+                    else:
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.line.emit(f"[check] Beta version {beta_tag} is available for testing (you run stable {current})")
+                            except Exception:
+                                pass
+                        if hasattr(self, "_ui") and self._ui:
+                            try:
+                                self._ui.ui.emit(lambda tag=beta_tag: self._show_centered_notice(
+                                    "Beta version available",
+                                    f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                ))
+                            except Exception:
+                                pass
                 
                 # Probe for python-tier drift (light patch) before
                 # declaring fully up-to-date. Silent on failure.
@@ -8157,15 +8837,21 @@ class FrpWindow(QMainWindow):
                             "use Settings > Apply Python Patch."
                         )
                         if not getattr(self, "_last_check_was_auto", False):
-                            self._ui.ui.emit(lambda: self._toasts.show_info(
+                            self._ui.ui.emit(lambda: self._show_centered_notice(
                                 "Light patch available",
-                                "Python-only changes detected.\nSettings > Apply Python Patch…"
+                                "Python-only changes detected.\nSettings → Apply Python Patch…",
+                                pill="PATCH", pill_grad=("#10b981", "#06b6d4"), ok_label="OK"
                             ))
                 except Exception:
                     pass
                 # Only pop up "Up to date" for manual checks; silent for auto
-                if not getattr(self, "_last_check_was_auto", False):
-                    self._ui.ui.emit(lambda cur=current: self._toasts.show_info("Up to date", f"FlashPilot {cur} is already installed."))
+                # and suppress when ahead of stable (we already showed Ahead dialog)
+                if not getattr(self, "_last_check_was_auto", False) and not ahead_of_stable:
+                    self._ui.ui.emit(lambda cur=current: self._show_centered_notice(
+                        "Up to date",
+                        f"FlashPilot {cur} is already installed — you are on the latest version.",
+                        pill="STABLE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
+                    ))
         except Exception as e:
             if hasattr(self, "_ui") and self._ui:
                 try:
@@ -8561,10 +9247,57 @@ class FrpWindow(QMainWindow):
         self._accent_strip.set_active(False)
 
     def _show_toast(self, kind, title, detail):
-        getattr(self._toasts, f"show_{kind}")(title, detail)
+        try:
+            getattr(self._toasts, f"show_{kind}")(title, detail)
+        except Exception:
+            # Fallback if toast host not yet ready
+            pass
+
+    # Compatibility alias: legacy code calls show_toast(title, kind) or
+    # show_toast(title, detail, kind). Normalizes to _show_toast.
+    def show_toast(self, title, detail_or_kind="", kind=None):
+        try:
+            # 3-arg form: show_toast(title, detail, kind)
+            if kind is not None:
+                detail = detail_or_kind
+                k = kind
+            else:
+                # 2-arg form: second arg may be kind (success/warning/error)
+                if detail_or_kind in ("success", "ok", "warn", "warning", "error", "err", "info"):
+                    k = detail_or_kind
+                    detail = ""
+                else:
+                    k = "info"
+                    detail = detail_or_kind
+            # normalize kind
+            if k in ("success", "ok"):
+                k = "ok"
+            elif k in ("warning", "warn"):
+                k = "warn"
+            elif k in ("error", "err"):
+                k = "err"
+            else:
+                k = "info" if k not in ("ok", "warn", "err", "info") else k
+            self._show_toast(k, str(title), str(detail) if detail else "")
+        except Exception:
+            pass
+
+    def _append_console(self, msg):
+        """Legacy alias – some flows called _append_console; wrap to log_line."""
+        try:
+            self.log_line(str(msg))
+        except Exception:
+            pass
 
     def _run_on_ui(self, fn):
-        fn()
+        try:
+            fn()
+        except Exception as e:
+            # Never let a UI callback crash the app – log and continue
+            try:
+                self.log_line(f"[error] UI callback failed: {e}")
+            except Exception:
+                pass
 
     # ----------------------------- device state ---------------------------
     def _on_device_state(self, state):
@@ -8965,7 +9698,7 @@ class FrpWindow(QMainWindow):
                         f"switch_to_diag() exposes the AT port"
                     )
                 else:
-                    lines.append("AT/control: no Samsung device for AT channel")
+                    lines.append("AT/control: — idle (no Samsung device connected)")
             except mtp.MtpError as e:
                 lines.append(f"AT/control: error - {e}")
 
@@ -10062,7 +10795,12 @@ class FrpWindow(QMainWindow):
 def _app_icon():
     """Window / taskbar icon: the packaged logo when present, else a drawn one.
     Resolves docs/logo_256.png in both the dev tree and the installed layout
-    (/usr/share/flashpilot/docs/)."""
+    (/usr/share/flashpilot/docs/). When running a beta build the icon is
+    always the generated logo with the BETA pill + display version so the
+    dock/taskbar itself advertises the channel."""
+    if _is_beta_version(APP_VERSION):
+        pix = _draw_logo(256)
+        return QIcon(pix)
     logo_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "..", "docs", "logo_256.png",

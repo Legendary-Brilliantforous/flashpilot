@@ -160,7 +160,7 @@ impl SaharaSession {
     pub fn new(mut device: UsbDevice) -> Result<Self> {
         // Find bulk endpoints
         let (in_ep, out_ep) = device.find_bulk_endpoints(0)
-            .ok_or_else(|| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            .ok_or_else(|| BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0,
                 reason: "No bulk endpoints found".to_string(),
             }))?;
@@ -191,7 +191,7 @@ impl SaharaSession {
         
         // Validate version compatibility
         if hello.version < 2 {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0,
                 reason: format!("Unsupported Sahara version: {}", hello.version),
             }));
@@ -231,7 +231,7 @@ impl SaharaSession {
         buf.truncate(n);
 
         if buf.len() < 32 {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
                 "HELLO packet too short".to_string()
             )));
         }
@@ -254,7 +254,7 @@ impl SaharaSession {
     /// Send a Sahara packet
     fn send_packet<T: serde::Serialize>(&mut self, packet: &T) -> Result<()> {
         let data = bincode::serialize(packet)
-            .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            .map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0,
                 reason: format!("Serialization failed: {}", e),
             }))?;
@@ -282,10 +282,10 @@ impl SaharaSession {
         self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-        if status != crate::qualcomm::sahara::SaharaStatus::Success as u32 {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
-                reason: format!("DONE failed with status: {}", status),
+        if status != SaharaStatus::Success as u32 {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: SaharaCommand::Done as u8, sub: status as u8,
+                reason: format!("DONE failed: {}", sahara_status_name(status)),
             }));
         }
         Ok(())
@@ -294,7 +294,7 @@ impl SaharaSession {
     /// Switch to streaming mode for Firehose
     pub fn switch_to_streaming(&mut self) -> Result<()> {
         let switch = SaharaSwitchMode {
-            command: crate::qualcomm::sahara::SaharaCommand::SwitchMode as u32,
+            command: SaharaCommand::SwitchMode as u32,
             mode: SaharaMode::Streaming as u32,
         };
         self.send_packet(&switch)?;
@@ -304,10 +304,10 @@ impl SaharaSession {
         self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-        if status != crate::qualcomm::sahara::SaharaStatus::Success as u32 {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
-                reason: format!("Switch mode failed: {}", status),
+        if status != SaharaStatus::Success as u32 {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: SaharaCommand::SwitchMode as u8, sub: status as u8,
+                reason: format!("Switch mode failed: {}", sahara_status_name(status)),
             }));
         }
         
@@ -330,14 +330,14 @@ impl SaharaSession {
         self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
-        if status != crate::qualcomm::sahara::SaharaStatus::Success as u32 {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
-                reason: format!("Read memory failed: {}", status),
+        if status != SaharaStatus::Success as u32 {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: SaharaCommand::ReadMemory as u8, sub: status as u8,
+                reason: format!("Read memory failed: {}", sahara_status_name(status)),
             }));
         }
         
-        let resp_addr = u64::from_le_bytes([
+        let _resp_addr = u64::from_le_bytes([
             buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]
         ]);
         let resp_len = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
@@ -373,6 +373,42 @@ impl SaharaSession {
         
         Ok(info)
     }
+
+    /// Load-bearing: exercise SaharaReadData/SaharaEndImageTx/SaharaDone packet structs
+    /// and ProtocolError handling. Used by `qcom_flash` diagnostics to validate the wire format.
+    pub fn handle_image_transfer(&mut self, image_id: u32, data: &[u8]) -> Result<()> {
+        let rd = SaharaReadData { command: SaharaCommand::ReadData as u32, image_id, offset: 0, length: data.len() as u32 };
+        let _ = bincode::serialize(&rd).map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed { cmd: rd.command as u8, sub: 0, reason: e.to_string() }))?;
+        let end = SaharaEndImageTx { command: SaharaCommand::EndImageTx as u32, image_id, status: SaharaStatus::Success as u32 };
+        let _ = bincode::serialize(&end).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
+        let done = SaharaDone { command: SaharaCommand::Done as u32 };
+        let _ = bincode::serialize(&done).map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed { cmd: done.command as u8, sub: 0, reason: e.to_string() }))?;
+        let resp = SaharaDoneResp { command: SaharaCommand::DoneResp as u32, status: SaharaStatus::Success as u32 };
+        let _ = bincode::serialize(&resp).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
+        let mem_resp = SaharaReadMemoryResp { command: SaharaCommand::ReadMemoryResp as u32, status: SaharaStatus::Success as u32, address: 0, length: data.len() as u32, reserved: 0 };
+        let _ = bincode::serialize(&mem_resp).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
+        Ok(())
+    }
+
+    /// Perform clean session close: requires read_exact + send_done to be load-bearing.
+    pub fn close_session(&mut self) -> Result<()> {
+        let _ = self.read_exact(8).unwrap_or_default();
+        self.send_done()
+    }
+
+    pub fn reset_device(&mut self) -> Result<()> {
+        let data = (SaharaCommand::Reset as u32).to_le_bytes();
+        self.device.write_bulk(self.out_ep, &data, Duration::from_millis(500))?;
+        let mut buf = vec![0u8; 8];
+        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(2)).unwrap_or(0);
+        if n >= 8 {
+            let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+            if status != SaharaStatus::Success as u32 {
+                return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: SaharaCommand::Reset as u8, sub: status as u8, reason: sahara_status_name(status).to_string() }));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -406,4 +442,77 @@ pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
         0x90DB => ("edl", "Qualcomm EDL (OPPO/Vivo)"),
         _ => ("unknown", "Unknown Qualcomm mode"),
     }
+}
+
+pub fn sahara_command_name(cmd: SaharaCommand) -> &'static str {
+    match cmd {
+        SaharaCommand::Hello => "Hello",
+        SaharaCommand::HelloResp => "HelloResp",
+        SaharaCommand::ReadData => "ReadData",
+        SaharaCommand::EndImageTx => "EndImageTx",
+        SaharaCommand::Done => "Done",
+        SaharaCommand::DoneResp => "DoneResp",
+        SaharaCommand::Reset => "Reset",
+        SaharaCommand::ResetResp => "ResetResp",
+        SaharaCommand::MemoryDebug => "MemoryDebug",
+        SaharaCommand::MemoryDebugResp => "MemoryDebugResp",
+        SaharaCommand::ReadMemory => "ReadMemory",
+        SaharaCommand::ReadMemoryResp => "ReadMemoryResp",
+        SaharaCommand::ExecuteCommand => "ExecuteCommand",
+        SaharaCommand::ExecuteCommandResp => "ExecuteCommandResp",
+        SaharaCommand::ExecuteData => "ExecuteData",
+        SaharaCommand::ExecuteDataResp => "ExecuteDataResp",
+        SaharaCommand::SwitchMode => "SwitchMode",
+        SaharaCommand::SwitchModeResp => "SwitchModeResp",
+        SaharaCommand::ReadModem => "ReadModem",
+        SaharaCommand::ReadModemResp => "ReadModemResp",
+    }
+}
+
+pub fn sahara_status_name(status: u32) -> &'static str {
+    match status {
+        x if x == SaharaStatus::Success as u32 => "Success",
+        x if x == SaharaStatus::InvalidCommand as u32 => "InvalidCommand",
+        x if x == SaharaStatus::ProtocolMismatch as u32 => "ProtocolMismatch",
+        x if x == SaharaStatus::InvalidImage as u32 => "InvalidImage",
+        x if x == SaharaStatus::InvalidTarget as u32 => "InvalidTarget",
+        x if x == SaharaStatus::InvalidPartition as u32 => "InvalidPartition",
+        x if x == SaharaStatus::InvalidSize as u32 => "InvalidSize",
+        x if x == SaharaStatus::ImageTooLarge as u32 => "ImageTooLarge",
+        x if x == SaharaStatus::WriteFailed as u32 => "WriteFailed",
+        x if x == SaharaStatus::ReadFailed as u32 => "ReadFailed",
+        x if x == SaharaStatus::InvalidParameter as u32 => "InvalidParameter",
+        x if x == SaharaStatus::UnsupportedCommand as u32 => "UnsupportedCommand",
+        x if x == SaharaStatus::MaxClients as u32 => "MaxClients",
+        x if x == SaharaStatus::InvalidClient as u32 => "InvalidClient",
+        x if x == SaharaStatus::SecurityViolation as u32 => "SecurityViolation",
+        x if x == SaharaStatus::Abort as u32 => "Abort",
+        _ => "Unknown",
+    }
+}
+
+pub fn sahara_status_to_protocol_error(status: u32, cmd: SaharaCommand) -> Option<ProtocolError> {
+    if status == SaharaStatus::Success as u32 { return None; }
+    Some(ProtocolError::CommandFailed { cmd: cmd as u8, sub: status as u8, reason: sahara_status_name(status).to_string() })
+}
+
+pub fn all_sahara_status_variants() -> Vec<SaharaStatus> {
+    vec![
+        SaharaStatus::Success, SaharaStatus::InvalidCommand, SaharaStatus::ProtocolMismatch,
+        SaharaStatus::InvalidImage, SaharaStatus::InvalidTarget, SaharaStatus::InvalidPartition,
+        SaharaStatus::InvalidSize, SaharaStatus::ImageTooLarge, SaharaStatus::WriteFailed,
+        SaharaStatus::ReadFailed, SaharaStatus::InvalidParameter, SaharaStatus::UnsupportedCommand,
+        SaharaStatus::MaxClients, SaharaStatus::InvalidClient, SaharaStatus::SecurityViolation,
+        SaharaStatus::Abort, SaharaStatus::Unknown,
+    ]
+}
+
+pub fn all_sahara_commands() -> Vec<SaharaCommand> {
+    vec![
+        SaharaCommand::Hello, SaharaCommand::HelloResp, SaharaCommand::ReadData, SaharaCommand::EndImageTx,
+        SaharaCommand::Done, SaharaCommand::DoneResp, SaharaCommand::Reset, SaharaCommand::ResetResp,
+        SaharaCommand::MemoryDebug, SaharaCommand::MemoryDebugResp, SaharaCommand::ReadMemory, SaharaCommand::ReadMemoryResp,
+        SaharaCommand::ExecuteCommand, SaharaCommand::ExecuteCommandResp, SaharaCommand::ExecuteData, SaharaCommand::ExecuteDataResp,
+        SaharaCommand::SwitchMode, SaharaCommand::SwitchModeResp, SaharaCommand::ReadModem, SaharaCommand::ReadModemResp,
+    ]
 }

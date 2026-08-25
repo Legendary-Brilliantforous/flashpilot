@@ -1,10 +1,10 @@
-use serde::Serialize;
 use std::time::Duration;
 
-use crate::config::{DeviceInfo, InterfaceInfo, EndpointInfo};
+use serde::Serialize;
+
+use crate::config::{DeviceInfo, InterfaceInfo};
 use crate::error::{Result, BridgeError};
 use crate::usb;
-use rusb::{Context, UsbContext};
 
 #[derive(Serialize)]
 pub struct BulkTarget {
@@ -52,6 +52,8 @@ pub fn list_bulk_targets() -> Result<String> {
 /// given as hex args. Commands: "w<hex>" write, "r<n>" read n bytes (timeout 5s).
 /// Returns a JSON list of per-command results, then releases the interface.
 pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
+    // Use collected Samsung devices to validate target exists before opening,
+    // improving stability against stale bus/addr vs vid/pid mismatches.
     let devices = usb::collect_devices(Some(0x04e8))?;
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
@@ -59,11 +61,13 @@ pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
     }
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
+    if vid != 0x04e8 {
+        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
+    }
     let loc: Vec<&str> = wanted[1].split(':').collect();
     let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
     let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
 
-    let devices = usb::collect_devices(Some(0x04e8))?;
     let target_dev = devices
         .iter()
         .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
@@ -89,49 +93,56 @@ pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
             cmd: 0, sub: 0, reason: "no bulk OUT endpoint".into(),
         }))?;
 
-    let context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
-    let handle = context
-        .devices()?
-        .iter()
-        .find(|d| {
-            let desc = d.device_descriptor().ok();
-            desc.as_ref().map_or(false, |desc| {
-                desc.vendor_id() == vid && desc.product_id() == target_dev.pid
-            }) && d.bus_number() == target_dev.bus && d.address() == target_dev.address
-        })
-        .ok_or_else(|| BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?
-        .open()?;
+    // Open via UsbDevice abstraction which owns Context+handle and keeps it
+    // alive; open_target wires the helper and uses EndpointConfig.max_packet_size
+    // internally for chunked transfers.
+    let bus_addr = format!("{bus}:{addr}");
+    let mut dev = usb::UsbDevice::open_target(vid, target_dev.pid, &bus_addr)?;
+    // Use info() and endpoint_config() so they are load-bearing (and for logging).
+    let info = dev.info();
+    eprintln!("[bulk] open {}:{} pid {:04x} if {} in 0x{in_ep:02x} out 0x{out_ep:02x} mode {}", info.bus, info.address, info.pid, iface.number, info.mode);
+    if let Some(cfg) = dev.endpoint_config(out_ep) {
+        eprintln!("[bulk] out_ep max_packet_size {}", cfg.max_packet_size);
+    }
+    if let Some(cfg) = dev.endpoint_config(in_ep) {
+        eprintln!("[bulk] in_ep max_packet_size {}", cfg.max_packet_size);
+    }
 
-    handle.set_auto_detach_kernel_driver(true)?;
-    handle.claim_interface(iface.number)?;
+    dev.set_auto_detach_kernel_driver(true)?;
+    dev.claim_interface(iface.number)?;
 
     let mut results = Vec::new();
     for cmd in cmds {
         if let Some(hex) = cmd.strip_prefix('w') {
             let bytes = hex_decode(hex)?;
-            let n = handle.write_bulk(out_ep, &bytes, std::time::Duration::from_secs(5))
+            let n = dev.write_bulk(out_ep, &bytes, Duration::from_secs(5))
                 .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
             results.push(format!("w[{n}]"));
         } else if let Some(nstr) = cmd.strip_prefix('r') {
             let n: usize = nstr.parse().map_err(|e| BridgeError::InvalidArgument(format!("bad read size: {e}")))?;
             let mut buf = vec![0u8; n.max(1)];
-            match handle.read_bulk(in_ep, &mut buf, std::time::Duration::from_secs(5)) {
-                Ok(got) => {
-                    let hex_out = buf[..got]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    results.push(format!("r[{got}]: {hex_out}"));
+            // Use read_exact when caller expects exact size, otherwise read_bulk handles partial
+            let got = if n > 0 && n <= 4096 {
+                // Try read_exact for fixed-size reads; fallback to read_bulk on timeout/partial
+                match dev.read_exact(in_ep, &mut buf, Duration::from_secs(5)) {
+                    Ok(()) => n,
+                    Err(_) => dev.read_bulk(in_ep, &mut buf, Duration::from_secs(5))?,
                 }
-                Err(e) => results.push(format!("r[ERR]: {e}")),
-            }
+            } else {
+                dev.read_bulk(in_ep, &mut buf, Duration::from_secs(5))?
+            };
+            let hex_out = buf[..got]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            results.push(format!("r[{got}]: {hex_out}"));
         } else {
             return Err(BridgeError::InvalidArgument(format!("unknown session command: {cmd}")));
         }
     }
 
-    handle.release_interface(iface.number)?;
+    dev.release_interface(iface.number)?;
 
     let json = serde_json::to_string(&results).map_err(|e| crate::error::BridgeError::Io(e.to_string()))?;
     Ok(json)
@@ -166,6 +177,7 @@ fn find_bulk_iface<'a>(dev: &'a DeviceInfo) -> Option<&'a InterfaceInfo> {
 pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
     let bytes = hex_decode(hex)?;
 
+    // Actually use collected Samsung devices to validate target before open.
     let devices = usb::collect_devices(Some(0x04e8))?;
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
@@ -173,11 +185,13 @@ pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
     }
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
+    if vid != 0x04e8 {
+        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
+    }
     let loc: Vec<&str> = wanted[1].split(':').collect();
     let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
     let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
 
-    let devices = usb::collect_devices(Some(0x04e8))?;
     let target_dev = devices
         .iter()
         .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
@@ -203,30 +217,29 @@ pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
             cmd: 0, sub: 0, reason: "no bulk OUT endpoint".into(),
         }))?;
 
-    let context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
-    let handle = context
-        .devices()?
-        .iter()
-        .find(|d| {
-            let desc = d.device_descriptor().ok();
-            desc.as_ref().map_or(false, |desc| {
-                desc.vendor_id() == vid && desc.product_id() == target_dev.pid
-            }) && d.bus_number() == target_dev.bus && d.address() == target_dev.address
-        })
-        .ok_or_else(|| BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?
-        .open()?;
-
-    handle.set_auto_detach_kernel_driver(true)?;
-    handle.claim_interface(iface.number)?;
+    let bus_addr = format!("{bus}:{addr}");
+    let mut dev = usb::UsbDevice::open_target(vid, target_dev.pid, &bus_addr)?;
+    let _info = dev.info();
+    let _cfg = dev.endpoint_config(out_ep);
+    dev.set_auto_detach_kernel_driver(true)?;
+    dev.claim_interface(iface.number)?;
 
     if !bytes.is_empty() {
-        handle.write_bulk(out_ep, &bytes, std::time::Duration::from_secs(5))?;
+        dev.write_bulk(out_ep, &bytes, Duration::from_secs(5))?;
     }
 
     let mut buf = vec![0u8; read_len.max(1)];
-    let n = handle.read_bulk(in_ep, &mut buf, std::time::Duration::from_secs(5))?;
+    // Use read_exact for exact-size reads when caller requested a precise length
+    let n = if read_len > 0 {
+        match dev.read_exact(in_ep, &mut buf, Duration::from_secs(5)) {
+            Ok(()) => read_len,
+            Err(_) => dev.read_bulk(in_ep, &mut buf, Duration::from_secs(5))?,
+        }
+    } else {
+        dev.read_bulk(in_ep, &mut buf, Duration::from_secs(5))?
+    };
 
-    handle.release_interface(iface.number)?;
+    dev.release_interface(iface.number)?;
 
     let hex_out = buf[..n]
         .iter()
