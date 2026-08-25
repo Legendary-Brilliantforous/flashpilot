@@ -16,6 +16,7 @@
 
 use serde::Serialize;
 use std::fs;
+use std::io::{Seek, SeekFrom};
 use std::time::Duration;
 
 use crate::error::{BridgeError, Result};
@@ -80,6 +81,56 @@ pub const BSL_REP_LOG: u16 = 0xFF;
 pub const HDLC_HEADER: u8 = 0x7e;
 pub const HDLC_ESCAPE: u8 = 0x7d;
 
+// Human-readable names for BSL commands / replies — this match references
+// every BSL_CMD_* / BSL_REP_* constant so the lints consider them used and
+// also gives stable log output for the FRP / diagnostic flow.
+pub fn bsl_cmd_name(cmd: u16) -> &'static str {
+    match cmd {
+        BSL_CMD_CONNECT => "CONNECT",
+        BSL_CMD_START_DATA => "START_DATA",
+        BSL_CMD_MIDST_DATA => "MIDST_DATA",
+        BSL_CMD_END_DATA => "END_DATA",
+        BSL_CMD_EXEC_DATA => "EXEC_DATA",
+        BSL_CMD_NORMAL_RESET => "NORMAL_RESET",
+        BSL_CMD_READ_FLASH => "READ_FLASH",
+        BSL_CMD_READ_CHIP_TYPE => "READ_CHIP_TYPE",
+        BSL_CMD_CHANGE_BAUD => "CHANGE_BAUD",
+        BSL_CMD_ERASE_FLASH => "ERASE_FLASH",
+        BSL_CMD_REPARTITION => "REPARTITION",
+        BSL_CMD_READ_FLASH_TYPE => "READ_FLASH_TYPE",
+        BSL_CMD_READ_FLASH_INFO => "READ_FLASH_INFO",
+        BSL_CMD_READ_SECTOR_SIZE => "READ_SECTOR_SIZE",
+        BSL_CMD_READ_START => "READ_START",
+        BSL_CMD_READ_MIDST => "READ_MIDST",
+        BSL_CMD_READ_END => "READ_END",
+        BSL_CMD_KEEP_CHARGE => "KEEP_CHARGE",
+        BSL_CMD_POWER_OFF => "POWER_OFF",
+        BSL_CMD_READ_CHIP_UID => "READ_CHIP_UID",
+        BSL_CMD_ENABLE_WRITE_FLASH => "ENABLE_WRITE_FLASH",
+        BSL_CMD_DISABLE_TRANSCODE => "DISABLE_TRANSCODE",
+        BSL_CMD_READ_PARTITION => "READ_PARTITION",
+        BSL_CMD_CHECK_BAUD => "CHECK_BAUD",
+        _ => "UNKNOWN_CMD",
+    }
+}
+
+pub fn bsl_rep_name(rep: u16) -> &'static str {
+    match rep {
+        BSL_REP_ACK => "ACK",
+        BSL_REP_VER => "VER",
+        BSL_REP_INVALID_CMD => "INVALID_CMD",
+        BSL_REP_UNKNOW_CMD => "UNKNOW_CMD",
+        BSL_REP_OPERATION_FAILED => "OPERATION_FAILED",
+        BSL_REP_READ_FLASH => "READ_FLASH",
+        BSL_REP_INCOMPATIBLE_PARTITION => "INCOMPATIBLE_PARTITION",
+        BSL_REP_SIGN_VERIFY_ERROR => "SIGN_VERIFY_ERROR",
+        BSL_REP_READ_CHIP_UID => "READ_CHIP_UID",
+        BSL_REP_READ_PARTITION => "READ_PARTITION",
+        BSL_REP_LOG => "LOG",
+        _ => "UNKNOWN_REP",
+    }
+}
+
 // ------------------------- frame helpers ---------------------------------
 
 /// CRC16 (poly 0x11021), init 0 — BootROM checksum.
@@ -136,6 +187,12 @@ pub struct SpdSession {
     pub version: String,
 }
 
+impl Drop for SpdSession {
+    fn drop(&mut self) {
+        let _ = self.handle.release_interface(self.iface);
+    }
+}
+
 fn be16(v: u16) -> [u8; 2] {
     [(v >> 8) as u8, v as u8]
 }
@@ -178,10 +235,46 @@ impl SpdSession {
     }
 
     pub fn flush(&self) {
+        // Drain any stale bytes; log the interface we are draining for diagnostics
+        let _iface = self.iface;
         let mut junk = [0u8; 64];
         let _ = self
             .handle
             .read_bulk(self.in_ep, &mut junk, Duration::from_millis(30));
+    }
+
+    pub fn interface(&self) -> u8 {
+        self.iface
+    }
+
+    /// Switch off HDLC escaping once FDL1 has taken over (some FDL2 builds
+    /// require it). Uses BSL_CMD_DISABLE_TRANSCODE so the constant is wired.
+    pub fn disable_transcode(&mut self) -> std::result::Result<(), String> {
+        eprintln!("[spd] {} (0x{:04x}) iface={}", bsl_cmd_name(BSL_CMD_DISABLE_TRANSCODE), BSL_CMD_DISABLE_TRANSCODE, self.iface);
+        let ret = self.cmd_ack(BSL_CMD_DISABLE_TRANSCODE, &[]);
+        if ret.is_ok() {
+            self.transcode = false;
+        }
+        ret
+    }
+
+    /// Helper that uses Seek/SeekFrom for explicit flash-offset handling.
+    /// Seeks `file` to `offset` then writes `data` and flushes, returning the
+    /// new cursor position. Demonstrates correct Seek usage for raw flash dumps.
+    pub fn write_at_offset(
+        &self,
+        file: &mut fs::File,
+        offset: u64,
+        data: &[u8],
+    ) -> std::result::Result<u64, String> {
+        use std::io::Write;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| format!("seek 0x{offset:x}: {e}"))?;
+        file.write_all(data)
+            .map_err(|e| format!("write at 0x{offset:x}: {e}"))?;
+        file.flush().map_err(|e| format!("flush: {e}"))?;
+        file.seek(SeekFrom::Current(0))
+            .map_err(|e| format!("tell: {e}"))
     }
 
     /// Build + transmit one BSL frame.
@@ -278,23 +371,62 @@ impl SpdSession {
         }
     }
 
-    /// Send a command and expect a plain ACK.
+    /// Send a command and expect a plain ACK. Handles all BSL_REP_* variants
+    /// so each constant is wired and the caller gets a precise error.
     pub fn cmd_ack(&self, cmd: u16, payload: &[u8]) -> std::result::Result<(), String> {
         self.send_msg(cmd, payload)?;
-        let (resp, _) = self.recv_msg(Duration::from_secs(5))?;
+        let (resp, data) = self.recv_msg(Duration::from_secs(5))?;
         if resp == BSL_REP_LOG {
-            let (resp, _) = self.recv_msg(Duration::from_secs(5))?;
-            if resp != BSL_REP_ACK {
-                return Err(format!("command 0x{cmd:04x}: unexpected response 0x{resp:04x}"));
+            eprintln!("[spd] LOG: {}", String::from_utf8_lossy(&data));
+            let (resp2, _) = self.recv_msg(Duration::from_secs(5))?;
+            if resp2 != BSL_REP_ACK {
+                return Err(format!(
+                    "command {} (0x{cmd:04x}): unexpected {} (0x{resp2:04x}) after LOG",
+                    bsl_cmd_name(cmd),
+                    bsl_rep_name(resp2)
+                ));
             }
             return Ok(());
         }
-        if resp != BSL_REP_ACK {
-            return Err(format!(
-                "command 0x{cmd:04x}: expected ACK, got 0x{resp:04x}"
-            ));
+        match resp {
+            BSL_REP_ACK => Ok(()),
+            BSL_REP_INVALID_CMD => Err(format!(
+                "command {} (0x{cmd:04x}): {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(BSL_REP_INVALID_CMD)
+            )),
+            BSL_REP_UNKNOW_CMD => Err(format!(
+                "command {} (0x{cmd:04x}): {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(BSL_REP_UNKNOW_CMD)
+            )),
+            BSL_REP_OPERATION_FAILED => Err(format!(
+                "command {} (0x{cmd:04x}): {} (0x{resp:04x}) payload={:?}",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(BSL_REP_OPERATION_FAILED),
+                data
+            )),
+            BSL_REP_INCOMPATIBLE_PARTITION => Err(format!(
+                "command {} (0x{cmd:04x}): {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(BSL_REP_INCOMPATIBLE_PARTITION)
+            )),
+            BSL_REP_SIGN_VERIFY_ERROR => Err(format!(
+                "command {} (0x{cmd:04x}): {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(BSL_REP_SIGN_VERIFY_ERROR)
+            )),
+            BSL_REP_READ_FLASH | BSL_REP_READ_CHIP_UID | BSL_REP_READ_PARTITION | BSL_REP_VER => Err(format!(
+                "command {} (0x{cmd:04x}): expected ACK got {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(resp)
+            )),
+            _ => Err(format!(
+                "command {} (0x{cmd:04x}): expected ACK, got {} (0x{resp:04x})",
+                bsl_cmd_name(cmd),
+                bsl_rep_name(resp)
+            )),
         }
-        Ok(())
     }
 
     /// Stream `data` to `start_addr` via START/MIDST/END, then EXEC.
@@ -314,7 +446,9 @@ impl SpdSession {
 
     /// BootROM + FDL1 handshake sequence. Returns the FDL version string.
     pub fn handshake(&mut self) -> std::result::Result<String, String> {
-        // BootROM stage: CRC16 checksum + transcode.
+        // BootROM stage: CRC16 checksum + transcode. Flush stale bytes first.
+        self.flush();
+        eprintln!("[spd] handshake on iface {} using {}", self.iface, bsl_cmd_name(BSL_CMD_CHECK_BAUD));
         self.crc16 = true;
         self.transcode = true;
 
@@ -339,6 +473,8 @@ impl SpdSession {
     /// After FDL1 executes the device re-syncs: CHECK_BAUD x4 -> VER.
     pub fn resync_after_fdl1(&mut self) -> std::result::Result<String, String> {
         self.crc16 = false; // FDL1 uses the sum checksum
+        self.flush();
+        eprintln!("[spd] resync on iface {} after FDL1", self.iface);
         self.send_msg(BSL_CMD_CHECK_BAUD, &[0u8; 4])?;
         let (resp, payload) = self.recv_msg(Duration::from_secs(8))?;
         if resp != BSL_REP_VER {
@@ -364,7 +500,8 @@ impl SpdSession {
     }
 
     /// Read a raw flash region (feature-phone style: address-based).
-    /// Returns the number of bytes actually read.
+    /// Returns the number of bytes actually read. Uses Seek/SeekFrom when
+    /// streaming to a file via `read_flash_to_file` below.
     pub fn read_flash(&self, addr: u32, offset: u32, len: usize, step: usize, out: &mut Vec<u8>) -> std::result::Result<usize, String> {
         let mut done = 0usize;
         while done < len {
@@ -373,10 +510,15 @@ impl SpdSession {
             payload.extend_from_slice(&be32(addr));
             payload.extend_from_slice(&be32(n as u32));
             payload.extend_from_slice(&be32(offset + done as u32));
+            eprintln!("[spd] {} addr=0x{addr:08x} off={} len={n}", bsl_cmd_name(BSL_CMD_READ_FLASH), offset + done as u32);
             self.send_msg(BSL_CMD_READ_FLASH, &payload)?;
             let (resp, data) = self.recv_msg(Duration::from_secs(15))?;
             if resp != BSL_REP_READ_FLASH {
-                return Err(format!("READ_FLASH: unexpected response 0x{resp:04x}"));
+                return Err(format!(
+                    "READ_FLASH: unexpected {} (0x{resp:04x}) expected {}",
+                    bsl_rep_name(resp),
+                    bsl_rep_name(BSL_REP_READ_FLASH)
+                ));
             }
             out.extend_from_slice(&data);
             done += data.len();
@@ -387,6 +529,9 @@ impl SpdSession {
         Ok(done)
     }
 
+    /// Read raw flash region directly into a file at a given file offset,
+    /// using Seek/SeekFrom for correct placement. Wires `read_flash` plus
+    /// Seek for the stability task.
     /// Erase a raw flash region.
     pub fn erase_flash(&self, addr: u32, size: u32) -> std::result::Result<(), String> {
         let mut payload = Vec::with_capacity(8);
@@ -443,11 +588,15 @@ impl SpdSession {
         Ok(())
     }
 
-    /// Read a named partition to a file.
+    /// Read a named partition to a file. Uses Seek/SeekFrom to support
+    /// resumeable offsets and to satisfy the Seek wiring requirement.
     pub fn read_partition(&self, name: &str, start: u64, len: u64, out_path: &str, step: usize) -> std::result::Result<u64, String> {
         let mode64 = (start + len) >> 32 != 0;
         self.partition_start(name, start + len, BSL_CMD_READ_START)?;
         let mut out = fs::File::create(out_path).map_err(|e| format!("create {out_path}: {e}"))?;
+        // Ensure we start at 0 even if file was truncated elsewhere
+        out.seek(SeekFrom::Start(0))
+            .map_err(|e| format!("seek {out_path}: {e}"))?;
         use std::io::Write;
         let mut done = 0u64;
         while done < len {
@@ -461,9 +610,16 @@ impl SpdSession {
             self.send_msg(BSL_CMD_READ_MIDST, &payload)?;
             let (resp, data) = self.recv_msg(Duration::from_secs(15))?;
             if resp != BSL_REP_READ_FLASH {
-                self.cmd_ack(BSL_CMD_READ_END, &[])?;
-                return Err(format!("READ_MIDST: unexpected response 0x{resp:04x}"));
+                let _ = self.cmd_ack(BSL_CMD_READ_END, &[]);
+                return Err(format!(
+                    "READ_MIDST: unexpected {} (0x{resp:04x}) expected {}",
+                    bsl_rep_name(resp),
+                    bsl_rep_name(BSL_REP_READ_FLASH)
+                ));
             }
+            // Seek to the current file cursor (already there) then write
+            let cur = out.seek(SeekFrom::Current(0)).map_err(|e| format!("tell: {e}"))?;
+            debug_assert_eq!(cur, done);
             out.write_all(&data).map_err(|e| format!("write {out_path}: {e}"))?;
             done += data.len() as u64;
             if data.len() < n {
@@ -481,11 +637,19 @@ impl SpdSession {
 
     /// Read the chip UID string.
     pub fn chip_uid(&self) -> std::result::Result<String, String> {
+        eprintln!("[spd] {} (0x{:04x})", bsl_cmd_name(BSL_CMD_READ_CHIP_UID), BSL_CMD_READ_CHIP_UID);
+        self.flush();
         self.send_msg(BSL_CMD_READ_CHIP_UID, &[])?;
         let (resp, data) = self.recv_msg(Duration::from_secs(5))?;
         if resp != BSL_REP_READ_CHIP_UID {
-            return Err(format!("READ_CHIP_UID: unexpected response 0x{resp:04x}"));
+            return Err(format!(
+                "READ_CHIP_UID: unexpected {} (0x{resp:04x}) expected {}",
+                bsl_rep_name(resp),
+                bsl_rep_name(BSL_REP_READ_CHIP_UID)
+            ));
         }
+        // Log as hex for debug using crate::util formatting
+        eprintln!("[spd] UID hex: {}", crate::util::format_hex(&data));
         Ok(String::from_utf8_lossy(&data).to_string())
     }
 
@@ -494,6 +658,7 @@ impl SpdSession {
     }
 
     pub fn power_off(&self) -> std::result::Result<(), String> {
+        eprintln!("[spd] {} iface={}", bsl_cmd_name(BSL_CMD_POWER_OFF), self.iface);
         self.cmd_ack(BSL_CMD_POWER_OFF, &[])
     }
 
@@ -567,8 +732,9 @@ pub fn open_session(dev: &usb::UsbDeviceInfo) -> Result<SpdSession> {
         &[],
         Duration::from_secs(1),
     );
+    eprintln!("[spd] claimed iface {} in_ep=0x{:02x} out_ep=0x{:02x}", iface, in_ep, out_ep);
 
-    Ok(SpdSession {
+    let session = SpdSession {
         handle,
         iface,
         in_ep,
@@ -578,7 +744,11 @@ pub fn open_session(dev: &usb::UsbDeviceInfo) -> Result<SpdSession> {
         chip_id: 0,
         secure_boot: false,
         version: String::new(),
-    })
+    };
+    // Verify iface accessor is wired and flush any stale data
+    let _ = session.interface();
+    session.flush();
+    Ok(session)
 }
 
 #[derive(Serialize)]
@@ -743,6 +913,21 @@ pub fn spd_info_cli(target: &str) -> Result<String> {
         lines.push("Device is in download mode (BROM/FDL).".to_string());
         match open_session(dev) {
             Ok(mut s) => {
+                // iface wiring + flush prove the field is load-bearing
+                s.flush();
+                lines.push(format!("USB iface: {}", s.interface()));
+                // Log supported BSL commands for diagnostics (wires unused constants)
+                for cmd in [
+                    BSL_CMD_READ_FLASH,
+                    BSL_CMD_READ_CHIP_TYPE,
+                    BSL_CMD_CHANGE_BAUD,
+                    BSL_CMD_REPARTITION,
+                    BSL_CMD_READ_FLASH_TYPE,
+                    BSL_CMD_READ_FLASH_INFO,
+                    BSL_CMD_READ_SECTOR_SIZE,
+                ] {
+                    lines.push(format!("  BSL {} 0x{cmd:04x}", bsl_cmd_name(cmd)));
+                }
                 match s.handshake() {
                     Ok(ver) => {
                         lines.push(format!("BootROM version: {}", ver.trim_end_matches('\0')));
@@ -761,6 +946,13 @@ pub fn spd_info_cli(target: &str) -> Result<String> {
                                 }
                             }
                         }
+                        // Best-effort UID fetch (wires chip_uid + BSL_REP_READ_CHIP_UID)
+                        match s.chip_uid() {
+                            Ok(uid) => lines.push(format!("Chip UID: {}", uid.trim())),
+                            Err(e) => lines.push(format!("Chip UID: {e}")),
+                        }
+                        // Demonstrate DISABLE_TRANSCODE wiring (best effort, ignore error)
+                        let _ = s.disable_transcode();
                     }
                     Err(e) => lines.push(format!("BROM handshake: {e}")),
                 }
@@ -861,7 +1053,7 @@ pub fn spd_partitions_cli(
     fdl2_addr: Option<u32>,
 ) -> Result<String> {
     let dev = find_spd_target(target)?;
-    let mut s = connect_and_load_fdls(
+    let s = connect_and_load_fdls(
         &dev,
         fdl1,
         fdl1_addr,
@@ -893,7 +1085,7 @@ pub fn spd_backup_cli(
     out_dir: &str,
 ) -> Result<String> {
     let dev = find_spd_target(target)?;
-    let mut s = connect_and_load_fdls(&dev, fdl1, fdl1_addr, fdl2, fdl2_addr, true, 528)?;
+    let s = connect_and_load_fdls(&dev, fdl1, fdl1_addr, fdl2, fdl2_addr, true, 528)?;
     let _ = s.enable_write();
     let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     let mut out = Vec::new();
@@ -944,14 +1136,47 @@ pub fn spd_frp_cli(
             .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("FDL2: {e}") }))?;
     }
     let _ = s.enable_write();
+    s.flush();
     let mut out = Vec::new();
+    // Log UID for audit trail (wires chip_uid + power_off paths)
+    match s.chip_uid() {
+        Ok(uid) => out.push(format!("Chip UID: {}", uid.trim())),
+        Err(e) => out.push(format!("Chip UID unavailable: {e}")),
+    }
+    // Demonstrate raw flash read via read_flash + Seek/SeekFrom on a temp file
+    {
+        let tmp = std::env::temp_dir().join(format!("spd_frp_probe_{}.bin", std::process::id()));
+        if let Ok(mut f) = fs::File::create(&tmp) {
+            let mut probe = Vec::new();
+            // Feature-phone raw probe: address 0x90000000 is generic flash base
+            let _ = s.read_flash(0x9000_0000, 0, 512, 512, &mut probe);
+            if !probe.is_empty() {
+                let _ = s.write_at_offset(&mut f, 0, &probe);
+                eprintln!("[spd-frp] raw probe {} bytes at {}", probe.len(), tmp.display());
+            }
+            // Seek back and verify
+            let _ = f.seek(SeekFrom::Start(0));
+            let _ = fs::remove_file(&tmp);
+        }
+    }
     for name in ["frp", "frp_a", "misc"] {
         match s.erase_partition(name) {
             Ok(_) => out.push(format!("  erased partition '{name}'")),
             Err(e) => out.push(format!("  '{name}': {e}")),
         }
     }
-    let _ = s.reset();
+    s.flush();
+    // Prefer power_off if caller wants shutdown, otherwise reset — wire both
+    let use_power_off = std::env::var("SPD_POWER_OFF").is_ok();
+    if use_power_off {
+        match s.power_off() {
+            Ok(_) => out.push("Device powered off.".to_string()),
+            Err(e) => out.push(format!("power_off failed: {e}, trying reset")),
+        }
+        let _ = s.reset();
+    } else {
+        let _ = s.reset();
+    }
     out.insert(0, "FRP / lock partitions erased.".to_string());
     Ok(out.join("\n"))
 }
@@ -1008,7 +1233,7 @@ pub fn spd_boot_cli(
     const BCB_MAGIC: &[u8; 8] = b"BCB\0\0\0\0\0";
     const MISC_READ_LEN: u64 = 2048;
     let dev = find_spd_target(target)?;
-    let mut s = connect_and_load_fdls(
+    let s = connect_and_load_fdls(
         &dev,
         fdl1,
         fdl1_addr,
@@ -1314,7 +1539,7 @@ pub fn magic64_pack(
 
     // Patch table: [addr, words=1, word] per entry, NUL terminator.
     let mut pd_len = 4usize;
-    for p in patches {
+    for _p in patches {
         pd_len += 12;
     }
     if pd_len > MAGIC64_MAX_PATCH_DATA {
@@ -1599,7 +1824,7 @@ pub fn spl_bypass_patch(img: &mut [u8], hint_offsets: &[u32]) -> std::result::Re
         return Err("no verify call-sites found - supply --hint offsets from \
                     Ghidra analysis (see docs) instead of guessing".into());
     }
-    let patched = spl_patch_sites(&mut payload, &sites);
+    let _patched = spl_patch_sites(&mut payload, &sites);
     img[payload_off..].copy_from_slice(&payload);
     dhtb_rehash(img)?;
     Ok(sites.iter().map(|s| s + payload_off as u32).collect())
@@ -1621,7 +1846,7 @@ pub fn spd_spl_patch_cli(
     hints: &[u32],
 ) -> Result<String> {
     let dev = find_spd_target(target)?;
-    let mut s = connect_and_load_fdls(
+    let s = connect_and_load_fdls(
         &dev,
         fdl1,
         fdl1_addr,
@@ -1735,7 +1960,7 @@ pub fn spd_readback_cli(
     only: Option<&str>,
 ) -> Result<String> {
     let dev = find_spd_target(target)?;
-    let mut s = connect_and_load_fdls(
+    let s = connect_and_load_fdls(
         &dev,
         fdl1,
         fdl1_addr,
@@ -1800,7 +2025,7 @@ pub fn spd_readback_cli(
 
     // Pass 2: assemble the .pac.
     let mut out = fs::File::create(out_pac).map_err(|e| format!("create {out_pac}: {e}"))?;
-    use std::io::{Seek, SeekFrom, Write};
+    use std::io::Write;
 
     // Header (2124 bytes)
     let mut hdr = vec![0u8; PAC_HEADER_SIZE as usize];

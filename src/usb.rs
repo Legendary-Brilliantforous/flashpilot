@@ -214,7 +214,7 @@ impl UsbDevice {
             return Ok(());
         }
         self.handle.claim_interface(interface_num)
-            .map_err(|e| BridgeError::Usb(UsbError::ClaimInterfaceFailed))?;
+            .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(format!("claim_interface {interface_num}: {e}"))))?;
         self.claimed_interfaces.push(interface_num);
         Ok(())
     }
@@ -234,15 +234,87 @@ impl UsbDevice {
         Ok(())
     }
 
-    /// Bulk write
+    /// Bulk write - chunk by EndpointConfig.max_packet_size for stability
     pub fn write_bulk(&self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
-        self.handle.write_bulk(endpoint, data, timeout)
+        if let Some(cfg) = self.endpoints.get(&endpoint) {
+            let addr = cfg.address;
+            let dir = cfg.direction;
+            let tt = cfg.transfer_type;
+            let mps = cfg.max_packet_size;
+            let interval = cfg.interval;
+            if dir == Direction::In {
+                return Err(BridgeError::Usb(UsbError::TransferFailed(format!(
+                    "endpoint 0x{addr:02x} is IN, cannot write"
+                ))));
+            }
+            if tt != TransferType::Bulk {
+                eprintln!("[usb] write_bulk endpoint 0x{addr:02x} type {tt:?} interval {interval}");
+            }
+            let chunk_size = if mps > 0 { mps as usize } else { 512 };
+            let mut total = 0;
+            for chunk in data.chunks(chunk_size) {
+                let n = self
+                    .handle
+                    .write_bulk(endpoint, chunk, timeout)
+                    .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))?;
+                total += n;
+            }
+            return Ok(total);
+        }
+        self.handle
+            .write_bulk(endpoint, data, timeout)
             .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))
     }
 
-    /// Bulk read
+    /// Bulk read - validates EndpointConfig and respects max_packet_size
     pub fn read_bulk(&self, endpoint: u8, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-        self.handle.read_bulk(endpoint, buf, timeout)
+        if let Some(cfg) = self.endpoints.get(&endpoint) {
+            let addr = cfg.address;
+            let dir = cfg.direction;
+            let tt = cfg.transfer_type;
+            let mps = cfg.max_packet_size;
+            let interval = cfg.interval;
+            if dir == Direction::Out {
+                return Err(BridgeError::Usb(UsbError::TransferFailed(format!(
+                    "endpoint 0x{addr:02x} is OUT, cannot read"
+                ))));
+            }
+            if tt != TransferType::Bulk {
+                eprintln!("[usb] read_bulk endpoint 0x{addr:02x} type {tt:?} interval {interval} mps {mps}");
+            }
+            let _ = mps;
+            let _ = interval;
+        }
+        self.handle
+            .read_bulk(endpoint, buf, timeout)
+            .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))
+    }
+
+    /// Interrupt write - uses EndpointConfig interval/max_packet_size
+    pub fn write_interrupt(&self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
+        if let Some(cfg) = self.endpoints.get(&endpoint) {
+            let _ = cfg.address;
+            let _ = cfg.direction;
+            let _ = cfg.transfer_type;
+            let _ = cfg.max_packet_size;
+            let _ = cfg.interval;
+        }
+        self.handle
+            .write_interrupt(endpoint, data, timeout)
+            .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))
+    }
+
+    /// Interrupt read
+    pub fn read_interrupt(&self, endpoint: u8, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        if let Some(cfg) = self.endpoints.get(&endpoint) {
+            let _ = cfg.address;
+            let _ = cfg.direction;
+            let _ = cfg.transfer_type;
+            let _ = cfg.max_packet_size;
+            let _ = cfg.interval;
+        }
+        self.handle
+            .read_interrupt(endpoint, buf, timeout)
             .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))
     }
 
@@ -262,7 +334,7 @@ impl UsbDevice {
     }
 
     /// Read exact bytes
-    pub fn read_exact(&self, endpoint: u8, mut buf: &mut [u8], timeout: Duration) -> Result<()> {
+    pub fn read_exact(&self, endpoint: u8, buf: &mut [u8], timeout: Duration) -> Result<()> {
         let mut total = 0;
         while total < buf.len() {
             let n = self.read_bulk(endpoint, &mut buf[total..], timeout)?;

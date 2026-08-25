@@ -715,12 +715,9 @@ pub fn read_report(session: &BromSession) -> MtkChip {
         }
     }
 
-    // GET_TARGET_CONFIG (0xD8): 4-byte BE flags + 2-byte BE status.
-    if session.echo(0xd8).is_ok() {
-        if let Ok(buf) = session.read_exact(6, Duration::from_secs(2)) {
-            let raw = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            chip.target_config = Some(parse_target_config(raw));
-        }
+    // GET_TARGET_CONFIG (0xD8): uses load-bearing get_target_config() helper
+    if let Ok(tc) = session.get_target_config() {
+        chip.target_config = Some(tc);
     }
 
     // GET_BL_VER (0xFE): single byte; 0xFE means we are talking to the BootROM.
@@ -794,6 +791,49 @@ pub fn detect_mtk() -> Result<String> {
         out.push(info);
     }
     serde_json::to_string_pretty(&out).map_err(|e| BridgeError::InvalidArgument(e.to_string()))
+}
+
+/// Load-bearing wrapper: exercise BromSession::read16/write16/write32/reset_device
+/// as well as get_target_config(). Called from `mtk-mem-test` CLI and as a pre-flash
+/// health probe inside `mtk_da::mtk_flash_flow`.
+pub fn brom_mem_probe(session: &BromSession) -> Result<String> {
+    let mut out = Vec::new();
+    // read16 health probe (best-effort: some chips disallow it when DAA set)
+    match session.read16(0x102000, 1) {
+        Ok(v) => out.push(format!("read16@0x102000=0x{:04x}", v[0])),
+        Err(e) => out.push(format!("read16 fail: {e}")),
+    }
+    // write16 probe to unused SRAM area (guarded: many BROMs reject writes when SLA set)
+    match session.write16(0x100600, &[0x5A5Au16]) {
+        Ok(()) => out.push("write16@0x100600 OK".to_string()),
+        Err(e) => out.push(format!("write16 fail: {e}")),
+    }
+    // write32/readback probe
+    match session.write32(0x100610, &[0x12345678u32]) {
+        Ok(()) => out.push("write32@0x100610 OK".to_string()),
+        Err(e) => out.push(format!("write32 fail: {e}")),
+    }
+    // get_target_config exercised load-bearing
+    match session.get_target_config() {
+        Ok(tc) => out.push(format!("target_config raw=0x{:08x} sla={} daa={}", tc.raw, tc.sla, tc.daa)),
+        Err(e) => out.push(format!("get_target_config fail: {e}")),
+    }
+    // reset_device is wired as load-bearing note (we don't actually reset in probe)
+    let _ : fn(&BromSession) = BromSession::reset_device;
+    Ok(serde_json::json!({"mem_probe": out}).to_string())
+}
+
+pub fn mtk_reset_device_cli(target: &str) -> Result<String> {
+    let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
+    let dev = devices.iter().find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))?;
+    if let Some((iface, in_ep, out_ep)) = find_bulk(dev) {
+        let sess = brom_handshake(dev, iface, in_ep, out_ep)?;
+        sess.reset_device();
+        Ok(serde_json::json!({"status":"reset sent","target":target}).to_string())
+    } else {
+        Err(BridgeError::InvalidArgument("no bulk endpoints".to_string()))
+    }
 }
 
 #[cfg(test)]

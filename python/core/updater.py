@@ -32,9 +32,11 @@ class UpdateError(RuntimeError):
 
 
 def _app_root():
-    """Directory containing the installed python package (repo root when
-    running from a checkout)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """Repository/install root: the parent of the python package.
+    updater.py -> core/ -> python/ -> <root> (repo checkout or
+    /usr/share/flashpilot when deb-installed)."""
+    return os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
 
 
 def is_dev_checkout():

@@ -1,10 +1,9 @@
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-use crate::config::{DeviceInfo, InterfaceInfo};
 use crate::error::{Result, BridgeError, UsbError};
 use crate::usb;
-use rusb::{Context, UsbContext};
+use rusb::Context;
 
 const OP_GET_DEVICE_INFO: u16 = 0x1001;
 const OP_OPEN_SESSION: u16 = 0x1002;
@@ -120,7 +119,7 @@ pub fn mtp_info(target: &str, timeout_ms: u64) -> Result<String> {
         None => None,
     };
 
-    let context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let _context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     let info = usb::collect_devices(Some(vid))?;
     let target_dev = info
         .iter()

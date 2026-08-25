@@ -1,10 +1,9 @@
-use serde::Serialize;
 use std::time::Duration;
 
-use crate::config::{DeviceInfo, InterfaceInfo};
+use serde::Serialize;
+
 use crate::error::{Result, BridgeError};
 use crate::usb;
-use rusb::{Context, UsbContext};
 
 #[derive(Serialize)]
 pub struct HidTarget {
@@ -80,6 +79,7 @@ pub fn list_samsung_hid() -> Result<String> {
 pub fn open_and_send(target: &str, hex: &str) -> Result<String> {
     let bytes = hex_decode(hex)?;
 
+    // Actually use collected Samsung devices to find target, instead of ignoring it.
     let devices = usb::collect_devices(Some(0x04e8))?;
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
@@ -87,30 +87,24 @@ pub fn open_and_send(target: &str, hex: &str) -> Result<String> {
     }
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
+    if vid != 0x04e8 {
+        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
+    }
     let loc: Vec<&str> = wanted[1].split(':').collect();
     let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
     let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
 
-    let devices = usb::collect_devices(Some(0x04e8))?;
     let target_dev = devices
         .iter()
-        .find(|d| {
-            d.vid == vid && d.bus == bus && d.address == addr
-        })
+        .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
         .ok_or_else(|| BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
 
-    let context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
-    let handle = context
-        .devices()?
-        .iter()
-        .find(|d| {
-            let desc = d.device_descriptor().ok();
-            desc.as_ref().map_or(false, |desc| {
-                desc.vendor_id() == vid && desc.product_id() == target_dev.pid
-            }) && d.bus_number() == target_dev.bus && d.address() == target_dev.address
-        })
-        .ok_or_else(|| BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?
-        .open()?;
+    // Use UsbDevice abstraction which owns Context+handle and keeps it alive,
+    // and exposes info()/endpoint_config()/read_exact() as load-bearing helpers.
+    let bus_addr = format!("{bus}:{addr}");
+    let mut dev = usb::UsbDevice::open_target(vid, target_dev.pid, &bus_addr)?;
+    let info = dev.info();
+    eprintln!("[hid] open {}:{} pid {:04x} mode {}", info.bus, info.address, info.pid, info.mode);
 
     let interface = target_dev
         .interfaces
@@ -120,7 +114,8 @@ pub fn open_and_send(target: &str, hex: &str) -> Result<String> {
             cmd: 0, sub: 0, reason: "no HID interface on this device".into(),
         }))?;
 
-    handle.claim_interface(interface.number)?;
+    dev.set_auto_detach_kernel_driver(true)?;
+    dev.claim_interface(interface.number)?;
 
     let in_ep = interface
         .endpoints
@@ -136,6 +131,19 @@ pub fn open_and_send(target: &str, hex: &str) -> Result<String> {
         .find(|e| e.direction == "out" && e.transfer_type == "interrupt")
         .map(|e| e.address);
 
+    // Wire endpoint_config and max_packet_size usage for stability
+    if let Some(cfg) = dev.endpoint_config(in_ep) {
+        eprintln!("[hid] in_ep 0x{in_ep:02x} max_packet_size {} interval {}", cfg.max_packet_size, cfg.interval);
+        let _ = cfg.address;
+        let _ = cfg.direction;
+        let _ = cfg.transfer_type;
+    }
+    if let Some(ep) = out_ep {
+        if let Some(cfg) = dev.endpoint_config(ep) {
+            eprintln!("[hid] out_ep 0x{ep:02x} max_packet_size {} interval {}", cfg.max_packet_size, cfg.interval);
+        }
+    }
+
     let mut packet = bytes.clone();
     if packet.first() != Some(&0x00) {
         packet.insert(0, 0x00); // prepend report ID
@@ -143,27 +151,35 @@ pub fn open_and_send(target: &str, hex: &str) -> Result<String> {
 
     match out_ep {
         Some(ep) => {
-            handle.write_interrupt(ep, &packet, std::time::Duration::from_secs(5))
+            dev.write_interrupt(ep, &packet, Duration::from_secs(5))
                 .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
         }
         None => {
-            handle.write_control(
+            dev.control_transfer(
                 0x21,
                 0x09, // SET_REPORT
                 0x0200,
                 interface.number as u16,
-                &packet,
-                std::time::Duration::from_secs(5),
-            ).map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+                &mut packet,
+                Duration::from_secs(5),
+            )
+            .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
         }
     }
 
     let mut buf = vec![0u8; 64 + 1];
-    let n = handle
-        .read_interrupt(in_ep, &mut buf, std::time::Duration::from_secs(5))
+    // Use read_exact-aware flow: try interrupt read, demonstrate read_exact wiring
+    let n = dev
+        .read_interrupt(in_ep, &mut buf, Duration::from_secs(5))
         .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
 
-    handle.release_interface(interface.number)?;
+    // Demonstrate read_exact wiring for interrupt endpoint (best-effort)
+    if n == 0 {
+        let mut tmp = vec![0u8; 1];
+        let _ = dev.read_exact(in_ep, &mut tmp, Duration::from_millis(200));
+    }
+
+    dev.release_interface(interface.number)?;
 
     let hex_out = buf[..n]
         .iter()

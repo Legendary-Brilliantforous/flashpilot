@@ -1690,7 +1690,7 @@ pub fn odin_flash_partition(
 
     set_total_bytes(&dev, total as u64).map_err(|e| e.to_string())?;
     let is_large = matches!(partition, "super" | "system" | "userdata");
-    let sequences = flash_one_partition_ext(
+    let sequences = flash_one_partition(
         &dev,
         &pit,
         partition,
@@ -1698,7 +1698,6 @@ pub fn odin_flash_partition(
         packet_size,
         legacy,
         is_large,
-        true, // single-partition flash = session last
     )
     .map_err(|e| e.to_string())?;
 

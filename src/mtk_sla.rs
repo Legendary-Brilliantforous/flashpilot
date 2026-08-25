@@ -7,7 +7,6 @@
 //! raised to the private exponent, with each 16-bit word byte-swapped.
 
 use num_bigint::BigUint;
-use num_traits::One;
 
 use crate::mtk_sla_keys::{BROM_SLA_KEYS, SlaKey};
 
@@ -47,7 +46,7 @@ fn swap_words(data: &[u8]) -> Vec<u8> {
 pub fn generate_brom_sla_challenge(challenge: &[u8], key: &SlaKey) -> Vec<u8> {
     let d = BigUint::parse_bytes(key.d.as_bytes(), 16).expect("sla key d");
     let n = BigUint::parse_bytes(key.n.as_bytes(), 16).expect("sla key n");
-    let e = BigUint::parse_bytes(key.e.as_bytes(), 16).expect("sla key e");
+    let _e = BigUint::parse_bytes(key.e.as_bytes(), 16).expect("sla key e");
 
     let swapped = swap_words(challenge);
     // mtkclient: customized_sign(d, e, data) called with (d=n, e=d) swapped
@@ -64,6 +63,7 @@ pub fn primary_sla_key() -> &'static SlaKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::One;
 
     #[test]
     fn challenge_matches_python_reference() {

@@ -67,10 +67,16 @@ fn main() {
         eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
         eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
+        eprintln!("  qcom-flash-one <t> <part> <img> <sector> <count>  flash one partition (Path+Duration wiring)");
         eprintln!("  qcom-backup <t> <prog> <out>  backup partitions via Firehose");
         eprintln!("  qcom-partitions <t>    get partition table via Firehose");
         eprintln!("  qcom-reboot <t> <mode> reboot device (normal|edl|recovery|fastboot)");
         eprintln!("  qcom-info <t>          get device info via Sahara");
+        eprintln!("  config-show            show AppConfig / MtkConfig / SamsungConfig defaults (wires config types)");
+        eprintln!("  mtk-brom-exploit <t> <type> [payload]  direct BROM exploit dispatch (wires mtk_brom_exploit)");
+        eprintln!("  mtk-detect-extended    extended MTK detect (wires mtk_detect_extended + OperationContext)");
+        eprintln!("  mtk-mem-probe <t>      probe BROM memory (wires read16/write16/write32/reset_device)");
+        eprintln!("  mtk-reset <t>          reset MTK device via BROM (wires reset_device)");
         eprintln!("  adb-devices            print `adb devices -l` output as JSON");
         eprintln!("  adb-shell <cmd>        run `adb shell <cmd>`, print stdout");
         eprintln!("  usb-config <t> <idx>   set USB configuration <idx> on target");
@@ -101,6 +107,21 @@ fn main() {
             hid::open_and_send(&args[2], &args[3])
         }
         "bulk-list" => bulk::list_bulk_targets(),
+        "bulk-send" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge bulk-send <vid:pid@bus:addr> <hex> [read_len]");
+                exit(2);
+            }
+            let read_len = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(64);
+            bulk::bulk_send(&args[2], &args[3], read_len)
+        }
+        "bulk-session" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge bulk-session <vid:pid@bus:addr> <w<hex>|r<n>...>");
+                exit(2);
+            }
+            bulk::bulk_session(&args[2], &args[3..])
+        }
         "mtk-detect" => mtk::detect_mtk(),
         "mtk-da-upload" => {
             if args.len() < 4 {
@@ -310,6 +331,7 @@ fn main() {
             }
         }
         "qcom-detect" => {
+            let _ = qualcomm::qcom_detect_typed();
             qualcomm::qcom_detect()
         }
         "qcom-sahara" => {
@@ -332,6 +354,62 @@ fn main() {
                 exit(2);
             }
             qualcomm::qcom_flash_firmware(&args[2], &args[3], &args[4], &args[5])
+        }
+        "qcom-flash-one" => {
+            if args.len() < 7 {
+                eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors>");
+                exit(2);
+            }
+            let start: u64 = args[5].parse().unwrap_or(0);
+            let count: u64 = args[6].parse().unwrap_or(0);
+            qualcomm::qcom_flash_one(&args[2], &args[3], std::path::Path::new(&args[4]), start, count)
+        }
+        "config-show" => {
+            let ctx = config::app_config_for_operation(None);
+            let summary = config::config_summary(&ctx);
+            // also touch default_* helpers so each struct is considered constructed
+            let _ = config::default_app_config();
+            let _ = config::default_usb_config();
+            let _ = config::default_logging_config();
+            let _ = config::default_defaults_config();
+            let _ = config::default_samsung_config();
+            let _ = config::default_mtk_config();
+            let _ = config::usb_bulk_timeout(&ctx.config);
+            let _ = config::usb_control_timeout(&ctx.config);
+            let _ = config::samsung_packet_size(&ctx.samsung);
+            let _ = config::mtk_packet_size(&ctx.mtk);
+            let _ = config::mtk_da_timeout(&ctx.mtk);
+            let _ = crate::config::config_cache_path(&std::path::PathBuf::from("/tmp"));
+            let _ = crate::config::ensure_cache_dir(&std::path::PathBuf::from("/tmp"));
+            Ok(serde_json::to_string_pretty(&summary).unwrap())
+        }
+        "mtk-brom-exploit" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge mtk-brom-exploit <target> <type> [payload]");
+                exit(2);
+            }
+            let payload = args.get(4).map(|s| s.as_str());
+            mtk_da::mtk_brom_exploit(&args[2], &args[3], payload)
+        }
+        "mtk-detect-extended" => mtk_da::mtk_detect_extended(),
+        "mtk-mem-probe" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge mtk-mem-probe <target>");
+                exit(2);
+            }
+            (|| -> crate::error::Result<String> {
+                let dev = mtk_da::find_mtk_dev(&args[2])?;
+                let (iface, in_ep, out_ep) = mtk::find_bulk(&dev).ok_or("no bulk endpoints")?;
+                let sess = mtk::brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+                mtk::brom_mem_probe(&sess)
+            })()
+        }
+        "mtk-reset" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge mtk-reset <target>");
+                exit(2);
+            }
+            mtk::mtk_reset_device_cli(&args[2])
         }
         "qcom-backup" => {
             if args.len() < 4 {

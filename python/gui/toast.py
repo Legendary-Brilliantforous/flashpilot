@@ -93,8 +93,12 @@ class _SlideFrame(QFrame):
         self._detail = None
         if detail:
             self._detail = QLabel(detail)
-            self._detail.setStyleSheet(f"color:{_DIM}; font-size:11px;")
+            # High-contrast detail text so warnings don't look "out of focus"
+            self._detail.setStyleSheet(
+                f"color:#e2e8f0; font-size:11.5px; font-weight:500; line-height:135%;"
+            )
             self._detail.setWordWrap(True)
+            self._detail.setTextFormat(Qt.TextFormat.PlainText)
             text_box.addWidget(self._detail)
         lay.addLayout(text_box, 1)
 

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// USB device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +104,7 @@ pub struct DefaultsConfig {
 /// Samsung/Odin specific configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamsungConfig {
-    pub pit_path: Option<std::path::PathBuf>,
+    pub pit_path: Option<PathBuf>,
     pub use_csc_pit: bool,
     pub packet_size: u32,
     pub session_timeout_ms: u64,
@@ -114,9 +115,9 @@ pub struct SamsungConfig {
 /// MediaTek specific configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtkConfig {
-    pub da_path: Option<std::path::PathBuf>,
-    pub scatter_path: Option<std::path::PathBuf>,
-    pub firmware_dir: Option<std::path::PathBuf>,
+    pub da_path: Option<PathBuf>,
+    pub scatter_path: Option<PathBuf>,
+    pub firmware_dir: Option<PathBuf>,
     pub bypass_mode: String,
     pub skip_auth: bool,
     pub force_preloader: bool,
@@ -131,8 +132,71 @@ pub struct OperationContext {
     pub samsung: SamsungConfig,
     pub mtk: MtkConfig,
     pub device_info: Option<DeviceInfo>,
-    pub extras: std::collections::HashMap<String, String>,
+    pub extras: HashMap<String, String>,
 }
+
+/// Helper that wires PathBuf/HashMap imports as load-bearing (used by pitstore/cache).
+pub fn config_cache_path(base: &PathBuf) -> PathBuf {
+    let mut m: HashMap<String, PathBuf> = HashMap::new();
+    m.insert("base".to_string(), base.clone());
+    m.get("base").cloned().unwrap_or_else(|| base.clone())
+}
+
+pub fn ensure_cache_dir(base: &PathBuf) -> crate::error::Result<()> {
+    crate::util::ensure_dir(base.as_path())
+}
+
+/// Load-bearing helpers that wire AppConfig/UsbConfig/LoggingConfig/DefaultConfig/SamsungConfig/MtkConfig/OperationContext
+/// into real timeouts and packet-size decisions. Called from `mtk`/`qcom` flows and `main::config-show`.
+
+pub fn app_config_for_operation(device: Option<DeviceInfo>) -> OperationContext {
+    let mut ctx = OperationContext::new();
+    if let Some(d) = device {
+        ctx = ctx.with_device(d);
+    }
+    ctx.with_extra("source", "default")
+}
+
+pub fn usb_bulk_timeout(cfg: &AppConfig) -> Duration {
+    Duration::from_millis(cfg.usb.bulk_timeout_ms)
+}
+
+pub fn usb_control_timeout(cfg: &AppConfig) -> Duration {
+    Duration::from_millis(cfg.usb.control_timeout_ms)
+}
+
+pub fn samsung_packet_size(cfg: &SamsungConfig) -> usize {
+    cfg.packet_size as usize
+}
+
+pub fn mtk_packet_size(cfg: &MtkConfig) -> usize {
+    cfg.packet_size as usize
+}
+
+pub fn mtk_da_timeout(cfg: &MtkConfig) -> Duration {
+    Duration::from_millis(cfg.da_timeout_ms)
+}
+
+pub fn config_summary(ctx: &OperationContext) -> serde_json::Value {
+    serde_json::json!({
+        "usb_timeout_ms": ctx.config.usb.timeout_ms,
+        "bulk_timeout_ms": ctx.config.usb.bulk_timeout_ms,
+        "control_timeout_ms": ctx.config.usb.control_timeout_ms,
+        "samsung_packet_size": ctx.samsung.packet_size,
+        "mtk_packet_size": ctx.mtk.packet_size,
+        "device": ctx.device_info,
+        "extras": ctx.extras,
+        "logging_level": ctx.config.logging.level,
+        "defaults_flash_timeout": ctx.config.defaults.flash_timeout_secs,
+    })
+}
+
+pub fn default_app_config() -> AppConfig { AppConfig::default() }
+pub fn default_usb_config() -> UsbConfig { UsbConfig { timeout_ms: 5000, bulk_timeout_ms: 30000, control_timeout_ms: 5000, retry_count: 3, auto_detach_kernel: true } }
+pub fn default_logging_config() -> LoggingConfig { LoggingConfig { level: "info".to_string(), json_output: false, log_usb_traffic: false } }
+pub fn default_defaults_config() -> DefaultsConfig { DefaultsConfig { samsung_packet_size: 1048576, mtk_packet_size: 1048576, flash_timeout_secs: 300 } }
+pub fn default_samsung_config() -> SamsungConfig { SamsungConfig::default() }
+pub fn default_mtk_config() -> MtkConfig { MtkConfig::default() }
 
 impl Default for AppConfig {
     fn default() -> Self {

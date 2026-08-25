@@ -134,22 +134,22 @@ impl FirehoseResponse {
         loop {
             match reader.read_event() {
                 Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     for attr in e.attributes() {
-                        let attr = attr.map_err(|e| crate::error::BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e.to_string())))?;
+                        let attr = attr.map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
                         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
                         let value = String::from_utf8_lossy(&attr.value).to_string();
                         data.insert(key, value);
                     }
                 }
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().map_err(|e| crate::error::BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e.to_string())))?;
+                    let text = e.unescape().map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
                     if text.trim().starts_with("<log>") {
                         log = Some(text.to_string());
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(e) => return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e.to_string()))),
+                Err(e) => return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string()))),
                 _ => {}
             }
         }
@@ -176,7 +176,7 @@ impl FirehoseResponse {
 
 /// Firehose session
 pub struct FirehoseSession {
-    pub device: crate::usb::UsbDevice,
+    pub device: UsbDevice,
     pub in_ep: u8,
     pub out_ep: u8,
     pub max_payload_from: u32,
@@ -187,9 +187,9 @@ pub struct FirehoseSession {
 }
 
 impl FirehoseSession {
-    pub fn new(mut device: crate::usb::UsbDevice) -> Result<Self> {
+    pub fn new(mut device: UsbDevice) -> Result<Self> {
         let (in_ep, out_ep) = device.find_bulk_endpoints(0)
-            .ok_or_else(|| crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            .ok_or_else(|| BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: "No bulk endpoints".to_string(),
             }))?;
 
@@ -210,14 +210,21 @@ impl FirehoseSession {
 
     pub fn send_command(&mut self, packet: &FirehosePacket) -> Result<FirehoseResponse> {
         let xml = packet.to_xml();
-        self.device.write_bulk(self.out_ep, xml.as_bytes(), std::time::Duration::from_secs(30))?;
+        let timeout = Duration::from_secs(30);
+        self.device.write_bulk(self.out_ep, xml.as_bytes(), timeout)?;
         
         let mut buf = vec![0u8; 64 * 1024];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, std::time::Duration::from_secs(30))?;
+        let n = self.device.read_bulk(self.in_ep, &mut buf, timeout)?;
         buf.truncate(n);
         
         let xml_str = String::from_utf8_lossy(&buf).to_string();
         FirehoseResponse::from_xml(&xml_str)
+    }
+
+    /// Send a raw Firehose command by name using FirehosePacket::new (wires new() as load-bearing)
+    pub fn send_raw_command(&mut self, name: &str) -> Result<FirehoseResponse> {
+        let pkt = FirehosePacket::new(name);
+        self.send_command(&pkt)
     }
 
     pub fn configure(&mut self, target: &str, memory_name: Option<&str>) -> Result<()> {
@@ -227,7 +234,7 @@ impl FirehoseSession {
         
         let resp = self.send_command(&packet)?;
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Configure failed: {:?}", resp.error),
             }));
         }
@@ -250,7 +257,7 @@ impl FirehoseSession {
         let resp = self.send_command(&packet)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Get partition table failed: {:?}", resp.error),
             }));
         }
@@ -312,16 +319,22 @@ impl FirehoseSession {
         }
     }
 
-    pub fn program_partition(&mut self, partition_name: &str, file_path: &std::path::Path, 
+    pub fn program_partition(&mut self, partition_name: &str, file_path: &Path, 
                              start_sector: u64, num_sectors: u64) -> Result<()> {
+        if !file_path.exists() {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("file not found: {}", file_path.display()) }));
+        }
         let file = std::fs::File::open(file_path)?;
         let file_size = file.metadata()?.len();
         
-        let packet = crate::qualcomm::firehose::FirehosePacket::program(
+        let packet = FirehosePacket::program(
             partition_name, 512, num_sectors, start_sector,
             self.physical_partition, false, None, None);
         
-        self.send_command(&packet)?;
+        let resp = self.send_command(&packet)?;
+        if !resp.is_success() {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("program {:?} rejected: {:?}", partition_name, resp.error) }));
+        }
         self.send_file_data(file, file_size)?;
         Ok(())
     }
@@ -329,6 +342,7 @@ impl FirehoseSession {
     pub fn send_file_data(&mut self, mut file: std::fs::File, file_size: u64) -> Result<()> {
         let mut buffer = vec![0u8; self.max_payload_to as usize];
         let mut total_sent = 0u64;
+        let timeout = Duration::from_secs(super::super::config::default_app_config().defaults.flash_timeout_secs);
         
         use std::io::Read;
         
@@ -337,20 +351,20 @@ impl FirehoseSession {
             let n = file.read(&mut buffer[..chunk_size])?;
             if n == 0 { break; }
             
-            self.device.write_bulk(self.out_ep, &buffer[..n], std::time::Duration::from_secs(30))?;
+            self.device.write_bulk(self.out_ep, &buffer[..n], timeout)?;
             total_sent += n as u64;
         }
         
         // Read final response
         let mut buf = vec![0u8; 4096];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, std::time::Duration::from_secs(30))?;
+        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(30))?;
         buf.truncate(n);
         
         let xml_str = String::from_utf8_lossy(&buf).to_string();
         let resp = FirehoseResponse::from_xml(&xml_str)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("File data transfer failed: {:?}", resp.error),
             }));
         }
@@ -358,14 +372,14 @@ impl FirehoseSession {
         Ok(())
     }
 
-    pub fn read_partition(&mut self, partition_name: &str, output_path: &std::path::Path, 
+    pub fn read_partition(&mut self, partition_name: &str, output_path: &Path, 
                           start_sector: u64, num_sectors: u64) -> Result<()> {
-        let packet = crate::qualcomm::firehose::FirehosePacket::read(
+        let packet = FirehosePacket::read(
             start_sector, num_sectors, self.physical_partition, partition_name);
         let resp = self.send_command(&packet)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Read command failed: {:?}", resp.error),
             }));
         }
@@ -374,10 +388,11 @@ impl FirehoseSession {
         let expected_size = num_sectors * self.sector_size as u64;
         let mut total_received = 0u64;
         let mut buffer = vec![0u8; self.max_payload_from as usize];
+        let timeout = Duration::from_secs(30);
         
         while total_received < expected_size {
             let chunk_size = std::cmp::min(self.max_payload_from as usize, (expected_size - total_received) as usize);
-            let n = self.device.read_bulk(self.in_ep, &mut buffer[..chunk_size], std::time::Duration::from_secs(30))?;
+            let n = self.device.read_bulk(self.in_ep, &mut buffer[..chunk_size], timeout)?;
             if n == 0 { break; }
             
             use std::io::Write;
@@ -393,7 +408,7 @@ impl FirehoseSession {
         let resp = self.send_command(&packet)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Erase failed: {:?}", resp.error),
             }));
         }
@@ -405,7 +420,7 @@ impl FirehoseSession {
         let resp = self.send_command(&packet)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Power command failed: {:?}", resp.error),
             }));
         }
@@ -417,11 +432,16 @@ impl FirehoseSession {
         let resp = self.send_command(&packet)?;
         
         if !resp.is_success() {
-            return Err(crate::error::BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
                 cmd: 0, sub: 0, reason: format!("Reset failed: {:?}", resp.error),
             }));
         }
         Ok(())
+    }
+
+    pub fn device_info(&self) -> (u32, u32, Duration) {
+        let cfg = crate::config::default_app_config();
+        (self.max_payload_to, self.sector_size, Duration::from_millis(cfg.usb.bulk_timeout_ms))
     }
 }
 
