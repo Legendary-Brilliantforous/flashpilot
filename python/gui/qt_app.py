@@ -3278,7 +3278,7 @@ class FrpWindow(QMainWindow):
 
         # right: live device metric cards (model / mode / interface / adb / pit)
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setSpacing(14)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         self.info = {}
@@ -4234,14 +4234,22 @@ class FrpWindow(QMainWindow):
         console_row.addStretch(1)
 
         self.wrap_btn = self._tool_button("Wrap", self._toggle_wrap)
+        self.wrap_btn.setFixedWidth(52)
+        self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
         self.clear_btn = self._tool_button("Clear", self._clear_console)
+        self.clear_btn.setFixedWidth(52)
+        self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.clear_btn.setToolTip("Clear console (Ctrl+L)")
         console_row.addWidget(self.clear_btn)
         self.copy_btn = self._tool_button("Copy", self._copy_console)
+        self.copy_btn.setFixedWidth(52)
+        self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.copy_btn.setToolTip("Copy console to clipboard (Ctrl+Shift+C)")
         console_row.addWidget(self.copy_btn)
         self.save_btn = self._tool_button("Save", self._save_console)
+        self.save_btn.setFixedWidth(52)
+        self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.save_btn.setToolTip("Save console to a text file (Ctrl+S)")
         console_row.addWidget(self.save_btn)
         lay.addLayout(console_row)
@@ -8418,9 +8426,18 @@ class FrpWindow(QMainWindow):
     # --- Appearance --------------------------------------------------------
     def _build_settings_appearance(self):
         page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(14)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(18)
 
         # THEME — advanced grid with live whole-app preview (10 themes)
         bl = self._settings_box("THEME — whole-app accent (live)", lay)
@@ -8438,11 +8455,11 @@ class FrpWindow(QMainWindow):
         )
         # Premium theme preview — 10 cards with gradient + name, click to apply
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setSpacing(14)
         for idx, (th, tok) in enumerate(ACCENT_THEMES.items()):
             card = QFrame()
             card.setCursor(Qt.CursorShape.PointingHandCursor)
-            card.setFixedHeight(54)
+            card.setFixedHeight(68)
             card.setStyleSheet(
                 f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['grad_b']});"
                 f" border: 2px solid {tok['accent_hi'] if self.settings.value('theme')==th else tok['border'] if 'border' in tok else 'rgba(255,255,255,20)'};"
@@ -8461,7 +8478,7 @@ class FrpWindow(QMainWindow):
             cl.addWidget(hexlbl)
             # Click applies theme and rebuilds whole app
             card.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
-            r, c = divmod(idx, 5)
+            r, c = divmod(idx, 3)
             grid.addWidget(card, r, c)
         bl.addLayout(grid)
         # Live preview hint
@@ -8557,6 +8574,8 @@ class FrpWindow(QMainWindow):
         self._settings_row(bl4, "Base font size", "Applies to console and cards (restart to fully apply).", self._s_font)
 
         lay.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
         return page
 
     def _apply_theme(self, name):
