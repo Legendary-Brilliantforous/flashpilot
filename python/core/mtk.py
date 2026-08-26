@@ -50,8 +50,8 @@ BOOT_STAGE = {
 
 # pid -> boot stage (for USB-detect entries that lack mtk-detect data).
 _PID_STAGE = {
-    0x2000: "brom",
-    0x0003: "preloader",
+    0x0003: "brom",
+    0x2000: "preloader",
     0x0004: "da",
     0x1004: "da",
     0x0a0a: "mtk-adb",
