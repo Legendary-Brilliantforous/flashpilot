@@ -4323,6 +4323,7 @@ class FlashPilotWindow(QMainWindow):
             deadline = _time.monotonic() + 240
             attempt = 0
             beat = 0.0
+            crash_cd = 0.0
             os.environ["MTK_PRELOADER_OUT"] = out
             try:
                 while _time.monotonic() < deadline:
@@ -4355,6 +4356,26 @@ class FlashPilotWindow(QMainWindow):
                     if not d:
                         _time.sleep(0.7)
                         continue
+
+                    # PRELOADER-held (0x2000): fire crash-to-BROM, then keep
+                    # polling for the true BROM window instead of wasting a
+                    # kamakiri attempt on a port that cannot handshake.
+                    if stage == "preloader":
+                        tgt2000 = f"{d.get('bus')}:{d.get('address')}"
+                        if _time.monotonic() >= crash_cd:
+                            crash_cd = _time.monotonic() + 6.0
+                            self._ui.line.emit(
+                                f"  preloader 0e8d:2000 caught - sending "
+                                f"crash-to-BROM ({tgt2000}) ...")
+                            try:
+                                res = bridge._run(
+                                    ["mtk-crash-brom", tgt2000], timeout=25)
+                                self._ui.line.emit(res)
+                            except Exception as e:  # noqa: BLE001
+                                self._ui.line.emit(f"  crash send failed: {e}")
+                        _time.sleep(1.2)
+                        continue
+
                     target = f"{d.get('bus')}:{d.get('address')}"
                     attempt += 1
                     self._ui.line.emit(

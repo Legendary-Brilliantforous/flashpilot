@@ -73,6 +73,7 @@ fn main() {
         eprintln!("  qcom-reboot <t> <mode> reboot device (normal|edl|recovery|fastboot)");
         eprintln!("  qcom-info <t>          get device info via Sahara");
         eprintln!("  config-show            show AppConfig / MtkConfig / SamsungConfig defaults (wires config types)");
+        eprintln!("  mtk-crash-brom <bus:addr>  crash PRELOADER (2000) into BootROM\n");
         eprintln!("  mtk-brom-exploit <t> <type> [payload]  direct BROM exploit dispatch (wires mtk_brom_exploit)");
         eprintln!("  mtk-detect-extended    extended MTK detect (wires mtk_detect_extended + OperationContext)");
         eprintln!("  mtk-mem-probe <t>      probe BROM memory (wires read16/write16/write32/reset_device)");
@@ -389,6 +390,18 @@ fn main() {
             let _ = crate::config::config_cache_path(&std::path::PathBuf::from("/tmp"));
             let _ = crate::config::ensure_cache_dir(&std::path::PathBuf::from("/tmp"));
             Ok(serde_json::to_string_pretty(&summary).unwrap())
+        }
+        "mtk-crash-brom" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge mtk-crash-brom <bus:addr>");
+                exit(2);
+            }
+            let loc: Vec<&str> = args[2].split(':').collect();
+            let (bus, addr) = match (loc[0].parse::<u8>(), loc[1].parse::<u8>()) {
+                (Ok(b), Ok(a)) => (b, a),
+                _ => { eprintln!("error: bad bus:addr"); exit(2); }
+            };
+            mtk_exploit::preloader_crash_to_brom(bus, addr)
         }
         "mtk-brom-exploit" => {
             if args.len() < 4 {
