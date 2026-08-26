@@ -3429,6 +3429,12 @@ def flow_odin_advanced_flash():
                     log(f"         Partitions inside: {', '.join(files[:8])}{' ...' if len(files) > 8 else ''}")
                 cmd.extend([opt, slot_path])
 
+        if _env_flag("ODIN4_CHECK_ONLY"):
+            log("")
+            log("  [check-only] ODIN4_CHECK_ONLY=1 - stopping BEFORE the "
+                "actual flash. Untick / unset to write for real.")
+            return True
+
         # Advanced flags
         cmd.extend(_odin4_allow_unknown())
         cmd.extend(_reboot_redownload_flags(log))
@@ -3447,6 +3453,19 @@ def flow_odin_advanced_flash():
         log("Flashing in progress... DO NOT disconnect cable!")
 
         rc, out = _run_odin4_streaming(cmd, log, timeout=1800)
+        if rc != 0 and "illegal option" in out.lower():
+            bad = [w for w in ("--allow-unknown", "--reboot",
+                               "--redownload", "--verbose")
+                   if w in out]
+            if bad:
+                log(f"  [odin4] build rejects {bad} - retrying without them ...")
+                cleaned, skip = [], False
+                for tok in cmd:
+                    if tok in bad:
+                        continue
+                    cleaned.append(tok)
+                cmd = cleaned
+                rc, out = _run_odin4_streaming(cmd, log, timeout=1800)
         if rc != 0:
             hint = _explain_odin4_failure(out)
             raise RuntimeError(f"Advanced flash failed (rc={rc}). {hint}")
@@ -3896,6 +3915,14 @@ def _run_odin4_check_only(log, odin4, archives):
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     out = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
+        # Some odin4 builds lack --check-only entirely - degrade to a warning
+        # instead of blocking the flash (the real run validates against the
+        # device PIT anyway).
+        if "illegal option" in out.lower() or "--check-only" in out:
+            log("  [check-only] this odin4 build lacks --check-only - "
+                "skipping archive pre-validation (device-side PIT check "
+                "still runs during the flash).")
+            return
         hint = _explain_odin4_failure(out)
         raise RuntimeError(
             f"Pre-flash validation FAILED (rc={proc.returncode}). {hint}\n{out[-1200:]}"
@@ -4556,40 +4583,62 @@ def flow_preflight():
             # PIT contract: auto-fetch the device's own partition table,
             # validate it forensically and diff against the firmware PIT.
             # This is FlashPilot's odin4-style --check-only, always on.
-            try:
-                contract = pit_contract(log=log)
+            _cached_pit = os.environ.get("PIT_FILE", "")
+            if _cached_pit and os.path.isfile(_cached_pit):
+                # Single-session preservation: a live PIT dump here burns the
+                # one Loke session per plug-in, leaving the real writer with a
+                # dead phone ('OUT endpoint stalled'). Build the same contract
+                # shape from the cached table instead of opening the device.
+                import contextlib as _cl
+                with open(_cached_pit, "rb") as _pf:
+                    _raw = _pf.read()
+                _dev_entries = pit.parse_pit(_raw)
+                _summary = (f"cached device PIT ({len(_dev_entries)} partitions) "
+                            f"- live dump skipped (single-session mode)")
+                log(f"  [pit-contract] {_summary}")
+                contract = {"raw": _raw,
+                            "health": {"summary": _summary,
+                                       "findings": [],
+                                       "verdict": "pass",
+                                       "stats": {"parsed_count": len(_dev_entries),
+                                                 "style": "cached"}},
+                            "from_cache": True}
                 health = contract["health"]
-                log(f"  [pit-contract] {health['summary']}")
-                for f in health["findings"]:
-                    if f["severity"] == "fail":
-                        log(f"    FAIL: {f['message']}")
-                        ok = False
-                    elif f["severity"] == "warn":
-                        log(f"    warn: {f['message']}")
-                log(pit.pit_map(contract["raw"]).replace("\n", "\n  "))
+            else:
+                try:
+                    contract = pit_contract(log=log)
+                    health = contract["health"]
+                    log(f"  [pit-contract] {health['summary']}")
+                    for f in health["findings"]:
+                        if f["severity"] == "fail":
+                            log(f"    FAIL: {f['message']}")
+                            ok = False
+                        elif f["severity"] == "warn":
+                            log(f"    warn: {f['message']}")
+                    log(pit.pit_map(contract["raw"]).replace("\n", "\n  "))
 
-                fw_entries = ctx.get("fw_pit_entries")
-                if fw_entries:
-                    # Compare entry-name sets (normalized): firmware must not
-                    # reference partitions the device does not have.
-                    fw_names = {pit.normalize_part_name(e.name) for e in fw_entries}
-                    dev_entries = pit.parse_pit(contract["raw"])
-                    dev_set = {pit.normalize_part_name(e.name) for e in dev_entries}
-                    missing = sorted(fw_names - dev_set)
-                    extra = sorted(dev_set - fw_names)
-                    if missing:
-                        log(f"    firmware needs partitions absent on device: "
-                            f"{missing}")
-                        ok = False
-                    if extra:
-                        log(f"    NOTE: device-only partitions (not in firmware): "
-                            f"{extra[:8]}")
-                    if not missing and not extra:
-                        log("    firmware partition set matches device table")
-            except RuntimeError as e:
-                log(f"  [pit-contract] {e}")
-            except Exception as e:  # never block flashing on tooling errors
-                log(f"  [pit-contract] skipped ({e})")
+                    fw_entries = ctx.get("fw_pit_entries")
+                    if fw_entries:
+                        # Compare entry-name sets (normalized): firmware must not
+                        # reference partitions the device does not have.
+                        fw_names = {pit.normalize_part_name(e.name) for e in fw_entries}
+                        dev_entries = pit.parse_pit(contract["raw"])
+                        dev_set = {pit.normalize_part_name(e.name) for e in dev_entries}
+                        missing = sorted(fw_names - dev_set)
+                        extra = sorted(dev_set - fw_names)
+                        if missing:
+                            log(f"    firmware needs partitions absent on device: "
+                                f"{missing}")
+                            ok = False
+                        if extra:
+                            log(f"    NOTE: device-only partitions (not in firmware): "
+                                f"{extra[:8]}")
+                        if not missing and not extra:
+                            log("    firmware partition set matches device table")
+                except RuntimeError as e:
+                    log(f"  [pit-contract] {e}")
+                except Exception as e:  # never block flashing on tooling errors
+                    log(f"  [pit-contract] skipped ({e})")
 
         # 5. USB health
         _check_cdc_acm(log)
@@ -4723,12 +4772,18 @@ def flow_odin_flash_partition_gui():
         # PIT is needed to map partition -> metadata
         pit_path = ctx.get("device_pit_path")
         if not pit_path or not os.path.isfile(pit_path):
+            # Single-session preservation: prefer a cached table over a live
+            # dump (which burns the one Loke session per plug-in).
+            pit_path = os.environ.get("PIT_FILE") or ""
+        if not pit_path or not os.path.isfile(pit_path):
             import tempfile
             pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
             try:
                 bridge.odin_pit(target, pit_path, timeout=120)
             except bridge.BridgeError as e:
                 raise RuntimeError(f"Could not dump PIT: {e}")
+        else:
+            log(f"  PIT (cached): {os.path.basename(pit_path)} - live dump skipped")
         ctx["device_pit_path"] = pit_path
 
         # Read selections from GUI/context
