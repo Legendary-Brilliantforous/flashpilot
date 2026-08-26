@@ -2758,6 +2758,19 @@ class FlashPilotWindow(QMainWindow):
 
         # BL downgrade override row (native multi-partition flash gate)
         opt_row3 = FlowLayout(spacing=8)
+        self.skip_efs_cb = QCheckBox("Skip EFS backup requirement (ODIN4_SKIP_BACKUP=1)")
+        self.skip_efs_cb.setChecked(False)
+        self.skip_efs_cb.setToolTip(
+            "OFF by default (safety). The flash refuses to run without a recent\n"
+            "EFS backup (<30 days) or an authorized-ADB auto-backup. Tick this\n"
+            "ONLY if you already have backups elsewhere - EFS holds IMEI/radio\n"
+            "calibration; losing it without a backup is unrecoverable."
+        )
+        self.skip_efs_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row3.addWidget(self.skip_efs_cb)
         self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
         self.force_bl_cb.setChecked(False)
         self.force_bl_cb.setToolTip(
@@ -9764,6 +9777,7 @@ class FlashPilotWindow(QMainWindow):
             os.environ["ODIN4_REDOWNLOAD"] = "1" if self.redownload_cb.isChecked() else "0"
             os.environ["ODIN4_VERBOSE"] = "1" if self.verbose_cb.isChecked() else "0"
             os.environ["ODIN4_FORCE_BL"] = "1" if self.force_bl_cb.isChecked() else "0"
+            os.environ["ODIN4_SKIP_BACKUP"] = "1" if self.skip_efs_cb.isChecked() else "0"
             os.environ["VBMETA_PATCH"] = "1" if self.vbmeta_patch_cb.isChecked() else "0"
             # GUI-triggered Odin flows must flash ONLY the files the user
             # picked in the slots - never auto-discover in ~/Downloads.
