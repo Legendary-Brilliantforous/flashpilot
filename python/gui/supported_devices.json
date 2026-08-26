@@ -8,9 +8,9 @@
       "icon": "\u25c9",
       "models": [
         {
-          "model": "Galaxy A14 / A14 5G",
-          "chip": "Exynos 1330 / Helio G80",
-          "vid": "04e8",
+          "model": "Galaxy A14 (SM-A145F/M/P \u00b7 SM-A146B/P)",
+          "chip": "Exynos 850 / Exynos 1330 / Helio G80 (variant-dependent)",
+          "vid": "04e8|0e8d",
           "engine": "odin",
           "status": "researched",
           "actions": [
@@ -20,7 +20,7 @@
             "flash",
             "kg_unlock"
           ],
-          "notes": "SM-A146B PIT reversed; frp partition known; AT KG chain tested."
+          "notes": "A145P = MTK Helio G80/MT6765 variant (shows 0e8d:2000 preloader when off+plugged; BROM dump via preloader-crash, MT6765 in kamakiri table). FRP fastest via Download Mode (04e8:685d) -> Samsung tab FLASH flows. Check your exact variant: dial *#1234#."
         },
         {
           "model": "Galaxy A15 / A15 5G",
