@@ -151,7 +151,49 @@ QFrame#sbox {{
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(18,28,44,180), stop:1 rgba(9,15,27,200));
     border: 1px solid {C['glass_border']}; border-radius: 14px;
 }}
+
+/* ---- premium component layer ---- */
+QToolTip {{
+    background-color: #101a26; color: {C['text_hi']};
+    border: 1px solid {C['border_hi']}; border-radius: 10px; padding: 9px 12px;
+    font-size: 12px;
+}}
+QLineEdit {{
+    background: {C['inset']};
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 9px;
+    padding: 8px 12px;
+    color: {C['text_hi']};
+    selection-background-color: {C['accent']};
+    selection-color: #ffffff;
+}}
+QLineEdit:hover {{ border-color: rgba(255,255,255,0.14); }}
+QLineEdit:focus {{ border: 1px solid {C['accent']}; background: {C['card']}; }}
+QPushButton {{
+    border-radius: 9px; padding: 7px 14px; font-size: 12px; font-weight: 600;
+}}
+QCheckBox {{ color: {C['text']}; spacing: 7px; }}
+QCheckBox::indicator {{ width: 16px; height: 16px;
+    border: 1px solid rgba(255,255,255,0.18); border-radius: 5px; background: {C['inset']}; }}
+QCheckBox::indicator:hover {{ border-color: {C['accent']}; }}
+QCheckBox::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
+QComboBox QAbstractItemView {{
+    background-color: {C['panel']};
+    border: 1px solid {C['border_hi']}; border-radius: 12px;
+    color: {C['text']}; outline: 0; padding: 6px;
+}}
+QScrollBar:vertical {{ background: transparent; width: 7px; margin: 2px; }}
+QScrollBar::handle:vertical {{
+    background: rgba(255,255,255,0.13); border-radius: 3px; min-height: 28px;
+}}
+QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
+QScrollBar:horizontal {{ background: transparent; height: 7px; margin: 2px; }}
+QScrollBar::handle:horizontal {{
+    background: rgba(255,255,255,0.13); border-radius: 3px; min-width: 28px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {C['accent']}; }}
 """
+
 
 
 def _get_base_qss():
@@ -234,74 +276,91 @@ def _btn_primary():
     return f"""
     QPushButton {{
         border: 1px solid {C['accent']};
-        border-radius: 8px;
-        padding: 7px 16px;
+        border-radius: 9px;
+        padding: 8px 18px;
         font-size: 12px;
         font-weight: 700;
-        letter-spacing: 0.3px;
+        letter-spacing: 0.2px;
         color: #04121a;
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                    stop:0 {C['grad_a']}, stop:1 {C['grad_b']});
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                    stop:0 {C['grad_b']}, stop:1 {C['grad_a']});
     }}
-    QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                    stop:0 {C['accent']}, stop:1 #67e8f9);
-                         border: 1px solid {C['accent_hi']}; }}
-    QPushButton:pressed {{ background: {C['grad_a']};
-                          border: 1px solid {C['accent_hi']}; }}
-    QPushButton:disabled {{ background: {C['border']}; color: {C['mute']};
-                           border: 1px solid {C['border']}; }}
+    QPushButton:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                    stop:0 {C['accent_hi']}, stop:1 {C['accent']});
+        border-color: {C['accent_hi']};
+    }}
+    QPushButton:pressed {{ background: {C['grad_a']}; }}
+    QPushButton:focus {{ border-color: {C['accent_hi']}; }}
+    QPushButton:disabled {{ background: rgba(255,255,255,14); color: {C['mute']};
+                            border-color: {C['border']}; }}
     """
 
 
 def _card_qss():
-    """Premium glassmorphism card: translucent frosted glass with soft blur,
-    14px radius, inner highlight and accent left edge."""
+    """Glass surface v2: hairline border + inner top highlight + hover lift."""
     return (
         f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(18, 28, 44, 210), stop:1 rgba(9, 15, 27, 230));"
-        f" border: 1px solid {C['glass_border']}; border-left: 2.5px solid {C['accent']};"
-        f" border-top: 1px solid rgba(255,255,255,0.10);"
-        f" border-radius: 14px; }}"
+        f" stop:0 rgba(20, 31, 48, 215), stop:1 rgba(9, 15, 27, 235));"
+        f" border: 1px solid rgba(255,255,255,0.07);"
+        f" border-left: 2px solid {C['accent']};"
+        f" border-top: 1px solid rgba(255,255,255,0.06);"
+        f" border-radius: 16px; }}"
+        f"QFrame#card:hover {{ border-color: rgba(255,255,255,0.12);"
+        f" border-left-color: {C['accent_hi']}; }}"
         f"QFrame#sbox {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(18, 28, 44, 180), stop:1 rgba(9, 15, 27, 200));"
-        f" border: 1px solid {C['glass_border']}; border-top: 1px solid rgba(255,255,255,0.08);"
-        f" border-radius: 14px; }}"
+        f" stop:0 rgba(18, 28, 44, 185), stop:1 rgba(9, 15, 27, 205));"
+        f" border: 1px solid rgba(255,255,255,0.055);"
+        f" border-top: 1px solid rgba(255,255,255,0.05);"
+        f" border-radius: 16px; }}"
     )
 
 
 def _btn_ghost():
     return f"""
     QPushButton {{
-        border: 1px solid {C['border']};
-        border-radius: 8px;
-        padding: 6px 12px;
+        border: 1px solid rgba(255,255,255,0.09);
+        border-radius: 9px;
+        padding: 7px 14px;
         font-size: 12px;
         font-weight: 600;
+        letter-spacing: 0.2px;
         color: {C['text']};
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                    stop:0 {C['card']}, stop:1 {C['inset']});
+        background: rgba(255,255,255,10);
     }}
-    QPushButton:hover {{ border: 1px solid {C['accent']}; color: {C['accent_hi']};
-                        background: {C['card_hover']}; }}
+    QPushButton:hover {{
+        border: 1px solid {C['accent']};
+        color: {C['accent_hi']};
+        background: rgba(255,255,255,22);
+    }}
     QPushButton:pressed {{ background: {C['accent_dim']}; color: #fff; }}
-    QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; background: {C['card']}; }}
+    QPushButton:focus {{ border-color: {C['accent_hi']}; }}
+    QPushButton:disabled {{ color: {C['mute']}; border-color: rgba(255,255,255,6);
+                            background: transparent; }}
     """
 
 
 def _btn_danger():
     return f"""
     QPushButton {{
-        border: 1px solid {C['err']};
-        border-radius: 6px;
-        padding: 6px 12px;
+        border: 1px solid rgba(239,68,68,0.55);
+        border-radius: 9px;
+        padding: 7px 14px;
         font-size: 12px;
         font-weight: 700;
-        color: #ffa3b2;
-        background: {C['card']};
+        letter-spacing: 0.2px;
+        color: #ffb4b4;
+        background: rgba(239,68,68,26);
     }}
-    QPushButton:hover {{ background: {C['err']}; color: #ffffff; }}
+    QPushButton:hover {{
+        background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                                    stop:0 #ef4444, stop:1 #dc2626);
+        color: #ffffff; border-color: #f87171;
+    }}
     QPushButton:pressed {{ background: #b91c1c; border-color: #b91c1c; }}
-    QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; }}
+    QPushButton:focus {{ border-color: #f87171; }}
+    QPushButton:disabled {{ color: {C['mute']};
+                            border-color: rgba(255,255,255,6); background: transparent; }}
     """
 
 

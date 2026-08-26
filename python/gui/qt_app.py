@@ -869,54 +869,48 @@ class FlowLayout(QLayout):
 
 
 class SamsungSubTabs(QFrame):
-    """Horizontal sub-tab bar for the Samsung operations panel - a compact
-    terminal-style segmented control (FLASH / UNLOCK & FRP / INFO & TOOLS) so
-    the operations are split into focused views instead of one congested column."""
-
+    """Pill sub-tab strip: hairline chips, gradient fill when active."""
     tab_selected = pyqtSignal(str)
 
-    def __init__(self, tabs, parent=None):
-        super().__init__(parent)
-        self.setObjectName("subnav")
-        self.setStyleSheet(
-            f"QFrame#subnav {{ background:{C['inset']};"
-            f" border:1px solid {C['border']}; border-radius:7px; }}"
-        )
+    def __init__(self, tabs):
+        super().__init__()
+        self.setObjectName("subtabs")
+        self.setStyleSheet("QFrame#subtabs { background: transparent; }")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(3, 3, 3, 3)
-        lay.setSpacing(3)
-
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        self._keys = []
+        self._buttons = {}
         for i, (key, label) in enumerate(tabs):
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(30)
-            btn.setStyleSheet(
-                f"QPushButton {{ border:none; border-radius:4px; padding:0 14px;"
-                f" font-family:'JetBrains Mono','Consolas',monospace;"
-                f" font-size:10px; font-weight:800; letter-spacing:1.5px;"
-                f" color:{C['mute']}; background:transparent; }}"
-                f" QPushButton:hover {{ color:{C['text']};"
-                f" background:{C['card_hover']}; }}"
-                f" QPushButton:checked {{ color:#04121a;"
-                f" background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); }}"
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            f = b.font(); f.setPixelSize(10); f.setBold(True); b.setFont(f)
+            b.setFixedHeight(26)
+            b.setStyleSheet(
+                "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9);"
+                " border:1px solid rgba(255,255,255,0.08); border-radius:13px;"
+                " padding:0 14px; letter-spacing:0.6px; }"
+                "QPushButton:hover { color:#e2e8f0;"
+                " border-color:rgba(255,255,255,0.22); background:rgba(255,255,255,20); }"
+                f"QPushButton:checked {{ color:#04121a;"
+                f" background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                f" stop:0 {C['grad_b']}, stop:1 {C['grad_a']});"
+                f" border-color:{C['accent_hi']}; }}"
             )
-            btn.clicked.connect(
-                lambda _=False, k=key: self.tab_selected.emit(k)
-            )
-            self._group.addButton(btn, i)
-            self._keys.append(key)
-            lay.addWidget(btn, 1)
-        if self._keys:
-            self._group.button(0).setChecked(True)
+            if i == 0:
+                b.setChecked(True)
+            b.clicked.connect(lambda _=False, k=key: self.tab_selected.emit(k))
+            self._group.addButton(b)
+            lay.addWidget(b)
+            self._buttons[key] = b
+        lay.addStretch(1)
 
-    def set_tab(self, key):
-        if key in self._keys:
-            self._group.button(self._keys.index(key)).setChecked(True)
+    def set_active(self, key):
+        if hasattr(self, "_buttons"):
+            for k, b in self._buttons.items():
+                b.setChecked(k == key)
 
 
 class CollapsibleSection(QFrame):
@@ -924,12 +918,12 @@ class CollapsibleSection(QFrame):
     terminal title that toggles the body. Keeps dense pages (like the FLASH
     tab) to one screen - advanced panels collapse by default."""
 
-    def __init__(self, title, body, accent=C["accent"], collapsed=False,
+    def __init__(self, title, body, accent=None, collapsed=False,
                  parent=None):
         super().__init__(parent)
         self.setObjectName("colsec")
         self._title = title
-        self._accent = accent
+        self._accent = accent or C["accent"]
         self._collapsed = collapsed
         self.setStyleSheet(
             f"QFrame#colsec {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
@@ -1677,14 +1671,16 @@ class FlashPilotWindow(QMainWindow):
         root = QFrame()
         root.setObjectName("root")
         root.setStyleSheet(
-            f"QFrame#root {{ background: rgba(5, 9, 15, 244);"
+            f"QFrame#root {{ background:"
+            f" qradialgradient(cx:0.5, cy:-0.15, radius:1.2,"
+            f"   stop:0 rgba(23, 37, 60, 248), stop:1 rgba(5, 9, 15, 246));"
             f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['accent']};"
-            f" border-radius: 12px; }}"
+            f" border-radius: 16px; }}"
         )
         root_shadow = QGraphicsDropShadowEffect(root)
-        root_shadow.setBlurRadius(42)
-        root_shadow.setOffset(0, 14)
-        root_shadow.setColor(QColor(0, 0, 0, 170))
+        root_shadow.setBlurRadius(64)
+        root_shadow.setOffset(0, 18)
+        root_shadow.setColor(QColor(0, 0, 0, 210))
         root.setGraphicsEffect(root_shadow)
         self._root_shadow = root_shadow
         self._root = root
@@ -1712,9 +1708,9 @@ class FlashPilotWindow(QMainWindow):
         titlebar.setObjectName("dragbar")
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 rgba(16, 26, 40, 90), stop:0.55 rgba(10, 15, 23, 0),"
-            f" stop:1 rgba(10, 15, 23, 90));"
-            f" border-bottom: 1px solid {C['border']}; }}"
+            f" stop:0 rgba(20, 32, 50, 110), stop:0.5 rgba(10, 15, 23, 0),"
+            f" stop:1 rgba(20, 32, 50, 110));"
+            f" border-bottom: 1px solid rgba(255,255,255,0.055); }}"
         )
         tb = QHBoxLayout(titlebar)
         tb.setContentsMargins(12, 4, 8, 2)
@@ -2955,11 +2951,14 @@ class FlashPilotWindow(QMainWindow):
         panel.setObjectName("console")
         panel.setStyleSheet(
             f"QFrame#console {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(13, 20, 31, 230), stop:1 rgba(6, 10, 16, 235));"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
-            f" border-radius: 9px; }}"
-            f" QFrame#console:hover {{ border: 1px solid {C['border_hi']};"
-            f" background: rgba(15, 23, 35, 235); }}"
+            f" stop:0 rgba(14, 22, 34, 232), stop:1 rgba(7, 11, 17, 240));"
+            f" border: 1px solid rgba(255,255,255,0.06);"
+            f" border-left: 2px solid {C['accent']};"
+            f" border-top: 1px solid rgba(255,255,255,0.045);"
+            f" border-radius: 14px; }}"
+            f" QFrame#console:hover {{ border-color: rgba(255,255,255,0.11);"
+            f" border-left-color: {C['accent_hi']};"
+            f" background: rgba(16, 25, 38, 238); }}"
         )
         panel.setMinimumWidth(330)
         panel.setMaximumWidth(380)

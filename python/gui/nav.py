@@ -166,9 +166,10 @@ class OemChipBar(QFrame):
         b.setFixedHeight(26)
         if accent:
             b.setStyleSheet(
-                "QPushButton { color:#e2e8f0; background:rgba(21,32,50,0.7);"
-                " border:1px solid #2c405e; border-radius:13px; padding:0 12px; }"
-                "QPushButton:hover { border:1px solid #22d3ee; color:#fff; }"
+                "QPushButton { color:#dbe6f2; background:rgba(24,36,55,0.72);"
+                " border:1px solid rgba(255,255,255,0.09); border-radius:13px; padding:0 12px; }"
+                "QPushButton:hover { border:1px solid rgba(34,211,238,0.75); color:#fff;"
+                                   " background:rgba(30,45,68,0.85); }"
                 "QPushButton:checked { background:#22d3ee; color:#04121a;"
                 " border:1px solid #22d3ee; font-weight:800; }"
             )
