@@ -4301,6 +4301,12 @@ class FlashPilotWindow(QMainWindow):
         patched file is saved to ~/Downloads/preloader_patched.bin and
         auto-selected as the DA binary."""
         out = os.path.expanduser("~/Downloads/preloader_patched.bin")
+        if not bridge.BRIDGE.exists():
+            self._toasts.show_error(
+                "Bridge missing",
+                "flashpilot-bridge not built - run `cargo build --release` "
+                "(Settings ▸ Tools ▸ Rebuild bridge).")
+            return
         if not _flow_start("MTK preloader dump", destructive=True):
             self._ui.status.emit("Busy: " + _flow_busy_msg())
             self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
@@ -4316,15 +4322,25 @@ class FlashPilotWindow(QMainWindow):
         def work():
             deadline = _time.monotonic() + 240
             attempt = 0
+            beat = 0.0
             os.environ["MTK_PRELOADER_OUT"] = out
             try:
                 while _time.monotonic() < deadline:
                     if frp.cancel_requested():
                         self._ui.line.emit("[cancelled] MTK preloader dump stopped")
                         return
+                    devs = mtk.find_mtk()
+                    if _time.monotonic() - beat >= 5.0:
+                        beat = _time.monotonic()
+                        stages = [mtk.stage_label(mtk.pid_stage(x.get("pid", 0)))[0]
+                                  for x in devs] or ["none"]
+                        self._ui.line.emit(
+                            f"[wait] polling BROM/preloader - MTK USB devices: "
+                            f"{len(devs)} ({', '.join(stages)}) - power the phone "
+                            f"OFF completely, then plug USB")
                     d = None
                     stage = None
-                    for x in mtk.find_mtk():
+                    for x in devs:
                         st = mtk.pid_stage(x.get("pid", 0))
                         if st in ("brom", "preloader"):
                             d = x
@@ -4344,11 +4360,12 @@ class FlashPilotWindow(QMainWindow):
                             ["mtk-exploit", target, "mtk_bypass"], timeout=120
                         )
                         self._ui.line.emit(res)
-                    except bridge.BridgeError as e:
+                    except Exception as e:  # noqa: BLE001
                         self._ui.line.emit(
-                            f"  attempt {attempt} lost the device ({e}) - "
-                            "waiting for the next window ..."
+                            f"  attempt {attempt} failed ({e}) - waiting for "
+                            "the next BROM window ..."
                         )
+                        _time.sleep(1)
                         continue
                     if os.path.isfile(out) and os.path.getsize(out):
                         self._ui.ui.emit(lambda: self.mtk_files["da"].setText(out))
@@ -4371,6 +4388,14 @@ class FlashPilotWindow(QMainWindow):
                 self._ui.ui.emit(self._mtk_reset_ui)
 
         threading.Thread(target=work, daemon=True).start()
+
+    @property
+    def mtk_files(self):
+        """Compatibility view over the MTK page inputs (da/scatter edits)."""
+        return {
+            "da": getattr(self, "mtk_da_edit", None) or QLineEdit(),
+            "scatter": getattr(self, "mtk_scatter_edit", None) or QLineEdit(),
+        }
 
     def _mtk_gen_scatter(self):
         """Generate an SP Flash Tool scatter file from the device's own GPT
