@@ -548,6 +548,12 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
 
 
 def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
+    """
+    tar_path may be a single archive path OR a LIST of archives (multi-slot:
+    AP/BL/CP/CSC). Lists are extracted into one workdir and flashed in the
+    given order inside the SAME single Loke session. Files ending in .pit are
+    collected but NOT written (repartition is a separate explicit flow).
+    """
     """Smart archive flashing: BULK FIRST, then bit-by-bit rescue.
 
     Phase 1 (one session): extract -> lz4-decompress -> AVB-patch ->
@@ -586,10 +592,22 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
             pass
 
     workdir = tempfile.mkdtemp(prefix="fp_smart_")
-    _log(f"[smart] extracting {os.path.basename(tar_path)} ...")
-    images = _extract_archive_images(tar_path, workdir)
+    tar_list = tar_path if isinstance(tar_path, (list, tuple)) else [tar_path]
+    images = []
+    skipped_pits = []
+    for _tar in tar_list:
+        _log(f"[smart] extracting {os.path.basename(_tar)} ...")
+        imgs = _extract_archive_images(_tar, workdir)
+        for name, path in imgs:
+            if name.lower().endswith(".pit"):
+                skipped_pits.append(name)
+                continue
+            images.append((name, path))
     if not images:
-        raise RuntimeError("archive contains no flashable images")
+        raise RuntimeError("archives contain no flashable images")
+    if skipped_pits:
+        _log(f"[smart] PIT file(s) inside archive(s) NOT auto-written "
+             f"(repartition is explicit-only): {skipped_pits}")
 
     patched_any = False
     for name, path in images:
@@ -3449,13 +3467,32 @@ def flow_odin_advanced_flash():
                 v = _find_slot_tar(slot)
                 if v:
                     tars[slot] = v
-            target_tar = tars.get("AP") or next(iter(tars.values()), None)
-            if not target_tar:
+            # Hard guard: an explicitly picked slot whose file has vanished
+            # (moved/cleaned) must NEVER be silently skipped - that turns a
+            # full-flash into a partial flash without warning.
+            missing = []
+            for s in ("AP", "BL", "CP", "CSC", "USERDATA"):
+                env_p = os.environ.get(f"{s}_TAR", "")
+                if env_p and not os.path.isfile(env_p):
+                    missing.append(f"{s}: {env_p}")
+            if missing:
+                raise RuntimeError(
+                    "Picked firmware file(s) no longer exist on disk:\n  "
+                    + "\n  ".join(missing)
+                    + "\nRe-select them in the slots (Browse) and retry.")
+            order = ["AP", "BL", "CP", "CSC", "USERDATA"]
+            tars = {s: os.environ[f"{s}_TAR"] for s in order
+                    if os.environ.get(f"{s}_TAR")}
+            tar_list = [tars[s] for s in order if s in tars]
+            if not tar_list:
                 raise RuntimeError(
                     "Native engine needs at least one archive (AP preferred). "
                     "Pick files in the slots above and retry.")
+            for s, pth in zip([s for s in order if s in tars], tar_list):
+                log(f"  [{s}] {os.path.basename(pth)} "
+                    f"({os.path.getsize(pth) >> 20} MB)")
             res = flash_archive_smart(
-                target_tar, log=log, patch_vbmeta=_env_flag("VBMETA_PATCH"),
+                tar_list, log=log, patch_vbmeta=_env_flag("VBMETA_PATCH"),
                 reboot=_env_flag("ODIN4_REBOOT"),
             )
             n = len(res.get("flashed", [])) if isinstance(res, dict) else "?"
