@@ -21,9 +21,11 @@ class TestMTKBootStages:
     """Test PID to boot stage mapping."""
 
     def test_pid_stages(self):
-        """Known PIDs map to correct stages."""
-        assert pid_stage(0x2000) == "brom"
-        assert pid_stage(0x0003) == "preloader"
+        """Known PIDs map to correct stages (mtkclient convention:
+        0003=BootROM, 2000=preloader - verified live against an
+        'MT65xx Preloader' 0e8d:2000 device)."""
+        assert pid_stage(0x0003) == "brom"
+        assert pid_stage(0x2000) == "preloader"
         assert pid_stage(0x0004) == "da"
         assert pid_stage(0x1004) == "da"
         assert pid_stage(0x0a0a) == "mtk-adb"
