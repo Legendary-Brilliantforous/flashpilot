@@ -5390,8 +5390,14 @@ class FlashPilotWindow(QMainWindow):
             def show():
                 try:
                     self._show_beta_risk_dialog(APP_VERSION, tag)
-                except Exception:
-                    pass
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        self.log_line(f"[error] beta dialog crashed: {e}")
+                        self._toasts.show_error("Beta dialog error", str(e))
+                    except Exception:
+                        pass
             try:
                 self._ui.ui.emit(show)
             except Exception:
@@ -5411,7 +5417,7 @@ class FlashPilotWindow(QMainWindow):
         # One-time reset per version: clears stale accepted/seen flags so a
         # freshly installed beta ALWAYS surfaces the risk dialog at least
         # once (stale flags from prior sessions silently suppressed it).
-        reset_marker = f"beta_gate_reset_{cur}"
+        reset_marker = f"beta_gate_reset_v2_{cur}"
         if not self.settings.value(reset_marker, False, type=bool):
             self.settings.setValue(f"beta_risk_accepted_{cur}", False)
             self.settings.setValue(f"beta_notice_seen_{cur}", False)
@@ -7918,18 +7924,9 @@ class FlashPilotWindow(QMainWindow):
                     except Exception:
                         pass
                 
-                if stable_tag:
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda cur=current, stable=stable_tag: self._show_beta_risk_dialog(cur, stable))
-                        except Exception:
-                            pass
-                else:
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda cur=current: self._show_beta_risk_dialog(cur, ""))
-                        except Exception:
-                            pass
+                if hasattr(self, "_ui") and self._ui:
+                    tag0 = stable_tag if stable_tag else ""
+                    self._ui.ui.emit(lambda cur=current, st=tag0: self._show_beta_risk_dialog(cur, st))
             
             if newer_stable:
                 if hasattr(self, "_ui") and self._ui:
