@@ -54,16 +54,15 @@ pub fn list_bulk_targets() -> Result<String> {
 pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
     // Use collected Samsung devices to validate target exists before opening,
     // improving stability against stale bus/addr vs vid/pid mismatches.
-    let devices = usb::collect_devices(Some(0x04e8))?;
+    // Explicit @bus:addr targets may use ANY vendor (MTK/SPD probing etc.);
+    // the 0e8d/1782 stacks need raw bulk access too.
+    let devices = usb::collect_devices(None)?;
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
         return Err(BridgeError::InvalidArgument("target must be vid:pid@bus:addr".into()));
     }
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
-    if vid != 0x04e8 {
-        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
-    }
     let loc: Vec<&str> = wanted[1].split(':').collect();
     let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
     let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
@@ -178,16 +177,15 @@ pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
     let bytes = hex_decode(hex)?;
 
     // Actually use collected Samsung devices to validate target before open.
-    let devices = usb::collect_devices(Some(0x04e8))?;
+    // Explicit @bus:addr targets may use ANY vendor (MTK/SPD probing etc.);
+    // the 0e8d/1782 stacks need raw bulk access too.
+    let devices = usb::collect_devices(None)?;
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
         return Err(BridgeError::InvalidArgument("target must be vid:pid@bus:addr".into()));
     }
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
-    if vid != 0x04e8 {
-        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
-    }
     let loc: Vec<&str> = wanted[1].split(':').collect();
     let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
     let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;

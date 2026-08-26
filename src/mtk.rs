@@ -43,7 +43,9 @@ pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
 /// PIDs for which mtkclient's `run_handshake` starts WITHOUT the extra leading
 /// 0xA0 sync byte (the preloader and preloader-variant PIDs echo the sync
 /// sequence directly; the held BootROM wants the wake byte first).
-pub const SYNC_NO_EXTRA_BYTE: &[u16] = &[0x0003, 0xf200, 0xd1e9, 0xd1e2, 0xd1ec, 0xd1dd];
+pub const SYNC_NO_EXTRA_BYTE: &[u16] = &[
+    0x0003, 0x2000, 0x2001, 0xf200, 0xd1e9, 0xd1e2, 0xd1ec, 0xd1dd,
+];
 
 /// The BROM sync sequence. Each byte is echoed back complemented (~byte).
 pub const SYNC_BYTES: &[u8] = &[0xa0, 0x0a, 0x50, 0x05];
@@ -180,8 +182,23 @@ impl BromSession {
 
     /// Discard any stale input before a (re)attempt.
     pub fn flush(&self) {
-        let mut junk = [0u8; 64];
-        let _ = self.handle.read_bulk(self.in_ep, &mut junk, Duration::from_millis(30));
+        // Drain RX until the device is silent for a full window (stale
+        // bursts / echoed junk from earlier failed attempts otherwise
+        // poison the very first sync read).
+        let mut junk = [0u8; 512];
+        let mut quiet = 0;
+        for _ in 0..16 {
+            match self.handle.read_bulk(self.in_ep, &mut junk,
+                                        Duration::from_millis(40)) {
+                Ok(n) if n > 0 => quiet = 0,
+                _ => {
+                    quiet += 1;
+                    if quiet >= 2 {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// Echo-protocol write of `data`: the device echoes the bytes back.
@@ -588,6 +605,8 @@ pub fn brom_handshake(
     handle
         .claim_interface(iface.number)
         .map_err(|e| format!("claim interface {}: {e}", iface.number))?;
+    // give the preloader/BROM a moment after open before syncing
+    std::thread::sleep(Duration::from_millis(250));
 
     let session = BromSession {
         handle,
@@ -595,6 +614,7 @@ pub fn brom_handshake(
         in_ep,
         out_ep,
     };
+    session.flush();
     session.flush();
 
     if !SYNC_NO_EXTRA_BYTE.contains(&dev.pid) {
@@ -613,6 +633,14 @@ pub fn brom_handshake(
             }
             match session.read_exact(1, Duration::from_millis(600)) {
                 Ok(r) if r[0] == (!b) & 0xff => {}
+                Ok(r) if r[0] == b => {
+                    last_err = format!(
+                        "device echoed our own byte 0x{:02x} verbatim - this is NOT a handshake-capable BootROM/preloader state (wrong entry mode or protected SoC). Enter true BROM (power fully off, battery out if possible, plug cable) and retry.",
+                        b
+                    );
+                    ok = false;
+                    break;
+                }
                 Ok(r) => {
                     last_err = format!(
                         "sync echo mismatch: sent 0x{b:02x}, expected 0x{:02x}, got 0x{:02x}",
