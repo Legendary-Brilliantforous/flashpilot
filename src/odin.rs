@@ -284,7 +284,7 @@ impl Device {
             }
             let mut last_recv_err: Option<String> = None;
             let mut write_failed = false;
-            for attempt in 0..4 {
+            for attempt in 0..2 {
                 match self.send_raw_fast(b"ODIN") {
                     Ok(_) => {}
                     Err(e) => {
@@ -317,7 +317,11 @@ impl Device {
                 continue; // one rescue round before giving up
             }
         }
-        err("handshake failed after retries (device must be in download mode)")
+        err(
+            "Loke is not responding (handshake silent). Unplug the cable, \
+wait 3 seconds, re-enter Download Mode (Vol Down + Vol Up + cable), \
+then press Flash again - the flash resumes automatically.",
+        )
     }
 
     /// Pack a little-endian u32 control frame of the given type + payload.
