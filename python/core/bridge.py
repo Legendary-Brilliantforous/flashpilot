@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import threading
 import time
+import signal
 from pathlib import Path
 
 
@@ -176,6 +177,30 @@ def cancel_requested():
     return _cancel.is_set()
 
 
+def _graceful_terminate(proc, timeout=3.0):
+    """Gracefully terminate a process: SIGTERM, wait, then SIGKILL if needed.
+    
+    This gives the Rust bridge time to cleanly close USB connections and
+    disconnect the phone before hard-killing the process.
+    """
+    if proc.poll() is not None:
+        return  # Already terminated
+    
+    try:
+        # Send SIGTERM (graceful shutdown)
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+            return  # Process terminated gracefully
+        except subprocess.TimeoutExpired:
+            # Process didn't respond to SIGTERM, force kill
+            proc.kill()
+            proc.wait()
+    except Exception:
+        # Ignore errors during termination
+        pass
+
+
 def _run(args, timeout=15):
     bridge_path = Path(BRIDGE)
     if not bridge_path.exists():
@@ -225,15 +250,13 @@ def _run(args, timeout=15):
     try:
         while True:
             if cancel_requested():
-                proc.kill()
-                proc.wait()
+                _graceful_terminate(proc, timeout=3.0)
                 raise BridgeCancelled("cancelled by user")
             rc = proc.poll()
             if rc is not None:
                 break
             if time.monotonic() > deadline:
-                proc.kill()
-                proc.wait()
+                _graceful_terminate(proc, timeout=2.0)
                 raise BridgeTimeout(f"timed out after {timeout}s", timeout=timeout)
             time.sleep(0.05)
         out_drainer.join()
@@ -251,8 +274,7 @@ def _run(args, timeout=15):
         return out.strip()
     finally:
         if not stopped.is_set():
-            proc.kill()
-            proc.wait()
+            _graceful_terminate(proc, timeout=2.0)
             stopped.set()
 
 
@@ -469,8 +491,6 @@ def select_flash_engine(has_pit=False, is_samsung=True):
     if is_samsung and has_pit:
         return "native"  # Native Odin protocol preferred (fast, no external binary needed)
     return "odin4"       # Fallback to odin4 for complex tar multi-archive parsing
-
-    return json.loads(_run(args, timeout=timeout))
 
 
 def odin_send_pit(target, pit_file, timeout=120):
