@@ -547,6 +547,45 @@ def flash_archive_native_resilient(tar_path, log=None, patch_vbmeta=False,
     return {"flashed": flashed, "rebooted": rebooted, "workdir": workdir}
 
 
+def _humanize_flash_error(msg: str) -> str:
+    """Map low-level flash errors to plain-English beginner guidance."""
+    m = msg or ""
+    low = m.lower()
+    checks = [
+        ("out endpoint stalled",
+         "The phone stopped talking.\nFIX: Unplug the cable, wait 3 seconds, "
+         "re-enter Download Mode (Vol Down + Vol Up + cable), then press "
+         "Flash again - it resumes where it stopped."),
+        ("loke is not responding",
+         "The phone needs a fresh connection.\nFIX: Unplug, wait 3 seconds, "
+         "re-enter Download Mode, press Flash again."),
+        ("resource busy",
+         "Another app is using the phone's USB port.\nFIX: Close any other "
+         "flashing tool, then unplug + replug the cable."),
+        ("exceeds", "capacity"),
+        ("-5", ""),
+    ]
+    if "exceeds" in low and "capacity" in low:
+        return ("That image is bigger than the phone's partition.\n"
+                "This usually means the firmware is for a DIFFERENT model. "
+                "Double-check you downloaded A145P files.")
+    if "sig_verify" in low or "da error 0x7024" in low:
+        return ("Samsung's signature check rejected the file.\n"
+                "This happens with unofficial images on locked bootloaders - "
+                "use stock Samsung firmware for this model.")
+    if "out endpoint stalled" in low:
+        return ("The phone stopped talking.\nFIX: Unplug, wait 3s, re-enter "
+                "Download Mode (Vol Down + Vol Up + cable), press Flash again "
+                "- it resumes.")
+    if "loke is not responding" in low:
+        return ("Fresh connection needed.\nFIX: Unplug 3s -> Download Mode "
+                "-> Flash again.")
+    if "resource busy" in low:
+        return ("Another app holds the USB port.\nFIX: Close other flash "
+                "tools, unplug + replug.")
+    return ""
+
+
 def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
     """
     tar_path may be a single archive path OR a LIST of archives (multi-slot:
@@ -677,6 +716,18 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
     skipped = []
 
     # ------------------------- PHASE 1: bulk -------------------------------
+    total_bytes = sum(os.path.getsize(p) for _, p in files)
+    _log("")
+    _log("READY TO FLASH")
+    _log(f"   {len(files)} partitions | {total_bytes/1024/1024:.0f} MB total | "
+         f"model PIT: device (live)")
+    est = max(3, int(total_bytes / 1024 / 1024 / 8))
+    _log(f"   Estimated time: {est}-{est*2} minutes. Keep the cable "
+         f"connected the whole time!")
+    if done:
+        _log(f"   Resume: {len(done)} partition(s) already done from an "
+             f"earlier attempt will be skipped.")
+    _log("")
     _log("[smart] PHASE 1: bulk flash (all partitions, one session)")
     proc = None
     pit_sha = None
@@ -738,7 +789,11 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
             if "done" in resp:
                 pname = resp["done"]
                 fname = next((f for p, f in files if p == pname), "")
-                _log(f"[smart]   OK: {pname} ({resp.get('progress','')})")
+                wrote = sum(os.path.getsize(p2) for pn, p2 in files
+                            if pn in done or pn == pname)
+                pct = min(100, int(wrote * 100 / max(1, total_bytes)))
+                _log(f"[smart]   [{pct:3d}%] {pname} done "
+                     f"({resp.get('progress','')})")
                 flashed.append((pname, fname))
                 _mark(pname)
             elif "error" in resp:
@@ -855,6 +910,12 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
         except Exception as e:
             _log(f"[smart] reboot command failed ({e}) - reboot manually")
 
+    _log("")
+    _log("FLASH COMPLETE - ALL DONE!")
+    _log("  Next steps:")
+    _log("   1. Reboot: hold Power + Vol Down until it restarts")
+    _log("   2. First boot can take 5-10 minutes - be patient")
+    _log("   3. Bootloop? Power off -> Download Mode -> re-flash AP + CSC")
     return {"flashed": flashed, "skipped": skipped,
             "rebooted": rebooted, "workdir": workdir}
 
