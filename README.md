@@ -1,8 +1,8 @@
 # 🔧 FlashPilot
 
-> **An open-source Samsung firmware flashing & repair workbench for Linux — an Odin / Heimdall alternative for flashing Galaxy phones (Download/Odin mode), MediaTek (BROM/DA), Qualcomm (EDL) and Spreadtrum/UNISOC devices. Native Rust core, PyQt6 GUI.**
+> **An open-source Samsung firmware flashing & repair workbench for Linux — an Odin / Heimdall alternative for flashing Galaxy phones (Download/Odin mode), MediaTek (BROM/DA), Qualcomm (EDL) and Spreadtrum/UNISOC devices.**
 
-**Search keywords:** Samsung flashing tool · Odin alternative · Android firmware flashing Linux · Heimdall GUI · Galaxy phone repair · MTK BROM flash · Qualcomm EDL · FRP unlock · UNISOC flash
+**Search keywords:** Samsung flashing tool · Odin alternative · Android firmware flashing Linux · Heimdall GUI · Galaxy phone repair · MTK BROM flash · Qualcomm EDL · FRP unlock · UNISOC flashing · device firmware tool · mobile repair · Android bootloader · USB flashing · Linux flashing suite · proprietary tool alternative
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org)
@@ -13,13 +13,13 @@
 [![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/flashpilot/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 [![Contributors](https://img.shields.io/github/contributors/Legendary-Brilliantforous/flashpilot)](https://github.com/Legendary-Brilliantforous/flashpilot/graphs/contributors)
 
-**What is this?** A Linux-native equivalent of the paid Windows flashing suites — one unified tool that talks straight to the bootloader of **Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC** phones. No Windows VM, no crack, no gray-market server: everything runs on your own machine.
+**What is this?** A Linux-native equivalent of the paid Windows flashing suites — one unified tool that talks straight to the bootloader of **Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC devices**. Reverse-engineered protocols + native Rust performance + a beautiful PyQt6 GUI = the open alternative to Odin, Heimdall, and expensive commercial tools.
 
 ---
 
 ## ✨ Why this project matters
 
-The Android repair world runs on closed, Windows-only commercial tools. Their protocols are reverse-engineered by a small community of tinkerers — and most of that knowledge is locked inside paid executables or scattered across forum threads.
+The Android repair world runs on closed, Windows-only commercial tools. Their protocols are reverse-engineered by a small community of tinkerers — and most of that knowledge is locked inside paid suites or scattered across forums in incomplete form.
 
 **This project is our answer.** It turns those reverse-engineered protocols into a clean, auditable, MIT-licensed codebase that anyone can read, run, extend — and ship as their own flashing suite.
 
@@ -37,7 +37,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 - **8 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL.
 - **8 job categories, ~120 operation methods** — flashing, FRP bypass, screen-lock removal, MDM unlock, device info, reboot, settings/UI repair, and more.
-- **Rust core (`flashpilot-bridge`, ~9.3k LOC) — 0 `cargo check` warnings** — raw USB with *vendored libusb* (no system deps), real protocol implementations (+ 18 wired dead-paths, `-80KB` `lto`):
+- **Rust core (`flashpilot-bridge`, ~9.3k LOC) — 0 `cargo check` warnings** — raw USB with *vendored libusb* (no system deps), real protocol implementations (+ 18 wired dead-paths, `-80KB` ltcg trim).
   - **Samsung**: reverse-engineered Odin session protocol (Heimdall-based), HID download-mode payloads, PIT read/write/flash — AT `Context` retained, `EndpointConfig` chunking.
   - **MediaTek**: BROM / preloader / DA handshake, scatter & GPT, BROM exploits, SLA keys — `ProgressReporter` real %.
   - **Qualcomm**: Sahara `ProtocolError` + Firehose `QcomDeviceInfo` wired via `Duration` timeouts.
@@ -45,7 +45,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
   - Plus **MTP**, **AT-command**, and full **ADB** plumbing.
 - **A studio-grade GUI** — frameless translucent window, 5 accent themes, animated cable/status scene, live console.
   - **Dynamic version** — installed `APP_VERSION` via `importlib.metadata` (deb truth), `_display_version` `1.2.0→1.2`, live GitHub latest stable, BETA pill.
-  - **Big centered dialogs (620px, draggable, ✕)** — beta gate + stable `UPDATE/AHEAD/PATCH` + flash/FRP confirms, chip colors `MTK amber` `QCOM red` `SPD violet` `SAMSUNG blue`, high-contrast `#e2e8f0`.
+  - **Big centered dialogs (620px, draggable, ✕)** — beta gate + stable `UPDATE/AHEAD/PATCH` + flash/FRP confirms, chip colors `MTK amber` `QCOM red` `SPD violet` `SAMSUNG blue`, high-contrast text.
   - **One global ⏹ STOP** in titlebar stops any Samsung/MTK/QC/SPD flow (legacy per-chip hidden).
 
 ---
@@ -78,7 +78,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 ## 🖥️ The GUI
 
-A frameless, translucent, radius-card window with a live **connection banner** (computer → cable → phone scene with an animated data pulse) above a left **nav rail** and a right **console/log column**.
+A frameless, translucent, radius-card window with a live **connection banner** (computer → cable → phone scene with an animated data pulse) above a left **nav rail** and a right **console/log pane**.
 
 - **Samsung** — TFT-style sub-tabs: `FLASH · FRP · SCREEN LOCK · MDM · INFO & TOOLS`.
 - **MediaTek / Qualcomm / SPD** — dedicated workbenches with the same sub-tab layout plus their native low-level tools (scatter/DA, programmer/XML, FDL binaries, base-address inputs).
@@ -114,7 +114,7 @@ python3 -m venv .venv
 .venv/bin/python -m python.main        # or: python3 main.py
 ```
 
-The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scripts/fetch-odin4.sh` — Samsung's proprietary binary is not redistributed in this repo. Samsung combo firmware should go in `~/Downloads` (or set `COMBINATION_TAR`).
+The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scripts/fetch-odin4.sh` — Samsung's proprietary binary is not redistributed in this repo. Samsung combo firmware should be sourced from Samsung's official support pages or trusted firmware archives.
 
 ### CLI / bridge
 
@@ -168,7 +168,7 @@ flashpilot/
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — everything you need to start.
 - **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
-- Use the **[bug report](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=enhancement&template=feature_request.yml)** templates; every PR gets a review.
+- Use the **[bug report](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=enhancement&template=feature_request.yml)** templates.
 - **Beginner-friendly tasks** — every `flow_*` function in `python/core/frp.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
 - **No prior flashing experience required.** The flow framework (`python/core/frp.py`) is dead simple — a new method is ~5 lines:
 
@@ -199,13 +199,13 @@ This tool talks directly to bootloaders and can wipe data or brick a device if m
 - Use it only on **devices you own or are authorized to service** (repair shops servicing customer phones with consent).
 - Always read the on-screen warnings and **back up partitions** before flashing.
 - Bypassing FRP/MDM on a device you don't own may be **illegal in your jurisdiction** — you are responsible for how you use this software.
-- The project ships **no proprietary "secret sauce"** (HID unlock payloads, leaked DAs are *not* vendored) — you supply the firmware/binaries for your specific device, exactly like every commercial tool requires.
+- The project ships **no proprietary "secret sauce"** (HID unlock payloads, leaked DAs are *not* vendored) — you supply the firmware/binaries for your specific device, exactly like every commercial flashing suite.
 
 ---
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE). The Odin protocol constants are derived from the Heimdall project (MIT), and the SPD BSL reference comes from clean-room protocol write-ups (spd_cmd.h / Opus-Spreadtrum, ilyakurdyukov). Everything here is yours to read, fork, and build on.
+MIT — see [LICENSE](LICENSE). The Odin protocol constants are derived from the Heimdall project (MIT), and the SPD BSL reference comes from clean-room protocol write-ups (spd_cmd.h / Opus-Spreadtrum docs).
 
 ---
 
