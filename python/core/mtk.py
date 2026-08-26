@@ -66,9 +66,13 @@ def pid_stage(pid):
 
 
 def find_mtk():
-    """Return the list of MediaTek USB device dicts (VID 0x0e8d)."""
+    """Return the list of MediaTek USB device dicts (VID 0x0e8d).
+
+    Scans the UNFILTERED bus list — bridge.detect_usb() is Samsung-filtered
+    (04e8) and would never yield MTK devices, which is why BROM/preloader
+    polling used to see '0 devices' even with a phone in BROM mode."""
     try:
-        return [d for d in bridge.detect_usb() if d.get("vid") == MTK_VID]
+        return [d for d in bridge.detect_all() if d.get("vid") == MTK_VID]
     except bridge.BridgeError:
         return []
 

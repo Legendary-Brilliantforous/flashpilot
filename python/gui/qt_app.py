@@ -4334,10 +4334,16 @@ class FlashPilotWindow(QMainWindow):
                         beat = _time.monotonic()
                         stages = [mtk.stage_label(mtk.pid_stage(x.get("pid", 0)))[0]
                                   for x in devs] or ["none"]
+                        try:
+                            vids = sorted({hex(x.get("vid", 0))
+                                           for x in bridge.detect_all()})
+                        except Exception:
+                            vids = []
                         self._ui.line.emit(
-                            f"[wait] polling BROM/preloader - MTK USB devices: "
-                            f"{len(devs)} ({', '.join(stages)}) - power the phone "
-                            f"OFF completely, then plug USB")
+                            f"[wait] polling BROM/preloader - MTK devices: "
+                            f"{len(devs)} ({', '.join(stages)}) | bus VIDs: "
+                            f"{', '.join(vids) or 'none'} - power phone OFF, "
+                            f"then plug USB")
                     d = None
                     stage = None
                     for x in devs:
