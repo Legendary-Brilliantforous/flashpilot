@@ -80,6 +80,7 @@ from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, _BASE_QSS, _get_base_qss,
     _btn_primary, _card_qss, _btn_ghost, _btn_danger, _console_qss,
+    _parse_version, _display_version, _is_beta_version,
 )
 from .animations import (  # noqa: F401
     Motion, _draw_computer, _draw_phone, _draw_logo,
@@ -267,55 +268,6 @@ class LogHighlighter:
                 elif "[error]" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
                 elif text.strip().startswith("[check]"): hself.setFormat(0, len(text), fmt_dim)
         self._hl = _HL(doc)
-
-
-def _parse_version(tag):
-    """Simple version parser: strips leading 'v', extracts numeric + alpha segments."""
-    if not tag:
-        return (0, 0, 0), ""
-    t = tag.lstrip("v")
-    parts = t.split("-", 1)
-    num_parts = []
-    for p in parts[0].split("."):
-        try:
-            num_parts.append(int(p))
-        except ValueError:
-            num_parts.append(0)
-    while len(num_parts) < 3:
-        num_parts.append(0)
-    alpha = parts[1] if len(parts) > 1 else ""
-    return tuple(num_parts), alpha
-
-
-def _display_version(tag):
-    """Display version: strips trailing '.0' patches.
-    1.2.0 -> 1.2, 1.2.1 -> 1.2.1, 1.2.0-beta -> 1.2-beta, 2.0.0 -> 2.0.
-    Preserves prerelease suffix (-beta, -rc1, etc.) exactly."""
-    if not tag:
-        return ""
-    t = tag.lstrip("v")
-    parts = t.split("-", 1)
-    numeric = parts[0]
-    suffix = f"-{parts[1]}" if len(parts) > 1 else ""
-    # Split numeric, strip trailing zeros but keep at least major.minor
-    nums = numeric.split(".")
-    # Remove trailing "0" segments while we have >2 parts
-    while len(nums) > 2 and nums[-1] == "0":
-        nums.pop()
-    # Special case: 1.0.0 -> 1.0, 2.0 stays 2.0 etc.
-    clean = ".".join(nums)
-    return f"{clean}{suffix}"
-
-
-def _is_beta_version(tag):
-    """True if version string denotes a beta/prerelease."""
-    if not tag:
-        return False
-    _, alpha = _parse_version(tag)
-    if not alpha:
-        return False
-    low = alpha.lower()
-    return any(k in low for k in ("beta", "alpha", "rc", "pre"))
 
 
 class LogBridge(QObject):
@@ -1769,7 +1721,7 @@ class FlashPilotWindow(QMainWindow):
         tb.setSpacing(12)
 
         logo = QLabel()
-        logo.setPixmap(_draw_logo(26))
+        logo.setPixmap(_draw_logo(30))
         tb.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_box = QVBoxLayout()
@@ -5364,6 +5316,14 @@ class FlashPilotWindow(QMainWindow):
         high contrast (no translucency blur) so it never looks
         'out of focus'."""
         key = f"beta_risk_accepted_{cur}"
+        # One-time reset per version: clears stale accepted/seen flags so a
+        # freshly installed beta ALWAYS surfaces the risk dialog at least
+        # once (stale flags from prior sessions silently suppressed it).
+        reset_marker = f"beta_gate_reset_{cur}"
+        if not self.settings.value(reset_marker, False, type=bool):
+            self.settings.setValue(f"beta_risk_accepted_{cur}", False)
+            self.settings.setValue(f"beta_notice_seen_{cur}", False)
+            self.settings.setValue(reset_marker, True)
         if self.settings.value(key, False, type=bool):
             return
         # Settings: first_install (default) shows once per beta version,

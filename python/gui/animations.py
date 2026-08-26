@@ -9,12 +9,14 @@ from PyQt6.QtCore import (
     QPropertyAnimation, QEasingCurve, pyqtProperty,
 )
 from PyQt6.QtGui import (
+    QFontMetricsF,
     QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygonF,
     QLinearGradient, QRadialGradient,
 )
 from PyQt6.QtWidgets import QWidget, QProgressBar, QFrame, QLabel
 
-from .theme import C
+from .theme import C, _display_version, _is_beta_version
+from ..core import APP_VERSION
 
 class Motion:
     """Premium motion system - centralised easings and helpers."""
