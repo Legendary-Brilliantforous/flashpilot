@@ -76,6 +76,7 @@ from PyQt6.QtWidgets import (
 from ..core import bridge, frp, mtk, mtp, fus, pit, pitstore
 from ..core import APP_VERSION
 from .toast import ToastHost
+from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, _BASE_QSS, _get_base_qss,
     _btn_primary, _card_qss, _btn_ghost, _btn_danger, _console_qss,
@@ -1062,28 +1063,28 @@ class MetricCard(QFrame):
         super().__init__()
         self.setObjectName("metric")
         self._accent_hex = accent
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 12)
-        lay.setSpacing(5)
-        top = QHBoxLayout()
-        top.setSpacing(8)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 6)
+        lay.setSpacing(7)
         bar = QLabel()
-        bar.setFixedSize(3, 24)
+        bar.setFixedSize(3, 18)
         bar.setStyleSheet(f"background:{accent}; border-radius:1.5px;")
-        top.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(0)
         cap = QLabel(caption.upper())
         cap.setStyleSheet(
-            f"color:{C['mute']}; font-size:10px; font-weight:700; letter-spacing:1px;"
+            f"color:{C['mute']}; font-size:8px; font-weight:700; letter-spacing:1px;"
         )
-        top.addWidget(cap)
-        lay.addLayout(top)
+        col.addWidget(cap)
         self.value = QLabel(value)
         self.value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.value.setWordWrap(True)
         self.value.setStyleSheet(
-            f"color:{C['text']}; font-size:14px; font-weight:600; background:transparent;"
+            f"color:{C['text']}; font-size:12px; font-weight:600; background:transparent;"
         )
-        lay.addWidget(self.value)
+        col.addWidget(self.value)
+        lay.addLayout(col, 1)
         self.setStyleSheet(
             f"QFrame#metric {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));"
@@ -1600,8 +1601,8 @@ class FlashPilotWindow(QMainWindow):
 
         # Fit the window to the available screen so it is never cut off.
         screen = QApplication.primaryScreen().availableGeometry()
-        fit_w = min(1180, max(960, screen.width() - 120))
-        fit_h = min(760, max(640, screen.height() - 80))
+        fit_w = min(1180, max(940, screen.width() - 140))
+        fit_h = min(720, max(600, screen.height() - 110))
         self.setMinimumSize(fit_w, fit_h)
         self.resize(fit_w, fit_h)
 
@@ -1630,7 +1631,7 @@ class FlashPilotWindow(QMainWindow):
         self.setStyleSheet(_BASE_QSS + _console_qss())
 
         self._build_ui()
-        self.nav.select("samsung")
+        if hasattr(self, "oem_bar"): self.oem_bar.select("samsung")
 
         # apply persisted effect settings to the freshly-built widgets
         if not self.settings.value("animations", "true", type=bool):
@@ -1749,13 +1750,13 @@ class FlashPilotWindow(QMainWindow):
         root_lay.addWidget(strip_wrap)
 
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(30, 18, 30, 26)
+        outer.setContentsMargins(14, 10, 14, 10)
         outer.addWidget(root)
         self._outer = outer
 
         # --- custom title bar ---
         titlebar = DragBar(self)
-        titlebar.setFixedHeight(58)
+        titlebar.setFixedHeight(46)
         titlebar.setObjectName("dragbar")
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
@@ -1764,11 +1765,11 @@ class FlashPilotWindow(QMainWindow):
             f" border-bottom: 1px solid {C['border']}; }}"
         )
         tb = QHBoxLayout(titlebar)
-        tb.setContentsMargins(20, 8, 10, 6)
+        tb.setContentsMargins(12, 4, 8, 2)
         tb.setSpacing(12)
 
         logo = QLabel()
-        logo.setPixmap(_draw_logo(34))
+        logo.setPixmap(_draw_logo(26))
         tb.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_box = QVBoxLayout()
@@ -1843,47 +1844,33 @@ class FlashPilotWindow(QMainWindow):
 
         root_lay.addWidget(titlebar)
 
-        # --- content ---
-        body = QHBoxLayout()
-        body.setContentsMargins(18, 4, 18, 14)
-        body.setSpacing(14)
-
-        # Dynamic nav: samsung + every supported brand (data-driven) + tools.
+        # --- content: OEM chips on top, scene on left, page fills middle ---
         self._section_index = {"samsung": 0}
-        nav_items = [("samsung", "◉", "Samsung")]
-        nav_items += [(f"dev_{b['key']}", b.get('icon', '▣'), b['label'])
-                      for b in device_pages.BRANDS if b["key"] != "samsung"]
-        nav_items += [
-            ("general", "⚡", "General"),
-            ("fus", "⬇", "Firmware Downloader"),
-            ("mtk", "▣", "MTK Tools"),
+        oem_items = [("samsung", "◉", "Samsung")]
+        for b in device_pages.BRANDS:
+            if b["key"] == "samsung":
+                continue
+            oem_items.append((f"dev_{b['key']}", b.get('icon', '▣'), b['label']))
+        oem_items.append(("general", "⚡", "General"))
+        tools = [
+            ("fus", "⬇", "FUS"),
+            ("mtk", "▣", "MTK"),
             ("qc", "◈", "Qualcomm"),
-            ("spd", "✦", "SPD / Unisoc"),
+            ("spd", "✦", "SPD"),
         ]
-        self.nav = NavRail(nav_items)
-        self.nav.section_selected.connect(self._on_section)
+        self.oem_bar = OemChipBar(oem_items, tools=tools)
+        self.oem_bar.section_selected.connect(self._on_section)
+        root_lay.addWidget(self.oem_bar)
 
-        # Rail can now exceed viewport height — make it scrollable.
-        from PyQt6.QtWidgets import QScrollArea as _NavScroll
-        nav_wrap = _NavScroll()
-        nav_wrap.setWidgetResizable(True)
-        nav_wrap.setFrameShape(QFrame.Shape.NoFrame)
-        nav_wrap.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        nav_wrap.setStyleSheet("QScrollArea { background: transparent; }")
-        nav_wrap.setWidget(self.nav)
-        try:
-            w = self.nav.width() or self.nav.sizeHint().width()
-        except Exception:
-            w = 170
-        nav_wrap.setFixedWidth(max(150, min(200, w + 12)))
-        body.addWidget(nav_wrap)
+        body = QHBoxLayout()
+        body.setContentsMargins(10, 4, 10, 6)
+        body.setSpacing(10)
 
         self._device_stacks = {}
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("QStackedWidget { background: transparent; }")
 
-        # Samsung page = operations/console panel (device scene + metrics live
-        # in the shared connection banner above the stack).
+        # Samsung hub page (operations/console panel).
         dash = QWidget()
         dash_lay = QHBoxLayout(dash)
         dash_lay.setContentsMargins(0, 0, 0, 0)
@@ -1900,7 +1887,7 @@ class FlashPilotWindow(QMainWindow):
             self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
             self._section_index[f"dev_{b['key']}"] = len(self._section_index)
 
-        # General = Quick + Battery + Network behind sub-tabs (frees 2 rail slots)
+        # General = Quick + Battery + Network behind sub-tabs.
         gen = QWidget()
         gen.setStyleSheet("background: transparent;")
         gv = QVBoxLayout(gen)
@@ -1933,19 +1920,59 @@ class FlashPilotWindow(QMainWindow):
             self._section_index[key] = len(self._section_index)
         self._gen_stack = gen_stack
 
-        # Connection banner shared by every section so the computer-cable-phone
-        # scene (and its live animation) is visible on Samsung / MTK / Qualcomm.
-        stack_col = QVBoxLayout()
-        stack_col.setContentsMargins(0, 0, 0, 0)
-        stack_col.setSpacing(10)
-        stack_col.addWidget(self._build_conn_bar())
-        stack_col.addWidget(self._stack, 1)
+        # LEFT: connection scene (keeps its size) + state + compact metrics.
+        left_panel = QFrame()
+        left_panel.setObjectName("connbar")
+        self._conn = left_panel
+        left_panel.setFixedWidth(232)
+        left_panel.setStyleSheet(
+            f"QFrame#connbar {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 rgba(15, 24, 38, 225), stop:1 rgba(7, 12, 19, 230));"
+            f" border: 1px solid {C['border']}; border-top: 1px solid {C['accent']};"
+            f" border-radius: 9px; }}"
+        )
+        ll = QVBoxLayout(left_panel)
+        ll.setContentsMargins(10, 8, 10, 8)
+        ll.setSpacing(6)
+        self.scene = ConnectionScene()
+        self.scene.setMinimumHeight(120)
+        ll.addWidget(self.scene, 1)
 
-        body.addLayout(stack_col, 1)
+        srow = QHBoxLayout()
+        srow.setSpacing(6)
+        self.orb = StatusOrb()
+        srow.addWidget(self.orb, 0, Qt.AlignmentFlag.AlignTop)
+        self.conn_state = QLabel("No device connected")
+        self.conn_state.setWordWrap(True)
+        self.conn_state.setStyleSheet(
+            f"color:{C['dim']}; font-size:10px; font-weight:500; background:transparent;"
+        )
+        srow.addWidget(self.conn_state, 1)
+        ll.addLayout(srow)
 
-        # Shared console/log column on the right side, visible on every section
-        # (Samsung / MTK / Qualcomm / Settings) - TFT-unlock-tools style.
+        mgrid = QGridLayout()
+        mgrid.setSpacing(4)
+        self.info = {}
+        tiles = [
+            ("Device Model", C["grad_b"]), ("USB Mode", C["accent"]),
+            ("Interface", C["ok"]), ("ADB Status", C["warn"]),
+            ("PIT Health", C["err_dim"]),
+        ]
+        for i, (name, accent) in enumerate(tiles):
+            card = MetricCard(name, "--", accent)
+            self.info[name] = card
+            mgrid.addWidget(card, i // 2, i % 2)
+        for i in range(2):
+            mgrid.setColumnStretch(i, 1)
+        ll.addLayout(mgrid)
+        body.addWidget(left_panel, 0)
+
+        # MIDDLE: the content page fills the entire remaining space.
+        body.addWidget(self._stack, 1)
+
+        # RIGHT: shared console stays where it is.
         body.addWidget(self._build_console())
+
         root_lay.addLayout(body, 1)
 
         self._grip = QSizeGrip(root)
@@ -1980,14 +2007,14 @@ class FlashPilotWindow(QMainWindow):
             f" background: rgba(16, 25, 39, 230); }}"
         )
         conn_lay = QHBoxLayout(conn)
-        conn_lay.setContentsMargins(14, 8, 14, 8)
+        conn_lay.setContentsMargins(10, 5, 10, 5)
         conn_lay.setSpacing(14)
 
         # left: animated computer -- cable -- phone scene + orb + state
         left = QVBoxLayout()
         left.setSpacing(4)
         self.scene = ConnectionScene()
-        self.scene.setMinimumHeight(64)
+        self.scene.setMinimumHeight(54)
         left.addWidget(self.scene, 1)
 
         row = QHBoxLayout()
@@ -2007,9 +2034,7 @@ class FlashPilotWindow(QMainWindow):
 
         # right: live device metric cards (model / mode / interface / adb / pit)
         grid = QGridLayout()
-        grid.setSpacing(14)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        grid.setSpacing(6)
         self.info = {}
         tiles = [
             ("Device Model", C["grad_b"]),
@@ -2021,7 +2046,8 @@ class FlashPilotWindow(QMainWindow):
         for i, (name, accent) in enumerate(tiles):
             card = MetricCard(name, "--", accent)
             self.info[name] = card
-            grid.addWidget(card, i // 2, i % 2)
+            grid.addWidget(card, 0, i)   # single horizontal row -> banner stays short
+            grid.setColumnStretch(i, 1)
         conn_lay.addLayout(grid, 2)
 
         return conn
@@ -3127,7 +3153,8 @@ class FlashPilotWindow(QMainWindow):
     def _on_section(self, key):
         idx = getattr(self, "_section_index", {}).get(key, 0)
         self._stack.setCurrentIndex(idx)
-        self.nav.select(key)
+        if hasattr(self, "oem_bar"):
+            self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
 
     # --------------------- model action router (devices drill-down) --------
@@ -5327,7 +5354,7 @@ class FlashPilotWindow(QMainWindow):
         overlay.raise_()
         ok.setFocus()
 
-    def _show_beta_risk_dialog(self, cur, stable_tag):
+    def _show_beta_risk_dialog(self, cur, stable_tag, force=False):
         """Beta acceptance gate — replaces the easy-to-miss toast.
 
         Shows a blocking in-window card that requires an explicit
@@ -5342,8 +5369,22 @@ class FlashPilotWindow(QMainWindow):
         # Settings: first_install (default) shows once per beta version,
         # every_boot shows on every launch. Bigger than toast (320px) -> 620px.
         mode = self.settings.value("beta_warning_mode", "first_install")
-        if mode == "first_install" and self.settings.value(key, False, type=bool):
-            return
+        seen_key = f"beta_notice_seen_{cur}"
+        if force:
+            self.settings.setValue(key, False)
+        elif mode == "first_install" and self.settings.value(key, False, type=bool):
+            # Still show ONCE per version even if accepted, so a freshly
+            # installed beta always surfaces the warning (user had accepted
+            # during earlier testing, which silently hid it).
+            if self.settings.value(seen_key, False, type=bool):
+                try:
+                    self._ui.line.emit("[beta] notice suppressed (already accepted "
+                                       "for this version) — Settings ▸ Updates ▸ "
+                                       "'Preview beta warning' to see it again.")
+                except Exception:
+                    pass
+                return
+            # fall through to show once, then mark seen
         # Prevent stacking multiple beta dialogs if update check fires twice
         if getattr(self, "_beta_dialog_open", False):
             return
@@ -5488,6 +5529,10 @@ class FlashPilotWindow(QMainWindow):
             overlay.hide()
             overlay.deleteLater()
             self._beta_dialog_open = False
+            try:
+                self.settings.setValue(f"beta_notice_seen_{cur}", True)
+            except Exception:
+                pass
 
         def close_and_exit():
             close_only()
@@ -7237,6 +7282,21 @@ class FlashPilotWindow(QMainWindow):
             bl, "Beta warning on every boot",
             "ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version.",
             self._beta_every_boot,
+        )
+        prev_btn = QPushButton("Preview beta warning")
+        prev_btn.setStyleSheet(
+            f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
+            f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
+            f" QPushButton:hover {{ border-color:{C['accent']}; }}"
+        )
+        prev_btn.setFixedWidth(200)
+        prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        prev_btn.clicked.connect(lambda: self._show_beta_risk_dialog(
+            APP_VERSION, "", force=True))
+        self._settings_row(
+            bl, "Preview beta warning",
+            "Show the full-screen beta risk dialog now (ignores 'accepted' state).",
+            prev_btn,
         )
 
         lay.addStretch(1)

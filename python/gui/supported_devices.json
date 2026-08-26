@@ -5,184 +5,552 @@
     {
       "key": "samsung",
       "label": "Samsung",
-      "icon": "◉",
+      "icon": "\u25c9",
       "models": [
-        {"model": "Galaxy A14 / A14 5G", "chip": "Exynos 1330 / Helio G80", "vid": "04e8", "engine": "odin", "status": "researched",
-         "actions": ["frp", "info", "backup", "flash", "kg_unlock"],
-         "notes": "SM-A146B PIT reversed; frp partition known; AT KG chain tested."},
-        {"model": "Galaxy A15 / A15 5G", "chip": "Helio G99", "vid": "04e8", "engine": "odin", "status": "researched",
-         "actions": ["frp", "info", "backup", "flash"], "notes": "PIT captured via odin-pit-mtk."},
-        {"model": "Galaxy A16 / A16 5G", "chip": "Helio G99", "vid": "04e8", "engine": "odin", "status": "researched",
-         "actions": ["frp", "info", "backup", "flash"], "notes": "Same PIT family as A15."},
-        {"model": "Galaxy A05 / A06", "chip": "Helio G85", "vid": "04e8|0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "info"], "notes": "Enumerates as MTK 0e8d in BROM; DA needed."}
+        {
+          "model": "Galaxy A14 / A14 5G",
+          "chip": "Exynos 1330 / Helio G80",
+          "vid": "04e8",
+          "engine": "odin",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "backup",
+            "flash",
+            "kg_unlock"
+          ],
+          "notes": "SM-A146B PIT reversed; frp partition known; AT KG chain tested."
+        },
+        {
+          "model": "Galaxy A15 / A15 5G",
+          "chip": "Helio G99",
+          "vid": "04e8",
+          "engine": "odin",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "backup",
+            "flash"
+          ],
+          "notes": "PIT captured via odin-pit-mtk."
+        },
+        {
+          "model": "Galaxy A16 / A16 5G",
+          "chip": "Helio G99",
+          "vid": "04e8",
+          "engine": "odin",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "backup",
+            "flash"
+          ],
+          "notes": "Same PIT family as A15."
+        },
+        {
+          "model": "Galaxy A05 / A06",
+          "chip": "Helio G85",
+          "vid": "04e8|0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": "Enumerates as MTK 0e8d in BROM; DA needed."
+        }
+      ]
+    },
+    {
+      "key": "apple",
+      "label": "Apple",
+      "icon": "",
+      "models": [
+        {
+          "model": "iPhone SE/XR/11/12",
+          "chip": "A13-A14 (checkm8)",
+          "vid": "05ac",
+          "engine": "apple",
+          "status": "planned",
+          "actions": [],
+          "notes": "Apple is isolated \u2014 checkm8 DFU (05ac:12xx), separate from Android BSP. No cross-wiring."
+        }
       ]
     },
     {
       "key": "tecno",
       "label": "Tecno",
-      "icon": "▤",
+      "icon": "\u25a4",
       "models": [
-        {"model": "Pop 8", "chip": "SC9863A", "vid": "1782", "engine": "spd", "status": "researched",
-         "frp_offset": "0x1a00000", "pit_hash": "a9d8f1", 
-         "actions": ["frp", "info", "backup", "adb_enable"],
-         "notes": "BSL FDL1/FDL2 tested; magic64-compatible; instant FRP path."},
-        {"model": "Spark 10 / 20", "chip": "Helio G88 / T606", "vid": "0e8d|1782", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "info"], "notes": "Spark 20 is Unisoc T606 - use SPD engine."},
-        {"model": "Camon 20", "chip": "Helio G85", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "Pop 8",
+          "chip": "SC9863A",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "researched",
+          "frp_offset": "0x1a00000",
+          "pit_hash": "a9d8f1",
+          "actions": [
+            "frp",
+            "info",
+            "backup",
+            "adb_enable"
+          ],
+          "notes": "BSL FDL1/FDL2 tested; magic64-compatible; instant FRP path."
+        },
+        {
+          "model": "Spark 10 / 20",
+          "chip": "Helio G88 / T606",
+          "vid": "0e8d|1782",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": "Spark 20 is Unisoc T606 - use SPD engine."
+        },
+        {
+          "model": "Camon 20",
+          "chip": "Helio G85",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "infinix",
       "label": "Infinix",
-      "icon": "▤",
+      "icon": "\u25a4",
       "models": [
-        {"model": "Hot 30i / 40i", "chip": "T606 / Helio G85", "vid": "1782|0e8d", "engine": "spd", "status": "planned",
-         "actions": ["frp", "info"], "notes": "30i Unisoc, 40i MTK."},
-        {"model": "Smart 8", "chip": "T606", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""},
-        {"model": "Note 30", "chip": "Helio G99", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "flash"], "notes": ""}
+        {
+          "model": "Hot 30i / 40i",
+          "chip": "T606 / Helio G85",
+          "vid": "1782|0e8d",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": "30i Unisoc, 40i MTK."
+        },
+        {
+          "model": "Smart 8",
+          "chip": "T606",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "Note 30",
+          "chip": "Helio G99",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "flash"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "itel",
       "label": "itel",
-      "icon": "▤",
+      "icon": "\u25a4",
       "models": [
-        {"model": "A14 / A18", "chip": "SC7731e", "vid": "1782", "engine": "spd", "status": "researched",
-         "frp_offset": "known", "actions": ["frp", "info", "adb_enable"],
-         "notes": "Itel A14 field-tested; *#*#49#*#* ADB path documented."},
-        {"model": "A60 / A70", "chip": "T603 / SC9863A", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp", "info"], "notes": ""},
-        {"model": "S23 / P40", "chip": "T606", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "A14 / A18",
+          "chip": "SC7731e",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "researched",
+          "frp_offset": "known",
+          "actions": [
+            "frp",
+            "info",
+            "adb_enable"
+          ],
+          "notes": "Itel A14 field-tested; *#*#49#*#* ADB path documented."
+        },
+        {
+          "model": "A60 / A70",
+          "chip": "T603 / SC9863A",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "S23 / P40",
+          "chip": "T606",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "xiaomi",
       "label": "Xiaomi / Redmi / Poco",
-      "icon": "▣",
+      "icon": "\u25a3",
       "models": [
-        {"model": "Redmi 12", "chip": "Helio G88", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "flash"], "notes": ""},
-        {"model": "Redmi 13C", "chip": "T603", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": "Same shell as Poco C65."},
-        {"model": "Redmi Note 12 / 13", "chip": "SD 4 Gen1 / G85", "vid": "05c6|0e8d", "engine": "qcom", "status": "planned",
-         "actions": ["frp", "flash"], "notes": "Note 13 4G is MTK, 5G is QCOM."},
-        {"model": "Poco C65 / M6 / X6", "chip": "T603 / SD", "vid": "1782|05c6", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "Redmi 12",
+          "chip": "Helio G88",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "flash"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "Redmi 13C",
+          "chip": "T603",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": "Same shell as Poco C65."
+        },
+        {
+          "model": "Redmi Note 12 / 13",
+          "chip": "SD 4 Gen1 / G85",
+          "vid": "05c6|0e8d",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "flash"
+          ],
+          "notes": "Note 13 4G is MTK, 5G is QCOM."
+        },
+        {
+          "model": "Poco C65 / M6 / X6",
+          "chip": "T603 / SD",
+          "vid": "1782|05c6",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "oppo",
       "label": "Oppo",
-      "icon": "◈",
+      "icon": "\u25c8",
       "models": [
-        {"model": "A17 / A18 / A38", "chip": "Helio G35 / G85", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "info"], "notes": ""},
-        {"model": "A58 / Reno 10 / 11", "chip": "SD 680 / Dimensity", "vid": "05c6|0e8d", "engine": "qcom", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "A17 / A18 / A38",
+          "chip": "Helio G35 / G85",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "A58 / Reno 10 / 11",
+          "chip": "SD 680 / Dimensity",
+          "vid": "05c6|0e8d",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "realme",
       "label": "Realme",
-      "icon": "◈",
+      "icon": "\u25c8",
       "models": [
-        {"model": "C53 / C55", "chip": "T612 / Helio G88", "vid": "1782|0e8d", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": "C53 Unisoc."},
-        {"model": "Note 50 / 11 Pro", "chip": "T612 / SD", "vid": "1782|05c6", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "C53 / C55",
+          "chip": "T612 / Helio G88",
+          "vid": "1782|0e8d",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": "C53 Unisoc."
+        },
+        {
+          "model": "Note 50 / 11 Pro",
+          "chip": "T612 / SD",
+          "vid": "1782|05c6",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "oneplus",
       "label": "OnePlus",
-      "icon": "◈",
+      "icon": "\u25c8",
       "models": [
-        {"model": "Nord N20 / N30 / CE3", "chip": "SD 695", "vid": "05c6", "engine": "qcom", "status": "planned",
-         "actions": ["frp", "flash"], "notes": ""},
-        {"model": "11R / 12R", "chip": "SD 8+ Gen1", "vid": "05c6", "engine": "qcom", "status": "planned",
-         "actions": ["frp", "info"], "notes": ""}
+        {
+          "model": "Nord N20 / N30 / CE3",
+          "chip": "SD 695",
+          "vid": "05c6",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "flash"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "11R / 12R",
+          "chip": "SD 8+ Gen1",
+          "vid": "05c6",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "info"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "vivo",
       "label": "Vivo / iQOO",
-      "icon": "✦",
+      "icon": "\u2726",
       "models": [
-        {"model": "Y02 / Y17 / Y27 / Y36", "chip": "T612 / Helio G85 / SD 680", "vid": "1782|0e8d|05c6", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": "Y02/Y17 Unisoc-heavy lineup."},
-        {"model": "iQOO Z7 / Z9", "chip": "SD / Dimensity", "vid": "05c6|0e8d", "engine": "qcom", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "Y02 / Y17 / Y27 / Y36",
+          "chip": "T612 / Helio G85 / SD 680",
+          "vid": "1782|0e8d|05c6",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": "Y02/Y17 Unisoc-heavy lineup."
+        },
+        {
+          "model": "iQOO Z7 / Z9",
+          "chip": "SD / Dimensity",
+          "vid": "05c6|0e8d",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "huawei",
       "label": "Huawei (+Honor)",
-      "icon": "⬡",
+      "icon": "\u2b21",
       "models": [
-        {"model": "Y5p / Y6p / Y9a", "chip": "Kirin 710 / HiSilicon", "vid": "12d1", "engine": "kirin", "status": "planned",
-         "actions": [], "notes": "HiSilicon download mode - research needed, no open tooling."},
-        {"model": "Honor X6 / X8 / X9b / 90", "chip": "T606 / SD 680 / G96", "vid": "1782|05c6|0e8d", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": "Post-split Honor uses standard MTK/QC/SPD - same engines apply."}
+        {
+          "model": "Y5p / Y6p / Y9a",
+          "chip": "Kirin 710 / HiSilicon",
+          "vid": "12d1",
+          "engine": "kirin",
+          "status": "planned",
+          "actions": [],
+          "notes": "HiSilicon download mode - research needed, no open tooling."
+        },
+        {
+          "model": "Honor X6 / X8 / X9b / 90",
+          "chip": "T606 / SD 680 / G96",
+          "vid": "1782|05c6|0e8d",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": "Post-split Honor uses standard MTK/QC/SPD - same engines apply."
+        }
       ]
     },
     {
       "key": "motorola",
       "label": "Motorola",
-      "icon": "Ⓜ",
+      "icon": "\u24c2",
       "models": [
-        {"model": "Moto G13/G24/G34/G84", "chip": "Helio G85 / SD 695", "vid": "0e8d|05c6", "engine": "mtk", "status": "planned",
-         "actions": ["frp", "flash"], "notes": ""},
-        {"model": "Edge 40", "chip": "Dimensity 8020", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "Moto G13/G24/G34/G84",
+          "chip": "Helio G85 / SD 695",
+          "vid": "0e8d|05c6",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp",
+            "flash"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "Edge 40",
+          "chip": "Dimensity 8020",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "nokia",
       "label": "Nokia",
-      "icon": "◍",
+      "icon": "\u25cd",
       "models": [
-        {"model": "G21 / G42 / C32", "chip": "T606 / SD 480+", "vid": "1782|05c6", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""},
-        {"model": "2.4 / 3.4", "chip": "SC9863A", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": "Same BSL family as Pop 8."}
+        {
+          "model": "G21 / G42 / C32",
+          "chip": "T606 / SD 480+",
+          "vid": "1782|05c6",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "2.4 / 3.4",
+          "chip": "SC9863A",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": "Same BSL family as Pop 8."
+        }
       ]
     },
     {
       "key": "tcl_zte",
       "label": "TCL / ZTE",
-      "icon": "◎",
+      "icon": "\u25ce",
       "models": [
-        {"model": "TCL 30 / 40 SE / 305", "chip": "Helio G37 / T606", "vid": "0e8d|1782", "engine": "mtk", "status": "planned",
-         "actions": ["frp"], "notes": ""},
-        {"model": "ZTE Blade A54 / A72", "chip": "T606 / SC9863A", "vid": "1782", "engine": "spd", "status": "planned",
-         "actions": ["frp"], "notes": ""}
+        {
+          "model": "TCL 30 / 40 SE / 305",
+          "chip": "Helio G37 / T606",
+          "vid": "0e8d|1782",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "ZTE Blade A54 / A72",
+          "chip": "T606 / SC9863A",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "lg",
       "label": "LG",
-      "icon": "◐",
+      "icon": "\u25d0",
       "models": [
-        {"model": "K40 / K52", "chip": "Helio P22 / G35", "vid": "0e8d", "engine": "mtk", "status": "planned",
-         "actions": ["frp"], "notes": ""},
-        {"model": "Velvet", "chip": "SD 765G", "vid": "05c6", "engine": "qcom", "status": "planned",
-         "actions": [], "notes": ""}
+        {
+          "model": "K40 / K52",
+          "chip": "Helio P22 / G35",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "Velvet",
+          "chip": "SD 765G",
+          "vid": "05c6",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [],
+          "notes": ""
+        }
       ]
     },
     {
       "key": "asus_sharp",
       "label": "Asus / Sharp",
-      "icon": "◇",
+      "icon": "\u25c7",
       "models": [
-        {"model": "Zenfone 9 / 10", "chip": "SD 8 Gen1/2", "vid": "05c6", "engine": "qcom", "status": "planned",
-         "actions": ["frp"], "notes": ""},
-        {"model": "Aquos sense7", "chip": "SD 695", "vid": "05c6", "engine": "qcom", "status": "planned",
-         "actions": [], "notes": ""}
+        {
+          "model": "Zenfone 9 / 10",
+          "chip": "SD 8 Gen1/2",
+          "vid": "05c6",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [
+            "frp"
+          ],
+          "notes": ""
+        },
+        {
+          "model": "Aquos sense7",
+          "chip": "SD 695",
+          "vid": "05c6",
+          "engine": "qcom",
+          "status": "planned",
+          "actions": [],
+          "notes": ""
+        }
       ]
     }
   ]

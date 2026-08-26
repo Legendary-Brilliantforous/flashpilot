@@ -7,7 +7,7 @@ a gradient fill. Emits `section_selected(str)`.
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen
-from PyQt6.QtWidgets import QButtonGroup, QFrame, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QButtonGroup, QFrame, QPushButton, QHBoxLayout, QVBoxLayout
 
 _PANEL = "#0a111a"
 _INSET = "#070d15"
@@ -114,6 +114,80 @@ class NavRail(QFrame):
         if key in self._buttons:
             for k, b in self._buttons.items():
                 b.set_active(k == key)
+
+    def keys(self):
+        return list(self._buttons.keys())
+
+class OemChipBar(QFrame):
+    """Top OEM brand selector — bordered chips in rows (~10/row), then a slim
+    tools row. Emits section_selected(str). Keeps the scene/content clean:
+    OEMs on top, animation left, page fills the middle."""
+
+    section_selected = pyqtSignal(str)
+
+    def __init__(self, oem_items, tools=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("oemchipbar")
+        self.setStyleSheet("QFrame#oemchipbar { background: transparent; }")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 4, 0, 4)
+        outer.setSpacing(4)
+        self._buttons = {}
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+
+        row = None
+        for i, (key, glyph, label) in enumerate(oem_items):
+            if i % 10 == 0:
+                row = QHBoxLayout()
+                row.setSpacing(4)
+                outer.addLayout(row)
+            btn = self._chip(f"{glyph}  {label}", key, accent=True)
+            row.addWidget(btn)
+        if row is not None:
+            row.addStretch(1)
+
+        if tools:
+            trow = QHBoxLayout()
+            trow.setSpacing(4)
+            for key, glyph, label in tools:
+                btn = self._chip(f"{glyph}  {label}", key, accent=False)
+                trow.addWidget(btn)
+            trow.addStretch(1)
+            outer.addLayout(trow)
+
+        outer.addStretch(1)
+
+    def _chip(self, text, key, accent):
+        b = QPushButton(text)
+        b.setCheckable(True)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        f = b.font(); f.setPixelSize(11); b.setFont(f)
+        b.setFixedHeight(26)
+        if accent:
+            b.setStyleSheet(
+                "QPushButton { color:#e2e8f0; background:rgba(21,32,50,0.7);"
+                " border:1px solid #2c405e; border-radius:13px; padding:0 12px; }"
+                "QPushButton:hover { border:1px solid #22d3ee; color:#fff; }"
+                "QPushButton:checked { background:#22d3ee; color:#04121a;"
+                " border:1px solid #22d3ee; font-weight:800; }"
+            )
+        else:
+            b.setStyleSheet(
+                "QPushButton { color:#8fa4bd; background:transparent;"
+                " border:1px dashed #334155; border-radius:13px; padding:0 12px; }"
+                "QPushButton:hover { border:1px solid #94a3b8; color:#e2e8f0; }"
+                "QPushButton:checked { background:#94a3b8; color:#0b0f14;"
+                " border:1px solid #94a3b8; font-weight:800; }"
+            )
+        b.clicked.connect(lambda _=False, k=key: self.section_selected.emit(k))
+        self._group.addButton(b)
+        self._buttons[key] = b
+        return b
+
+    def select(self, key):
+        for k, b in self._buttons.items():
+            b.setChecked(k == key)
 
     def keys(self):
         return list(self._buttons.keys())

@@ -56,306 +56,300 @@ class Motion:
         )
 
 
-def _draw_computer(size, connected=False):
-    pix = QPixmap(size, size)
+def _draw_computer(s, connected=False):
+    """Premium desktop workstation: slim-bezel monitor, live screen UI,
+    stand + base, power LED and desk reflection."""
+    pix = QPixmap(s, s)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = float(size)
+    ss = float(s)
 
-    # ground shadow
-    p.setBrush(QColor(0, 0, 0, 70))
+    mon = QRectF(ss * 0.03, ss * 0.08, ss * 0.94, ss * 0.60)
+
+    # drop shadow under the panel
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(s * 0.28, s * 0.945, s * 0.44, s * 0.05))
+    p.setBrush(QColor(0, 0, 0, 90))
+    p.drawRoundedRect(mon.translated(0, ss * 0.018), ss * 0.035, ss * 0.035)
 
-    # stand base
-    base = QRectF(s * 0.27, s * 0.86, s * 0.46, s * 0.09)
-    bgrad = QLinearGradient(0, base.top(), 0, base.bottom())
-    bgrad.setColorAt(0, QColor(C["border_hi"]))
-    bgrad.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(bgrad)
-    p.setPen(QPen(QColor(C["border_hi"]), 1))
-    p.drawRoundedRect(base, s * 0.05, s * 0.05)
-    p.setPen(QPen(QColor(255, 255, 255, 42), 1))
-    p.drawLine(QPointF(base.x() + s * 0.05, base.y() + 1.6),
-               QPointF(base.x() + base.width() - s * 0.05, base.y() + 1.6))
-    # neck
-    ngrad = QLinearGradient(0, s * 0.70, 0, s * 0.90)
-    ngrad.setColorAt(0, QColor(C["border_hi"]))
-    ngrad.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(ngrad)
-    p.setPen(QPen(QColor(C["border_hi"]), 1))
-    p.drawRoundedRect(QRectF(s * 0.455, s * 0.72, s * 0.09, s * 0.16), s * 0.03, s * 0.03)
-
-    # monitor bezel (dark metallic frame)
-    bezel = QRectF(s * 0.06, s * 0.03, s * 0.88, s * 0.70)
-    fr = QLinearGradient(bezel.left(), bezel.top(), bezel.right(), bezel.bottom())
-    fr.setColorAt(0, QColor("#3a4450"))
-    fr.setColorAt(0.5, QColor("#232b35"))
-    fr.setColorAt(1, QColor("#10151d"))
-    p.setBrush(fr)
-    p.setPen(QPen(QColor("#4a5563"), 1.2))
-    p.drawRoundedRect(bezel, s * 0.09, s * 0.09)
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(bezel.x() + s * 0.02, bezel.y() + s * 0.02),
-               QPointF(bezel.x() + bezel.width() - s * 0.02, bezel.y() + s * 0.02))
+    # bezel with metallic edge
+    frame = QLinearGradient(mon.left(), mon.top(), mon.left(), mon.bottom())
+    frame.setColorAt(0, QColor("#454f5c"))
+    frame.setColorAt(0.5, QColor("#2b333d"))
+    frame.setColorAt(1, QColor("#1c232b"))
+    p.setPen(QPen(QColor("#11161c"), ss * 0.008))
+    p.setBrush(frame)
+    p.drawRoundedRect(mon, ss * 0.035, ss * 0.035)
 
     # screen
-    screen = QRectF(bezel.x() + s * 0.055, bezel.y() + s * 0.06,
-                    bezel.width() - s * 0.11, bezel.height() - s * 0.12)
+    bz = ss * 0.035
+    screen = mon.adjusted(bz, bz, -bz, -bz * 1.5)
+    scr = QLinearGradient(screen.left(), screen.top(),
+                          screen.right(), screen.bottom())
     if connected:
-        sc = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sc.setColorAt(0, QColor(C["accent_hi"]))
-        sc.setColorAt(0.55, QColor(C["grad_b"]))
-        sc.setColorAt(1, QColor(C["grad_a"]))
+        scr.setColorAt(0, QColor("#0e3a46"))
+        scr.setColorAt(0.55, QColor("#0b2b35"))
+        scr.setColorAt(1, QColor("#071b22"))
     else:
-        sc = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sc.setColorAt(0, QColor("#25314a"))
-        sc.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(sc)
-    p.setPen(QPen(QColor(0, 0, 0, 120), 1))
-    p.drawRoundedRect(screen, s * 0.04, s * 0.04)
+        scr.setColorAt(0, QColor("#131a22"))
+        scr.setColorAt(1, QColor("#0a0f15"))
+    p.setPen(QPen(QColor("#05080c"), ss * 0.006))
+    p.setBrush(scr)
+    p.drawRoundedRect(screen, ss * 0.012, ss * 0.012)
 
-    if connected:
-        # desktop: sun glow
-        orb = QRadialGradient(screen.x() + screen.width() * 0.72,
-                              screen.y() + screen.height() * 0.28, s * 0.22)
-        orb.setColorAt(0, QColor(255, 255, 255, 90))
-        orb.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(orb)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(screen.x() + screen.width() * 0.55,
-                             screen.y() + screen.height() * 0.10,
-                             s * 0.36, s * 0.36))
-        # desktop window
-        wx = screen.x() + screen.width() * 0.16
-        wy = screen.y() + screen.height() * 0.15
-        ww = screen.width() * 0.52
-        wh = screen.height() * 0.5
-        p.setBrush(QColor(13, 17, 26, 180))
-        p.setPen(QPen(QColor(C["accent"]), 1))
-        p.drawRoundedRect(QRectF(wx, wy, ww, wh), s * 0.02, s * 0.02)
-        p.setPen(QPen(QColor(C["accent_hi"]), 1))
-        p.drawLine(QPointF(wx + s * 0.02, wy + wh * 0.09),
-                   QPointF(wx + ww - s * 0.02, wy + wh * 0.09))
-        p.setBrush(QColor(C["accent_hi"]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(wx + s * 0.02, wy + wh * 0.14, ww * 0.45, s * 0.02),
-                          s * 0.008, s * 0.008)
-        # second window hint
-        p.setBrush(QColor(13, 17, 26, 140))
-        p.setPen(QPen(QColor(C["border_hi"]), 1))
-        p.drawRoundedRect(QRectF(wx + ww * 0.30, wy + wh * 0.58, ww * 0.62, wh * 0.32),
-                          s * 0.02, s * 0.02)
-    else:
-        # dark screen with faint reflection
-        sh = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sh.setColorAt(0, QColor(255, 255, 255, 30))
-        sh.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(sh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(screen.adjusted(s * 0.02, s * 0.02, -s * 0.02, -s * 0.3),
-                          s * 0.03, s * 0.03)
-
-    # glass diagonal reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(screen.x(), screen.y() + screen.height() * 0.6),
-               QPointF(screen.x() + screen.width() * 0.5, screen.y()))
-
-    # webcam dot
-    p.setBrush(QColor(C["border_hi"]))
+    # screen glass sheen (diagonal)
+    sheen = QLinearGradient(screen.left(), screen.top(),
+                            screen.right(), screen.bottom())
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 26))
+    sheen.setColorAt(0.35, QColor(255, 255, 255, 4))
+    sheen.setColorAt(0.55, QColor(255, 255, 255, 0))
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() / 2 - s * 0.014,
-                         bezel.y() + s * 0.006, s * 0.028, s * 0.028))
-    p.setBrush(QColor(10, 14, 20))
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() / 2 - s * 0.008,
-                         bezel.y() + s * 0.012, s * 0.016, s * 0.016))
+    p.setBrush(sheen)
+    p.drawRoundedRect(screen, ss * 0.012, ss * 0.012)
 
-    # status LED (bottom-right of bezel)
-    led = QColor(C["ok"]) if connected else QColor(C["mute"])
-    p.setBrush(led)
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() - s * 0.06,
-                         bezel.y() + bezel.height() - s * 0.045,
-                         s * 0.026, s * 0.026))
+    # live screen UI
+    p.setPen(Qt.PenStyle.NoPen)
+    if connected:
+        acc = QColor(C["accent_hi"])
+        bars = [0.30, 0.48, 0.38, 0.62]
+        bw = screen.width() * 0.11
+        for i, frac in enumerate(bars):
+            bh = screen.height() * 0.16 * (0.5 + frac)
+            bx = screen.left() + screen.width() * 0.10 + i * (bw + bw * 0.28)
+            by = screen.bottom() - ss * 0.05 - bh
+            g = QLinearGradient(bx, by, bx, by + bh)
+            g.setColorAt(0, QColor(acc.red(), acc.green(), acc.blue(), 210))
+            g.setColorAt(1, QColor(acc.red(), acc.green(), acc.blue(), 60))
+            p.setBrush(g)
+            p.drawRoundedRect(QRectF(bx, by, bw, bh), ss * 0.008, ss * 0.008)
+        # SYNC pill top-right of screen
+        pill = QRectF(screen.right() - screen.width() * 0.30,
+                      screen.top() + screen.height() * 0.08,
+                      screen.width() * 0.20, screen.height() * 0.13)
+        p.setBrush(QColor(6, 20, 24, 200))
+        p.setPen(QPen(QColor(C["ok"]), ss * 0.006))
+        p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2)
+        p.setBrush(QColor(C["ok"]))
+        p.drawEllipse(QRectF(pill.left() + pill.width() * 0.10,
+                             pill.center().y() - ss * 0.011,
+                             ss * 0.022, ss * 0.022))
+        p.setPen(QPen(QColor(C["ok"])))
+        f = QFont("Inter", max(5, int(ss * 0.055)), QFont.Weight.Bold)
+        p.setFont(f)
+        p.drawText(pill.adjusted(pill.width() * 0.22, 0, 0, 0),
+                   Qt.AlignmentFlag.AlignVCenter, "SYNC")
+    else:
+        p.setBrush(QColor(255, 255, 255, 26))
+        for i in range(3):
+            ln = QRectF(screen.left() + screen.width() * 0.12,
+                        screen.top() + screen.height() * (0.30 + i * 0.16),
+                        screen.width() * (0.52 - i * 0.10), ss * 0.018)
+            p.drawRoundedRect(ln, ss * 0.009, ss * 0.009)
+
+    # chin brand dot + power LED on bezel
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(255, 255, 255, 40))
+    p.drawEllipse(QRectF(mon.center().x() - ss * 0.008,
+                         mon.bottom() - bz * 0.9,
+                         ss * 0.016, ss * 0.016))
+    led_c = QColor(C["ok"]) if connected else QColor("#5b6875")
+    p.setBrush(led_c)
+    led_r = ss * 0.012
+    lx = mon.right() - bz * 1.6 - led_r
+    ly = mon.bottom() - bz * 0.85 - led_r
+    if connected:
+        gl = QRadialGradient(lx + led_r, ly + led_r, led_r * 3)
+        gl.setColorAt(0, QColor(led_c.red(), led_c.green(), led_c.blue(), 170))
+        gl.setColorAt(1, QColor(led_c.red(), led_c.green(), led_c.blue(), 0))
+        p.setBrush(gl)
+        p.drawEllipse(QRectF(lx - led_r * 2, ly - led_r * 2,
+                             led_r * 6, led_r * 6))
+    p.setBrush(led_c)
+    p.drawEllipse(QRectF(lx, ly, led_r * 2, led_r * 2))
+
+    # stand neck + base
+    neck = QRectF(mon.center().x() - ss * 0.05, mon.bottom() - ss * 0.002,
+                  ss * 0.10, ss * 0.12)
+    ng = QLinearGradient(neck.left(), 0, neck.right(), 0)
+    ng.setColorAt(0, QColor("#2a323c"))
+    ng.setColorAt(0.5, QColor("#49525e"))
+    ng.setColorAt(1, QColor("#232a33"))
+    p.setPen(QPen(QColor("#141a21"), ss * 0.005))
+    p.setBrush(ng)
+    p.drawRoundedRect(neck, ss * 0.01, ss * 0.01)
+    base = QRectF(mon.center().x() - ss * 0.19, neck.bottom() - ss * 0.004,
+                  ss * 0.38, ss * 0.035)
+    bg2 = QLinearGradient(base.left(), 0, base.right(), 0)
+    bg2.setColorAt(0, QColor("#39434f"))
+    bg2.setColorAt(0.5, QColor("#59636f"))
+    bg2.setColorAt(1, QColor("#2c343f"))
+    p.setBrush(bg2)
+    p.setPen(QPen(QColor("#141a21"), ss * 0.005))
+    p.drawRoundedRect(base, ss * 0.017, ss * 0.017)
+    # desk reflection
+    refl = QLinearGradient(0, base.bottom(), 0, base.bottom() + ss * 0.06)
+    refl.setColorAt(0, QColor(120, 140, 160, 50))
+    refl.setColorAt(1, QColor(120, 140, 160, 0))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(refl)
+    p.drawRoundedRect(QRectF(base.left() + ss * 0.02, base.bottom(),
+                             base.width() - ss * 0.04, ss * 0.05),
+                      ss * 0.02, ss * 0.02)
+
     p.end()
     return pix
 
 
-def _draw_phone(size, connected):
-    pix = QPixmap(size, size)
+def _draw_phone(s, connected=False):
+    """Modern flagship phone: metal frame, punch-hole camera, status icons,
+    side buttons, USB-C port + speaker/mic detail, charging state."""
+    pix = QPixmap(s, s)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = float(size)
+    ss = float(s)
 
-    # ground shadow
-    p.setBrush(QColor(0, 0, 0, 70))
+    body = QRectF(ss * 0.27, ss * 0.04, ss * 0.46, ss * 0.92)
+    rad = ss * 0.075
+
+    # side buttons (right edge): power + volume — drawn under the frame edge
     p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(s * 0.36, s * 0.945, s * 0.28, s * 0.045))
+    p.setBrush(QColor("#39424e"))
+    p.drawRoundedRect(QRectF(body.right() - ss * 0.004, body.top() + body.height() * 0.16,
+                             ss * 0.016, body.height() * 0.09), ss * 0.006, ss * 0.006)
+    p.drawRoundedRect(QRectF(body.right() - ss * 0.004, body.top() + body.height() * 0.28,
+                             ss * 0.016, body.height() * 0.05), ss * 0.006, ss * 0.006)
 
-    # ambient glow when connected
-    if connected:
-        glow = QRadialGradient(s * 0.5, s * 0.45, s * 0.58)
-        glow.setColorAt(0, QColor(34, 197, 94, 80))
-        glow.setColorAt(1, QColor(34, 197, 94, 0))
-        p.setBrush(glow)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(0, 0, s, s))
+    # drop shadow
+    p.setBrush(QColor(0, 0, 0, 95))
+    p.drawRoundedRect(body.translated(ss * 0.012, ss * 0.014), rad, rad)
 
-    # body with metallic frame
-    body = QRectF(s * 0.30, s * 0.02, s * 0.40, s * 0.94)
-    frame = body.adjusted(-s * 0.006, -s * 0.006, s * 0.006, s * 0.006)
-    fr = QLinearGradient(frame.left(), frame.top(), frame.right(), frame.bottom())
-    fr.setColorAt(0, QColor("#b9c2cc"))
-    fr.setColorAt(0.5, QColor("#7c8a99"))
-    fr.setColorAt(1, QColor("#3d4754"))
-    p.setBrush(fr)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(frame, s * 0.10, s * 0.10)
-
-    if connected:
-        bg = QLinearGradient(0, 0, 0, s)
-        bg.setColorAt(0, QColor("#263544"))
-        bg.setColorAt(1, QColor("#141b26"))
-    else:
-        bg = QLinearGradient(0, 0, 0, s)
-        bg.setColorAt(0, QColor(C["card_hover"]))
-        bg.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(bg)
-    p.setPen(QPen(QColor("#0a0f15"), 1))
-    p.drawRoundedRect(body, s * 0.09, s * 0.09)
-    # left edge light reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(body.x() + s * 0.012, body.y() + s * 0.06),
-               QPointF(body.x() + s * 0.012, body.y() + body.height() - s * 0.06))
-
-    # side buttons
-    p.setBrush(QColor("#9aa7b5"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(QRectF(frame.x() - s * 0.014, s * 0.22, s * 0.018, s * 0.09), 1, 1)
-    p.drawRoundedRect(QRectF(frame.x() - s * 0.014, s * 0.34, s * 0.018, s * 0.06), 1, 1)
-    p.drawRoundedRect(QRectF(frame.x() + frame.width(), s * 0.20, s * 0.018, s * 0.12), 1, 1)
+    # metal frame
+    fg = QLinearGradient(body.left(), body.top(), body.right(), body.top())
+    fg.setColorAt(0, QColor("#525c68"))
+    fg.setColorAt(0.5, QColor("#8b97a3"))
+    fg.setColorAt(1, QColor("#3a434e"))
+    p.setPen(QPen(QColor("#10151b"), ss * 0.007))
+    p.setBrush(fg)
+    p.drawRoundedRect(body, rad, rad)
 
     # screen
-    screen = QRectF(body.x() + s * 0.022, body.y() + s * 0.05,
-                    body.width() - s * 0.044, body.height() - s * 0.15)
+    bz = ss * 0.014
+    screen = body.adjusted(bz, bz, -bz, -bz)
+    sr = rad - bz * 0.6
+    wall = QLinearGradient(screen.left(), screen.top(),
+                           screen.left(), screen.bottom())
     if connected:
-        sg = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sg.setColorAt(0, QColor(C["grad_b"]))
-        sg.setColorAt(1, QColor(C["grad_a"]))
+        wall.setColorAt(0, QColor("#0f4652"))
+        wall.setColorAt(0.5, QColor("#0b333d"))
+        wall.setColorAt(1, QColor("#06181e"))
     else:
-        sg = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sg.setColorAt(0, QColor("#1d2939"))
-        sg.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(sg)
-    p.setPen(QPen(QColor(0, 0, 0, 110), 1))
-    p.drawRoundedRect(screen, s * 0.035, s * 0.035)
+        wall.setColorAt(0, QColor("#161d26"))
+        wall.setColorAt(1, QColor("#0b0f15"))
+    p.setPen(QPen(QColor("#05080c"), ss * 0.004))
+    p.setBrush(wall)
+    p.drawRoundedRect(screen, sr, sr)
 
+    # punch-hole camera
+    ch = QPointF(screen.center().x(), screen.top() + ss * 0.030)
+    p.setBrush(QColor("#04070a"))
+    p.setPen(QPen(QColor("#2c3a47"), ss * 0.004))
+    p.drawEllipse(QRectF(ch.x() - ss * 0.016, ch.y() - ss * 0.016,
+                         ss * 0.032, ss * 0.032))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(140, 190, 230, 130))
+    p.drawEllipse(QRectF(ch.x() - ss * 0.006, ch.y() - ss * 0.008,
+                         ss * 0.010, ss * 0.010))
+
+    # status cluster: signal bars + battery
+    top_y = screen.top() + ss * 0.030
+    sig_c = QColor(C["ok"]) if connected else QColor("#5b6875")
+    for i in range(4):
+        bh = ss * (0.014 + i * 0.007)
+        bx = screen.left() + ss * 0.030 + i * ss * 0.014
+        p.setBrush(sig_c if (connected or i < 2) else QColor("#3a4653"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(bx, top_y + ss * 0.028 - bh,
+                                 ss * 0.009, bh), ss * 0.002, ss * 0.002)
+    bat_w, bat_h = ss * 0.052, ss * 0.020
+    bat = QRectF(screen.right() - ss * 0.034 - bat_w, top_y, bat_w, bat_h)
+    p.setPen(QPen(QColor("#7c8a99"), ss * 0.004))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(bat, ss * 0.004, ss * 0.004)
+    fill_frac = 0.82 if connected else 0.38
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(C["ok"]) if connected else QColor("#8fa4bd"))
+    fw = (bat.width() - ss * 0.006) * fill_frac
+    p.drawRoundedRect(QRectF(bat.left() + ss * 0.003, bat.top() + ss * 0.003,
+                             fw, bat.height() - ss * 0.006),
+                      ss * 0.002, ss * 0.002)
+    p.setBrush(QColor("#7c8a99"))
+    p.drawRoundedRect(QRectF(bat.right() + ss * 0.002, bat.center().y() - ss * 0.004,
+                             ss * 0.005, ss * 0.008), ss * 0.001, ss * 0.001)
+
+    # charging bolt when connected
     if connected:
-        # wallpaper glow
-        orb = QRadialGradient(screen.x() + screen.width() * 0.5,
-                              screen.y() + screen.height() * 0.4, s * 0.28)
-        orb.setColorAt(0, QColor(255, 255, 255, 70))
-        orb.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(orb)
+        cxp = screen.center().x()
+        cyp = screen.center().y() + screen.height() * 0.06
+        sc = ss * 0.05
+        bolt = QPolygonF([
+            QPointF(cxp + sc * 0.25, cyp - sc * 0.9),
+            QPointF(cxp - sc * 0.45, cyp + sc * 0.15),
+            QPointF(cxp - sc * 0.02, cyp + sc * 0.15),
+            QPointF(cxp - sc * 0.25, cyp + sc * 0.9),
+            QPointF(cxp + sc * 0.45, cyp - sc * 0.20),
+            QPointF(cxp + sc * 0.02, cyp - sc * 0.20),
+        ])
+        gl = QRadialGradient(cxp, cyp, sc * 1.6)
+        gl.setColorAt(0, QColor(250, 204, 21, 120))
+        gl.setColorAt(1, QColor(250, 204, 21, 0))
+        p.setBrush(gl)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(screen.x() + screen.width() * 0.25,
-                             screen.y() + screen.height() * 0.15,
-                             screen.width() * 0.5, screen.width() * 0.5))
-        # status bar
-        p.setPen(QPen(QColor(255, 255, 255, 150), 1))
-        p.drawLine(QPointF(screen.x() + s * 0.03, screen.y() + s * 0.035),
-                   QPointF(screen.x() + screen.width() - s * 0.03,
-                           screen.y() + s * 0.035))
-        # clock
-        p.setPen(QPen(QColor(255, 255, 255, 220), 1.4))
-        fm = p.font()
-        fm.setBold(True)
-        p.setFont(fm)
-        p.drawText(QRectF(screen.x(), screen.y() + s * 0.055, screen.width(), s * 0.06),
-                   Qt.AlignmentFlag.AlignHCenter, "09:41")
-        # app icon row
-        p.setBrush(QColor(255, 255, 255, 190))
-        p.setPen(Qt.PenStyle.NoPen)
-        for i in range(4):
-            ix = screen.x() + screen.width() * (0.12 + i * 0.24)
-            iy = screen.y() + screen.height() * 0.70
-            p.drawRoundedRect(QRectF(ix, iy, s * 0.048, s * 0.048), s * 0.012, s * 0.012)
-        # status text
-        p.setPen(QPen(QColor(255, 255, 255, 120), 1))
-        p.drawText(QRectF(screen.x() + s * 0.03, screen.y() + s * 0.14,
-                          screen.width() - s * 0.06, s * 0.03),
-                   Qt.AlignmentFlag.AlignHCenter, "CONNECTED")
-    else:
-        # lock screen: faint sheen + label
-        sh = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sh.setColorAt(0, QColor(255, 255, 255, 34))
-        sh.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(sh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(screen.adjusted(s * 0.02, s * 0.02, -s * 0.02, -s * 0.35),
-                          s * 0.03, s * 0.03)
-        p.setPen(QPen(QColor(255, 255, 255, 60), 1))
-        p.drawText(QRectF(screen.x(), screen.y() + s * 0.16, screen.width(), s * 0.03),
-                   Qt.AlignmentFlag.AlignHCenter, "OFFLINE")
+        p.drawEllipse(QRectF(cxp - sc * 1.6, cyp - sc * 1.6, sc * 3.2, sc * 3.2))
+        bg3 = QLinearGradient(0, cyp - sc, 0, cyp + sc)
+        bg3.setColorAt(0, QColor("#fde047"))
+        bg3.setColorAt(1, QColor("#f59e0b"))
+        p.setBrush(bg3)
+        p.setPen(QPen(QColor("#78350f"), ss * 0.004))
+        p.drawPolygon(bolt)
 
-    # glass diagonal reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(screen.x(), screen.y() + screen.height() * 0.5),
-               QPointF(screen.x() + screen.width() * 0.55, screen.y()))
-
-    # camera punch-hole with lens ring
-    ring = QColor(C["ok"]) if connected else QColor(C["border_hi"])
-    p.setPen(QPen(ring, 1))
-    p.setBrush(QColor(8, 12, 18))
-    p.drawEllipse(QRectF(s * 0.463, s * 0.062, s * 0.074, s * 0.074))
-    p.setBrush(QColor(20, 28, 40))
-    p.drawEllipse(QRectF(s * 0.473, s * 0.072, s * 0.054, s * 0.054))
-    p.setBrush(QColor(4, 6, 10))
-    p.drawEllipse(QRectF(s * 0.483, s * 0.082, s * 0.034, s * 0.034))
+    # bottom bezel details: speaker grill + USB-C + mic
+    by_ = body.bottom() - bz * 0.9
+    port_w, port_h = ss * 0.085, ss * 0.016
+    port = QRectF(body.center().x() - port_w / 2, by_ - port_h / 2, port_w, port_h)
+    p.setPen(QPen(QColor("#0a0f14"), ss * 0.004))
+    pg2 = QLinearGradient(port.left(), 0, port.right(), 0)
+    pg2.setColorAt(0, QColor("#0c1218"))
+    pg2.setColorAt(0.5, QColor("#1d2630"))
+    pg2.setColorAt(1, QColor("#0c1218"))
+    p.setBrush(pg2)
+    p.drawRoundedRect(port, port_h / 2, port_h / 2)
     if connected:
-        p.setPen(QPen(QColor(C["ok"]), 0.8))
-        p.drawArc(QRectF(s * 0.478, s * 0.077, s * 0.044, s * 0.044), 30 * 16, 200 * 16)
-
-    # home indicator bar
-    p.setBrush(QColor(255, 255, 255, 110))
-    p.drawRoundedRect(
-        QRectF(s * 0.42, screen.y() + screen.height() + s * 0.02,
-               s * 0.16, s * 0.012), 1, 1
-    )
-
-    # USB-C port on the bottom edge (where the cable plugs in)
-    port_w = s * 0.13
-    port_h = s * 0.052
-    port_x = body.x() + (body.width() - port_w) / 2
-    port_y = body.y() + body.height() - port_h
-    if connected:
-        glow = QRadialGradient(port_x + port_w / 2, port_y + port_h / 2, s * 0.10)
-        glow.setColorAt(0, QColor(34, 197, 94, 150))
-        glow.setColorAt(1, QColor(34, 197, 94, 0))
-        p.setBrush(glow)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(port_x - s * 0.03, port_y - s * 0.01,
-                             port_w + s * 0.06, s * 0.10))
-        p.setBrush(QColor(10, 14, 20))
-        p.setPen(QPen(QColor("#9aa7b5"), 1))
-        p.drawRoundedRect(QRectF(port_x, port_y, port_w, port_h), 2, 2)
         p.setBrush(QColor(C["ok"]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(
-            QRectF(port_x + port_w * 0.24, port_y + port_h * 0.3,
-                   port_w * 0.52, port_h * 0.4), 1, 1
-        )
-    else:
-        p.setBrush(QColor(8, 11, 16))
-        p.setPen(QPen(QColor("#7c8a99"), 1))
-        p.drawRoundedRect(QRectF(port_x, port_y, port_w, port_h), 2, 2)
-        p.setBrush(QColor(20, 26, 36))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(
-            QRectF(port_x + port_w * 0.24, port_y + port_h * 0.3,
-                   port_w * 0.52, port_h * 0.4), 1, 1
-        )
+        p.drawRoundedRect(port.adjusted(port_w * 0.18, port_h * 0.22,
+                                        -port_w * 0.18, -port_h * 0.22),
+                          port_h * 0.28, port_h * 0.28)
+    p.setBrush(QColor("#202a34"))
+    p.setPen(Qt.PenStyle.NoPen)
+    for k in range(4):
+        dx = port.left() - ss * 0.030 + (k % 2) * ss * 0.012
+        dy = by_ - ss * 0.004 + (k // 2) * ss * 0.010
+        p.drawEllipse(QRectF(dx, dy, ss * 0.006, ss * 0.006))
+        dx2 = port.right() + ss * 0.018 + (k % 2) * ss * 0.012
+        p.drawEllipse(QRectF(dx2, dy, ss * 0.006, ss * 0.006))
+    p.drawEllipse(QRectF(body.center().x() - ss * 0.004,
+                         by_ + ss * 0.014, ss * 0.008, ss * 0.008))
+
+    # screen glass reflection sweep
+    sh = QLinearGradient(screen.left(), screen.top(),
+                         screen.right(), screen.bottom())
+    sh.setColorAt(0.0, QColor(255, 255, 255, 20))
+    sh.setColorAt(0.4, QColor(255, 255, 255, 0))
+    p.setBrush(sh)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(screen, sr, sr)
+
     p.end()
     return pix
 
@@ -604,7 +598,7 @@ class ConnectionScene(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setMinimumHeight(176)
+        self.setMinimumHeight(96)
         self._connected = False
         self._plug_t = 0.0
         self._vendor = None
@@ -717,10 +711,10 @@ class ConnectionScene(QWidget):
         p.drawRect(QRect(scan_x - 20, 0, 40, int(h)))
         p.setClipping(False)
 
-        icon = 80.0
-        pc_x = 10.0
-        phone_x = w - 10.0 - icon
-        top_y = (h - icon) * 0.24
+        icon = max(52.0, min(78.0, h * 0.60))
+        pc_x = 8.0
+        phone_x = w - 8.0 - icon
+        top_y = max(4.0, (h - icon) * 0.22)
         pc_y = top_y
         phone_y = top_y
 
@@ -784,8 +778,9 @@ class ConnectionScene(QWidget):
         plug_pt = QPointF(plug.center().x(), plug.top())
         c0 = QPointF(pc_x + icon * 0.92, pc_y + icon * 0.60)
 
-        # --- cable ---
-        rail = h - 24 if t > 0.5 else h - 9
+        # --- cable (sag rail adapts: always below ports, never clipped) ---
+        rail_seated = min(h - 10.0, max(port_bottom + 9.0, c0.y() + 24.0))
+        rail = rail_seated if t > 0.5 else min(h - 4.0, rail_seated + 8.0)
         path = self._cable_path(c0, plug_pt, rail)
 
         # soft drop shadow under the whole cable
@@ -806,20 +801,6 @@ class ConnectionScene(QWidget):
             p.setPen(QPen(QColor(C["ok"]), 1.8, Qt.PenStyle.SolidLine,
                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             p.drawPath(path)
-            # data pulse dots along cable when connected
-            if self._anim:
-                for k in (0.25, 0.55, 0.85):
-                    tpos = (self._phase + k) % 1.0
-                    pt = path.pointAtPercent(tpos)
-                    glow = QRadialGradient(pt.x(), pt.y(), 6)
-                    vc2 = QColor(C["accent_hi"])
-                    glow.setColorAt(0, QColor(vc2.red(), vc2.green(), vc2.blue(), 220))
-                    glow.setColorAt(1, QColor(vc2.red(), vc2.green(), vc2.blue(), 0))
-                    p.setBrush(glow)
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.drawEllipse(QRectF(pt.x()-5, pt.y()-5, 10, 10))
-                    p.setBrush(QColor(255,255,255,230))
-                    p.drawEllipse(QRectF(pt.x()-2, pt.y()-2, 4, 4))
 
         # --- computer socket ---
         sock = QRectF(c0.x() - 3, c0.y() - 6, 9, 12)
@@ -933,24 +914,32 @@ class ConnectionScene(QWidget):
                                                      led_col.blue(), 120))
             p.drawEllipse(QRectF(plug.right() - 5.6, plug.y() + 4.2, 3.8, 3.8))
 
-        # --- data pulses travelling along the cable (2 phases) ---
-        if self._connected:
-            for k in range(2):
-                ph = (self._phase + k * 0.5) % 1.0
-                pos = path.pointAtPercent(ph)
-                glow = QRadialGradient(pos.x(), pos.y(), 9)
-                vc = QColor(C["accent_hi"])
-                glow.setColorAt(0, QColor(vc.red(), vc.green(), vc.blue(), 200))
+        # --- data packets travelling ALONG the cable (never leave the wire):
+        # each packet is a comet whose tail is sampled from the cable path
+        # itself, so it bends with every curve of the braid. ---
+        if self._connected and self._anim:
+            vc = QColor(C["accent_hi"])
+            tails = (0.050, 0.038, 0.027, 0.018, 0.010, 0.004, 0.0)
+            for k in range(3):
+                ph = (self._phase * 0.9 + k / 3.0) % 1.0
+                pts = [path.pointAtPercent(max(0.0, ph - d)) for d in tails]
+                # tail segments fade out behind the head, hugging the curve
+                n = len(pts) - 1
+                for i in range(n):
+                    a = int(210 * (i + 1) / n)
+                    p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), a),
+                                  3.6 - 1.6 * i / n, Qt.PenStyle.SolidLine,
+                                  Qt.PenCapStyle.RoundCap))
+                    p.drawLine(pts[i], pts[i + 1])
+                head = pts[-1]
+                glow = QRadialGradient(head.x(), head.y(), 8)
+                glow.setColorAt(0, QColor(vc.red(), vc.green(), vc.blue(), 230))
                 glow.setColorAt(1, QColor(vc.red(), vc.green(), vc.blue(), 0))
                 p.setBrush(glow)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QRectF(pos.x() - 9, pos.y() - 9, 18, 18))
-                p.setPen(QPen(QColor(C["accent_hi"]), 5.0, Qt.PenStyle.SolidLine,
-                              Qt.PenCapStyle.RoundCap))
-                p.drawLine(pos, QPointF(pos.x() - 14, pos.y()))
-                p.setPen(QPen(QColor(255, 255, 255, 130), 2.0, Qt.PenStyle.SolidLine,
-                              Qt.PenCapStyle.RoundCap))
-                p.drawLine(pos, QPointF(pos.x() - 14, pos.y()))
+                p.drawEllipse(QRectF(head.x() - 8, head.y() - 8, 16, 16))
+                p.setBrush(QColor(255, 255, 255, 235))
+                p.drawEllipse(QRectF(head.x() - 2.2, head.y() - 2.2, 4.4, 4.4))
         p.end()
 
 
