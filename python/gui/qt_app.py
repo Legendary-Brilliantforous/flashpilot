@@ -1643,7 +1643,7 @@ class FlashPilotWindow(QMainWindow):
         # from GitHub in _check_update_thread. Show the acceptance dialog once
         # per beta version so the risk text is never "out of focus" toast.
         if _is_beta_version(APP_VERSION):
-            QTimer.singleShot(1200, lambda: self._show_beta_risk_dialog(APP_VERSION, ""))
+            QTimer.singleShot(1200, self._show_beta_gate_async)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -5306,6 +5306,46 @@ class FlashPilotWindow(QMainWindow):
         overlay.raise_()
         ok.setFocus()
 
+    def _fetch_latest_stable_tag(self, timeout=5):
+        """Live latest non-draft, non-prerelease tag from GitHub (never
+        hand-coded). Returns '' when offline or nothing published."""
+        import json as _json
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/Legendary-Brilliantforous/"
+                "flashpilot/releases",
+                headers={"User-Agent": "FlashPilot"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                rel = _json.loads(r.read().decode("utf-8"))
+            best, bt = None, (0, 0, 0)
+            for x in rel:
+                if x.get("draft") or x.get("prerelease"):
+                    continue
+                tag = (x.get("tag_name") or "").lstrip("v")
+                tv, _ = _parse_version(tag)
+                if tv > bt:
+                    best, bt = tag, tv
+            return best or ""
+        except Exception:
+            return ""
+
+    def _show_beta_gate_async(self):
+        """Fetch latest stable off-thread, then open the beta gate on UI."""
+        def work():
+            tag = self._fetch_latest_stable_tag()
+            def show():
+                try:
+                    self._show_beta_risk_dialog(APP_VERSION, tag)
+                except Exception:
+                    pass
+            try:
+                self._ui.ui.emit(show)
+            except Exception:
+                show()
+        threading.Thread(target=work, daemon=True).start()
+
     def _show_beta_risk_dialog(self, cur, stable_tag, force=False):
         """Beta acceptance gate — replaces the easy-to-miss toast.
 
@@ -5426,10 +5466,17 @@ class FlashPilotWindow(QMainWindow):
 
         # Version line — installed (downloaded) vs latest stable on GitHub (dynamic, never hand-coded)
         disp_cur = _display_version(cur)
-        disp_stable = _display_version(stable_tag) if stable_tag else "none yet"
+        if stable_tag:
+            stable_line = (
+                f"Latest <b>stable</b> on GitHub is "
+                f"<b style='color:#7dd3fc;'>{stable_tag}</b>  "
+                f"(display v{_display_version(stable_tag)})."
+            )
+        else:
+            stable_line = "Latest <b>stable</b> on GitHub: <i>not published yet.</i>"
         ver_line = QLabel(
-            f"You downloaded <b style='color:#fbbf24;'>{cur}</b>  (display v{disp_cur}).<br>"
-            f"Latest <b>stable</b> on GitHub is <b style='color:#7dd3fc;'>{stable_tag or '—'}</b> (display v{disp_stable})."
+            f"You downloaded <b style='color:#fbbf24;'>{cur}</b>  "
+            f"(display v{disp_cur}).<br>{stable_line}"
         )
         ver_line.setTextFormat(Qt.TextFormat.RichText)
         ver_line.setWordWrap(True)
