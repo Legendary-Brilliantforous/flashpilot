@@ -3435,6 +3435,34 @@ def flow_odin_advanced_flash():
                 "actual flash. Untick / unset to write for real.")
             return True
 
+        # ---- Engine selection (GUI checkbox -> FLASH_ENGINE env) ----
+        # native = FlashPilot's own single-session Rust writer (recommended,
+        # especially on MTK-Samsung units); odin4 = Samsung proprietary binary.
+        engine = os.environ.get("FLASH_ENGINE", "native").strip().lower()
+        if engine not in ("native", "odin4"):
+            engine = "native"
+        log(f"  Engine: {engine.upper()}")
+        if engine == "native":
+            from_glob = (not _env_flag("ODIN4_EXACT_SLOTS"))
+            tars = {}
+            for slot in ("AP", "BL", "CP", "CSC"):
+                v = _find_slot_tar(slot)
+                if v:
+                    tars[slot] = v
+            target_tar = tars.get("AP") or next(iter(tars.values()), None)
+            if not target_tar:
+                raise RuntimeError(
+                    "Native engine needs at least one archive (AP preferred). "
+                    "Pick files in the slots above and retry.")
+            res = flash_archive_smart(
+                target_tar, log=log, patch_vbmeta=_env_flag("VBMETA_PATCH"),
+                reboot=_env_flag("ODIN4_REBOOT"),
+            )
+            n = len(res.get("flashed", [])) if isinstance(res, dict) else "?"
+            log(f"  Native smart flash completed ({n} partitions).")
+            return True
+        # else: fall through to the classic odin4 binary path below.
+
         # Advanced flags
         cmd.extend(_odin4_allow_unknown())
         cmd.extend(_reboot_redownload_flags(log))

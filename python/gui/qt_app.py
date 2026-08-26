@@ -2771,6 +2771,19 @@ class FlashPilotWindow(QMainWindow):
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row3.addWidget(self.skip_efs_cb)
+        self.engine_native_cb = QCheckBox("Use native engine (recommended)")
+        self.engine_native_cb.setChecked(True)
+        self.engine_native_cb.setToolTip(
+            "ON  = FlashPilot's own single-session Rust writer.\n"
+            "     Preserves Loke's one-session-per-plug rule; best for\n"
+            "     MTK-Samsung units like A14/A15 Helio variants.\n"
+            "OFF = Samsung's proprietary odin4 binary (Exynos fallback)."
+        )
+        self.engine_native_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row3.addWidget(self.engine_native_cb)
         self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
         self.force_bl_cb.setChecked(False)
         self.force_bl_cb.setToolTip(
@@ -9791,6 +9804,8 @@ class FlashPilotWindow(QMainWindow):
             except Exception:
                 pass
             os.environ["VBMETA_PATCH"] = "1" if self.vbmeta_patch_cb.isChecked() else "0"
+            os.environ["FLASH_ENGINE"] = (
+                "native" if self.engine_native_cb.isChecked() else "odin4")
             # GUI-triggered Odin flows must flash ONLY the files the user
             # picked in the slots - never auto-discover in ~/Downloads.
             os.environ["ODIN4_EXACT_SLOTS"] = "1"
