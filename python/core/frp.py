@@ -630,7 +630,26 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
         except Exception:
             pass
 
-    workdir = tempfile.mkdtemp(prefix="fp_smart_")
+    # Workdir lives next to the archives (same big disk), never /tmp.
+    base_dir = os.environ.get("FLASH_WORKDIR") or os.path.join(
+        os.path.expanduser("~/flashpilot"), "work")
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Free-space preflight: archives + decompressed images must fit with
+    # headroom, or lz4 dies mid-way with a cryptic error (real-world bug).
+    _src_tars = [os.environ[f"{s}_TAR"] for s in ("AP","BL","CP","CSC","USERDATA")
+                 if os.environ.get(f"{s}_TAR")]
+    need = sum(os.path.getsize(x) for x in _src_tars) * 2  # extract+decompress
+    need += 1_000_000_000                                # 1GB margin
+    free = shutil.disk_usage(base_dir).free
+    if free < need:
+        raise RuntimeError(
+            f"Not enough disk space to prepare firmware.\n"
+            f"  Need ~{need/1e9:.1f} GB free in {base_dir}\n"
+            f"  Have  {free/1e9:.1f} GB\n"
+            f"FIX: free up space (empty trash, remove old dumps) and retry.")
+
+    workdir = tempfile.mkdtemp(prefix="fp_smart_", dir=base_dir)
     tar_list = tar_path if isinstance(tar_path, (list, tuple)) else [tar_path]
     images = []
     skipped_pits = []
@@ -716,18 +735,6 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
     skipped = []
 
     # ------------------------- PHASE 1: bulk -------------------------------
-    total_bytes = sum(os.path.getsize(p) for _, p in files)
-    _log("")
-    _log("READY TO FLASH")
-    _log(f"   {len(files)} partitions | {total_bytes/1024/1024:.0f} MB total | "
-         f"model PIT: device (live)")
-    est = max(3, int(total_bytes / 1024 / 1024 / 8))
-    _log(f"   Estimated time: {est}-{est*2} minutes. Keep the cable "
-         f"connected the whole time!")
-    if done:
-        _log(f"   Resume: {len(done)} partition(s) already done from an "
-             f"earlier attempt will be skipped.")
-    _log("")
     _log("[smart] PHASE 1: bulk flash (all partitions, one session)")
     proc = None
     pit_sha = None
@@ -768,6 +775,19 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
 
         if not files:
             raise RuntimeError("nothing matched the device PIT")
+
+        total_bytes = sum(os.path.getsize(p) for _, p in files)
+        _log("")
+        _log("READY TO FLASH")
+        _log(f"   {len(files)} partitions | {total_bytes/1024/1024:.0f} MB total | "
+             f"model PIT: device (live)")
+        est = max(3, int(total_bytes / 1024 / 1024 / 8))
+        _log(f"   Estimated time: {est}-{est*2} minutes. Keep the cable "
+             f"connected the whole time!")
+        if done:
+            _log(f"   Resume: {len(done)} partition(s) already done from "
+                 f"an earlier attempt will be skipped.")
+        _log("")
 
         # Streamed batch: read until terminal marker; record per-partition
         # outcome instead of aborting on first error.
@@ -3378,6 +3398,8 @@ def _find_slot_tar(prefix):
     env = os.environ.get(f"{prefix}_TAR")
     if env and os.path.isfile(env):
         return env
+    # A directory matching the slot prefix (leftover extraction folder) is
+    # NOT firmware - skip it instead of returning a path that fails isfile.
     if _env_flag("ODIN4_EXACT_SLOTS"):
         return ""
     dirs = [os.path.expanduser("~/Downloads"), os.path.expanduser("~"), os.getcwd()]
@@ -3385,7 +3407,8 @@ def _find_slot_tar(prefix):
         if not os.path.isdir(d):
             continue
         cands = sorted(
-            glob.glob(os.path.join(d, f"{prefix}*.tar*")),
+            (f for f in glob.glob(os.path.join(d, f"{prefix}*.tar*"))
+             if os.path.isfile(f)),
             key=os.path.getmtime, reverse=True,
         )
         if cands:
@@ -3481,6 +3504,43 @@ def flow_odin_advanced_flash():
 
         if not ap and not bl and not cp and not csc:
             raise RuntimeError("No firmware slot archives (AP, BL, CP, CSC) found in ~/Downloads or current directory.")
+
+        # PitCat: if no cached PIT, dump PIT + reboot, tell user to re-enter Download Mode for next click
+        # This preserves the one-session-per-plug rule for Loke
+        has_cache = False
+        try:
+            has_cache = len(pitstore.stats().get("models", [])) > 0
+            if not has_cache:
+                import glob as _g
+                has_cache = len(_g.glob(os.path.join(os.path.expanduser("~/.cache/flashpilot/pit"), "*.pit"))) > 0
+        except Exception:
+            has_cache = False
+        if not has_cache:
+            log("")
+            log("  PIT not cached - first, dump PIT and reboot to preserve single-session")
+            try:
+                contract = pit_contract(target=target, log=log)
+                log(f"  PIT cached: {contract.get('path', 'unknown')}")
+            except Exception as e:
+                log(f"  PIT dump failed: {e}")
+                raise
+            try:
+                log("  Rebooting device for fresh Download Mode session...")
+                try:
+                    bridge.odin_reboot(target)
+                except Exception:
+                    odin4b = _find_odin4()
+                    if odin4b:
+                        import subprocess as _sp
+                        _sp.run([odin4b, "--reboot", "-d", target], timeout=10, capture_output=True)
+                log("")
+                log("  >>> PIT captured. Phone will reboot - re-enter Download Mode (Vol Down + Vol Up + cable), then click Flash again. <<<")
+                log("  (Next click will use cached PIT and flash in one session)")
+                return True
+            except Exception as e:
+                log(f"  Reboot note: {e} - please manually reboot to Download Mode")
+                log("  >>> PIT captured. Re-enter Download Mode, then click Flash again. <<<")
+                return True
 
         log("")
         log("Running safety checks before flashing...")
