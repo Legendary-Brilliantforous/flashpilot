@@ -103,7 +103,7 @@ fn open_and_handshake(target: &str) -> OdinResult<Device> {
                 Err(e) => {
                     last_err = e.to_string();
                     eprintln!("[open] handshake failed (attempt {attempt}): {e}");
-                    if attempt < 2 && dev.reset_port() {
+                    if !crate::error::cancel_requested() && attempt < 2 && dev.reset_port() {
                         eprintln!("[open] USB port reset issued; waiting for re-enumeration...");
                         std::thread::sleep(Duration::from_millis(1800));
                     }
@@ -137,10 +137,37 @@ fn open_device(target: &str) -> OdinResult<Device> {
     let bus: u8 = loc[0].parse().map_err(|_| OdinError("bad bus".into()))?;
     let addr: u8 = loc[1].parse().map_err(|_| OdinError("bad addr".into()))?;
 
-    let target_dev = devices
+    let mut target_dev = devices
         .iter()
         .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
+        .cloned()
         .ok_or(OdinError("device not found (is it in download mode?)".into()))?;
+
+    // If device came up unconfigured (active_config 0, no interfaces), set config 1 and re-enumerate
+    if target_dev.interfaces.is_empty() {
+        let ctx2 = rusb::Context::new().map_err(|e| OdinError(format!("libusb: {e}")))?;
+        if let Some(d) = ctx2
+            .devices()
+            .map_err(|e| OdinError(format!("libusb: {e}")))?
+            .iter()
+            .find(|d| d.bus_number() == bus && d.address() == addr)
+        {
+            if let Ok(h) = d.open() {
+                let _ = h.set_active_configuration(1);
+                std::thread::sleep(std::time::Duration::from_millis(600));
+            }
+        }
+        let devices2 = usb::collect_devices(Some(0x04e8))?;
+        target_dev = devices2
+            .into_iter()
+            .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
+            .ok_or(OdinError(
+                "device still unconfigured after set_config(1) - replug cable, re-enter Download Mode".into(),
+            ))?;
+        if target_dev.interfaces.is_empty() {
+            return Err(OdinError("no CDC data interface (device returned no endpoints after config)".into()));
+        }
+    }
 
     let iface = target_dev
         .interfaces

@@ -9774,10 +9774,28 @@ class FlashPilotWindow(QMainWindow):
     def _on_mode_changed(self, mode):
         pass
 
+    _last_stop = [0.0]
     def on_stop(self):
+        now = __import__("time").monotonic()
+        if now - self._last_stop[0] < 0.5:
+            return
+        self._last_stop[0] = now
         frp.request_cancel()
         bridge.request_cancel()
-        self._ui.status.emit("Stopping flow ...")
+        self._ui.status.emit("Stopping …")
+        try:
+            self._ui.toast.emit("warn", "Stopping", "Closing the current USB operation — device stays connected")
+        except Exception:
+            pass
+        # Instantly disable the single global STOP and all legacy stops so the user
+        # sees immediate feedback; the actual flow thread exits on its next
+        # cancel check ( ≤ one bulk timeout, typically <600 ms) without a port reset.
+        for name in ("global_stop_btn", "stop_btn", "mtk_stop_btn",
+                     "qc_stop_btn", "spd_stop_btn"):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setEnabled(False)
+        self._ui.line.emit("[cancel] Stop requested — finishing the current USB packet ...")
 
     def _run_ops_flow(self, job, mode, method, label):
         """Run a Samsung Operations flow directly from its button - no

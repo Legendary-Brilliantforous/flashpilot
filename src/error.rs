@@ -231,3 +231,12 @@ impl From<BridgeError> for String {
         e.to_string()
     }
 }
+
+use std::sync::atomic::{AtomicBool, Ordering};
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+
+#[allow(dead_code)]
+pub fn request_cancel() { CANCEL_FLAG.store(true, Ordering::SeqCst); }
+#[allow(dead_code)]
+pub fn clear_cancel() { CANCEL_FLAG.store(false, Ordering::SeqCst); }
+pub fn cancel_requested() -> bool { CANCEL_FLAG.load(Ordering::SeqCst) }

@@ -247,10 +247,16 @@ def _run(args, timeout=15):
 
     out_drainer.start()
 
+    cancel_grace = False
     try:
         while True:
             if cancel_requested():
-                _graceful_terminate(proc, timeout=3.0)
+                # Don't burn the one Loke session or yank the USB port.
+                # Let the bridge exit its current bulk op with a TERM;
+                # a short linger lets its Drop close the handle cleanly and
+                # the device stays plugged without re-enumerating.
+                cancel_grace = True
+                _graceful_terminate(proc, timeout=1.2)
                 raise BridgeCancelled("cancelled by user")
             rc = proc.poll()
             if rc is not None:
