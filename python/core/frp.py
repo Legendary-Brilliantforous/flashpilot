@@ -635,19 +635,21 @@ def flash_archive_smart(tar_path, log=None, patch_vbmeta=True, reboot=True):
         os.path.expanduser("~/flashpilot"), "work")
     os.makedirs(base_dir, exist_ok=True)
 
-    # Free-space preflight: archives + decompressed images must fit with
-    # headroom, or lz4 dies mid-way with a cryptic error (real-world bug).
+    # Free-space preflight: archives + decompressed images must fit.
+    # Need ~1x for extracted .lz4 + ~1x for decompressed .img (super is 7GB).
+    # Be lenient: warn if tight, hard-fail only if <5GB free (would definitely OOM).
     _src_tars = [os.environ[f"{s}_TAR"] for s in ("AP","BL","CP","CSC","USERDATA")
                  if os.environ.get(f"{s}_TAR")]
-    need = sum(os.path.getsize(x) for x in _src_tars) * 2  # extract+decompress
-    need += 1_000_000_000                                # 1GB margin
+    need = sum(os.path.getsize(x) for x in _src_tars) + 9_000_000_000  # +9GB for decompressed
     free = shutil.disk_usage(base_dir).free
-    if free < need:
+    if free < 5_000_000_000:
         raise RuntimeError(
             f"Not enough disk space to prepare firmware.\n"
             f"  Need ~{need/1e9:.1f} GB free in {base_dir}\n"
             f"  Have  {free/1e9:.1f} GB\n"
             f"FIX: free up space (empty trash, remove old dumps) and retry.")
+    if free < need:
+        _log(f"  WARNING: Low disk space: need ~{need/1e9:.1f} GB, have {free/1e9:.1f} GB - proceeding, may fail if space runs out")
 
     workdir = tempfile.mkdtemp(prefix="fp_smart_", dir=base_dir)
     tar_list = tar_path if isinstance(tar_path, (list, tuple)) else [tar_path]
