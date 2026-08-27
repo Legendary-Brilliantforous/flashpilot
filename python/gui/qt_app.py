@@ -9838,9 +9838,11 @@ class FlashPilotWindow(QMainWindow):
             else:
                 os.environ.pop("FLASH_SPECS", None)
             if pit:
+                # Explicit PIT file field wins.
                 os.environ["PIT_FILE"] = pit
-            else:
-                os.environ.pop("PIT_FILE", None)
+            # else: keep the cached-PIT seeded earlier - do NOT pop it, or
+            # preflight falls back to a live dump that burns the one Loke
+            # session (bulk-read timeout spam) on the next flash attempt.
 
             vbmeta = self.vbmeta_edit.text().strip()
             if vbmeta:
