@@ -8803,7 +8803,15 @@ class FlashPilotWindow(QMainWindow):
                     # the model may still be readable via AT+DEVCONINFO while in
                     # test mode (*#0*#) - try it before falling back to the pid.
                     try:
-                        if mtp.is_diag_config(mtp.find_samsung() or {}):
+                        _sam = mtp.find_samsung() or {}
+                        # Download-mode (Loke) exposes a CDC-ACM *interrupt*
+                        # interface that falsely looks like a diag port - but
+                        # there is NO AT channel there, only a bulk session.
+                        # Attempting AT on it spams 'bulk read: timed out'
+                        # every poll. Only probe AT when not in download mode.
+                        _is_dl = _sam.get("pid") in (0x685d, 0x685c, 0x685e) \
+                            or _sam.get("mode") == "samsung-odin"
+                        if not _is_dl and mtp.is_diag_config(_sam):
                             model = mtp.read_model_via_at(timeout_ms=5000)
                             if model and model != self._cached_model:
                                 self._cached_model = model
