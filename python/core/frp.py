@@ -3145,6 +3145,45 @@ def _find_odin4():
     return ""
 
 
+_ODIN4_OPTS_CACHE = None
+
+
+def _odin4_supported_opts(odin4=None):
+    """Cache the long/short option set an odin4 build actually supports, by
+    running `odin4 -h`. Builds in the wild differ (some lack --check-only,
+    --allow-unknown, --verbose) - passing an unsupported flag aborts with
+    'illegal option'. Returns a set of long-option names e.g. {'reboot',
+    'redownload'} plus short flags as '-x' strings."""
+    global _ODIN4_OPTS_CACHE
+    if _ODIN4_OPTS_CACHE is not None:
+        return _ODIN4_OPTS_CACHE
+    if odin4 is None:
+        odin4 = _find_odin4()
+    if not odin4:
+        _ODIN4_OPTS_CACHE = set()
+        return _ODIN4_OPTS_CACHE
+    import subprocess as _sp
+    try:
+        r = _sp.run([odin4, "-h"], capture_output=True, text=True, timeout=8)
+        out = (r.stdout or "") + (r.stderr or "")
+    except Exception:
+        _ODIN4_OPTS_CACHE = set()
+        return _ODIN4_OPTS_CACHE
+    opts = set()
+    import re as _re
+    for m in _re.finditer(r"(?<!\w)-([a-zA-Z])", out):
+        opts.add("-" + m.group(1))
+    for m in _re.finditer(r"(--[a-z][a-z-]*)", out):
+        opts.add(m.group(1))
+    _ODIN4_OPTS_CACHE = opts
+    return opts
+
+
+def _odin4_supports(opt, odin4=None):
+    """True if this odin4 build accepts the long option (--reboot etc.)."""
+    return opt in _odin4_supported_opts(odin4)
+
+
 def _odin4_allow_unknown():
     """Return ['--allow-unknown'] only when explicitly enabled (ODIN4_ALLOW_UNKNOWN=1).
 
@@ -3153,7 +3192,9 @@ def _odin4_allow_unknown():
     guard that stops mismatched firmware from being written, so it stays ON
     unless the user explicitly opts out via the GUI checkbox or the env var."""
     if os.environ.get("ODIN4_ALLOW_UNKNOWN", "0").strip().lower() in ("1", "true", "yes", "on"):
-        return ["--allow-unknown"]
+        if _odin4_supports("--allow-unknown"):
+            return ["--allow-unknown"]
+        return []
     return []
 
 
@@ -3181,7 +3222,9 @@ def _odin4_redownload():
 def _odin4_verbose():
     """Return ['--verbose'] only when explicitly requested (ODIN4_VERBOSE=1)."""
     if os.environ.get("ODIN4_VERBOSE", "0").strip().lower() in ("1", "true", "yes", "on"):
-        return ["--verbose"]
+        if _odin4_supports("--verbose"):
+            return ["--verbose"]
+        return []
     return []
 
 
@@ -4090,6 +4133,11 @@ def _erase_nvram(ctx, log, d):
 def _run_odin4_check_only(log, odin4, archives):
     """Validate firmware archives with odin4 --check-only before flashing.
     Raises on any failure so a corrupt/mismatched archive is never flashed."""
+    if not _odin4_supports("--check-only", odin4):
+        log("  [check-only] this odin4 build lacks --check-only - skipping "
+            "archive pre-validation (device-side PIT check still runs "
+            "during the flash).")
+        return
     log("  Pre-flash validation (odin4 --check-only)...")
     cmd = [odin4, "--check-only", *_odin4_allow_unknown()]
     for opt, path in (("-a", archives.get("AP")), ("-b", archives.get("BL")),

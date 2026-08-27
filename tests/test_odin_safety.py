@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+import python.core.frp as frp
 from python.core.frp import (
     ODIN4_SHA256,
     _bl_rev_from_bootloader,
@@ -36,6 +37,9 @@ class TestOdin4FlagDefaults:
 
     def test_allow_unknown_opt_in(self, monkeypatch):
         monkeypatch.setenv("ODIN4_ALLOW_UNKNOWN", "1")
+        # negotiation: only emitted if this odin4 build supports it
+        monkeypatch.setattr(frp, "_odin4_supported_opts",
+                            lambda *a, **k: {"--allow-unknown", "--verbose", "--check-only"})
         assert _odin4_allow_unknown() == ["--allow-unknown"]
 
     def test_allow_unknown_explicit_off(self, monkeypatch):
@@ -68,6 +72,8 @@ class TestOdin4AdvancedFlags:
 
     def test_verbose_opt_in(self, monkeypatch):
         monkeypatch.setenv("ODIN4_VERBOSE", "true")
+        monkeypatch.setattr(frp, "_odin4_supported_opts",
+                            lambda *a, **k: {"--allow-unknown", "--verbose", "--check-only"})
         assert _odin4_verbose() == ["--verbose"]
 
     def test_env_flag_defaults_false(self, monkeypatch):
