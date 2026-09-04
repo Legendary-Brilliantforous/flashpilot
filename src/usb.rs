@@ -23,7 +23,15 @@ pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
     let has_hid = interfaces.iter().any(|i| i.class == 3);
 
     match vid {
-        0x05c6 if pid == 0x9008 => "qualcomm-edl".to_string(),
+        0x05c6 => {
+            if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) {
+                "qualcomm-edl".to_string()
+            } else if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) {
+                "qualcomm".to_string()
+            } else {
+                "qualcomm".to_string()
+            }
+        }
         0x0e8d => "mediatek".to_string(),
         0x04e8 => {
             if SAMSUNG_ODIN_PIDS.contains(&pid) {

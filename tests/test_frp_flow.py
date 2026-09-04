@@ -1,7 +1,7 @@
 """Tests for Flow/Step framework and cancellation (frp.py)."""
 import pytest
 import time
-from python.core.frp import Flow, Step, request_cancel, clear_cancel, cancel_requested, FlowCancelled
+from python.core.core import Flow, Step, request_cancel, clear_cancel, cancel_requested, FlowCancelled
 
 
 class TestFlowCancellation:
@@ -73,9 +73,10 @@ class TestFlowContext:
 
 
 class TestRunGuard:
-    """The GUI run-guard serializes device operations: only one flow may run
-    at a time, so two destructive writes can never overlap and a second
-    clear_cancel() cannot discard the in-flight flow's cancel request."""
+    """The GUI run-guard serializes operations PER DEVICE: two flows on the
+    same phone can never overlap (so two destructive writes can't collide
+    and a second clear_cancel() can't discard the in-flight cancel
+    request), while different phones may run in parallel."""
 
     def test_second_flow_blocked_while_first_runs(self):
         from python.gui.qt_app import _flow_start, _flow_end, _flow_busy_msg
@@ -96,3 +97,21 @@ class TestRunGuard:
         assert _flow_start("Carrier lock check", destructive=False)
         assert "Carrier lock check" in _flow_busy_msg()
         _flow_end()
+
+    def test_different_devices_run_in_parallel(self):
+        from python.gui.qt_app import _flow_start, _flow_end, _flows_running
+        assert _flow_start("Flash A", destructive=True, key="adb:AAA")
+        assert _flow_start("Flash B", destructive=True, key="adb:BBB")
+        assert _flows_running() == 2
+        assert not _flow_start("Flash A2", destructive=True, key="adb:AAA")
+        _flow_end(key="adb:AAA")
+        assert _flow_start("Flash A3", destructive=True, key="adb:AAA")
+        _flow_end(key="adb:AAA")
+        _flow_end(key="adb:BBB")
+        assert _flows_running() == 0
+
+    def test_busy_msg_names_same_device_op(self):
+        from python.gui.qt_app import _flow_start, _flow_end, _flow_busy_msg
+        assert _flow_start("Odin flash", destructive=True, key="adb:AAA")
+        assert "Odin flash" in _flow_busy_msg(key="adb:AAA")
+        _flow_end(key="adb:AAA")

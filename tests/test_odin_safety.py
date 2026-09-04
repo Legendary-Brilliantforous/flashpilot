@@ -1,11 +1,11 @@
-"""Tests for the Samsung flashing safety gates (frp.py)."""
+"""Tests for the Samsung flashing safety gates (core.py)."""
 import hashlib
 import os
 
 import pytest
 
-import python.core.frp as frp
-from python.core.frp import (
+import python.core.core as core
+from python.core.core import (
     ODIN4_SHA256,
     _bl_rev_from_bootloader,
     _bl_rev_from_name,
@@ -38,7 +38,7 @@ class TestOdin4FlagDefaults:
     def test_allow_unknown_opt_in(self, monkeypatch):
         monkeypatch.setenv("ODIN4_ALLOW_UNKNOWN", "1")
         # negotiation: only emitted if this odin4 build supports it
-        monkeypatch.setattr(frp, "_odin4_supported_opts",
+        monkeypatch.setattr(core, "_odin4_supported_opts",
                             lambda *a, **k: {"--allow-unknown", "--verbose", "--check-only"})
         assert _odin4_allow_unknown() == ["--allow-unknown"]
 
@@ -72,7 +72,7 @@ class TestOdin4AdvancedFlags:
 
     def test_verbose_opt_in(self, monkeypatch):
         monkeypatch.setenv("ODIN4_VERBOSE", "true")
-        monkeypatch.setattr(frp, "_odin4_supported_opts",
+        monkeypatch.setattr(core, "_odin4_supported_opts",
                             lambda *a, **k: {"--allow-unknown", "--verbose", "--check-only"})
         assert _odin4_verbose() == ["--verbose"]
 
@@ -346,29 +346,29 @@ class TestSendPitMtkRefusal:
         return {"pid": 0x685D, "bus": 1, "address": 2}
 
     def test_refuses_combo_pit_before_send(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
-        monkeypatch.setattr(frp, "_download_mode_device", lambda: self._dev())
+        monkeypatch.setattr(core, "_download_mode_device", lambda: self._dev())
         sent = []
         monkeypatch.setattr(
-            frp.bridge, "odin_send_pit",
+            core.bridge, "odin_send_pit",
             lambda *a, **k: sent.append(a) or '{"sent": 32}',
         )
-        flow = frp.flow_odin_send_pit()
+        flow = core.flow_odin_send_pit()
         with pytest.raises(RuntimeError, match="not supported on MediaTek"):
             flow.run({"pit_file": self._combo_pit(tmp_path)}, lambda *a: None)
         assert sent == [], "bridge.odin_send_pit must not be called for MTK PITs"
 
     def test_real_device_model_pit_proceeds(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
-        monkeypatch.setattr(frp, "_download_mode_device", lambda: self._dev())
+        monkeypatch.setattr(core, "_download_mode_device", lambda: self._dev())
         sent = []
         monkeypatch.setattr(
-            frp.bridge, "odin_send_pit",
+            core.bridge, "odin_send_pit",
             lambda *a, **k: sent.append(a) or '{"sent": 32}',
         )
-        flow = frp.flow_odin_send_pit()
+        flow = core.flow_odin_send_pit()
         flow.run({"pit_file": self._combo_pit(tmp_path, model="A145P")}, lambda *a: None)
         assert sent, "a real-device-model PIT should reach the actual send"
 
@@ -377,21 +377,21 @@ class TestOdin4MultiHash:
     """Both the default build and the MTK-handshaking build are accepted."""
 
     def test_known_good_hashes_registered(self):
-        from python.core import frp
+        from python.core import core
 
-        assert frp.ODIN4_SHA256 in frp.ODIN4_SHA256S
-        assert frp.ODIN4_SHA256_MTK in frp.ODIN4_SHA256S
-        assert len(frp.ODIN4_SHA256_MTK) == 64
+        assert core.ODIN4_SHA256 in core.ODIN4_SHA256S
+        assert core.ODIN4_SHA256_MTK in core.ODIN4_SHA256S
+        assert len(core.ODIN4_SHA256_MTK) == 64
 
     def test_mtk_build_accepted(self, tmp_path):
         import shutil
-        from python.core import frp
+        from python.core import core
 
         user_build = os.path.expanduser(
             "~/Downloads/ABDM/Compressed/odin/odin4")
         if not os.path.isfile(user_build):
             pytest.skip("working odin4 build not present on this machine")
-        assert frp._odin4_hash_ok(user_build) is True
+        assert core._odin4_hash_ok(user_build) is True
 
 
 class TestOdin4TarStripping:
@@ -406,23 +406,23 @@ class TestOdin4TarStripping:
         return str(p), body
 
     def test_strips_trailer_to_plain_tar(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         (tmp_path / "home" / "flashpilot").mkdir(parents=True)
         tar, body = self._make(tmp_path)
-        out = frp._strip_odin4_md5_trailer(tar)
+        out = core._strip_odin4_md5_trailer(tar)
         assert out.endswith(".tar")
         assert not out.endswith(".md5")
         with open(out, "rb") as f:
             assert f.read() == body
 
     def test_plain_tar_passthrough(self, tmp_path):
-        from python.core import frp
+        from python.core import core
 
         p = tmp_path / "firmware.tar"
         p.write_bytes(b"not a real tar")
-        assert frp._strip_odin4_md5_trailer(str(p)) == str(p)
+        assert core._strip_odin4_md5_trailer(str(p)) == str(p)
 
 
 class TestOdin4ExactSlots:
@@ -430,7 +430,7 @@ class TestOdin4ExactSlots:
     the ~/Downloads auto-discovery fallback is disabled (ODIN4_EXACT_SLOTS)."""
 
     def test_exact_mode_disables_auto_discovery(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
         monkeypatch.setenv("ODIN4_EXACT_SLOTS", "1")
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -441,14 +441,14 @@ class TestOdin4ExactSlots:
         ap = tmp_path / "chosen.tar"
         ap.write_bytes(b"real")
         monkeypatch.setenv("AP_TAR", str(ap))
-        assert frp._find_slot_tar("AP") == str(ap)
+        assert core._find_slot_tar("AP") == str(ap)
         # empty slot must NOT auto-grab the newest tar in Downloads
         monkeypatch.delenv("BL_TAR", raising=False)
-        assert frp._find_slot_tar("BL") == ""
-        assert frp._find_firmware_tar() == ""
+        assert core._find_slot_tar("BL") == ""
+        assert core._find_firmware_tar() == ""
 
     def test_non_exact_mode_keeps_discovery(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
         monkeypatch.delenv("ODIN4_EXACT_SLOTS", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -461,10 +461,10 @@ class TestOdin4ExactSlots:
         import os
         os.utime(str(older), (1_600_000_000, 1_600_000_000))
         os.utime(str(newest), (1_700_000_000, 1_700_000_000))
-        assert frp._find_slot_tar("AP") == str(newest)
+        assert core._find_slot_tar("AP") == str(newest)
 
     def test_exact_mode_missing_slot_raises_in_flash(self, tmp_path, monkeypatch):
-        from python.core import frp
+        from python.core import core
 
         monkeypatch.setenv("ODIN4_EXACT_SLOTS", "1")
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -477,10 +477,10 @@ class TestOdin4ExactSlots:
         monkeypatch.delenv("CSC_TAR", raising=False)
         monkeypatch.delenv("HOME_CSC_TAR", raising=False)
         monkeypatch.delenv("USERDATA_TAR", raising=False)
-        assert frp._find_slot_tar("AP") == ""
-        assert frp._find_slot_tar("BL") == ""
-        assert frp._find_slot_tar("CSC") == ""
-        assert frp._find_slot_tar("USERDATA") == ""
+        assert core._find_slot_tar("AP") == ""
+        assert core._find_slot_tar("BL") == ""
+        assert core._find_slot_tar("CSC") == ""
+        assert core._find_slot_tar("USERDATA") == ""
 
 
 class TestEnforceFlashGatesMtk:
@@ -488,7 +488,7 @@ class TestEnforceFlashGatesMtk:
     wedges MTK download agents); non-device-model values skip the gate."""
 
     def _run(self, tmp_path, monkeypatch, dev_model):
-        from python.core import frp
+        from python.core import core
 
         monkeypatch.setenv("ODIN4_EXACT_SLOTS", "1")
         fw = tmp_path / "AP_A145PXXU1AWC1_meta_OS13.tar.md5"
@@ -496,7 +496,7 @@ class TestEnforceFlashGatesMtk:
         monkeypatch.setenv("FIRMWARE_TAR", str(fw))
         logs = []
         d = {"pid": 0x685D, "bus": 2, "address": 90}
-        frp._enforce_flash_gates({"device_model": dev_model}, logs.append, d)
+        core._enforce_flash_gates({"device_model": dev_model}, logs.append, d)
         return logs
 
     def test_garbage_model_skipped(self, tmp_path, monkeypatch):

@@ -982,6 +982,56 @@ pub fn spd_format_cli(
     let mut out = Vec::new();
     let step = 528usize;
 
+    // BROM-only path: if no FDL provided (user wants immediate factory reset without FDL),
+    // do raw BROM erase without loading FDLs. This matches "brom should not require a fdl file".
+    let fdl_none = fdl1.is_empty() || fdl1 == "none" || !std::path::Path::new(fdl1).exists();
+    if fdl_none {
+        let mut s = open_session(&dev)?;
+        // BROM window is 1.5-2s; retry handshake 3× with flush+delay before giving up
+        let mut ver: Option<String> = None;
+        let mut last_err: String = String::new();
+        for attempt in 1..=3 {
+            s.flush();
+            if attempt > 1 {
+                std::thread::sleep(std::time::Duration::from_millis(350));
+                eprintln!("[spd] BROM-only handshake retry {}/3", attempt);
+            }
+            match s.handshake() {
+                Ok(v) => { ver = Some(v); break; }
+                Err(e) => { last_err = e; if attempt == 3 { break; } }
+            }
+        }
+        let ver = ver.ok_or(BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(last_err)))?;
+        out.push(format!("BootROM version: {ver} (BROM-only, no FDL)"));
+        let _ = s.enable_write();
+        out.push("Erasing security / user-data regions (BROM-only)...".to_string());
+        let mut any_ok = false;
+        for (name, addr, size) in [
+            ("PS (param store)", 0x8000_0003u32, 0x1000u32),
+            ("NV (non-volatile)", 0x9000_0001u32, 0x10000u32),
+            ("FLASH (userdata raw)", 0x9000_0003u32, 0x10000u32),
+        ] {
+            match s.erase_flash(addr, size) {
+                Ok(_) => {
+                    out.push(format!("  erased {name} @0x{addr:08x}"));
+                    any_ok = true;
+                }
+                Err(e) => out.push(format!("  {name}: {e}")),
+            }
+        }
+        // Try chip UID for logging even in BROM-only
+        if let Ok(uid) = s.chip_uid() {
+            out.push(format!("Chip UID: {}", uid.trim()));
+        }
+        let _ = s.reset();
+        if any_ok {
+            out.push("Done. Device reset to normal mode (BROM-only).".to_string());
+        } else {
+            out.push("BROM-only erase had no success — provide FDL1/FDL2 for full Android userdata wipe.".to_string());
+        }
+        return Ok(out.join("\n"));
+    }
+
     let mut s = open_session(&dev)?;
     let ver = s.handshake().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("BootROM version: {ver}"));

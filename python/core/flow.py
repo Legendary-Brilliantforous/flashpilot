@@ -8,18 +8,58 @@ class FlowCancelled(RuntimeError):
 
 
 _cancel = threading.Event()
+_cancels = {}  # device-key -> Event; the None/global entry is the broadcast bus
+_cancels_lock = threading.Lock()
 
 
-def request_cancel():
-    _cancel.set()
+def _scope_key(key):
+    """Explicit key wins, else the ambient thread-scoped device key."""
+    if key is not None:
+        return key
+    try:
+        from . import devices as _dev
+
+        return _dev.current_key()
+    except Exception:
+        return None
 
 
-def clear_cancel():
+def _event(key):
+    with _cancels_lock:
+        ev = _cancels.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _cancels[key] = ev
+        return ev
+
+
+def request_cancel(key=None):
+    """Request cancellation. ``key=None`` broadcasts to every running
+    operation (global STOP behaviour, unchanged); an explicit key cancels
+    only that device's operation."""
+    if key is None:
+        _cancel.set()
+        with _cancels_lock:
+            for ev in _cancels.values():
+                ev.set()
+    else:
+        _event(key).set()
+
+
+def clear_cancel(key=None):
+    """Clear a pending cancel. Scoped to ``key`` (ambient thread scope by
+    default) plus the broadcast bus, so a fresh operation never starts
+    already-cancelled — without touching other devices' scopes."""
+    scope = _scope_key(key)
+    _event(scope).clear()
     _cancel.clear()
 
 
-def cancel_requested():
-    return _cancel.is_set()
+def cancel_requested(key=None):
+    """True if this scope was cancelled, or a broadcast STOP was issued."""
+    if _cancel.is_set():
+        return True
+    return _event(_scope_key(key)).is_set()
 
 
 class Step:

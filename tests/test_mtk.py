@@ -60,33 +60,33 @@ class TestMtkBromBackup:
     """The BROM backup flow registration + safety behavior."""
 
     def test_registered_in_flows(self):
-        from python.core import frp
-        assert "mtk_brom_backup" in frp.FLOWS
-        flow = frp.FLOWS["mtk_brom_backup"]()
+        from python.core import core
+        assert "mtk_brom_backup" in core.FLOWS
+        flow = core.FLOWS["mtk_brom_backup"]()
         assert "backup" in flow.name.lower()
         assert "bootloader" in flow.name.lower()
 
     def test_registered_under_read_device_info_mtk_brom(self):
-        from python.core import frp
-        assert "mtk_brom_backup" in frp.JOBS["Read device info"]["MTK BROM"]
-        assert "mtk_brom_backup" in frp.JOBS["Read device info"]["MTK"]
+        from python.core import core
+        assert "mtk_brom_backup" in core.JOBS["Read Device Info"]["MTK BROM"]
+        assert "mtk_brom_backup" in core.JOBS["Read Device Info"]["MTK"]
 
     def test_requires_da(self, monkeypatch):
-        from python.core import frp
-        monkeypatch.setattr(frp, "_find_mtk_da", lambda: "")
+        from python.core import core
+        monkeypatch.setattr(core, "_find_mtk_da", lambda: "")
         import io
         buf = io.StringIO()
         with pytest.raises(RuntimeError, match="DA binary required"):
-            frp.FLOWS["mtk_brom_backup"]().run({}, buf.write)
+            core.FLOWS["mtk_brom_backup"]().run({}, buf.write)
 
     def test_waits_for_device_and_reports_bootloop_hint(self, monkeypatch):
-        from python.core import frp
-        monkeypatch.setattr(frp, "_find_mtk_da", lambda: "/tmp/da.bin")
-        monkeypatch.setattr(frp, "_wait_mtk_brom_target", lambda log, timeout=120: (None, None))
+        from python.core import core
+        monkeypatch.setattr(core, "_find_mtk_da", lambda: "/tmp/da.bin")
+        monkeypatch.setattr(core, "_wait_mtk_brom_target", lambda log, timeout=120: (None, None))
         import io
         buf = io.StringIO()
         with pytest.raises(RuntimeError, match="no MediaTek BROM/preloader"):
-            frp.FLOWS["mtk_brom_backup"]().run({}, buf.write)
+            core.FLOWS["mtk_brom_backup"]().run({}, buf.write)
         out = buf.getvalue()
         assert "Boot-looping" in out
         assert "Waiting for a MediaTek BROM / preloader device" in out
@@ -94,16 +94,16 @@ class TestMtkBromBackup:
     def test_mtk_retry_waits_for_next_window_after_device_loss(self, monkeypatch):
         """If a bridge op loses the device mid-run, the retry waits for the
         next preloader window and calls fn again."""
-        from python.core import frp
+        from python.core import core
         import io
         buf = io.StringIO()
         calls = []
         monkeypatch.setattr(
-            frp.mtk, "find_mtk",
+            core.mtk, "find_mtk",
             lambda: [{"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2}],
         )
         monkeypatch.setattr(
-            frp.bridge, "BridgeError", Exception,
+            core.bridge, "BridgeError", Exception,
         )
 
         def flaky(target):
@@ -112,7 +112,7 @@ class TestMtkBromBackup:
                 raise Exception("device disappeared")
             return "ok"
 
-        result = frp._mtk_retry(buf.write, "flaky op", flaky, timeout=10)
+        result = core._mtk_retry(buf.write, "flaky op", flaky, timeout=10)
         assert result == "ok"
         assert len(calls) == 2
         assert "attempt 2" in buf.getvalue()
@@ -120,20 +120,74 @@ class TestMtkBromBackup:
     def test_mtk_retry_aborts_on_permanent_failure(self, monkeypatch):
         """'partition not found' style errors must not retry for the full
         timeout - they abort immediately."""
-        from python.core import frp
+        from python.core import core
         import io
         buf = io.StringIO()
         monkeypatch.setattr(
-            frp.mtk, "find_mtk",
+            core.mtk, "find_mtk",
             lambda: [{"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2}],
         )
-        monkeypatch.setattr(frp.bridge, "BridgeError", Exception)
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
 
         def fail(target):
             raise Exception("partition 'tee' not found in device GPT")
 
         with pytest.raises(Exception, match="not found"):
-            frp._mtk_retry(buf.write, "read", fail, timeout=10,
+            core._mtk_retry(buf.write, "read", fail, timeout=10,
                            abort_on=("not found",))
         assert "attempt 1" in buf.getvalue()
         assert "attempt 2" not in buf.getvalue()
+
+
+class TestWaitMtkBromTarget:
+    """The waiter prefers the stable held BROM over the preloader window."""
+
+    def test_prefers_brom_over_preloader(self, monkeypatch):
+        from python.core import core
+        import io
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            core.mtk, "find_mtk",
+            lambda: [
+                {"vid": 0x0e8d, "pid": 0x2000, "bus": 1, "address": 5},
+                {"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2},
+            ],
+        )
+        target, stage = core._wait_mtk_brom_target(buf.write, timeout=5)
+        assert target == "1:2"
+        assert stage == "brom"
+
+    def test_falls_back_to_preloader(self, monkeypatch):
+        from python.core import core
+        import io
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            core.mtk, "find_mtk",
+            lambda: [{"vid": 0x0e8d, "pid": 0x2000, "bus": 1, "address": 5}],
+        )
+        target, stage = core._wait_mtk_brom_target(buf.write, timeout=5)
+        assert target == "1:5"
+        assert stage == "preloader"
+
+
+class TestMtkCrashBrom:
+    """Crash-preloader-into-BROM flow registration + behavior."""
+
+    def test_registered_in_flows_and_jobs(self):
+        from python.core import core
+        assert "mtk_crash_brom" in core.FLOWS
+        assert "BROM" in core.FLOWS["mtk_crash_brom"]().name
+        assert "mtk_crash_brom" in core.JOBS["Read Device Info"]["MTK BROM"]
+        assert "mtk_crash_brom" in core.JOBS["Detect Devices"]["MTK BROM"]
+
+    def test_noop_when_already_in_brom(self, monkeypatch):
+        from python.core import core
+        import io
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            core.mtk, "find_mtk",
+            lambda: [{"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2}],
+        )
+        result = core.FLOWS["mtk_crash_brom"]().run({}, buf.write)
+        assert result == [True]
+        assert "Already in held BROM" in buf.getvalue()

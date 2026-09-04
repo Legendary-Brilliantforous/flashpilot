@@ -33,20 +33,22 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 ---
 
-## 🚀 Highlights — 1.2.0 Stable (0 warnings)
+## 🚀 Highlights — 1.2.1-beta (0 warnings)
 
-- **8 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL.
-- **8 job categories, ~120 operation methods** — flashing, FRP bypass, screen-lock removal, MDM unlock, device info, reboot, settings/UI repair, and more.
+- **9 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
+- **13 job categories** — Flash Firmware, Remove FRP, Remove Screen Lock, Remove MDM, Unlock Carrier, Read Device Info, Detect Devices, Reboot, Repair Settings, plus per-chip EXPERIMENTAL: Knox / Warranty (Samsung), QCN / Modem (Qualcomm), IMEI Repair / Change (MTK/SPD/Qualcomm), eMMC / UFS.
+- **Multi-device** — plug in several phones: the connection bar lists each one, every operation asks which phone it applies to (or runs silently when only one matches), and different phones can run operations in parallel (one op per device, STOP broadcasts to all).
 - **Rust core (`flashpilot-bridge`, ~9.3k LOC) — 0 `cargo check` warnings** — raw USB with *vendored libusb* (no system deps), real protocol implementations (+ 18 wired dead-paths, `-80KB` ltcg trim).
   - **Samsung**: reverse-engineered Odin session protocol (Heimdall-based), HID download-mode payloads, PIT read/write/flash — AT `Context` retained, `EndpointConfig` chunking.
   - **MediaTek**: BROM / preloader / DA handshake, scatter & GPT, BROM exploits, SLA keys — `ProgressReporter` real %.
   - **Qualcomm**: Sahara `ProtocolError` + Firehose `QcomDeviceInfo` wired via `Duration` timeouts.
   - **SPD/UNISOC**: clean-room BSL — all `BSL_CMD/REP`, `iface`, `flush/read_flash/chip_uid/power_off` wired.
   - Plus **MTP**, **AT-command**, and full **ADB** plumbing.
-- **A studio-grade GUI** — frameless translucent window, 5 accent themes, animated cable/status scene, live console.
+- **A studio-grade GUI** — frameless translucent window, 10 accent themes, animated cable/status scene, live console.
   - **Dynamic version** — installed `APP_VERSION` via `importlib.metadata` (deb truth), `_display_version` `1.2.0→1.2`, live GitHub latest stable, BETA pill.
   - **Big centered dialogs (620px, draggable, ✕)** — beta gate + stable `UPDATE/AHEAD/PATCH` + flash/FRP confirms, chip colors `MTK amber` `QCOM red` `SPD violet` `SAMSUNG blue`, high-contrast text.
-  - **One global ⏹ STOP** in titlebar stops any Samsung/MTK/QC/SPD flow (legacy per-chip hidden).
+  - **Per-chip EXPERIMENTAL collapsibles** — Knox (Samsung), QCN/IMEI (Qualcomm), IMEI (MTK/SPD): amber banner, every-run ownership checkbox, `I UNDERSTAND` type-to-confirm for IMEI change, audit-logged.
+  - **⏹ STOP** in titlebar stops all running operations; per-device locks let other phones keep working.
 
 ---
 
@@ -62,13 +64,15 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 | Capability | Samsung | MediaTek | Qualcomm | SPD/UNISOC | Any ADB |
 |---|---|---|---|---|---|
-| Detect / info | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Detect / info | ✅ | ✅ (+ crash preloader→BROM) | ✅ (Sahara) | ✅ | ✅ |
 | Flash firmware | ✅ (Odin / odin4) | ✅ (scatter + GPT) | ✅ (Firehose) | ✅ (FDL/regions) | — |
 | Backup partitions | ✅ (EFS) | ✅ | ✅ | ✅ | — |
 | FRP bypass | ✅ (ADB + download) | ✅ | ✅ (EDL) | ✅ | ✅ |
 | Screen-lock removal | ✅ | ✅ | ✅ (EDL) | — | ✅ |
 | MDM unlock | ✅ (ADB, QR, recovery) | — | — | — | — |
-| Partition tools | ✅ (PIT) | ✅ (GPT) | ✅ | ✅ | — |
+| Knox warranty/bypass (EXPERIMENTAL) | ✅ | — | — | — | — |
+| QCN backup/restore + IMEI repair/change (EXPERIMENTAL) | — | ✅ (NVRAM) | ✅ (NV 550/682) | ✅ (BSL NV) | — |
+| Partition tools | ✅ (PIT) | ✅ (GPT) | ✅ | ✅ (PAC extract/pack) | — |
 | Low-level exploits | ✅ (HID/BROM) | ✅ (BROM exploit, SLA) | ✅ (Sahara) | ✅ (BSL) | — |
 | Battery / network repair | — | — | — | — | ✅ |
 
@@ -80,11 +84,12 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 A frameless, translucent, radius-card window with a live **connection banner** (computer → cable → phone scene with an animated data pulse) above a left **nav rail** and a right **console/log pane**.
 
-- **Samsung** — TFT-style sub-tabs: `FLASH · FRP · SCREEN LOCK · MDM · INFO & TOOLS`.
-- **MediaTek / Qualcomm / SPD** — dedicated workbenches with the same sub-tab layout plus their native low-level tools (scatter/DA, programmer/XML, FDL binaries, base-address inputs).
+- **Connection bar** — live device list (one row per phone: model · serial · transports); click a row to inspect it. Operation buttons ask which phone when several match.
+- **Samsung** — TFT-style sub-tabs: `ODIN FLASH · UNLOCK · ADVANCED FLASH · INFO & TOOLS`, plus firmware slots (AP/BL/CP/CSC/USERDATA), Odin utilities, and a `KNOX — EXPERIMENTAL` collapsible.
+- **MediaTek / Qualcomm / SPD** — dedicated workbenches with native low-level tools (scatter/DA + crash-to-BROM, programmer/XML + QCN/IMEI, FDL binaries + base addresses + IMEI), each with its own `— EXPERIMENTAL` collapsible.
 - **Battery** — fuel-gauge health %, temp/voltage/current, top consumers; one-click repair.
 - **Network** — SIM state, data/Wi-Fi flags, DNS mode; radio reset & re-registration.
-- **Settings** — auto-scan interval, default paths, console auto-clear, 5 accent themes, animations, window glow, engine status, and in-app `cargo build`.
+- **Settings** — auto-scan interval, default paths, console auto-clear, 10 accent themes, animations (shake/rubber/cable/bubble toggles), window glow, engine status, and in-app `cargo build`.
 
 **Shortcuts:** `F5` rescan · `Ctrl+Enter` run · `Ctrl+L` clear console · `Ctrl+S` save log · `Ctrl+F` find.
 
@@ -116,13 +121,48 @@ python3 -m venv .venv
 
 The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scripts/fetch-odin4.sh` — Samsung's proprietary binary is not redistributed in this repo. Samsung combo firmware should be sourced from Samsung's official support pages or trusted firmware archives.
 
+---
+
+## 🖥️ Platform support — we want your words
+
+**Linux is the supported platform.** FlashPilot is deliberately *the Linux-native
+answer to Windows-only flashing suites* — development, testing and releases
+target Linux, and that is not changing.
+
+**Windows / macOS are not supported today**, for practical reasons:
+
+- `odin4` (Samsung flashing) is a Linux-only binary — Windows would need a
+  different flash path entirely.
+- Windows USB is driver hell per phone mode (Zadig/WinUSB, QDLoader, Samsung
+  drivers fighting each other); most "phone not detected" reports would be
+  undebuggable remotely.
+- macOS adds signing/notarization overhead for near-zero repair-shop demand.
+- The stack *is* portable (Rust + rusb, Python, Qt), so this is a maintenance
+  decision, not a technical impossibility.
+
+**But this is an open question, not a verdict.** If you want Windows/macOS
+support — or you want to argue Linux-only forever — tell us:
+
+- 💬 Open a **[Discussion](https://github.com/Legendary-Brilliantforous/flashpilot/discussions)**
+  with your use case (repair shop? lab? which OS? which phones?).
+- 🔧 Code speaks loudest: the plan is a `python/core/platform.py` abstraction
+  (`open_file_manager()`, `detach_kernel_drivers()`, `usb_device_path()`,
+  `needs_udev_setup()`) with Linux as the only backend, so ports become
+  additive PRs instead of forks. PRs in that direction are welcome now.
+- 🎨 Related: contributors have proposed **PySide6** (LGPL, license-compatible
+  with this MIT project) over PyQt6 (GPLv3). Weigh in on the same Discussion —
+  the migration is mechanical but needs GUI smoke-test coverage first.
+
+No decision will be made without contributor voices. Come and be one of them.
+
 ### CLI / bridge
 
 ```bash
 ./target/release/flashpilot-bridge detect          # all USB + Samsung filter (JSON)
-./target/release/flashpilot-bridge mtk-detect      # MediaTek BROM/preloader/DA
+./target/release/flashpilot-bridge mtk-detect      # MediaTek BROM (0e8d:0003) / preloader (0e8d:2000) / DA
+./target/release/flashpilot-bridge mtk-crash-brom <bus:addr>  # crash preloader into held BROM
 ./target/release/flashpilot-bridge qcom-detect     # Qualcomm EDL
-./target/release/flashpilot-bridge spd-detect      # Spreadtrum/UNISOC
+./target/release/flashpilot-bridge spd-detect      # Spreadtrum/UNISOC (VID 0x1782)
 ./target/release/flashpilot-bridge odin-pit 04e8:xxxx@bus:addr  # read PIT
 ./target/release/flashpilot-bridge at-send <t> ATI # AT over CDC ACM
 ./target/release/flashpilot-bridge adb-devices     # adb devices -l as JSON
@@ -134,30 +174,44 @@ The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scri
 
 ```
 flashpilot/
-├── src/                      # Rust bridge (~9.3k LOC)
-│   ├── main.rs               #   command-line entry (60+ commands)
-│   ├── usb.rs                #   USB enumeration / interfaces
-│   ├── hid.rs bulk.rs        #   Samsung HID + bulk endpoints
+├── src/                      # Rust bridge (~13k LOC)
+│   ├── main.rs               #   command-line entry (80+ commands)
+│   ├── usb.rs                #   USB enumeration / interfaces (+ port_numbers)
 │   ├── odin.rs               #   reverse-engineered Odin session protocol
 │   ├── mtk.rs mtk_da.rs      #   MediaTek BROM/DA flashing
-│   ├── mtk_exploit.rs        #   BROM exploits (mtk_bypass/kamakiri2/patch_da)
+│   ├── mtk_exploit.rs        #   BROM exploits (bypass/kamakiri2/crash-to-BROM)
 │   ├── mtk_sla.rs            #   MediaTek SLA key handling
 │   ├── qualcomm/             #   Sahara + Firehose + GPT (EDL)
-│   ├── spd.rs                #   Spreadtrum/UNISOC BSL protocol
+│   ├── spd.rs                #   Spreadtrum/UNISOC BSL protocol (+ PAC)
 │   ├── mtp.rs at.rs adb.rs   #   MTP, AT command, ADB plumbing
 │   └── config.rs error.rs util.rs
 ├── python/
 │   ├── core/
-│   │   ├── frp.py            #   flow orchestrator: 8 jobs / 68 flows / 8 modes
-│   │   ├── bridge.py         #   talks to the Rust binary
-│   │   ├── adb.py mtp.py pit.py mtk.py usb_watch.py
+│   │   ├── core.py           #   THE registry: FLOWS / JOBS / MODES + all flows
+│   │   │                     #   (verb-first jobs; short snake_case method keys)
+│   │   ├── frp.py            #   FRP-only re-export (name == responsibility)
+│   │   ├── devices.py        #   multi-device identity: stable keys, list,
+│   │   │                     #   resolve, transport mapping, thread scope
+│   │   ├── bridge.py         #   talks to the Rust binary (+ per-key cancel)
+│   │   ├── flow.py           #   Flow/Step primitives (+ per-key cancel)
+│   │   ├── mtp.py            #   Samsung MTP/AT (multi-sequence ADB enable)
+│   │   ├── mtk.py            #   MTK PIDs/stages/chips (0003=BROM, 2000=preloader)
+│   │   ├── knox.py qcn.py imei.py emmc.py pac.py  # EXPERIMENTAL domains
+│   │   ├── experimental.py   #   per-run ack gates + audit log (Q2-B strict)
+│   │   ├── pit.py pitstore.py safety.py flashing.py fastboot.py
+│   │   └── adb.py device_info.py health.py integrity.py knox.py ...
 │   └── gui/
-│       └── qt_app.py         #   the whole PyQt6 studio (~6.2k LOC)
-├── docs/                     # screenshots + logo
+│       ├── qt_app.py         #   the PyQt6 studio (~12k LOC)
+│       ├── devices.py        #   brand→model→action drill-down pages
+│       ├── nav.py            #   nav rail + OEM chip bar
+│       ├── theme.py          #   tokens (accent vs focus_ring/sel_border) + QSS
+│       ├── animations.py     #   Motion (shake/rubber serialized, no stuck state)
+│       └── supported_devices.json  #   brand/model/chip research table
+├── docs/                     # screenshots (fresh) + logo
 ├── root/                     # udev rules (odin4 fetched by scripts/fetch-odin4.sh)
 ├── scripts/                  # fetch-odin4.sh, dev scripts
 ├── pit/ mdm_qr/              # sample PIT + MDM QR provisioning assets (git-ignored)
-└── tests/                    # pytest suite (flow, MTK, PIT)
+└── tests/                    # pytest suite (flow, MTK, PIT, odin safety, devices…)
 ```
 
 ---
@@ -169,17 +223,20 @@ flashpilot/
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — everything you need to start.
 - **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
 - Use the **[bug report](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=enhancement&template=feature_request.yml)** templates.
-- **Beginner-friendly tasks** — every `flow_*` function in `python/core/frp.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
-- **No prior flashing experience required.** The flow framework (`python/core/frp.py`) is dead simple — a new method is ~5 lines:
+- **Beginner-friendly tasks** — every `flow_*` function in `python/core/core.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
+- **No prior flashing experience required.** The flow framework (`python/core/core.py`) is dead simple — a new method is ~5 lines:
 
 ```python
 def flow_my_method():
     return Flow("my method", [Step("do thing", lambda ctx, log: log("hi"))])
 
-FLOWS["my_method"] = flow_my_method
+FLOWS["my_method"] = flow_my_method              # short snake_case key
+JOBS["Read Device Info"]["ADB"].append("my_method")  # ...and it shows in the GUI
 ```
 
 It appears in the GUI automatically. That's the whole contribution loop: **write a flow, ship a feature.**
+- **Multi-device rule** — never grab "the" device; accept `key=None` (ambient scope) and filter by it. See `python/core/devices.py` and `CONTRIBUTING.md`.
+- **Naming rules** — jobs are verb-first (`Remove FRP`, not `FRP bypass`); flow keys are short snake_case (no `flow_` prefix in `FLOWS`); MTK PIDs are `0003`=BROM / `2000`=preloader (mtkclient convention — don't swap them).
 
 **Ideas we'd love help with:**
 - New device models / firmware combos in the flow tables.

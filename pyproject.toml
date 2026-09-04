@@ -13,6 +13,7 @@ dependencies = [
     "PyQt6>=6.5",
     "segno>=1.6",
     "lz4>=4.0",
+    "zstandard>=0.22",
 ]
 
 [project.urls]

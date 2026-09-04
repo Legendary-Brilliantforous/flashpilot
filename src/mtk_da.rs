@@ -1311,7 +1311,8 @@ pub fn mtk_detect_emergency_mode() -> Result<String> {
     
     for d in devices.iter().filter(|d| d.vid == MTK_VID) {
         let (stage, _) = boot_stage_for(d.pid);
-        // Emergency mode PIDs: 0x2000 (BROM), 0x0003 (Preloader with auth bypass)
+        // Emergency mode PIDs: 0x0003 (BROM), 0x2000 (preloader) — plus
+        // 0x0001/0x0002 variants on some boards.
         // Some devices show 0x0001, 0x0002 in emergency mode
         let is_emergency = matches!(d.pid, 0x2000 | 0x0001 | 0x0002 | 0x0003);
         

@@ -18,26 +18,103 @@ from PyQt6.QtWidgets import QWidget, QProgressBar, QFrame, QLabel
 from .theme import C, _display_version, _is_beta_version
 from ..core import APP_VERSION
 
+def _is_deleted(obj):
+    try:
+        # Any attribute access on deleted C++ object raises RuntimeError
+        obj.objectName()
+        return False
+    except RuntimeError:
+        return True
+    except Exception:
+        return False
+
 class Motion:
-    """Premium motion system - centralised easings and helpers."""
+    """Unified professional motion — curated easings, consistent 220ms base."""
+
     @staticmethod
-    def fade(widget, dur=220, start=0.0, end=1.0):
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-        anim = QPropertyAnimation(widget, b"windowOpacity")
-        anim.setDuration(dur)
-        anim.setStartValue(start)
-        anim.setEndValue(end)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        # keep reference
+    def _keep(widget, anim):
         if not hasattr(widget, "_anims"):
             widget._anims = []
         widget._anims.append(anim)
+        # prune finished
+        widget._anims = [a for a in widget._anims if a.state() == a.State.Running or a == anim]
         return anim
 
     @staticmethod
+    def fade(widget, dur=220, start=0.0, end=1.0, curve=QEasingCurve.Type.OutCubic):
+        import sys
+        # On X11, windowOpacity and QGraphicsOpacityEffect on shadowed windows cause
+        # "QPainter::begin" spam and delete the drop shadow. Keep Linux fade as no-op.
+        if sys.platform.startswith("linux"):
+            return None
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        try:
+            anim = QPropertyAnimation(widget, b"windowOpacity")
+            anim.setDuration(dur)
+            anim.setStartValue(start)
+            anim.setEndValue(end)
+            anim.setEasingCurve(curve)
+            anim.start()
+            return Motion._keep(widget, anim)
+        except Exception:
+            return None
+
+    @staticmethod
+    def slide(widget, axis="x", offset=18, dur=260, curve=QEasingCurve.Type.OutCubic):
+        """Slide-in from offset (professional page transition)."""
+        from PyQt6.QtCore import QPropertyAnimation
+        prop = b"pos" if hasattr(widget, "pos") else b"geometry"
+        anim = QPropertyAnimation(widget, prop)
+        anim.setDuration(dur)
+        anim.setEasingCurve(curve)
+        # caller should set start pos before calling; this is a helper for manual pos animation
+        return Motion._keep(widget, anim)
+
+    @staticmethod
+    def pulse(widget, scale=1.04, dur=900, loop=True):
+        """Subtle breathe pulse — no-op on Linux to avoid painter spam."""
+        import sys
+        if sys.platform.startswith("linux"):
+            return None
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        anim = QPropertyAnimation(widget, b"windowOpacity")
+        anim.setDuration(dur)
+        anim.setStartValue(0.92)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        anim.setLoopCount(-1 if loop else 1)
+        anim.start()
+        return Motion._keep(widget, anim)
+
+    @staticmethod
+    def card_entrance(widget, delay_ms=0, dur=280):
+        """Staggered card lift — no-op on Linux (prevents painter spam)."""
+        import sys
+        if sys.platform.startswith("linux"):
+            return widget
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer
+        def start():
+            anim = QPropertyAnimation(widget, b"windowOpacity")
+            anim.setDuration(dur)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start()
+            Motion._keep(widget, anim)
+        if delay_ms:
+            QTimer.singleShot(delay_ms, start)
+        else:
+            start()
+        return widget
+
+    @staticmethod
+    def page_transition(stack: QFrame, dur=200):
+        """Stacked-widget cross-fade — unified, not bouncy."""
+        return Motion.fade(stack, dur=dur, start=0.85, end=1.0)
+
+    @staticmethod
     def scale_hover(widget):
-        orig = widget.geometry()
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
         def enter(e):
             anim = QPropertyAnimation(widget, b"geometry") if hasattr(widget, "geometry") else None
             if anim:
@@ -47,6 +124,7 @@ class Motion:
                 r.adjust(-1, -1, 1, 1)
                 anim.setEndValue(r)
                 anim.start()
+                Motion._keep(widget, anim)
         widget.enterEvent = enter
         return widget
 
@@ -56,6 +134,332 @@ class Motion:
             f"QProgressBar {{ background:{C['inset']}; border:1px solid {C['glass_border']}; border-radius:6px; height:8px; text-align:center; color:{C['text']}; }}"
             f"QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {C['grad_a']}, stop:0.5 {C['accent_hi']}, stop:1 {C['grad_b']}); border-radius:5px; }}"
         )
+
+    @staticmethod
+    def accent_pop(widget, dur=180):
+        """Quick accent flash on interaction — professional, not playful."""
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QTimer
+        try:
+            if widget is None or _is_deleted(widget):
+                return widget
+            if getattr(widget, "_anim_lock", False):
+                return widget
+        except Exception:
+            return widget
+        orig = widget.styleSheet()
+        try:
+            widget.setStyleSheet(orig + f" border-color: {C['accent_hi']};")
+        except Exception:
+            return widget
+        try:
+            QTimer.singleShot(dur, lambda: widget.setStyleSheet(orig) if not _is_deleted(widget) else None)
+        except Exception:
+            pass
+        return widget
+
+    @staticmethod
+    def shake(widget, amplitude=8, dur=320, axis="x"):
+        """Button shake — distinct: fast horizontal jitter + err flash, 320ms."""
+        try:
+            from PyQt6 import sip
+        except ImportError:
+            import sip
+        from PyQt6.QtCore import QTimer
+        try:
+            if widget is None or sip.isdeleted(widget):
+                return widget
+            # Guard: shake + rubber both touch geometry/stylesheet — don't overlap or they leave red border / shrunk fixed size.
+            if getattr(widget, "_anim_lock", False):
+                return widget
+            widget._anim_lock = True
+            try:
+                QTimer.singleShot(dur + 80, lambda w=widget: setattr(w, "_anim_lock", False) if not _is_deleted(w) else None)
+            except Exception:
+                pass
+            # Single style capture: every step rebuilds from orig_style so a
+            # concurrent accent_pop/rubber can't stack red borders permanently.
+            orig_style = widget.styleSheet()
+            try:
+                orig_pos = widget.pos()
+            except Exception:
+                orig_pos = None
+            # Distinct: larger amplitude, faster steps, err red flash
+            offsets = [amplitude, -amplitude, int(amplitude*0.75), -int(amplitude*0.6), 0]
+            def _unlock():
+                try:
+                    if not _is_deleted(widget):
+                        widget._anim_lock = False
+                except Exception:
+                    pass
+            def step(idx=0):
+                try:
+                    if _is_deleted(widget):
+                        return
+                    if idx >= len(offsets):
+                        try:
+                            widget.setStyleSheet(orig_style)
+                            if orig_pos is not None:
+                                try:
+                                    widget.move(orig_pos)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        finally:
+                            _unlock()
+                        return
+                    off = int(offsets[idx])
+                    try:
+                        # Layout-safe: margins only (no setFixedSize, no layout
+                        # disable). A free-floating widget also gets a tiny
+                        # move() so the jitter is visible outside layouts.
+                        if off >= 0:
+                            widget.setStyleSheet(orig_style + f" QPushButton {{ margin-left: {off}px; margin-right: 0px; border: 1px solid {C['err']}; }}")
+                        else:
+                            widget.setStyleSheet(orig_style + f" QPushButton {{ margin-left: 0px; margin-right: {-off}px; border: 1px solid {C['err']}; }}")
+                        if orig_pos is not None and widget.parentWidget() is None:
+                            try:
+                                from PyQt6.QtCore import QPoint
+                                widget.move(orig_pos + QPoint(off // 2, 0))
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    QTimer.singleShot(45, lambda i=idx + 1: step(i))
+                except Exception:
+                    pass
+            step(0)
+        except Exception:
+            try:
+                orig = widget.styleSheet()
+                widget.setStyleSheet(orig + f" border-color: {C['err']};")
+                QTimer.singleShot(dur, lambda: widget.setStyleSheet(orig))
+            except Exception:
+                pass
+        return widget
+
+    @staticmethod
+    def window_open(win, dur=280):
+        """Window pop — rubber OutBack geometry + fade, eloquent."""
+        import sys
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect
+        try:
+            geo = win.geometry()
+            mid = geo.center()
+            start = QRect(int(mid.x() - geo.width() * 0.48), int(mid.y() - geo.height() * 0.48),
+                          int(geo.width() * 0.96), int(geo.height() * 0.96))
+            g_anim = QPropertyAnimation(win, b"geometry")
+            g_anim.setDuration(dur)
+            g_anim.setStartValue(start)
+            g_anim.setEndValue(geo)
+            # Rubber pop: OutBack overshoots then settles
+            g_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+            g_anim.start()
+            Motion._keep(win, g_anim)
+            if not sys.platform.startswith("linux"):
+                anim = QPropertyAnimation(win, b"windowOpacity")
+                anim.setDuration(dur)
+                anim.setStartValue(0.0)
+                anim.setEndValue(1.0)
+                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                anim.start()
+                Motion._keep(win, anim)
+        except Exception:
+            pass
+        return win
+
+    @staticmethod
+    def window_close(win, dur=180, on_finished=None):
+        """Window shrink close — geometry-only on Linux, then callback."""
+        import sys
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect, QTimer
+        try:
+            geo = win.geometry()
+            mid = geo.center()
+            end = QRect(int(mid.x() - geo.width() * 0.46), int(mid.y() - geo.height() * 0.46),
+                        int(geo.width() * 0.92), int(geo.height() * 0.92))
+            g_anim = QPropertyAnimation(win, b"geometry")
+            g_anim.setDuration(dur)
+            g_anim.setStartValue(geo)
+            g_anim.setEndValue(end)
+            g_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+            g_anim.start()
+            Motion._keep(win, g_anim)
+            if not sys.platform.startswith("linux"):
+                o_anim = QPropertyAnimation(win, b"windowOpacity")
+                o_anim.setDuration(dur)
+                o_anim.setStartValue(1.0)
+                o_anim.setEndValue(0.0)
+                o_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+                o_anim.start()
+                Motion._keep(win, o_anim)
+            if on_finished:
+                QTimer.singleShot(dur + 20, on_finished)
+        except Exception:
+            if on_finished:
+                on_finished()
+        return win
+
+    @staticmethod
+    def rubber(widget, scale=1.10, dur=460):
+        """Rubber band — distinct: anisotropic stretch (wide→narrow→wide), accent flash. Not just shake."""
+        import sys
+        try:
+            from PyQt6 import sip
+        except ImportError:
+            import sip
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QRect, QTimer
+        try:
+            if widget is None or _is_deleted(widget):
+                return widget
+            if getattr(widget, "_anim_lock", False):
+                return widget
+            widget._anim_lock = True
+            try:
+                QTimer.singleShot(dur + 80, lambda w=widget: setattr(w, "_anim_lock", False) if not _is_deleted(w) else None)
+            except Exception:
+                pass
+            # Single capture of everything we mutate, restored in cleanup.
+            try:
+                orig_style_r = widget.styleSheet()
+            except Exception:
+                orig_style_r = ""
+            try:
+                orig_policy = widget.sizePolicy()
+            except Exception:
+                orig_policy = None
+            try:
+                orig_min = widget.minimumSize()
+                orig_max = widget.maximumSize()
+            except Exception:
+                orig_min = orig_max = None
+            geo = widget.geometry()
+            if geo.width() < 8 or geo.height() < 8:
+                try:
+                    widget._anim_lock = False
+                except Exception:
+                    pass
+                return widget
+            mid = geo.center()
+            parent = widget.parentWidget()
+            layout = parent.layout() if parent and not _is_deleted(parent) else None
+            was_fixed = False
+            if layout is not None and not _is_deleted(layout):
+                try:
+                    layout.setEnabled(False)
+                    widget.setFixedSize(geo.size())
+                    was_fixed = True
+                except Exception:
+                    pass
+
+            def cleanup():
+                try:
+                    if _is_deleted(widget):
+                        return
+                    try:
+                        widget.setStyleSheet(orig_style_r)
+                    except Exception:
+                        pass
+                    if was_fixed:
+                        try:
+                            if orig_policy is not None:
+                                widget.setSizePolicy(orig_policy)
+                            if orig_min is not None:
+                                widget.setMinimumSize(orig_min)
+                            if orig_max is not None:
+                                widget.setMaximumSize(orig_max)
+                            if layout is not None and not _is_deleted(layout) and not _is_deleted(parent):
+                                layout.setEnabled(True)
+                                try:
+                                    parent.updateGeometry()
+                                except Exception:
+                                    pass
+                                try:
+                                    layout.invalidate()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                    try:
+                        widget.setGeometry(geo)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        if not _is_deleted(widget):
+                            widget._anim_lock = False
+                    except Exception:
+                        pass
+
+            def step(sx, sy, d, ease, nxt=None):
+                try:
+                    if _is_deleted(widget):
+                        return
+                    w = int(geo.width() * sx)
+                    h = int(geo.height() * sy)
+                    r = QRect(int(mid.x() - w / 2), int(mid.y() - h / 2), w, h)
+                    a = QPropertyAnimation(widget, b"geometry")
+                    a.setDuration(d)
+                    try:
+                        a.setStartValue(widget.geometry())
+                    except Exception:
+                        a.setStartValue(geo)
+                    a.setEndValue(r)
+                    a.setEasingCurve(ease)
+                    a.start()
+                    Motion._keep(widget, a)
+                except Exception:
+                    return
+                if nxt:
+                    try:
+                        QTimer.singleShot(d, nxt)
+                    except Exception:
+                        pass
+                else:
+                    # Always run full cleanup (restores style + geometry +
+                    # size-policy and releases the lock), whether or not the
+                    # layout was disabled.
+                    try:
+                        QTimer.singleShot(d, cleanup)
+                    except Exception:
+                        pass
+
+            # Distinct anisotropic: wide→tall→wide→settle (rubber draw, not horizontal shake)
+            step(scale, 0.88, int(dur * 0.28), QEasingCurve.Type.OutCubic,
+                 lambda: step(0.92, 1.12, int(dur * 0.22), QEasingCurve.Type.InOutQuad,
+                 lambda: step(1.06, 0.94, int(dur * 0.22), QEasingCurve.Type.OutCubic,
+                 lambda: step(1.0, 1.0, int(dur * 0.28), QEasingCurve.Type.OutBack))))
+            # Accent flash built from the SINGLE captured style (cleanup restores it).
+            try:
+                if _is_deleted(widget):
+                    return widget
+                widget.setStyleSheet(orig_style_r + f" border-color: {C['accent_hi']};")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return widget
+
+    @staticmethod
+    def bubble_splash(scene, count=6):
+        """Trigger bubble splash on ConnectionScene (phone connect)."""
+        try:
+            if hasattr(scene, "bubble_splash"):
+                scene.bubble_splash(count=count)
+        except Exception:
+            pass
+        return scene
+
+    @staticmethod
+    def cable_shake(scene, amp=5, dur=420):
+        """Trigger cable shake on ConnectionScene (professional jitter)."""
+        try:
+            scene.shake(amp=amp, dur=dur)
+        except Exception:
+            pass
+        return scene
 
 
 def _draw_computer(s, connected=False):
@@ -607,6 +1011,9 @@ class ConnectionScene(QWidget):
         self._vendor_color = None
         self._anim = True
         self._phase = 0.0
+        self._shake_amp = 0.0
+        self._shake_phase = 0.0
+        self._bubbles = []  # list of [x,y,r,alpha,vy]
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)
@@ -621,16 +1028,85 @@ class ConnectionScene(QWidget):
     def set_connected(self, c):
         if self._connected == c:
             return
+        was = self._connected
         self._connected = c
+        if c and not was:
+            # Phone connect → bubble splash + subtle cable jolt (respect toggles)
+            try:
+                from PyQt6.QtCore import QSettings
+                s = QSettings("FlashPilot", "FlashingTool")
+                master = s.value("animations", "true", type=bool)
+                if master:
+                    if s.value("anim_bubble", "true", type=bool):
+                        self.bubble_splash(count=7)
+                    if s.value("anim_shake", "true", type=bool):
+                        self.shake(amp=4, dur=360)
+            except Exception:
+                self.bubble_splash(count=7)
+                self.shake(amp=4, dur=360)
         self.update()
 
     def set_vendor(self, label, color=None):
         self._vendor = label
         self._vendor_color = color or C["ok"]
+        # Full name as tooltip so even elided chip reveals complete model on hover
+        try:
+            self.setToolTip(label or "")
+        except Exception:
+            pass
         self.update()
+
+    def shake(self, amp=6, dur=420):
+        """Cable shake — distinct: damped sine y-jitter with extra diagonal + bolt glow."""
+        self._shake_amp = float(amp)
+        self._shake_phase = 0.0
+        self._shake_dir = 1
+        # Auto-decay via timer; also schedule clear
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(int(dur), lambda: setattr(self, "_shake_amp", 0.0))
+
+    def bubble_splash(self, count=12):
+        """Phone-connect bubble splash — 12 distinct-color bubbles, eloquent, larger."""
+        import random
+        w = float(self.width())
+        h = float(self.height())
+        icon = max(52.0, min(78.0, h * 0.60))
+        phone_x = w - 8.0 - icon
+        phone_y = max(4.0, (h - icon) * 0.22)
+        port_x = phone_x + icon * 0.5
+        port_y = phone_y + icon * 0.95
+        # Distinct palette — champagne, sky, teal, amber, violet
+        palette = [C["accent"], C["accent_hi"], C["ok"], C["warn"], "#a78bfa"]
+        for i in range(count):
+            x = port_x + random.uniform(-10, 10)
+            y = port_y + random.uniform(-4, 6)
+            r = random.uniform(3.2, 7.0)
+            vy = random.uniform(1.4, 3.0)
+            col = palette[i % len(palette)]
+            self._bubbles.append([x, y, r, 230, vy, col])
+        # Longer life for bigger splash
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1100, lambda: self._bubbles.clear())
 
     def _tick(self):
         self._phase = (self._phase + 0.02) % 1.0
+        # shake decay (cable) — smoother damped sine
+        if self._shake_amp > 0.05:
+            self._shake_phase += 0.45
+            self._shake_amp *= 0.90
+            if self._shake_amp < 0.18:
+                self._shake_amp = 0.0
+        # bubble splash — bigger, slower rise for distinct "burst" feel
+        if self._bubbles:
+            alive = []
+            for b in self._bubbles:
+                b[1] -= b[4]  # y -= vy
+                b[4] += 0.05  # gravity-free rise
+                b[3] -= 14    # alpha (longer life)
+                b[2] *= 0.985  # gentle shrink
+                if b[3] > 10 and b[2] > 1.0:
+                    alive.append(b)
+            self._bubbles = alive
         # ease the plug between dangling and seated so insertion/removal is smooth
         target = 1.0 if self._connected else 0.0
         if self._anim:
@@ -656,9 +1132,13 @@ class ConnectionScene(QWidget):
             path.cubicTo(plug_pt.x(), rail, plug_pt.x(),
                          plug_pt.y() - 5, plug_pt.x(), plug_pt.y())
         else:
-            # dangling: deeper sag, then droops down to the loose plug
-            sway = math.sin(self._phase * math.tau) * (2.2 if self._anim else 0.0)
-            path.cubicTo(c0.x() + 22, c0.y() + 2, c0.x() + 26, rail,
+            # dangling: deeper sag + shake (distinct: x-jitter + slight y-arc wobble)
+            base_sway = math.sin(self._phase * math.tau) * (2.2 if self._anim else 0.0)
+            # Shake contribution: 2D x-jitter (sin) + small y arc (cos) → "loose wire" feel
+            shx = math.sin(self._shake_phase * 1.9) * self._shake_amp if self._shake_amp else 0.0
+            shy = math.cos(self._shake_phase * 3.1) * self._shake_amp * 0.4 if self._shake_amp else 0.0
+            sway = base_sway + shx
+            path.cubicTo(c0.x() + 22, c0.y() + 2 + shy, c0.x() + 26, rail,
                          c0.x() + 40 + sway, rail)
             path.lineTo(plug_pt.x(), rail)
             path.cubicTo(plug_pt.x(), rail + 2, plug_pt.x() + 3,
@@ -750,20 +1230,45 @@ class ConnectionScene(QWidget):
                 p.drawArc(QRectF(phone_x - 6, phone_y - 6, icon + 12, icon + 12), ang*16, 70*16)
 
             if self._vendor:
-                fm = p.fontMetrics()
-                bw = fm.horizontalAdvance(self._vendor) + 20
                 bh = 22
-                bx = phone_x + icon / 2 - bw / 2
                 by = max(0.0, phone_y - 28)
+                max_bw = w - 16  # keep 8px margins each side so long names stay visible
+                # Dynamically size font to fit long device names (e.g. "SM-A245F 10C" spans)
+                base_font = QFont("JetBrains Mono", 8, QFont.Weight.ExtraBold)
+                text = self._vendor
+                fm = QFontMetricsF(base_font)
+                bw_needed = fm.horizontalAdvance(text) + 20
+                font = base_font
+                if bw_needed > max_bw:
+                    # Shrink font step-wise until it fits (never smaller than 6pt)
+                    for sz in (7, 6):
+                        f2 = QFont("JetBrains Mono", sz, QFont.Weight.ExtraBold)
+                        fm2 = QFontMetricsF(f2)
+                        if fm2.horizontalAdvance(text) + 20 <= max_bw:
+                            font = f2
+                            fm = fm2
+                            bw_needed = fm.horizontalAdvance(text) + 20
+                            break
+                    else:
+                        # Still too wide: use smallest font and elide in the middle as last resort
+                        font = QFont("JetBrains Mono", 6, QFont.Weight.ExtraBold)
+                        fm = QFontMetricsF(font)
+                        text = fm.elidedText(self._vendor, Qt.TextElideMode.ElideMiddle, int(max_bw - 20))
+                        bw_needed = fm.horizontalAdvance(text) + 20
+                bw = min(bw_needed, max_bw)
+                bx = phone_x + icon / 2 - bw / 2
+                # Clamp to widget bounds so chip never overflows left/right edge
+                bx = max(4.0, min(bx, w - bw - 4.0))
                 p.setPen(QPen(QColor(255,255,255,18), 1))
                 p.setBrush(QColor(14, 20, 30, 185))
                 p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
                 p.setPen(QPen(QColor(255,255,255,32), 0.8))
                 p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
                 p.setPen(QPen(vc))
-                p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.ExtraBold))
+                p.setFont(font)
+                # Tooltip-style full text on hover could be added via setToolTip, but paint ensures visibility now
                 p.drawText(QRectF(bx, by, bw, bh),
-                           Qt.AlignmentFlag.AlignCenter, self._vendor)
+                           Qt.AlignmentFlag.AlignCenter, text)
 
         # --- plug geometry (interpolated for smooth insert/remove) ---
         t = self._plug_t
@@ -916,16 +1421,19 @@ class ConnectionScene(QWidget):
                                                      led_col.blue(), 120))
             p.drawEllipse(QRectF(plug.right() - 5.6, plug.y() + 4.2, 3.8, 3.8))
 
-        # --- data packets travelling ALONG the cable (never leave the wire):
-        # each packet is a comet whose tail is sampled from the cable path
-        # itself, so it bends with every curve of the braid. ---
-        if self._connected and self._anim:
+        # --- data packets travelling ALONG the cable (eloquent, respects Cable toggle) ---
+        _cable_on = True
+        try:
+            from PyQt6.QtCore import QSettings
+            _cable_on = QSettings("FlashPilot", "FlashingTool").value("anim_cable", "true", type=bool)
+        except Exception:
+            pass
+        if self._connected and self._anim and _cable_on:
             vc = QColor(C["accent_hi"])
             tails = (0.050, 0.038, 0.027, 0.018, 0.010, 0.004, 0.0)
             for k in range(3):
                 ph = (self._phase * 0.9 + k / 3.0) % 1.0
                 pts = [path.pointAtPercent(max(0.0, ph - d)) for d in tails]
-                # tail segments fade out behind the head, hugging the curve
                 n = len(pts) - 1
                 for i in range(n):
                     a = int(210 * (i + 1) / n)
@@ -942,6 +1450,38 @@ class ConnectionScene(QWidget):
                 p.drawEllipse(QRectF(head.x() - 8, head.y() - 8, 16, 16))
                 p.setBrush(QColor(255, 255, 255, 235))
                 p.drawEllipse(QRectF(head.x() - 2.2, head.y() - 2.2, 4.4, 4.4))
+        # bubble splash (respects Bubble toggle) — distinct palette + double-glow + sparkle
+        _bubble_on = True
+        try:
+            from PyQt6.QtCore import QSettings
+            _bubble_on = QSettings("FlashPilot", "FlashingTool").value("anim_bubble", "true", type=bool)
+        except Exception:
+            pass
+        if self._bubbles and _bubble_on:
+            for b in self._bubbles:
+                if len(b) >= 6:
+                    x, y, r, alpha, _vy, col = b
+                else:
+                    x, y, r, alpha, _vy = b[:5]
+                    col = C["accent_hi"]
+                # Soft outer glow
+                col_obj = QColor(col)
+                glow = QRadialGradient(x, y, r * 2.0)
+                glow.setColorAt(0, QColor(col_obj.red(), col_obj.green(), col_obj.blue(), int(alpha * 0.5)))
+                glow.setColorAt(1, QColor(col_obj.red(), col_obj.green(), col_obj.blue(), 0))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(glow)
+                p.drawEllipse(QRectF(x - r * 2, y - r * 2, r * 4, r * 4))
+                # Body
+                c = QColor(col)
+                c.setAlpha(int(max(0, min(255, alpha * 0.75))))
+                p.setPen(QPen(QColor(255, 255, 255, int(max(0, min(255, alpha * 0.55)))), 1.2))
+                p.setBrush(c)
+                p.drawEllipse(QRectF(x - r, y - r, r * 2, r * 2))
+                # Inner highlight
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(255, 255, 255, int(alpha * 0.45)))
+                p.drawEllipse(QRectF(x - r * 0.4, y - r * 0.4, r * 0.8, r * 0.8))
         p.end()
 
 

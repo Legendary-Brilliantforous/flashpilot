@@ -8,17 +8,18 @@ use rusb::{Context, UsbContext};
 pub const MTK_VID: u16 = 0x0e8d;
 
 /// MediaTek boot-stage USB PIDs seen on Samsung A05/A06 (Helio G85).
-/// 0x2000 = BootROM held in "USB" state, 0x0003 = preloader,
-/// 0x0004 = Download Agent (DA) after the DA handshake.
+/// Follows mtkclient convention: 0x0003 = BootROM ("MediaTek USB Port",
+/// held state), 0x2000 = preloader ("MT65xx Preloader", first bootloader
+/// stage), 0x0004 = Download Agent (DA) after the DA handshake.
 pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
     match pid {
-        0x2000 => (
+        0x0003 => (
             "brom",
             "MediaTek BootROM (held state) - the very first code that runs. \
              This is the state used for low-level chip unlock, preloader and \
              partition reads via mtkclient.",
         ),
-        0x0003 => (
+        0x2000 => (
             "preloader",
             "MediaTek Preloader - first bootloader stage. It waits for the \
              Download Agent (DA) handshake before flashing anything.",
@@ -578,7 +579,7 @@ impl BromSession {
 /// Best-effort BROM/preloader handshake, mirroring mtkclient `Port.run_handshake`.
 ///
 /// The sync sequence `a0 0a 50 05` is written one byte at a time; each byte is
-/// echoed back complemented (`5f f5 af fa`). A held BootROM (pid 0x2000) gets a
+/// echoed back complemented (`5f f5 af fa`). A held BootROM (pid 0x0003) gets a
 /// wake byte 0xA0 first. The handshake succeeds only if all four echoes match.
 /// Protected chips / bad entry states just never echo, which is reported, not fatal.
 pub fn brom_handshake(
@@ -870,8 +871,10 @@ mod tests {
 
     #[test]
     fn stage_mapping() {
-        assert_eq!(boot_stage_for(0x2000).0, "brom");
-        assert_eq!(boot_stage_for(0x0003).0, "preloader");
+        // mtkclient convention: 0x0003 = BootROM ("MediaTek USB Port"),
+        // 0x2000 = preloader ("MT65xx Preloader").
+        assert_eq!(boot_stage_for(0x0003).0, "brom");
+        assert_eq!(boot_stage_for(0x2000).0, "preloader");
         assert_eq!(boot_stage_for(0x0004).0, "da");
         assert_eq!(boot_stage_for(0x1004).0, "da");
         assert_eq!(boot_stage_for(0x0a0a).0, "mtk-adb");

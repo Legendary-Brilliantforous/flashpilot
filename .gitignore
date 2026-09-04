@@ -1,5 +1,6 @@
 # Rust
 /target/
+/build/target/
 
 # Python virtualenv
 .venv/
@@ -9,26 +10,29 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Runtime / user data
-/cache/
-/odin4.log
-/efs_backups/
+# Build / cache / runtime artifacts (all under build/ now)
+/build/
+!/build/.gitkeep
+!/build/README.md
 
-# Local device artifacts
+# Legacy runtime data — kept outside build/ because scripts write here
+/efs_backups/
+/odin4.log
+
+# Local device artifacts (matched anywhere in the tree)
 *.pit
 *.bin
 *.tar
 *.tar.md5
 *.img
 *.lz4
-/mdm_qr/*.png
-/mdm_qr/*.json
+*.zst
+*.zstd
+/build/mdm_qr/*.png
+/build/mdm_qr/*.json
 
 # Proprietary tools fetched at setup time (see scripts/fetch-odin4.sh)
 /root/tools/odin4
-
-# Build artifacts
-/dist/
 
 # OS / editor
 .DS_Store

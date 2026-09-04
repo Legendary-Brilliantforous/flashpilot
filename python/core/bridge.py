@@ -137,8 +137,33 @@ def _classify_bridge_error(stderr: str, args: list) -> BridgeError:
     return BridgeError(stderr.strip())
 
 
-# ---- cooperative cancel (mirrors frp.py) ------------------------------
+# ---- cooperative cancel (mirrors flow.py) --------------------------------
+# Per-device scopes plus a broadcast bus: request_cancel() with no key stops
+# everything (global STOP); request_cancel(key) stops one device. Checks
+# consult the scope event OR the broadcast bus.
 _cancel = threading.Event()
+_cancels = {}
+_cancels_lock = threading.Lock()
+
+
+def _cancel_scope_key(key):
+    if key is not None:
+        return key
+    try:
+        from . import devices as _dev
+
+        return _dev.current_key()
+    except Exception:
+        return None
+
+
+def _cancel_event(key):
+    with _cancels_lock:
+        ev = _cancels.get(key)
+        if ev is None:
+            ev = threading.Event()
+            _cancels[key] = ev
+        return ev
 
 # Optional live-log callback: the GUI wires this to its console so Rust
 # eprintln! progress lines reach the screen in real time.
@@ -165,16 +190,25 @@ def _forward_log(line):
             pass
 
 
-def request_cancel():
-    _cancel.set()
+def request_cancel(key=None):
+    if key is None:
+        _cancel.set()
+        with _cancels_lock:
+            for ev in _cancels.values():
+                ev.set()
+    else:
+        _cancel_event(key).set()
 
 
-def clear_cancel():
+def clear_cancel(key=None):
+    _cancel_event(_cancel_scope_key(key)).clear()
     _cancel.clear()
 
 
-def cancel_requested():
-    return _cancel.is_set()
+def cancel_requested(key=None):
+    if _cancel.is_set():
+        return True
+    return _cancel_event(_cancel_scope_key(key)).is_set()
 
 
 def _graceful_terminate(proc, timeout=3.0):
@@ -390,6 +424,110 @@ def mtk_flash_samsung(da, fw_dir, timeout=1800):
     """Flash a Samsung firmware directory (extracted AP/BL/CP/CSC, no scatter)
     via MTK GPT. Caller must extract tar.md5 and decompress .lz4 first."""
     return _run(["mtk-flash-samsung", "auto", da, fw_dir], timeout=timeout)
+
+
+def mtk_crash_brom(bus_addr, timeout=25):
+    """Crash a preloader (0e8d:2000) into the held BootROM (0e8d:0003).
+
+    `bus_addr` is 'bus:address' (e.g. '1:42'), NOT a vid:pid@ target — the
+    device re-enumerates with a new address after the crash."""
+    return _run(["mtk-crash-brom", bus_addr], timeout=timeout)
+
+
+def mtk_reset(target, timeout=30):
+    """Reset an MTK device in BROM via the reset command."""
+    return _run(["mtk-reset", target], timeout=timeout)
+
+
+def mtk_mem_probe(target, timeout=60):
+    """Probe BROM readable memory windows (read16/write16/write32/reset)."""
+    return _run(["mtk-mem-probe", target], timeout=timeout)
+
+
+def mtk_detect_extended(timeout=60):
+    """Extended MTK detect (hw/sub codes, operation context)."""
+    return json.loads(_run(["mtk-detect-extended"], timeout=timeout))
+
+
+def mtk_brom_exploit(target, exploit_type, payload=None, timeout=120):
+    """Direct BROM exploit dispatch (wires mtk_brom_exploit)."""
+    args = ["mtk-brom-exploit", target, exploit_type]
+    if payload:
+        args.append(payload)
+    return _run(args, timeout=timeout)
+
+
+def mtk_exploit(target, exploit_type, payload=None, timeout=120):
+    """BROM exploit (mtk_bypass|kamakiri2|dump_preloader|patch_da|custom)."""
+    args = ["mtk-exploit", target, exploit_type]
+    if payload:
+        args.append(payload)
+    return _run(args, timeout=timeout)
+
+
+def mtk_factory(target, timeout=60):
+    """Enter factory/dealer mode on an MTK device."""
+    return _run(["mtk-factory", target], timeout=timeout)
+
+
+def mtk_emergency(timeout=60):
+    """Detect MTK emergency/download mode devices."""
+    return _run(["mtk-emergency"], timeout=timeout)
+
+
+def mtk_dealer(target, da_file, timeout=120):
+    """Dealer mode (auth, unlock, FRP erase, secure config)."""
+    return _run(["mtk-dealer", target, da_file], timeout=timeout)
+
+
+def mtk_emergency_mode(target, da_file, timeout=300):
+    """Emergency mode (full partition access) with a DA file."""
+    return _run(["mtk-emergency-mode", target, da_file], timeout=timeout)
+
+
+def qcom_detect(timeout=30):
+    """Detect Qualcomm EDL devices (05c6:9008)."""
+    return _run(["qcom-detect"], timeout=timeout)
+
+
+def qcom_sahara(target, timeout=60):
+    """Sahara handshake with a Qualcomm EDL device."""
+    return _run(["qcom-sahara", target], timeout=timeout)
+
+
+def qcom_info(target, timeout=60):
+    """Device info via Sahara."""
+    return _run(["qcom-info", target], timeout=timeout)
+
+
+def qcom_partitions(target, timeout=120):
+    """Partition table via Firehose."""
+    return _run(["qcom-partitions", target], timeout=timeout)
+
+
+def qcom_backup(target, programmer, out_dir, timeout=900):
+    """Backup partitions via Firehose."""
+    return _run(["qcom-backup", target, programmer, out_dir], timeout=timeout)
+
+
+def qcom_reboot(target, mode, timeout=60):
+    """Reboot a Qualcomm device (normal|edl|recovery|fastboot)."""
+    return _run(["qcom-reboot", target, mode], timeout=timeout)
+
+
+def qcom_frp_reset(target, timeout=300):
+    """FRP reset on a Qualcomm EDL device."""
+    return _run(["qcom-frp-reset", target], timeout=timeout)
+
+
+def spd_detect(timeout=30):
+    """Detect Spreadtrum/UNISOC download devices."""
+    return _run(["spd-detect"], timeout=timeout)
+
+
+def spd_info(target, timeout=60):
+    """Full SPD device info (read-only, safe)."""
+    return _run(["spd-info", target], timeout=timeout)
 
 
 def list_samsung_hid():

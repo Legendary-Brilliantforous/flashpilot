@@ -67,16 +67,31 @@
     {
       "key": "apple",
       "label": "Apple",
-      "icon": "",
+      "icon": "🍎",
       "models": [
         {
-          "model": "iPhone SE/XR/11/12",
-          "chip": "A13-A14 (checkm8)",
+          "model": "iPhone 6s – X (A9–A11) — checkm8 DFU",
+          "chip": "A9–A11 · 05ac:1227 DFU / 1281 Recovery",
+          "vid": "05ac",
+          "engine": "apple",
+          "status": "researched",
+          "actions": [
+            "info",
+            "apple_icloud_remove",
+            "apple_icloud_add"
+          ],
+          "notes": "EXPERIMENTAL (educational) — DFU checkm8 (A9–A11 only) via 05ac:1227. usbmuxd/lockdownd ramdisk path; write is gated (ack) + audit. A12+ not checkm8 vulnerable."
+        },
+        {
+          "model": "iPhone XS–12 / SE2 (A12–A14)",
+          "chip": "A12–A14 · usbmuxd/lockdownd only",
           "vid": "05ac",
           "engine": "apple",
           "status": "planned",
-          "actions": [],
-          "notes": "Apple is isolated \u2014 checkm8 DFU (05ac:12xx), separate from Android BSP. No cross-wiring."
+          "actions": [
+            "info"
+          ],
+          "notes": "A12–A14 is NOT checkm8-vulnerable; info via ideviceinfo/pymobiledevice3 only. No DFU bypass."
         }
       ]
     },
@@ -102,16 +117,58 @@
           "notes": "BSL FDL1/FDL2 tested; magic64-compatible; instant FRP path."
         },
         {
-          "model": "Spark 10 / 20",
-          "chip": "Helio G88 / T606",
+          "model": "Spark 10",
+          "chip": "Helio G88 / UMS9230",
           "vid": "0e8d|1782",
           "engine": "mtk",
-          "status": "planned",
+          "status": "researched",
           "actions": [
-            "frp",
-            "info"
+            "tecno_frp_adb",
+            "tecno_frp_brom",
+            "tecno_screen_lock_adb",
+            "tecno_screen_lock_brom",
+            "tecno_mdm_adb",
+            "tecno_mdm_brom",
+            "tecno_device_info",
+            "tecno_enable_adb"
           ],
-          "notes": "Spark 20 is Unisoc T606 - use SPD engine."
+          "notes": "Spark 10 = MTK Helio G88 (0e8d BROM) / Unisoc UMS9230 (1782 SPD) variant-dependent. ADB researched: KI5k codename, Android 12 (API 31), brand TECNO. Per-model reverse-engineered flows for FRP/MDM/Screen-Lock (ADB + BROM) plus enable_adb and device_check."
+        },
+        {
+          "model": "Spark 20",
+          "chip": "Unisoc T606 (UMS9230)",
+          "vid": "1782",
+          "engine": "spd",
+          "status": "researched",
+          "actions": [
+            "tecno_frp_adb",
+            "tecno_frp_brom",
+            "tecno_screen_lock_adb",
+            "tecno_screen_lock_brom",
+            "tecno_mdm_adb",
+            "tecno_mdm_brom",
+            "tecno_device_info",
+            "tecno_enable_adb"
+          ],
+          "notes": "Spark 20 = Unisoc T606 (SPD 1782). Per-model reverse-engineered flows: FRP/MDM/Screen-Lock (ADB + BROM) plus enable_adb (secret code) and device_check."
+        },
+        {
+          "model": "Spark 10C",
+          "chip": "Unisoc UMS9230 (T606)",
+          "vid": "1782|18d1",
+          "engine": "spd",
+          "status": "researched",
+          "actions": [
+            "tecno_frp_adb",
+            "tecno_frp_brom",
+            "tecno_screen_lock_adb",
+            "tecno_screen_lock_brom",
+            "tecno_mdm_adb",
+            "tecno_mdm_brom",
+            "tecno_device_info",
+            "tecno_enable_adb"
+          ],
+          "notes": "Spark 10C = KI5k codename, Unisoc UMS9230, Android 12 (API 31), TECNO/TECNO-KI5k. ADB researched live (serial 10545373A6137053). Per-model reverse-engineered flows: FRP/MDM/Screen-Lock (ADB + BROM) plus enable_adb and device_check. Flash routes to the SPD tab for FDL1/FDL2."
         },
         {
           "model": "Camon 20",
@@ -414,8 +471,22 @@
     {
       "key": "motorola",
       "label": "Motorola",
-      "icon": "\u24c2",
+      "icon": "Ⓜ",
       "models": [
+        {
+          "model": "Moto G6 (ali)",
+          "chip": "Snapdragon 450 (SDM450)",
+          "vid": "22b8",
+          "engine": "qcom",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "flash",
+            "screen_lock"
+          ],
+          "notes": "Moto G6 ali — SDM450, USB 22b8:2e82 MTP vendor (ZY322PSBZ2 live). No ADB in FRP lock; FRP via browser/emergency (Android 8/9) or fastboot erase frp + cache. EDL 9008 via test-point only."
+        },
         {
           "model": "Moto G13/G24/G34/G84",
           "chip": "Helio G85 / SD 695",
@@ -446,6 +517,20 @@
       "label": "Nokia",
       "icon": "\u25cd",
       "models": [
+        {
+          "model": "G20",
+          "chip": "MT6765 (Helio P35/G35)",
+          "vid": "0e8d",
+          "engine": "mtk",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "backup",
+            "flash"
+          ],
+          "notes": "Nokia G20 (Ronin_00WW, RNN_sprout) — MT6765, Android 11 RP1A.200720.011 00WW_1_100, FRP mmcblk0p4, boot_a p25, instant BROM DA erase via mtk-frp-gpt (no combo), dumped ADB tar 3.5G (system 1.5G product 1.6G) 2025-08-31, preloader 0e8d:0003."
+        },
         {
           "model": "G21 / G42 / C32",
           "chip": "T606 / SD 480+",

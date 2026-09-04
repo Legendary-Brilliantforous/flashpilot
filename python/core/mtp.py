@@ -26,6 +26,47 @@ ENABLE_ADB_CMDS = [
     ("+SWATD=1", False),
 ]
 
+# Token-free sequence for patched firmwares (A02s Android 11 etc. where
+# DEBUGLVC returns PACM(PROTECTED_NO_TOK)). Commercial tools fall back to
+# SWATD/ACTIVATE without DEBUGLVC on these builds.
+ENABLE_ADB_CMDS_TOKEN_FREE = [
+    ("+KSTRINGB=0,3", False),
+    ("+DUMPCTRL=1,0", False),
+    ("+SWATD=0", False),
+    ("+ACTIVATE=0,0,0", False),
+    ("+SWATD=1", False),
+]
+
+# Minimal sequence for SDM450 / A02s where even KSTRINGB is enough to
+# expose the ADB composite without DUMPCTRL.
+ENABLE_ADB_CMDS_MINIMAL = [
+    ("+KSTRINGB=0,3", False),
+    ("+SWATD=1", False),
+]
+
+# Alternative vendor sets observed on newer OneUI (A13+) where the
+# classic commands are remapped.
+ENABLE_ADB_CMDS_ALT = [
+    ("+CFUN=1,1", False),
+    ("+CTSA=1,1", False),
+]
+
+# SDM450 / A02s (Qualcomm-based Samsung): the modem is Qualcomm, NOT a
+# Samsung Shannon — so Shannon-only commands (SHANNONVER/SVL) are a probe,
+# not an enable path. The enable still goes through KSTRINGB/SWATD/ACTIVATE.
+# This list is used for discovery logging only.
+DIAG_PROBE_CMDS = [
+    "+CGMM",
+    "+CGMR",
+    "+DEVCONINFO",
+    "+KSTRINGB=0,3",
+    "+SHANNONVER",
+    "+SVL",
+    "+SYSINFO",
+    "+SWATD=?",
+    "+ACTIVATE=?",
+]
+
 # ADB "MTP actions" (open browser / emergency / home / settings). These are the
 # same generic intents commercial tools (AndroidSeviceTool "Launch Browser
 # (MTP)", SamFw) fire over ADB once USB debugging is enabled - the mechanism
@@ -43,10 +84,25 @@ class MtpError(RuntimeError):
     pass
 
 
-def find_samsung():
-    """Return the first Samsung USB device dict, or None."""
+def find_samsung(key=None):
+    """Return the first Samsung USB device dict, or None.
+
+    ``key`` is a stable device key (see devices.device_key); None means
+    the ambient thread-scoped key, which itself defaults to first-match
+    for backward compatibility.
+    """
+    if key is None:
+        from . import devices as _dev
+
+        key = _dev.current_key()
     for d in bridge.detect_usb():
-        if d.get("vid") == SAMSUNG_VID:
+        if d.get("vid") != SAMSUNG_VID:
+            continue
+        if key is None:
+            return d
+        from . import devices as _dev2
+
+        if _dev2.match_key(d, key):
             return d
     return None
 
@@ -72,11 +128,16 @@ def is_diag_config(d):
     )
 
 
-def target(d=None):
+def target(d=None, key=None):
     """Normalize a device dict (or bridge USB entry) to a bridge target
-    string 'vid:pid@bus:addr'."""
+    string 'vid:pid@bus:addr'. With no dict, resolves via find_samsung(key);
+    ``key`` defaults to the ambient thread-scoped device key."""
     if d is None:
-        d = find_samsung()
+        if key is None:
+            from . import devices as _dev
+
+            key = _dev.current_key()
+        d = find_samsung(key=key)
         if d is None:
             raise MtpError("no Samsung device detected - plug the phone in")
     return f"{d['vid']:04x}:{d['pid']:04x}@{d['bus']}:{d['address']}"
@@ -203,6 +264,189 @@ def enable_adb_via_at(t=None, slow=True):
         elif slow:
             time.sleep(2.5)
     return t, lines
+
+
+def enable_adb_via_at_strong(t=None):
+    """Strong multi-sequence AT engine — tries token-free + minimal sets
+    when the classic DEBUGLVC is blocked (PACM PROTECTED_NO_TOK on A02s).
+
+    Returns (target, log_lines, success). Success is True if after any
+    sequence the device shows an ADB composite (checked via is_adb_composite)
+    or AT still answers and SWATD got OK.
+    """
+    import time as _t
+    lines = []
+    base_t = t or target()
+    # Discovery first: log which diag commands answer so SDM450/Qualcomm
+    # units fail fast with the right guidance instead of burning all sequences.
+    try:
+        _, probe_lines = probe_diag_commands(base_t)
+        lines.extend(probe_lines)
+    except Exception as e:
+        lines.append(f"  [diag-probe] error: {e}")
+    # Try sequences in order: classic (with DEBUGLVC), token-free, minimal.
+    sequences = [
+        ("classic", ENABLE_ADB_CMDS),
+        ("token-free", ENABLE_ADB_CMDS_TOKEN_FREE),
+        ("minimal", ENABLE_ADB_CMDS_MINIMAL),
+    ]
+    for name, seq in sequences:
+        lines.append(f"  [strong] Trying {name} sequence ({len(seq)} cmds)")
+        t = base_t
+        # Refresh target each sequence in case device re-enumerated.
+        try:
+            d = find_samsung()
+            if d:
+                t = target(d)
+        except Exception:
+            pass
+        # Quick ping first — if AT not alive, skip this sequence.
+        try:
+            if not ping(t, attempts=2):
+                lines.append(f"    AT ping failed on {t} — skip {name}")
+                continue
+        except Exception as e:
+            lines.append(f"    ping error: {e} — try {name} anyway")
+        ok_count = 0
+        for cmd, drops_usb in seq:
+            try:
+                r = at(cmd, t)
+                reply = (r.get("reply") or "").strip()
+                ok = r.get("ok", False)
+                lines.append(f"    > {cmd} -> {reply or '(no reply)'}{' OK' if ok else ''}")
+                if ok:
+                    ok_count += 1
+            except MtpError as e:
+                lines.append(f"    > {cmd} -> ERROR: {e}")
+                # Protected token errors are expected on patched FW — continue to next seq.
+                if "PROTECTED" in str(e) or "CME Error" in str(e):
+                    lines.append(f"      (protected — will try next sequence)")
+                    break
+            if drops_usb:
+                lines.append("    DEBUGLVC re-enumerate — reconnecting")
+                try:
+                    t = _reconnect_diag(timeout=18)
+                    lines.append(f"    reconnected {t}")
+                    if ping(t, attempts=4):
+                        lines.append("    AT alive after reconnect")
+                    else:
+                        lines.append("    AT silent after reconnect")
+                        break
+                except MtpError as e:
+                    lines.append(f"    reconnect failed: {e}")
+                    break
+            else:
+                _t.sleep(1.2)
+        # Heuristic: if at least KSTRINGB + SWATD got OK, consider sequence promising.
+        if ok_count >= 2:
+            # Check if ADB composite appeared (poll 5s)
+            for _ in range(5):
+                try:
+                    d = find_samsung()
+                    if d and is_adb_composite(d):
+                        lines.append(f"  [strong] {name} sequence exposed ADB composite!")
+                        return t, lines, True
+                except Exception:
+                    pass
+                _t.sleep(1)
+            lines.append(f"  [strong] {name} got {ok_count} OKs but no ADB composite yet — will check after replug")
+            # Don't return False yet — let caller wait for ADB; consider partial success.
+            # If this was token-free and got OKs, return True to trigger ADB wait.
+            if name != "classic":
+                return t, lines, True
+        else:
+            lines.append(f"  [strong] {name} only {ok_count} OKs — trying next")
+    return base_t, lines, False
+
+
+def probe_diag_commands(t=None, timeout_ms=3000):
+    """Probe which vendor AT commands this firmware answers (discovery only).
+
+    On SDM450/A02s the modem is Qualcomm-based, so Shannon commands
+    (SHANNONVER/SVL) are expected to be silent — the log this produces tells
+    the operator whether the diag port is Samsung-Shannon (enable path viable)
+    or Qualcomm (use EDL/Download instead of burning time on AT). Returns
+    (answered_list, log_lines).
+    """
+    lines = []
+    answered = []
+    if t is None:
+        try:
+            t = target()
+        except MtpError as e:
+            return [], [f"  [diag-probe] no target: {e}"]
+    for cmd in DIAG_PROBE_CMDS:
+        try:
+            r = at(cmd, t, timeout_ms=timeout_ms)
+            reply = (r.get("reply") or "").strip()
+            ok = r.get("ok", False)
+            if ok or reply:
+                answered.append(cmd)
+                lines.append(f"    [diag-probe] {cmd} -> {reply[:80] or '(no reply)'} OK")
+            else:
+                lines.append(f"    [diag-probe] {cmd} -> silent")
+        except MtpError as e:
+            lines.append(f"    [diag-probe] {cmd} -> {e}")
+    if not answered:
+        lines.append("  [diag-probe] no vendor commands answered — likely Qualcomm-based (SDM450) or patched; prefer EDL/Download.")
+    else:
+        lines.append(f"  [diag-probe] answered: {', '.join(answered)}")
+    return answered, lines
+
+
+def mtp_bypass_try_browser_via_adb(t=None):
+    """MTP-side browser/Settings launch without ADB — commercial tools use
+    MTP vendor extension 0x101B or file push + auto-open.
+
+    This is a best-effort Python fallback using `gio`/`mtp-tools` if the
+    bridge does not expose a native MTP SendObject. It tries to push a
+    tiny HTML file that auto-redirects to Settings via intent, then relies
+    on Samsung's MTP auto-index to surface it. Returns log lines.
+    """
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+    lines = []
+    # Check for gio/mtp tools
+    has_gio = _os.system("which gio >/dev/null 2>&1") == 0
+    has_mtp = _os.system("which mtp-connect >/dev/null 2>&1") == 0
+    lines.append(f"  [mtp-bypass] gio={has_gio} mtp-tools={has_mtp}")
+    if not has_gio and not has_mtp:
+        lines.append("  [mtp-bypass] no gio/mtp-tools — skip file-push vector (AT is primary)")
+        return lines
+    # Create a minimal HTML that tries to open Settings via intent
+    html = b"""<html><head><meta http-equiv="refresh" content="0; url=intent:#Intent;action=android.settings.SETTINGS;end"></head><body>tap</body></html>"""
+    try:
+        with _tf.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            f.write(html)
+            tmp = f.name
+        lines.append(f"  [mtp-bypass] created {tmp} ({len(html)} bytes)")
+        # Try gio copy to mtp://
+        if has_gio:
+            try:
+                out = _sp.run(["gio", "mount", "-l"], capture_output=True, text=True, timeout=8).stdout
+                lines.append(f"  gio mounts: {out[:200].replace(chr(10), ' ')}")
+                # Find mtp mount
+                for line in out.splitlines():
+                    if "mtp://" in line.lower():
+                        lines.append(f"    mtp mount: {line.strip()}")
+                        # Try copy
+                        try:
+                            _sp.run(["gio", "copy", tmp, line.strip().split()[-1] + "/bypass.html"], timeout=10, capture_output=True)
+                            lines.append("    gio copy attempted")
+                        except Exception as e:
+                            lines.append(f"    gio copy failed: {e}")
+                        break
+            except Exception as e:
+                lines.append(f"  gio error: {e}")
+        try:
+            _os.unlink(tmp)
+        except Exception:
+            pass
+    except Exception as e:
+        lines.append(f"  [mtp-bypass] error: {e}")
+    lines.append("  [mtp-bypass] done — check phone for browser/Settings popup")
+    return lines
 
 
 def adb_action(name, timeout=20):

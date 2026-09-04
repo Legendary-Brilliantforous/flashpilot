@@ -4,8 +4,9 @@ PyQt6>=6.5
 # MDM provisioning QR generation (used by the MDM/QR flow)
 segno>=1.6
 
-# LZ4 firmware decompression
+# LZ4 / zstd firmware decompression (dual support — lz4 legacy, zstd preferred)
 lz4>=4.0
+zstandard>=0.22
 
 # Samsung FUS firmware downloader & decryption
 samloader>=0.2.0

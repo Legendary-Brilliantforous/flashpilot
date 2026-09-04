@@ -4,8 +4,10 @@ The Samsung A05/A06 family is powered by MediaTek SoCs. Those boot a
 proprietary MediaTek download agent that open-source Odin tools cannot talk
 to, but they also expose the classic MediaTek low-level USB modes:
 
-  BROM      (PID 0x2000)  - the first code that runs; held state
-  Preloader (PID 0x0003)  - first bootloader stage, waits for the DA
+  BROM      (PID 0x0003)  - the first code that runs; held state
+                                ("MediaTek USB Port")
+  Preloader (PID 0x2000)  - first bootloader stage, waits for the DA
+                                ("MT65xx Preloader")
   DA        (PID 0x0004)  - Download Agent running (flashing active)
 
 The rust bridge's `mtk-detect` command enumerates MediaTek USB devices

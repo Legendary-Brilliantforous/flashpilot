@@ -220,7 +220,8 @@ def parse_pit(raw: bytes):
 # Suffixes firmware archives put on image files that must not take part in
 # partition-name matching (Odin and most commercial tools compare raw names
 # and wrongly flag e.g. "boot.img" as missing from the PIT).
-_IMG_SUFFIXES = (".img", ".bin", ".mbn", ".elf", ".lz4", ".ext4", ".raw")
+# Dual support: lz4 legacy + zstd preferred (.zst / .zstd)
+_IMG_SUFFIXES = (".img", ".bin", ".mbn", ".elf", ".lz4", ".zst", ".zstd", ".ext4", ".raw")
 
 
 def normalize_part_name(name: str):

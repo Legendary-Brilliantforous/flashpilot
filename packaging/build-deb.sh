@@ -59,10 +59,10 @@ if [ -x "$SRC_VENV/bin/python" ] && [ -d "$SRC_VENV/lib/python$PYVER/site-packag
     echo "-- reusing repo .venv (PyQt6 present)"
     cp -a "$SRC_VENV" "$STAGE/usr/lib/flashpilot/venv"
 else
-    echo "-- building fresh venv (pip install PyQt6 segno lz4)"
+    echo "-- building fresh venv (pip install PyQt6 segno lz4 zstd)"
     /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
     PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
-        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0" "samloader>=0.2.0" "requests>=2.28.0" "tqdm>=4.0"
+        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0" "zstandard>=0.22" "samloader>=0.2.0" "requests>=2.28.0" "tqdm>=4.0"
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"

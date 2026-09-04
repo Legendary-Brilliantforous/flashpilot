@@ -8,12 +8,24 @@ use std::time::Duration;
 /// Qualcomm USB VID
 pub const QCOM_VID: u16 = 0x05c6;
 
-/// Common Qualcomm EDL PIDs
+/// Common Qualcomm EDL PIDs (broad, not only 9008)
 pub const QCOM_EDL_PIDS: &[u16] = &[
     0x9008,  // Generic EDL
+    0x9006,  // Alt EDL
     0x900E,  // EDL with Sahara
+    0x901D,  // EDL diag
     0x9025,  // Some Xiaomi devices
+    0x9026,  // QCOM 9008 var
+    0x9046,  // QCOM EDL var
+    0x9066,  // QCOM EDL var
     0x90DB,  // Some OPPO/Vivo devices
+];
+/// All Qualcomm PIDs that indicate Qualcomm chip (EDL + normal diag + modem)
+pub const QCOM_ALL_PIDS: &[u16] = &[
+    0x9008, 0x9006, 0x900E, 0x901D, 0x9025, 0x9026, 0x9046, 0x9066, 0x90DB,
+    0x9091, // DIAG
+    0x903A, // Modem
+    0x6000, // QCOM modem
 ];
 
 /// Sahara protocol commands

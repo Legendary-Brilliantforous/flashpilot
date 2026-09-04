@@ -17,31 +17,17 @@ shared helpers into ``flow.py``).
 
 # Re-export flashing symbols from the legacy location.
 # Keep the list explicit so import cost stays low and linters see it.
-from .frp import (  # noqa: F401
-    ODIN4_SHA256,
-    ODIN4_SHA256_MTK,
-    ODIN4_SHA256S,
-    flow_odin_enable_adb,
-    flow_odin_flash_tar,
-    flow_odin_check,
-    flow_odin_list,
-    flow_odin_advanced_flash,
-    flow_odin_pit_tools,
-    flow_odin_flash_partition_gui,
-    flow_odin_vbmeta,
-    flow_odin_flash_multi,
-    flow_odin_send_pit,
-    flow_efs_backup,
-    flow_efs_restore,
-    _find_odin4,
-    _find_slot_tar,
-    _run_odin4_streaming,
-    _tar_md5_valid,
-    _strip_odin4_md5_trailer,
-    _enforce_flash_gates,
-    _enforce_bl_downgrade_gate,
-    _require_preflight,
-    _require_recent_efs_backup,
+from .core import (  # noqa: F401
+    _find_odin4, _find_slot_tar, _tar_md5_valid, _strip_odin4_md5_trailer,
+)
+from .core import (  # noqa: F401
+    flow_efs_backup, flow_efs_restore, flow_change_sales_code,
+    flow_odin_enable_adb, flow_odin_flash_tar, flow_odin_check, flow_odin_list,
+    flow_odin_pit_tools, flow_odin_flash_partition_gui, flow_odin_vbmeta,
+    flow_odin_flash_multi, flow_odin_send_pit, flow_odin_advanced_flash,
+    flow_preflight, _run_odin4_streaming,
+    _enforce_flash_gates, _enforce_bl_downgrade_gate,
+    _require_preflight, _require_recent_efs_backup,
 )
 
 __all__ = [
@@ -86,7 +72,7 @@ def flow_mtk_samsung_gpt():
             raise RuntimeError(f"MTK_DA not found: {da}")
         if not da:
             # try auto-find
-            from .frp import _find_mtk_da
+            from .core import _find_mtk_da
             da = _find_mtk_da()
             if not da:
                 raise RuntimeError("No MTK DA binary found. Place one in ~/Downloads or set MTK_DA=/path/to/da.bin")
@@ -105,20 +91,30 @@ def flow_mtk_samsung_gpt():
                 log(f"  warn: extract {tar}: {e}")
 
         src_dir = work if had_tar else fw_dir
-        # decompress .lz4 (Samsung AP uses lz4)
-        lz4s = glob.glob(os.path.join(src_dir, "*.lz4"))
-        for lz in lz4s:
-            out = lz[:-4]  # strip .lz4
-            if os.path.exists(out):
-                continue
-            log(f"Decompressing {os.path.basename(lz)}...")
-            # try python lz4, else external lz4 binary
-            try:
-                import lz4.frame as _lz4
-                open(out, "wb").write(_lz4.decompress(open(lz, "rb").read()))
-            except Exception:
-                import subprocess
-                subprocess.run(["lz4", "-d", "-f", lz, out], check=True)
+        # decompress .lz4 (legacy) + .zst/.zstd (zstd preferred) — dual support
+        for ext, strip_len in [(".lz4", 4), (".zst", 4), (".zstd", 5)]:
+            for comp in glob.glob(os.path.join(src_dir, f"*{ext}")):
+                out = comp[:-strip_len]
+                if os.path.exists(out):
+                    continue
+                log(f"Decompressing {os.path.basename(comp)}...")
+                if ext == ".lz4":
+                    try:
+                        import lz4.frame as _lz4
+                        open(out, "wb").write(_lz4.decompress(open(comp, "rb").read()))
+                    except Exception:
+                        import subprocess
+                        subprocess.run(["lz4", "-d", "-f", comp, out], check=True)
+                else:
+                    try:
+                        import zstandard as _zstd
+                        dctx = _zstd.ZstdDecompressor()
+                        data = open(comp, "rb").read()
+                        dec = dctx.decompress(data, max_output_size=8*1024*1024*1024)
+                        open(out, "wb").write(dec)
+                    except Exception:
+                        import subprocess
+                        subprocess.run(["zstd", "-d", "-f", comp, out], check=True)
 
         # count images
         imgs = glob.glob(os.path.join(src_dir, "*.img")) + glob.glob(os.path.join(src_dir, "*.bin"))
@@ -126,7 +122,7 @@ def flow_mtk_samsung_gpt():
             raise RuntimeError(f"No partition images found in {src_dir} (extract Samsung tar.md5 first)")
 
         log(f"MTK Samsung flash: {len(imgs)} images from {src_dir} via DA {os.path.basename(da)}")
-        log("Device must be in BROM/Preloader (0e8d:2000/0003) - power off, hold Vol Up+Down, plug USB")
+        log("Device must be in BROM/Preloader (0e8d:0003/2000) - power off, hold Vol Up+Down, plug USB")
         res = bridge.mtk_flash_samsung(da, src_dir, timeout=1800)
         log(res)
         return True

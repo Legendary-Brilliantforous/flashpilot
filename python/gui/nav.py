@@ -9,16 +9,17 @@ from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import QButtonGroup, QFrame, QPushButton, QHBoxLayout, QVBoxLayout
 
-_PANEL = "#0a111a"
-_INSET = "#070d15"
-_BORDER = "#16233a"
-_BORDER_HI = "#2c405e"
-_TEXT = "#e7eef8"
-_DIM = "#8fa4bd"
-_MUTE = "#52657d"
-_ACCENT = "#22d3ee"
-_GRAD_A = "#0ea5e9"
-_GRAD_B = "#22d3ee"
+from .theme import C as _C
+_PANEL = _C["panel"]
+_INSET = _C["inset"]
+_BORDER = _C["border"]
+_BORDER_HI = _C["border_hi"]
+_TEXT = _C["text"]
+_DIM = _C["dim"]
+_MUTE = _C["mute"]
+_ACCENT = _C["accent"]
+_GRAD_A = _C["grad_a"]
+_GRAD_B = _C["grad_b"]
 
 
 class _NavButton(QPushButton):
@@ -162,6 +163,7 @@ class OemChipBar(QFrame):
         b = QPushButton(text)
         b.setCheckable(True)
         b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         f = b.font(); f.setPixelSize(11); b.setFont(f)
         b.setFixedHeight(26)
         if accent:
@@ -171,7 +173,9 @@ class OemChipBar(QFrame):
                 "QPushButton:hover { border:1px solid rgba(34,211,238,0.75); color:#fff;"
                                    " background:rgba(30,45,68,0.85); }"
                 "QPushButton:checked { background:#22d3ee; color:#04121a;"
-                " border:1px solid #22d3ee; font-weight:800; }"
+                " border:1px solid #22d3ee; }"
+                "QPushButton:focus { border:1px solid rgba(255,255,255,0.09); outline:none; }"
+                "QPushButton:checked:focus { border:1px solid #22d3ee; outline:none; }"
             )
         else:
             b.setStyleSheet(
@@ -179,7 +183,9 @@ class OemChipBar(QFrame):
                 " border:1px dashed #334155; border-radius:13px; padding:0 12px; }"
                 "QPushButton:hover { border:1px solid #94a3b8; color:#e2e8f0; }"
                 "QPushButton:checked { background:#94a3b8; color:#0b0f14;"
-                " border:1px solid #94a3b8; font-weight:800; }"
+                " border:1px solid #94a3b8; }"
+                "QPushButton:focus { border:1px dashed #334155; outline:none; }"
+                "QPushButton:checked:focus { border:1px solid #94a3b8; outline:none; }"
             )
         b.clicked.connect(lambda _=False, k=key: self.section_selected.emit(k))
         self._group.addButton(b)

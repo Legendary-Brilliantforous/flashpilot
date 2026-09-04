@@ -46,7 +46,8 @@ pub fn qcom_detect() -> Result<String> {
     let mut edl_devices = Vec::new();
     
     for d in &devices {
-        if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) {
+        // Broad Qualcomm detection: any 05c6 device is Qualcomm (EDL 9008, 900E, 6000 modem, etc.), not only 9008
+        if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&d.pid) || crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) || d.vid == crate::qualcomm::sahara::QCOM_VID {
             let (stage, note) = crate::qualcomm::sahara::boot_stage_for(d.pid);
             // Wire QcomDeviceInfo into the flow (type + field access as load-bearing)
             let qinfo = QcomDeviceInfo { raw_info: d.product.clone(), soc_id: None, serial_number: d.serial.clone(), model: d.product.clone() };
