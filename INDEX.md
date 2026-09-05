@@ -106,26 +106,25 @@ src/
 
 These folders hold **per-operation README trees** that explain how each
 job works, which flow keys it uses, which devices it supports, and
-known caveats. They are **not** code; the code lives in `python/core/flows/`.
-The READMEs in `operations/` are written for end users / commercial-tool
-researchers; the code is the source of truth.
+known caveats. They are **not** code — the tree is pure markdown (a past
+cleanup removed the stale `.py` shims that used to live here; nothing
+imports `operations/`). The code lives in `python/core/core.py` (the
+`FLOWS` / `JOBS` / `MODES` registry plus all flows) and the per-domain
+modules (`knox.py`, `qcn.py`, `imei.py`, `emmc.py`, …). The READMEs in
+`operations/` are written for end users / commercial-tool researchers;
+the code is the source of truth.
 
 | Folder | What | Real code in |
 |---|---|---|
-| `operations/apple/` | Apple icloud, activation lock, MDM, passcode/lost mode remove | `python/core/flows/apple.py` (or wherever it's registered) |
-| `operations/frp/` | FRP bypass per-engine + per-device research notes. **Start with `operations/frp/INDEX.md`**. | `python/core/flows/{frp,brom,screenlock,oem_odin,info,mdm}.py` |
-| `operations/mdm/` | MDM / device-owner unlock + per-brand device notes | `python/core/flows/mdm.py` |
-| `operations/screen_unlock/` | Screen lock remove (ADB / recovery / download / comprehensive) | `python/core/flows/screenlock.py` |
-| `operations/battery/` | Battery report / repair / load test (over ADB) | `python/core/frp.py` (legacy) — see `flows/screenlock.py` for the modern path |
-| `operations/network/` | SIM state, DNS, radio reset | `python/core/frp.py` (legacy) |
-| `operations/carrier_unlock/` | Carrier lock (Apple, MTK) | `python/core/flows/{mdm,brom}.py` |
-| `operations/flashing/` | Per-vendor flashing guides (Samsung Odin, MTK DA, Qualcomm EDL, UNISOC SPD, PIT) | `python/core/flows/oem_odin.py` |
-| `operations/usb/` | USB enumeration and detection notes | `python/core/{usb_watch,bridge}.py` |
-
-The thin `__init__.py` in some of these is just to mark the folder as
-intentional — it does **not** import code. (After the FRP-tree cleanup,
-none of the operation folders have an `__init__.py`; the tree is pure
-markdown.)
+| `operations/apple/` | Apple icloud, activation lock, MDM, passcode/lost mode remove | `python/core/apple.py`, registered in `core.FLOWS` |
+| `operations/frp/` | FRP bypass per-engine + per-device research notes. **Start with `operations/frp/INDEX.md`**. | `python/core/core.py` (`flow_*_frp*`), FRP-only surface in `python/core/frp.py` |
+| `operations/mdm/` | MDM / device-owner unlock + per-brand device notes | `python/core/core.py` (`flow_mdm_*`) |
+| `operations/screen_unlock/` | Screen lock remove (ADB / recovery / download / comprehensive) | `python/core/core.py` (`flow_screen_lock_*`) |
+| `operations/battery/` | Battery report / repair / load test (over ADB) | `python/core/core.py` (battery flows) |
+| `operations/network/` | SIM state, DNS, radio reset | `python/core/core.py` (network flows) |
+| `operations/carrier_unlock/` | Carrier lock (Apple, MTK) | `python/core/core.py` (`flow_carrier_lock_*`) |
+| `operations/flashing/` | Per-vendor flashing guides (Samsung Odin, MTK DA, Qualcomm EDL, UNISOC SPD, PIT) | `python/core/core.py` (odin/mtk/qcom/spd flows) + `python/core/flashing.py` |
+| `operations/usb/` | USB enumeration and detection notes | `python/core/{usb_watch,bridge,devices}.py` |
 
 ## `build/` — gitignored runtime/build artifacts
 
@@ -146,7 +145,7 @@ state, delete the subdirectory — it'll be rebuilt.
 | You want to... | Touch |
 |---|---|
 | Add a new device to the supported list | `python/gui/supported_devices.json` |
-| Add a new per-vendor action to a supported device | `python/core/flows/<concern>.py` (register in its `FLOWS = {}` block) |
+| Add a new per-vendor action to a supported device | `python/core/core.py` (define `flow_*`, register in `FLOWS` + `JOBS`); domain logic goes in the matching `python/core/<concern>.py` module |
 | Add a new ADB-command flow for an existing concern | same as above |
 | Add a new bridge CLI command | `src/<concern>.rs` + `src/main.rs` (`<cmd>` arm in match) |
 | Add a new top-level nav page | `python/gui/qt_app.py` (`_build_*_page` + `_section_index`) |
@@ -156,14 +155,20 @@ state, delete the subdirectory — it'll be rebuilt.
 
 ## How the operation runner works (read this once)
 
-The GUI never calls a flow directly. It calls
-`python.core.flows.flow_for(job, mode, method)`, which returns a
+The GUI never calls a flow directly. The per-operation device picker
+(`FlashPilotWindow._choose_device`) resolves a stable device key first;
+then `_run_ops_flow` / `_run_job_flow` call
+`python.core.core.flow_for(job, mode, method)`, which returns a
 `Flow()` object (a list of `Step()`s), then `flow.run(ctx, log)` is
-called on a worker thread. Every flow logs to a `log(line)` callable
-that the GUI wires to its console. Cancellation is a shared
-threading.Event that every step checks at the top of `_run`.
+called on a worker thread inside `devices.device_scope(key)` (so every
+resolver targets the chosen phone). Every flow logs to a `log(line)`
+callable that the GUI wires to its console. Cancellation is per-device
+scoped (`flow.request_cancel(key)`; keyless broadcast stops everything),
+checked at the top of each `_run`.
 
 To add a flow: write `flow_my_op()` returning a `Flow(name, [Step(...)])`
-in the right `python/core/flows/<concern>.py` file, then add it to that
-file's `FLOWS = {}` dict. The GUI's job/mode/method drill-down picks it
-up automatically.
+in `python/core/core.py` (or the matching domain module, imported into
+`core.py`), then add it to the `FLOWS = {}` dict plus the right
+`JOBS[job][mode]` list. The GUI's job/mode/method drill-down picks it
+up automatically. Resolvers you add must accept `key=None` (ambient
+scope) — see `python/core/devices.py`.
