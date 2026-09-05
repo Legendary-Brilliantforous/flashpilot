@@ -131,7 +131,7 @@ cp -r scripts "$STAGE/usr/share/flashpilot/"
 # root/ is copied EXCEPT root/tools/odin4: the proprietary Samsung binary is
 # never redistributed (see fetch-odin4.sh for the after-install download).
 rsync -a --exclude 'tools/odin4' root/ "$STAGE/usr/share/flashpilot/root/"
-cp -r pit "$STAGE/usr/share/flashpilot/"
+[ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
 find "$STAGE/usr/share/flashpilot" -name "__pycache__" -type d -prune -exec rm -rf {} +
