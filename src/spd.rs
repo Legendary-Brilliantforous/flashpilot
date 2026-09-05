@@ -1159,6 +1159,10 @@ pub fn spd_backup_cli(
     }
     out.push(format!("Total dumped: {dumped} bytes"));
     let _ = s.reset();
+    match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+        Ok(summary) => out.push(summary),
+        Err(e) => out.push(format!("manifest warning: {e}")),
+    }
     Ok(out.join("\n"))
 }
 

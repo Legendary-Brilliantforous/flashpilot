@@ -856,6 +856,10 @@ impl DaSession {
             progress.update(done);
         }
         progress.finish();
+        match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+            Ok(summary) => println!("{summary}"),
+            Err(e) => eprintln!("manifest warning: {e}"),
+        }
         Ok(())
     }
 }
@@ -1034,6 +1038,78 @@ pub fn mtk_read_part_cli(
         "Read '{partition}' ({} MB) -> {out_file} (device back in BROM)",
         size / (1024 * 1024)
     ))
+}
+
+/// `mtk-verify-part <target> <da> <partition=file>...` — verify-after-write.
+///
+/// Uploads DA once, then for each entry reads back exactly the file's byte
+/// count from the partition start and compares SHA-256 against the source
+/// file. Reports MATCH per partition; returns Err listing every MISMATCH so
+/// callers (flows, CI) fail loudly instead of shipping a bad flash.
+pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, String)]) -> Result<String> {
+    use crate::util::{sha256_file, verify_bytes_match};
+    if entries.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no partition=file entries provided".to_string(),
+        ));
+    }
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
+    }
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+    let mut da = DaSession::new(session);
+    da.upload_da(da_path)?;
+
+    let mut out = Vec::new();
+    let mut bad = Vec::new();
+    for (name, file) in entries {
+        let expected = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) => {
+                bad.push(format!("{name}: cannot read source file: {e}"));
+                continue;
+            }
+        };
+        if expected.is_empty() {
+            bad.push(format!("{name}: source file is empty, refusing to compare"));
+            continue;
+        }
+        match da.read_partition_bytes(name, 0, expected.len() as u64) {
+            Ok(actual) => match verify_bytes_match(&expected, &actual) {
+                Ok(()) => {
+                    let hex = match sha256_file(std::path::Path::new(file)) {
+                        Ok(h) => h[..16].to_string(),
+                        Err(_) => "?".to_string(),
+                    };
+                    out.push(format!("  MATCH '{name}' ({} bytes, sha256:{hex}...)", expected.len()));
+                }
+                Err(e) => bad.push(format!("{name}: MISMATCH ({e})")),
+            },
+            Err(e) => bad.push(format!("{name}: read-back failed: {e}")),
+        }
+    }
+    let _ = da.reboot(4); // back to BROM
+    for line in &out {
+        println!("{line}");
+    }
+    if bad.is_empty() {
+        Ok(format!("verify: {} partition(s) MATCH", out.len()))
+    } else {
+        for line in &bad {
+            eprintln!("{line}");
+        }
+        Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("verify failed: {}", bad.join("; ")),
+        }))
+    }
 }
 
 /// Render an SP Flash Tool scatter file from a partition list

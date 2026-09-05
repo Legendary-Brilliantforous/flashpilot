@@ -193,6 +193,177 @@ def flow_qcn_restore():
                 continue
             log(f"  Flashing {name} ...")
             bridge.qcom_flash_one("auto", name, fp, 0, 0)
-        log("QCN restore complete. Reboot device.")
+            log(f"  Verifying {name} (read-back + SHA-256) ...")
+            try:
+                res = bridge.qcom_verify_part("auto", [(name, fp)], timeout=900)
+                log(f"    {res}")
+            except bridge.BridgeError as e:
+                raise RuntimeError(f"{name} written but VERIFY FAILED ({e}) - restore is untrusted, retry")
+        log("QCN restore complete (all partitions verified). Reboot device.")
 
     return Flow("QCN restore (EXPERIMENTAL)", [Step("qcn_restore", _run)])
+
+
+# Well-known Qualcomm NV items (reference table for the browser below).
+# Offsets inside modemst images are model-specific, so this table documents
+# item numbers + encoding, and the browser searches image bytes for matches.
+QCN_KNOWN_NV = {
+    550: ("RF band configuration", "bitmask, model-specific layout"),
+    682: ("IMEI", "9-byte BCD, Luhn-checked (see _imei_to_bcd)"),
+    832: ("SIM lock / network personalization flags", "model-specific layout"),
+    8960: ("UE usage setting / voice domain preference area", "model-specific"),
+}
+
+
+def _find_ascii_imeis(data, limit=5):
+    """Find Luhn-valid 15-digit ASCII runs in a modem image."""
+    import re as _re
+
+    found = []
+    for m in _re.finditer(rb"(?<!\d)(\d{15})(?!\d)", data):
+        s = m.group(1).decode()
+        if _imei_luhn(s):
+            found.append((m.start(), s))
+            if len(found) >= limit:
+                break
+    return found
+
+
+def _find_bcd_imei(data, imei, limit=3):
+    """Find occurrences of an IMEI's 9-byte BCD form in a modem image."""
+    from .imei import _bcd
+    needle = _bcd(imei)
+    found = []
+    start = 0
+    while len(found) < limit:
+        i = data.find(needle, start)
+        if i < 0:
+            break
+        found.append(i)
+        start = i + 1
+    return found
+
+
+def flow_qcn_nv_browser():
+    """Browse a QCN backup: file inventory + known-NV reference + IMEI search.
+
+    Read-only. Points at QCN_BACKUP_DIR (or ctx backup_dir): lists modemst /
+    EFS images with sizes + sha256, prints the well-known NV item table, then
+    searches images for Luhn-valid ASCII IMEIs and (when TARGET_IMEI is set)
+    its BCD form with file offsets. Offsets are model-specific — this tells
+    you WHAT is where in YOUR dump before any write flow touches it.
+    """
+
+    def _run(ctx, log):
+        import hashlib as _hl
+        log("=" * 60)
+        log("QCN NV BROWSER (read-only backup inspector)")
+        log("=" * 60)
+        src = os.environ.get("QCN_BACKUP_DIR", "").strip() or ctx.get("backup_dir", "")
+        if not src or not os.path.isdir(src):
+            raise RuntimeError("Set QCN_BACKUP_DIR=/path/to/qcn_backup_dir (from QCN backup)")
+        log(f"  Backup dir: {src}")
+        imgs = sorted(p for p in os.listdir(src)
+                      if p.endswith((".img", ".bin")) and os.path.isfile(os.path.join(src, p)))
+        if not imgs:
+            raise RuntimeError("no .img/.bin files in backup dir - run QCN backup first")
+        for name in imgs:
+            fp = os.path.join(src, name)
+            try:
+                h = _hl.sha256(open(fp, "rb").read()).hexdigest()[:16]
+            except Exception:
+                h = "unreadable"
+            log(f"  {name:<16} {os.path.getsize(fp) >> 10:>8} KB  sha256:{h}")
+        log("")
+        log("  Well-known NV items (offsets are model-specific):")
+        for num in sorted(QCN_KNOWN_NV):
+            desc, enc = QCN_KNOWN_NV[num]
+            log(f"    NV {num:<6} {desc} [{enc}]")
+        log("")
+        target_imei = (os.environ.get("TARGET_IMEI", "").strip()
+                       or ctx.get("imei", "") or "").replace(" ", "")
+        for name in imgs:
+            fp = os.path.join(src, name)
+            try:
+                data = open(fp, "rb").read()
+            except Exception as e:
+                log(f"  {name}: unreadable ({e})")
+                continue
+            hits = _find_ascii_imeis(data)
+            if hits:
+                for off, imei in hits:
+                    log(f"  {name}: ASCII IMEI {imei} at file offset 0x{off:x}")
+            else:
+                log(f"  {name}: no Luhn-valid ASCII IMEI found")
+            if target_imei and re.fullmatch(r"\d{15}", target_imei):
+                for off in _find_bcd_imei(data, target_imei):
+                    log(f"  {name}: BCD form of {target_imei} at file offset 0x{off:x}")
+        log("")
+        log("  Done - use these offsets with the QCN restore / IMEI flows.")
+
+    return Flow("QCN NV browser (backup inspector)", [Step("qcn_nv_browser", _run)])
+
+
+def flow_qcn_efs_explorer():
+    """Explore the EFS backup tar: list, preview text files, extract one.
+
+    Read-only except for the explicit extract step. Points at QCN_EFS_TAR
+    (or the newest *.tgz in QCN_BACKUP_DIR). QCN_EFS_EXTRACT=name to extract
+    one member into QCN_EFS_OUT (default ~/flashpilot/efs_extract).
+    """
+
+    def _run(ctx, log):
+        import tarfile as _tf
+        log("=" * 60)
+        log("QCN EFS EXPLORER (backup tar inspector)")
+        log("=" * 60)
+        tar_path = os.environ.get("QCN_EFS_TAR", "").strip() or ctx.get("efs_tar", "")
+        if not tar_path:
+            src = os.environ.get("QCN_BACKUP_DIR", "").strip() or ctx.get("backup_dir", "")
+            if src and os.path.isdir(src):
+                cands = sorted(
+                    (os.path.join(src, p) for p in os.listdir(src)
+                     if p.endswith((".tgz", ".tar.gz", ".tar")) and os.path.isfile(os.path.join(src, p))),
+                    key=os.path.getmtime, reverse=True,
+                )
+                if cands:
+                    tar_path = cands[0]
+        if not tar_path or not os.path.isfile(tar_path):
+            raise RuntimeError("Set QCN_EFS_TAR=/path/to/efs.tgz (QCN backup saves one when ADB is up)")
+        log(f"  Archive: {tar_path} ({os.path.getsize(tar_path) >> 10} KB)")
+        try:
+            tf = _tf.open(tar_path, "r:*")
+            members = [m for m in tf.getmembers() if m.isfile()]
+        except Exception as e:
+            raise RuntimeError(f"cannot read EFS archive: {e}")
+        log(f"  {len(members)} files:")
+        for m in members[:60]:
+            log(f"    {m.size:>10}  {m.name}")
+        if len(members) > 60:
+            log(f"    ... and {len(members) - 60} more")
+        want = os.environ.get("QCN_EFS_EXTRACT", "").strip() or ctx.get("efs_extract", "")
+        if not want:
+            log("")
+            log("  Set QCN_EFS_EXTRACT=<member path> to extract one file.")
+            return True
+        match = next((m for m in members if m.name == want or m.name.endswith("/" + want)), None)
+        if match is None:
+            raise RuntimeError(f"member not found: {want!r}")
+        out_dir = (os.environ.get("QCN_EFS_OUT", "").strip()
+                   or os.path.join(os.path.expanduser("~"), "flashpilot", "efs_extract"))
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, os.path.basename(match.name.rstrip("/")) or "extracted")
+        with open(out_path, "wb") as fh:
+            fh.write(tf.extractfile(match).read())
+        log(f"  Extracted -> {out_path} ({os.path.getsize(out_path)} bytes)")
+        try:
+            text = open(out_path, "rb").read(600).decode("utf-8", "replace")
+            if all(c.isprint() or c.isspace() for c in text[:200]):
+                log("  Preview:")
+                for line in text.splitlines()[:10]:
+                    log(f"    {line[:120]}")
+        except Exception:
+            pass
+        return True
+
+    return Flow("QCN EFS explorer (backup inspector)", [Step("qcn_efs_explorer", _run)])

@@ -39,3 +39,6 @@ __pycache__/
 *.swp
 .idea/
 .vscode/
+
+# Built packages (local `packaging/build-deb.sh` output)
+/dist/

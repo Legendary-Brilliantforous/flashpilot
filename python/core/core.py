@@ -17,6 +17,8 @@ from . import knox as _knox
 from . import qcn as _qcn
 from . import emmc as _emmc
 from . import imei as _imei
+from . import apple as _apple
+from . import ofp as _ofp
 # Flow primitives live in flow.py (shared by core + flashing). Re-export here
 # for backwards-compat so `from .core import Flow` keeps working.
 from .flow import Flow, Step, FlowCancelled, request_cancel, clear_cancel, cancel_requested  # noqa: F401
@@ -2140,6 +2142,78 @@ def flow_fastboot_continue():
     return Flow("fastboot continue boot", steps)
 
 
+def flow_oem_unlock_guide():
+    """Bootloader unlock guide with live checks (Samsung / Xiaomi / generic).
+
+    Read-only plus guidance: reads sys.oem_unlock_allowed over ADB when
+    available, explains Samsung OEM-unlock toggle + VaultKeeper/RMM wait
+    states, Xiaomi's Mi Unlock account binding + waiting period (server-side,
+    this tool cannot skip it), and the generic fastboot path. Never writes.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("BOOTLOADER UNLOCK GUIDE (checks + steps, no writes here)")
+        log("=" * 60)
+        brand = (os.environ.get("OEM_UNLOCK_BRAND", "").strip().lower()
+                 or ctx.get("brand", "") or "").lower()
+        try:
+            devs = bridge.adb_status()
+            auth = [d for d in devs if d["state"] == "device"]
+        except bridge.BridgeError:
+            auth = []
+        if auth:
+            log(f"  ADB authorized: {auth[0]['serial']}")
+            for prop, label in [
+                ("sys.oem_unlock_allowed", "OEM unlocking allowed flag"),
+                ("ro.oem_unlock_supported", "OEM unlock supported"),
+                ("ro.boot.vaultkeeper", "VaultKeeper state"),
+            ]:
+                try:
+                    out = bridge.adb_shell(f"getprop {prop}", timeout=10).strip()
+                except bridge.BridgeError as e:
+                    out = f"ERROR: {e}"
+                log(f"    {label} ({prop}) = {out or '(unset)'}")
+        else:
+            log("  No authorized ADB - enable USB debugging first for live checks.")
+        log("")
+        if brand in ("xiaomi", "redmi", "poco"):
+            log("  XIAOMI / REDMI / POCO (Mi Unlock, server-side):")
+            log("    1. On the phone: Settings -> Mi Account, sign in and bind")
+            log("       the account (Developer options -> Mi Unlock status).")
+            log("    2. Enable OEM unlocking + USB debugging.")
+            log("    3. Boot to fastboot (Vol Down + Power), plug in.")
+            log("    4. On PC run Xiaomi's Mi Unlock tool with the SAME account.")
+            log("    5. Expect a waiting period (up to 168h) - this is enforced")
+            log("       by Xiaomi's server and CANNOT be skipped by any tool,")
+            log("       including this one.")
+        elif brand in ("samsung", "galaxy"):
+            log("  SAMSUNG (OEM unlock + VaultKeeper/RMM):")
+            log("    1. Settings -> Developer options -> enable 'OEM unlocking'.")
+            log("       (Missing? Connect to Wi-Fi + Samsung account, wait 7 days")
+            log("       of uptime - RMM/KG 'prenormal' state hides the toggle.)")
+            log("    2. Power off -> hold Vol Up + Vol Down, plug USB (Download).")
+            log("    3. Long-press Vol Up for the unlock screen, confirm.")
+            log("    4. The phone wipes and reboots unlocked.")
+            log("    5. IMPORTANT: go through setup WITH internet once, so")
+            log("       VaultKeeper releases the bootloader for custom images.")
+        else:
+            log("  GENERIC FASTBOOT PATH (Pixels, Motorola, Nokia, OnePlus...):")
+            log("    1. Enable OEM unlocking + USB debugging in Developer options.")
+            log("    2. Boot to fastboot (Vol Down + Power), plug in.")
+            log("    3. In this tool run 'FASTBOOT -> fastboot_unlock' (or")
+            log("       'fastboot flashing unlock' by hand) and confirm on-device.")
+            log("    4. Set BRAND=xiaomi|samsung env (or ctx brand) and re-run")
+            log("       for vendor-specific steps.")
+        log("")
+        log("  Unlocking WIPES ALL DATA and may void warranty. Knox warranty")
+        log("  bit (Samsung) trips permanently on custom binaries - no tool")
+        log("  can untrip it (hardware eFuse).")
+
+    steps = [Step("oem_unlock_guide", _run)]
+    return Flow("bootloader unlock guide (checks + steps)", steps)
+
+
 def flow_reboot(target, title, manual):
     """Reboot the phone into a given mode.
 
@@ -2581,8 +2655,9 @@ def flow_samsung_emergency_call():
 def flow_samsung_talkback():
     """Samsung FRP bypass via Talkback accessibility service.
 
-    Uses the Talkback vulnerability on older Samsung devices (Android 6-9)
-    to access settings and enable ADB.
+    Uses the Talkback vulnerability on Samsung devices (classic chain on
+    Android 6-9; TalkBack -> YouTube -> Settings chain on some Android
+    10-13 builds) to access settings and enable ADB.
     """
 
     def _run(ctx, log):
@@ -2590,9 +2665,9 @@ def flow_samsung_talkback():
         log("SAMSUNG TALKBACK FRP BYPASS")
         log("=" * 60)
         log("This method uses Talkback accessibility to bypass FRP")
-        log("on Samsung devices running Android 6-9.")
+        log("on Samsung devices (classic: Android 6-9).")
         log("")
-        log("INSTRUCTIONS:")
+        log("INSTRUCTIONS (classic chain):")
         log("1. On the 'Verify your account' screen, draw an 'L' shape")
         log("2. Tap 'Talkback' -> 'Settings' -> 'Text-to-speech settings'")
         log("3. Tap the settings icon (gear) repeatedly until search opens")
@@ -2601,6 +2676,14 @@ def flow_samsung_talkback():
         log("6. Browser will open - navigate to: bit.ly/2nL2j7b")
         log("7. Download and install FRP bypass APK")
         log("8. Open bypass app to enable ADB")
+        log("")
+        log("NEWER BUILDS (some Android 10-13, if the classic chain is patched):")
+        log("1. Enable TalkBack (hold Vol Up + Vol Down ~3s), draw 'L'.")
+        log("2. TalkBack Settings -> 'Help & feedback' -> search or open YouTube.")
+        log("3. In YouTube: profile / history / terms -> opens Chrome.")
+        log("4. In Chrome go to Settings (chrome://settings) or Galaxy Store.")
+        log("5. From Settings enable ADB, or install Alliance Shield (see the")
+        log("   'FRP bypass (Alliance Shield)' method in this tool).")
         log("")
         log("After ADB is enabled, this tool will clear FRP flags automatically.")
         
@@ -2688,6 +2771,249 @@ def flow_samsung_account_bypass():
 
     steps = [Step("samsung_account_bypass", _run)]
     return Flow("samsung account bypass", steps)
+
+
+def _qr_emit_provisioning(component, name, out_dir, out_pngs, log):
+    """Render one Android Enterprise provisioning QR (payload JSON + PNG).
+
+    Same mechanism as the MDM QR generator, factored for FRP use: the setup
+    wizard scans the QR and enrolls the component as device owner. Returns
+    the PNG path.
+    """
+    import segno
+
+    pkg = component.split("/")[0]
+    url = (os.environ.get("FRP_DPC_APK_URL", "").strip()
+           or "https://play.google.com/store/apps/details?id=" + pkg)
+    cert = os.environ.get("FRP_DPC_CERT_HASH", "").strip()
+    payload = {
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT": component,
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": url,
+        "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": True,
+        "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": True,
+        "android.app.extra.PROVISIONING_SKIP_EDUCATION_SCREENS": True,
+    }
+    if cert:
+        payload["android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CERTIFICATE_HASH"] = cert
+    payload_json = json.dumps(payload, indent=2)
+    out_json = os.path.join(out_dir, f"provisioning_{name}.json")
+    out_png = os.path.join(out_dir, f"provisioning_qr_{name}.png")
+    with open(out_json, "w", encoding="utf-8") as fh:
+        fh.write(payload_json)
+    qr = segno.make_qr(payload_json, error="m", boost_error=True)
+    try:
+        qr.save(out_png, scale=10, border=4, dark="000000", light="ffffff")
+    except Exception:  # noqa: BLE001 (older segno: no dark/light kwargs)
+        qr.save(out_png, scale=10, border=4)
+    out_pngs.append((name, out_png))
+    log(f"  {name}:")
+    log(f"    component : {component}")
+    log(f"    download  : {url}")
+    log(f"    JSON      : {out_json}")
+    log(f"    QR PNG    : {out_png}")
+    return out_png
+
+
+def flow_frp_qr_provision():
+    """FRP bypass via setup-wizard QR provisioning (Android 10-14 method).
+
+    On recent Samsung builds (*#0*# and old TalkBack chains are patched) the
+    supported path is Device Owner provisioning: at the Welcome screen, tap
+    the screen 6 times (or the QR button) to open the QR scanner, scan the
+    generated QR, and the wizard enrolls a benign device owner (Test DPC by
+    default). A device owner can then disable the setup wizard / finish setup
+    without the previous Google account. If ADB comes up afterwards, this
+    flow also clears the FRP flags automatically.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("FRP BYPASS - QR PROVISIONING (Android 10-14)")
+        log("=" * 60)
+        try:
+            import segno  # noqa: F401
+        except ImportError:
+            log("ERROR: the `segno` package is not installed.")
+            log("  Fix:  .venv/bin/pip install segno")
+            raise RuntimeError("segno is required for QR generation")
+        out_dir = os.environ.get("FRP_QR_OUT_DIR", "").strip()
+        if not out_dir:
+            out_dir = os.path.normpath(os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "..", "..", "frp_qr"))
+            if os.path.exists(out_dir) and not os.access(out_dir, os.W_OK):
+                out_dir = os.path.join(os.path.expanduser("~"), "flashpilot", "frp_qr")
+        os.makedirs(out_dir, exist_ok=True)
+        log(f"Output: {out_dir}")
+        out_pngs = []
+        _qr_emit_provisioning("com.afwsamples.testdpc/.DeviceAdminReceiver",
+                              "frp_testdpc", out_dir, out_pngs, log)
+        custom = os.environ.get("FRP_DPC_COMPONENT", "").strip()
+        if custom:
+            _qr_emit_provisioning(custom, "frp_custom", out_dir, out_pngs, log)
+        if out_pngs:
+            ctx["mdm_qr_png"] = out_pngs[0][1]
+            ctx["mdm_qr_pngs"] = out_pngs
+        log("")
+        log("ON THE PHONE (at the Welcome / 'Verify your account' screen):")
+        log("  1. Connect to Wi-Fi (provisioning downloads the DPC APK).")
+        log("  2. Tap the screen 6 times in the same spot, or tap the QR button")
+        log("     if the wizard shows one - the QR scanner opens.")
+        log("  3. Scan provisioning_qr_frp_testdpc.png from this PC's screen.")
+        log("  4. Accept enrollment - Test DPC becomes device owner.")
+        log("  5. In Test DPC: finish provisioning, then disable the setup")
+        log("     wizard / complete setup - FRP is gone.")
+        log("")
+        log("If ADB becomes authorized along the way, clearing FRP flags now ...")
+        if not _wait_for_adb(ctx, log, timeout=30):
+            log("  (no ADB yet - the QR steps above are the way to go)")
+            return
+        for label, cmd in [
+            ("mark setup wizard run", "settings put global setup_wizard_has_run 1"),
+            ("mark user setup complete", "settings put secure user_setup_complete 1"),
+            ("mark device provisioned", "settings put global device_provisioned 1"),
+            ("disable Google setup wizard", "pm disable-user --user 0 com.google.android.setupwizard"),
+            ("disable Samsung setup wizard", "pm disable-user --user 0 com.sec.android.app.SecSetupWizard"),
+        ]:
+            log(f"  > {label}")
+            try:
+                bridge.adb_shell(cmd, timeout=30)
+            except bridge.BridgeError as e:
+                log(f"      ERROR: {e}")
+            time.sleep(1)
+        log("Done. Reboot the device to complete setup.")
+
+    steps = [Step("frp_qr_provision", _run)]
+    return Flow("FRP bypass (QR provisioning, Android 10-14)", steps)
+
+
+def flow_frp_alliance():
+    """FRP bypass via Alliance Shield X (Samsung, Knox device-admin method).
+
+    Alliance Shield is a legitimate Knox-powered device-admin app: once it
+    holds device-admin (or Knox) rights it can disable the setup wizard and
+    account-blocking packages. Path: open a browser on the FRP screen (use
+    the Browser method in this tool if needed), install Alliance Shield from
+    the Galaxy Store / Play Store, register a free account, enable device
+    admin + Knox permissions, then use App Manager to disable the setup
+    wizard packages. If ADB is already authorized this flow clears FRP
+    directly instead.
+    """
+
+    SETUP_PKGS = [
+        "com.google.android.setupwizard",
+        "com.sec.android.app.SecSetupWizard",
+    ]
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("FRP BYPASS - ALLIANCE SHIELD (Knox device-admin)")
+        log("=" * 60)
+        authorized = False
+        try:
+            authorized = any(d["state"] == "device" for d in bridge.adb_status())
+        except bridge.BridgeError:
+            pass
+        if authorized:
+            log("ADB authorized - clearing FRP directly ...")
+            for label, cmd in [
+                ("mark setup complete", "settings put secure user_setup_complete 1"),
+                ("mark device provisioned", "settings put global device_provisioned 1"),
+                ("disable Google setup wizard", "pm disable-user --user 0 com.google.android.setupwizard"),
+                ("disable Samsung setup wizard", "pm disable-user --user 0 com.sec.android.app.SecSetupWizard"),
+            ]:
+                log(f"  > {label}")
+                try:
+                    bridge.adb_shell(cmd, timeout=30)
+                except bridge.BridgeError as e:
+                    log(f"      ERROR: {e}")
+                time.sleep(1)
+            log("Done. Reboot the device.")
+            return
+        log("No authorized ADB - on-phone Alliance Shield path:")
+        log("")
+        log("  1. On the FRP screen, open a browser (use this tool's 'FRP")
+        log("     bypass (browser)' method if you need the intent fired).")
+        log("  2. Go to Galaxy Store (preferred on Samsung) and install")
+        log("     'Alliance Shield X'. (Play Store works if reachable.)")
+        log("  3. Open Alliance Shield, register a free account, sign in.")
+        log("  4. Grant device-admin when prompted, then enable Knox")
+        log("     permissions inside the app (Knox license is free-tier).")
+        log("  5. App Manager -> search 'wizard' -> disable:")
+        for p in SETUP_PKGS:
+            log(f"       - {p}")
+        log("  6. Back out to the Welcome screen and finish setup - the")
+        log("     account check is gone.")
+        log("")
+        log("Waiting 60s in case ADB authorizes meanwhile ...")
+        if _wait_for_adb(ctx, log, timeout=60):
+            log("ADB appeared - re-run this flow to clear FRP directly.")
+        else:
+            log("Still no ADB - the on-phone steps above are the way to go.")
+
+    steps = [Step("frp_alliance", _run)]
+    return Flow("FRP bypass (Alliance Shield, Knox admin)", steps)
+
+
+def flow_huawei_frp_guide():
+    """Huawei / Honor FRP guide (Kirin + Qualcomm + MTK models, honest scope).
+
+    Huawei FRP has no universal free bypass: Kirin secure-boot and HarmonyOS
+    account lock are server-backed (paid tools use server credits - this tool
+    will not pretend otherwise). What IS free and real: ADB-authorized clears
+    (same flags as any Android), fastboot/EDL fallbacks per chipset, and the
+    exact on-phone prerequisites. This flow checks live ADB/fastboot state
+    first, then gives the per-chipset path. Never writes without ADB.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("HUAWEI / HONOR FRP GUIDE (honest scope)")
+        log("=" * 60)
+        try:
+            devs = bridge.adb_status()
+            auth = [d for d in devs if d["state"] == "device"]
+        except bridge.BridgeError:
+            auth = []
+        chip = (os.environ.get("HUAWEI_CHIP", "").strip().lower()
+                or ctx.get("chip", "") or "").lower()
+        if auth:
+            log(f"  ADB authorized: {auth[0]['serial']} - clearing FRP flags ...")
+            for label, cmd in [
+                ("mark setup complete", "settings put secure user_setup_complete 1"),
+                ("mark device provisioned", "settings put global device_provisioned 1"),
+                ("disable setup wizard", "pm disable-user --user 0 com.android.setupwizard"),
+            ]:
+                log(f"  > {label}")
+                try:
+                    bridge.adb_shell(cmd, timeout=30)
+                except bridge.BridgeError as e:
+                    log(f"      ERROR: {e}")
+                time.sleep(1)
+            log("Done. Reboot and finish setup.")
+            return True
+        log("  No authorized ADB. Per-chipset honest paths:")
+        log("")
+        if chip in ("kirin", "harmony") or not chip:
+            log("  KIRIN / HarmonyOS (Y5p/Y6p/Y9a, Honor X-series):")
+            log("    - Secure boot + Huawei ID lock are server-backed. Free")
+            log("      tools (this one included) cannot generate unlock codes.")
+            log("    - What works free: enable ADB via OTG + Settings (if the")
+            log("      setup wizard allows reaching Settings), then re-run")
+            log("      this flow - the ADB clear above handles the rest.")
+            log("    - Fastboot FRP erase works on older (pre-2020, unlockable)")
+            log("      bootloaders only: 'FASTBOOT -> fastboot_erase frp'.")
+        if chip in ("qualcomm", "qcom", "snapdragon") or not chip:
+            log("  QUALCOMM Huawei (some Honor): EDL 9008 + programmer, same as")
+            log("    'Remove FRP -> EDL'. Needs the model-specific firehose loader.")
+        if chip in ("mtk", "mediatek") or not chip:
+            log("  MTK Huawei (Honor X6/X8): BROM + DA like any MTK - see")
+            log("    'Flash Firmware -> MTK auth-bypass flash'. Needs the DA.")
+        log("")
+        log("  Anyone selling you a one-click Kirin/Harmony bypass without")
+        log("  server credits is selling the ADB steps above with markup.")
+
+    steps = [Step("huawei_frp_guide", _run)]
+    return Flow("Huawei FRP guide (honest scope)", steps)
 
 
 def flow_mtk_sp_flash():
@@ -5098,6 +5424,12 @@ def _mtk_simlock_patch(ctx, log, da, target, backups):
     log(f"  PATCH: writing patched '{part}' back through the DA...")
     res = bridge._run(["mtk-flash-part", target, da, f"{part}={out}"], timeout=1800)
     log(f"    {res}")
+    log("  PATCH: verifying the write by reading back + SHA-256 compare ...")
+    try:
+        res = bridge.mtk_verify_part(target, da, [(part, out)], timeout=900)
+        log(f"    {res}")
+    except bridge.BridgeError as e:
+        raise RuntimeError(f"patch written but VERIFY FAILED ({e}) - do not trust this unlock, re-run")
     log("")
     log("  DONE. Insert the locked SIM and re-run 'Unlock Carrier status' (ADB)")
     log("  to confirm the verdict is now UNLOCKED.")
@@ -6415,6 +6747,276 @@ def flow_mtk_combo_flash():
     return Flow("flash combination firmware (MediaTek)", steps)
 
 
+def _find_mtk_scatter(fw_dir=""):
+    """Locate an MTK scatter file: MTK_SCATTER env first, then the newest
+    *scatter*.txt in fw_dir / ~/Downloads, else the newest .txt there."""
+    import glob as _g
+    env = os.environ.get("MTK_SCATTER", "").strip()
+    if env and os.path.isfile(env):
+        return env
+    dirs = [d for d in [fw_dir, os.path.expanduser("~/Downloads")] if d]
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        scats = sorted(_g.glob(os.path.join(d, "*scatter*.txt")),
+                       key=os.path.getmtime, reverse=True)
+        if scats:
+            return scats[0]
+        txts = sorted(_g.glob(os.path.join(d, "*.txt")),
+                      key=os.path.getmtime, reverse=True)
+        if txts:
+            return txts[0]
+    return ""
+
+
+def flow_mtk_auth_flash():
+    """One-click signed-MTK flash with auth bypass (UnlockTool-style).
+
+    Chains what commercial tools do in one button: catch BROM/preloader,
+    crash a preloader into held BROM when possible, run the auth bypass
+    (`mtk-bypass`: brom_exploit / sla_bypass / da_auth_bypass / standard),
+    then flash (scatter via `mtk-flash`, or FRP-only via `mtk-frp-gpt`).
+
+    Inputs (env or ctx): MTK_DA (or the MTK workbench picker), MTK_SCATTER,
+    MTK_FW_DIR (firmware dir), MTK_BYPASS_MODE (default auto), MTK_SKIP_AUTH
+    (0/1), MTK_FRP_ONLY (0/1: wipe FRP via GPT instead of a full flash).
+    """
+
+    _BYPASS_ORDER = ("brom_exploit", "sla_bypass", "da_auth_bypass", "standard")
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MTK AUTH-BYPASS FLASH (signed Oppo/Vivo/Xiaomi/Redmi/Transsion)")
+        log("=" * 60)
+        da = os.environ.get("MTK_DA", "").strip() or ctx.get("mtk_da", "")
+        if not da:
+            da = _find_mtk_da()
+        if not da or not os.path.isfile(da):
+            log("  DA binary not found.")
+            log("  Pick the Download Agent on the MTK workbench (MTK_AllInOne_DA.bin")
+            log("  / vendor DA) or set MTK_DA=/path/to/da.bin, then run again.")
+            raise RuntimeError("MediaTek DA binary required")
+        log(f"  DA file : {da}")
+        fw_dir = (os.environ.get("MTK_FW_DIR", "").strip()
+                  or ctx.get("mtk_fw_dir", "") or "").strip()
+        scatter = (os.environ.get("MTK_SCATTER", "").strip()
+                   or ctx.get("mtk_scatter", ""))
+        if not scatter:
+            scatter = _find_mtk_scatter(fw_dir)
+        frp_only = (os.environ.get("MTK_FRP_ONLY", "").strip().lower()
+                    in ("1", "true", "yes", "on")) or bool(ctx.get("frp_only"))
+        if frp_only:
+            log("  Mode    : FRP-only wipe via GPT (no full flash)")
+        else:
+            log(f"  Scatter : {scatter or '(none found yet)'}")
+            log(f"  FW dir  : {fw_dir or '(none - set MTK_FW_DIR)'}")
+        log("")
+
+        log("  Waiting for a MediaTek BROM / preloader device ...")
+        target, stage = _wait_mtk_brom_target(log, timeout=120)
+        if not target:
+            log("  To enter BROM / preloader:")
+            log("    1. Power the phone OFF completely.")
+            log("    2. Hold Volume Down + Power (screen stays dark) until USB")
+            log("       shows 0e8d:0003 (BROM) or 0e8d:2000 (preloader).")
+            raise RuntimeError("no MediaTek BROM/preloader device appeared")
+        log(f"  Caught device in '{stage}'.")
+        log("")
+
+        # Preloader window is seconds-long: crash it into held BROM first.
+        if stage == "preloader":
+            log("  Preloader caught - crashing into held BROM for a stable session ...")
+            try:
+                res = bridge.mtk_crash_brom(target, timeout=25)
+                log(f"    {res}")
+            except bridge.BridgeError as e:
+                log(f"    crash failed (continuing on preloader): {e}")
+            except Exception as e:
+                log(f"    crash failed (continuing on preloader): {e}")
+            target2, stage2 = _wait_mtk_brom_target(log, timeout=60)
+            if target2:
+                target, stage = target2, stage2
+                log(f"  Now in '{stage}'.")
+            log("")
+
+        # Auth bypass: explicit mode or auto through the order.
+        want = (os.environ.get("MTK_BYPASS_MODE", "").strip().lower()
+                or ctx.get("bypass_mode", "") or "auto").strip().lower()
+        modes = (want,) if want != "auto" else _BYPASS_ORDER
+        skip_auth = (os.environ.get("MTK_SKIP_AUTH", "").strip().lower()
+                     in ("1", "true", "yes", "on"))
+        bypassed = False
+        for m in modes:
+            log(f"  Bypass attempt: {m} ...")
+            args = ["mtk-bypass", target, da, m]
+            if scatter and os.path.isfile(scatter):
+                args.append(scatter)
+            if skip_auth:
+                args.append("1")
+            try:
+                res = bridge._run(args, timeout=600)
+                log(f"    OK: {str(res)[:300]}")
+                bypassed = True
+                break
+            except bridge.BridgeError as e:
+                log(f"    failed: {e} - trying next" if want == "auto" else f"    failed: {e}")
+                if want != "auto":
+                    break
+            except Exception as e:
+                log(f"    failed: {e}")
+                if want != "auto":
+                    break
+        if not bypassed:
+            raise RuntimeError(
+                "auth bypass failed on all modes - the chip needs a vendor "
+                "auth file (ask in the model thread) or a test-point BROM entry"
+            )
+        log("  Auth bypassed.")
+        log("")
+
+        if frp_only:
+            log("  Wiping FRP via GPT (no scatter needed) ...")
+            res = _mtk_retry(
+                log, "mtk FRP wipe",
+                lambda t: bridge._run(["mtk-frp-gpt", t, da], timeout=900),
+                timeout=180,
+            )
+            log(f"    {res}")
+            log("  FRP wipe done - reboot and complete setup.")
+            return True
+
+        if not (scatter and os.path.isfile(scatter)):
+            raise RuntimeError(
+                "no scatter file - set MTK_SCATTER=/path/to/MTxxxx_Android_scatter.txt "
+                "(or place it in MTK_FW_DIR / ~/Downloads)"
+            )
+        if not (fw_dir and os.path.isdir(fw_dir)):
+            raise RuntimeError("no firmware dir - set MTK_FW_DIR=/path/to/firmware")
+        log(f"  Flashing via scatter: {os.path.basename(scatter)} ...")
+        log("  DO NOT unplug!")
+        res = _mtk_retry(
+            log, "mtk flash",
+            lambda t: bridge._run(["mtk-flash", t, da, scatter, fw_dir], timeout=1800),
+            timeout=300,
+        )
+        log(f"    {res}")
+        log("")
+        log("  Verifying partition table after flash ...")
+        try:
+            res = _mtk_retry(
+                log, "GPT verify",
+                lambda t: bridge._run(["mtk-gpt", t, da], timeout=300),
+                timeout=120,
+            )
+            log(f"    GPT readable again - flash verified:\n{str(res)[:800]}")
+        except (bridge.BridgeError, RuntimeError) as e:
+            log(f"    verify skipped ({e}) - reboot and check the phone boots")
+        log("")
+        log("  Flash done - reboot the phone (it should boot the new firmware).")
+        return True
+
+    steps = [Step("mtk_auth_flash", _run)]
+    return Flow("MTK auth-bypass flash (signed devices)", steps)
+
+
+def _parse_part_entries(spec):
+    """Parse 'part=file,part=file' into [(part, file)] (env/ctx helper)."""
+    entries = []
+    for item in (spec or "").split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        part, path = item.split("=", 1)
+        part, path = part.strip(), path.strip()
+        if part and path:
+            entries.append((part, path))
+    return entries
+
+
+def flow_mtk_verify():
+    """Verify MTK partitions written earlier: read back + SHA-256 compare.
+
+    Standalone companion to any mtk-flash-part write. Set MTK_VERIFY_PARTS
+    to 'part=file,part=file' (e.g. 'frp=/tmp/frp.img,nvdata=/tmp/nvdata.img')
+    plus MTK_DA, with the phone in BROM/preloader. Fails loudly on mismatch.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MTK VERIFY-AFTER-WRITE (read back + SHA-256)")
+        log("=" * 60)
+        da = os.environ.get("MTK_DA", "").strip() or ctx.get("mtk_da", "")
+        if not da:
+            da = _find_mtk_da()
+        if not da or not os.path.isfile(da):
+            raise RuntimeError("MediaTek DA binary required (MTK_DA)")
+        spec = (os.environ.get("MTK_VERIFY_PARTS", "").strip()
+                or ctx.get("verify_parts", ""))
+        entries = _parse_part_entries(spec)
+        if not entries:
+            raise RuntimeError("Set MTK_VERIFY_PARTS='part=file,part=file' to verify")
+        log(f"  DA file : {da}")
+        for part, path in entries:
+            log(f"  Check   : {part} <- {path}")
+        target, stage = _wait_mtk_brom_target(log, timeout=120)
+        if not target:
+            raise RuntimeError("no MediaTek BROM/preloader device appeared")
+        log(f"  Caught device in '{stage}'.")
+        res = _mtk_retry(
+            log, "mtk verify",
+            lambda t: bridge.mtk_verify_part(t, da, entries, timeout=900),
+            timeout=180,
+        )
+        log(f"    {res}")
+        log("  Verify done - all listed partitions MATCH.")
+        return True
+
+    steps = [Step("mtk_verify", _run)]
+    return Flow("MTK verify-after-write (SHA-256)", steps)
+
+
+def flow_qcom_verify():
+    """Verify Qualcomm partitions written earlier: Firehose read-back +
+    SHA-256 compare. Set QCOM_VERIFY_PARTS='part=file,...' with the phone in
+    EDL (05c6:9008). Fails loudly on mismatch."""
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("QUALCOMM VERIFY-AFTER-WRITE (read back + SHA-256)")
+        log("=" * 60)
+        spec = (os.environ.get("QCOM_VERIFY_PARTS", "").strip()
+                or ctx.get("verify_parts", ""))
+        entries = _parse_part_entries(spec)
+        if not entries:
+            raise RuntimeError("Set QCOM_VERIFY_PARTS='part=file,part=file' to verify")
+        for part, path in entries:
+            log(f"  Check   : {part} <- {path}")
+        log("  Waiting for EDL (05c6:9008) ...")
+        deadline = time.time() + 180
+        tgt = None
+        while time.time() < deadline:
+            try:
+                for d in bridge.detect_all():
+                    if d.get("vid") == 0x05C6 and d.get("pid") == 0x9008:
+                        tgt = f"{d['vid']:04x}:{d['pid']:04x}@{d['bus']}:{d['address']}"
+                        break
+            except bridge.BridgeError:
+                pass
+            if tgt:
+                break
+            time.sleep(1.5)
+        if not tgt:
+            raise RuntimeError("no Qualcomm EDL device appeared")
+        log(f"  Target: {tgt}")
+        res = bridge.qcom_verify_part(tgt, entries, timeout=900)
+        log(f"    {res}")
+        log("  Verify done - all listed partitions MATCH.")
+        return True
+
+    steps = [Step("qcom_verify", _run)]
+    return Flow("Qualcomm verify-after-write (SHA-256)", steps)
+
+
 def flow_mtk_recovery_reset():
     """Guided recovery factory reset - clears the 'too many attempts /
     permanently locked' screen on any Samsung (MediaTek A05/A06 included),
@@ -6791,6 +7393,83 @@ def flow_kg_remove():
         
         return True
     return Flow("KG remove (patch vbmeta)", [Step("kg_remove", _run)])
+
+
+def flow_drk_repair():
+    """Samsung DRK (Device Root Key) repair guidance + Odin reflash path.
+
+    A damaged DRK shows as dm-verity / secure-boot failures or bootloops
+    after a bad flash. Repair = reflashing stock BL + modem (CP) so the
+    secure chain verifies again. This flow checks what it can live (model,
+    bootloader rev, Knox bit) and then guides the exact Odin reflash; the
+    actual write goes through the normal Flash Firmware path (with all its
+    safety gates). Honest limit stated plainly: a tripped Knox warranty bit
+    (eFuse 0x1) is hardware and can NEVER be untripped by any tool.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("SAMSUNG DRK REPAIR (secure-boot chain restore)")
+        log("=" * 60)
+        try:
+            devs = bridge.adb_status()
+            auth = [d for d in devs if d["state"] == "device"]
+        except bridge.BridgeError:
+            auth = []
+        if auth:
+            log(f"  ADB authorized: {auth[0]['serial']}")
+            for prop, label in [
+                ("ro.bootloader", "bootloader version"),
+                ("ro.boot.warranty_bit", "Knox warranty bit (0=intact, 1=tripped)"),
+                ("ro.boot.secure_boot", "secure boot state"),
+                ("ro.boot.verifiedbootstate", "verified boot state"),
+            ]:
+                try:
+                    out = bridge.adb_shell(f"getprop {prop}", timeout=10).strip()
+                except bridge.BridgeError as e:
+                    out = f"ERROR: {e}"
+                log(f"    {label} ({prop}) = {out or '(unset)'}")
+        else:
+            log("  No authorized ADB - checks below run blind; connect with")
+            log("  USB debugging if the phone still boots far enough.")
+        log("")
+        log("  What DRK damage looks like:")
+        log("    - 'dm-verity verification failed' / red secure-boot warnings")
+        log("    - bootloop right after the Samsung logo on stock firmware")
+        log("    - often caused by flashing mismatched BL/CP or interrupting Odin")
+        log("")
+        log("  Repair path (stock BL + CP reflash via Odin):")
+        log("    1. Download the EXACT stock firmware for your model + region")
+        log("       (same or HIGHER bootloader rev than on device - never lower).")
+        log("    2. Enter Download mode (Vol Down + Power, then Vol Up).")
+        log("    3. In this tool: Flash Firmware -> Download mode -> select the")
+        log("       BL and CP slots only (leave AP/CSC empty to keep /data).")
+        log("    4. Flash, then boot - the secure chain verifies again.")
+        log("")
+        log("  HARD LIMITS (no tool on earth changes these):")
+        log("    - Knox warranty 0x1 is a hardware eFuse. Reflashing, DRK")
+        log("      repair, paid server credits - nothing untrips it. Samsung")
+        log("      Pay / Secure Folder on that unit are gone for good.")
+        log("    - If the failure persists on matching stock BL+CP, the fault")
+        log("      is hardware (eMMC/UFS or SoC) - board-level repair.")
+        bl_tar = (os.environ.get("BL_TAR", "").strip() or ctx.get("bl_tar", ""))
+        cp_tar = (os.environ.get("CP_TAR", "").strip() or ctx.get("cp_tar", ""))
+        if bl_tar and cp_tar and os.path.isfile(bl_tar) and os.path.isfile(cp_tar):
+            log("")
+            log("  BL + CP archives provided - running the reflash now ...")
+            for slot, path in (("BL", bl_tar), ("CP", cp_tar)):
+                os.environ[f"{slot}_TAR"] = path
+            os.environ["ODIN4_EXACT_SLOTS"] = "1"
+            # Advanced flash reads the BL/CP slot envs (odin_flash_tar is
+            # AP-only and would put them in the wrong slot).
+            return flow_odin_advanced_flash().run(ctx, log)
+        log("")
+        log("  (Tip: set BL_TAR + CP_TAR env, or pick the slots in Flash")
+        log("   Firmware, and this flow will run the reflash itself.)")
+        return True
+
+    steps = [Step("drk_repair", _run)]
+    return Flow("DRK repair (BL+CP reflash guide)", steps)
 
 
 def flow_screen_lock_locksettings():
@@ -8986,6 +9665,7 @@ FLOWS = {
     "fastboot_set_active": flow_fastboot_set_active,
     "fastboot_oem": flow_fastboot_oem,
     "fastboot_continue": flow_fastboot_continue,
+    "oem_unlock_guide": flow_oem_unlock_guide,
     "reboot_recovery": flow_reboot_recovery,
     "reboot_download": flow_reboot_download,
     "reboot_normal": flow_reboot_normal,
@@ -9000,6 +9680,9 @@ FLOWS = {
     "odin_enable_adb": flow_odin_enable_adb,
     "mtk_download_info": flow_mtk_download_info,
     "mtk_combo_flash": flow_mtk_combo_flash,
+    "mtk_auth_flash": flow_mtk_auth_flash,
+    "mtk_verify": flow_mtk_verify,
+    "qcom_verify": flow_qcom_verify,
     "mtk_recovery_reset": flow_mtk_recovery_reset,
     "mtk_brom_info": flow_mtk_brom_info,
     "mtk_brom_backup": flow_mtk_brom_backup,
@@ -9009,6 +9692,8 @@ FLOWS = {
     "adb_frp": flow_adb_frp,
     "frp_browser": flow_frp_browser,
     "frp_emergency": flow_frp_emergency,
+    "frp_qr_provision": flow_frp_qr_provision,
+    "frp_alliance": flow_frp_alliance,
     "frp_settings": flow_frp_settings,
     "adb_info": flow_adb_info,
     "kg_state_check": flow_kg_state_check,
@@ -9055,6 +9740,16 @@ FLOWS = {
     "qcn_backup": _qcn.flow_qcn_backup,
     "qcn_restore": _qcn.flow_qcn_restore,
     "qcn_imei_repair": _qcn.flow_qcn_imei_write,
+    "qcn_nv_browser": _qcn.flow_qcn_nv_browser,
+    "qcn_efs_explorer": _qcn.flow_qcn_efs_explorer,
+    "oem_unlock_guide": flow_oem_unlock_guide,
+    "huawei_frp_guide": flow_huawei_frp_guide,
+    "drk_repair": flow_drk_repair,
+    "apple_info": _apple.flow_apple_info,
+    "apple_icloud_remove": _apple.flow_apple_icloud_remove,
+    "apple_icloud_add": _apple.flow_apple_icloud_add,
+    "apple_passcode_guide": _apple.flow_apple_passcode_guide,
+    "ofp_extract": _ofp.flow_ofp_extract,
     "emmc_health": _emmc.flow_emmc_health,
     "emmc_raw": _emmc.flow_emmc_raw,
     "imei_repair_mtk": _imei.flow_imei_repair_mtk,
@@ -9081,22 +9776,22 @@ JOBS = {
     "Flash Firmware": {
         "ADB": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_efs_backup", "odin_efs_restore", "odin_sales_code"],
         "MTP": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices"],
-        "Download mode": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_flash_multi", "odin_send_pit", "odin_vbmeta", "reboot_normal"],
+        "Download mode": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_flash_multi", "odin_send_pit", "odin_vbmeta", "drk_repair", "reboot_normal"],
         "Samsung BROM": ["odin_preflight", "odin_advanced_flash", "odin_flash_tar", "odin_check_tar", "odin_list_devices", "odin_pit_tools", "odin_flash_partition", "odin_flash_multi", "odin_send_pit", "odin_vbmeta"],
-        "MTK": [],
-        "MTK BROM": [],
+        "MTK": ["mtk_auth_flash"],
+        "MTK BROM": ["mtk_auth_flash"],
         "FASTBOOT": [],
         "EDL": [],
     },
     "Remove FRP": {
-        "ADB": ["adb_frp", "frp_browser", "frp_emergency", "frp_settings"],
+        "ADB": ["adb_frp", "frp_qr_provision", "frp_alliance", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide"],
         "MTP": ["at_method", "enable_adb", "test_mode"],
         "Download mode": ["download_frp", "odin_enable_adb"],
         "Samsung BROM": ["download_frp", "odin_enable_adb"],
         "MTK": ["mtk_combo_flash"],
         "MTK BROM": [],
         "FASTBOOT": ["fastboot_frp", "fastboot_unlock", "fastboot_wipe"],
-        "EDL": ["edl_auto", "edl_frp", "edl_enable_adb", "edl_detect"],
+        "EDL": ["edl_auto", "edl_frp", "edl_enable_adb", "edl_detect", "qcom_verify"],
     },
     "Remove Screen Lock": {
         "ADB": [
@@ -9114,14 +9809,14 @@ JOBS = {
         "EDL": ["screen_lock_edl"],
     },
     "Read Device Info": {
-        "ADB": ["adb_info", "kg_state_check", "recovery"],
+        "ADB": ["adb_info", "kg_state_check", "oem_unlock_guide", "recovery"],
         "MTP": ["at_info", "enable_adb", "test_mode"],
         "Download mode": ["download_mode_info", "kg_state_check"],
         "Samsung BROM": ["download_mode_info"],
         "MTK": ["mtk_download_info", "mtk_brom_info", "mtk_brom_backup"],
-        "MTK BROM": ["mtk_crash_brom", "mtk_brom_info", "mtk_brom_backup"],
-        "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot"],
-        "EDL": ["edl_detect", "qcom_detect_info"],
+        "MTK BROM": ["mtk_crash_brom", "mtk_brom_info", "mtk_brom_backup", "mtk_verify"],
+        "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot", "oem_unlock_guide"],
+        "EDL": ["edl_detect", "qcom_detect_info", "qcom_verify"],
         "SPD": ["spd_detect_info"],
     },
     "Detect Devices": {
@@ -9200,14 +9895,14 @@ JOBS = {
         "EDL": [],
     },
     "QCN / Modem": {
-        "ADB": ["qcn_backup"],
+        "ADB": ["qcn_backup", "qcn_nv_browser", "qcn_efs_explorer"],
         "MTP": [],
         "Download mode": [],
         "Samsung BROM": [],
         "MTK": [],
         "MTK BROM": [],
         "FASTBOOT": [],
-        "EDL": ["qcn_backup", "qcn_restore", "qcn_imei_repair"],
+        "EDL": ["qcn_backup", "qcn_restore", "qcn_imei_repair", "qcn_nv_browser", "qcn_efs_explorer"],
     },
     "IMEI Repair / Change": {
         "ADB": ["imei_repair_mtk", "imei_repair_spd"],

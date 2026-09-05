@@ -135,3 +135,56 @@ def flow_apple_icloud_add():
         log("  Add flow placeholder — HIL required.")
 
     return Flow("Apple iCloud Add (EXPERIMENTAL — edu only)", [Step("apple_icloud_add", _run)])
+
+
+def flow_apple_passcode_guide():
+    """iPhone passcode / Screen Time scope guide (honest, backup-based).
+
+    Read-only checks + guidance. States plainly what no free tool can do:
+    Activation Lock (iCloud) is Apple-server-side and cannot be bypassed
+    offline; a lost-mode/erased device with FMI ON stays locked without the
+    Apple ID. What IS real: (a) Screen Time passcode removal from an
+    ENCRYPTED iTunes/Finder backup you own, (b) passcode retry/wait guidance,
+    (c) DFU/restore path that keeps the device usable but NOT activated.
+    Never writes to the device.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("IPHONE PASSCODE / SCREEN TIME SCOPE (honest, backup-based)")
+        log("=" * 60)
+        tools = {t: shutil.which(t) for t in
+                 ("ideviceinfo", "idevicebackup2", "pymobiledevice3", "iproxy")}
+        for t, p in tools.items():
+            log(f"  {t:<16}: {p or '(not installed)'}")
+        if not any(tools.values()):
+            log("")
+            log("  Install libimobiledevice for USB access:")
+            log("    sudo apt install libimobiledevice-utils usbmuxd")
+        log("")
+        info = _idevice_info(log)
+        act = (info.get("ActivationState") or "").lower()
+        if act:
+            log(f"  ActivationState: {act}")
+            if "unactivated" in act or "activation" in act and "activat" in act:
+                log("  NOTE: an unactivated device with Find My ON cannot be")
+                log("  activated without the Apple ID - no offline tool changes this.")
+        log("")
+        log("  Honest options:")
+        log("  1. Screen Time passcode (iOS 12+): make an ENCRYPTED backup")
+        log("     (Finder/iTunes, 'Encrypt local backup' ON), then remove the")
+        log("     Screen Time passcode from that backup you own. Needs the")
+        log("     backup password if one was set - there is no way around it.")
+        log("  2. Device passcode, FMI OFF, trusted PC: 'Erase All Content and")
+        log("     Settings' on-device, or Finder restore - then set up as NEW")
+        log("     (not from backup) to avoid re-locking to the old passcode.")
+        log("  3. Device passcode, FMI ON: DFU restore makes the phone boot,")
+        log("     but Activation Lock remains. Only the Apple ID (or Apple")
+        log("     with proof of purchase) removes it.")
+        log("  4. Retry delays ('try again in X minutes') are enforced on-device;")
+        log("     waiting them out is the only free path - do not wipe blindly.")
+        log("")
+        log("  Anyone promising offline Activation Lock removal is selling")
+        log("  the DFU restore in (3) with the lock still on.")
+
+    return Flow("iPhone passcode scope guide (honest)", [Step("apple_passcode_guide", _run)])

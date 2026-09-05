@@ -426,6 +426,29 @@ def mtk_flash_samsung(da, fw_dir, timeout=1800):
     return _run(["mtk-flash-samsung", "auto", da, fw_dir], timeout=timeout)
 
 
+def mtk_verify_part(target, da, entries, timeout=900):
+    """Verify-after-write: read back each partition and SHA-256 compare
+    against the source file. ``entries`` is [(partition, file), ...].
+    Raises BridgeError listing every MISMATCH."""
+    args = ["mtk-verify-part", target, da]
+    args += [f"{part}={path}" for part, path in entries]
+    return _run(args, timeout=timeout)
+
+
+def qcom_verify_part(target, entries, timeout=900):
+    """Verify-after-write over Firehose: read back each partition and
+    SHA-256 compare. ``entries`` is [(partition, file), ...]."""
+    args = ["qcom-verify-part", target]
+    args += [f"{part}={path}" for part, path in entries]
+    return _run(args, timeout=timeout)
+
+
+def qcom_flash_one(target, partition, image, start_sector, num_sectors, timeout=900):
+    """Flash one partition over Firehose (mirrors the qcom-flash-one CLI)."""
+    return _run(["qcom-flash-one", target, partition, image,
+                 str(start_sector), str(num_sectors)], timeout=timeout)
+
+
 def mtk_crash_brom(bus_addr, timeout=25):
     """Crash a preloader (0e8d:2000) into the held BootROM (0e8d:0003).
 

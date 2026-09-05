@@ -50,6 +50,7 @@ fn main() {
         eprintln!("  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)");
         eprintln!("  mtk-flash-samsung <t> <da> <fw_dir>  flash Samsung firmware dir (AP/BL etc, no scatter, via GPT)");
         eprintln!("  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)");
+        eprintln!("  mtk-verify-part <t> <da> <part=file>...  verify-after-write: read back + SHA-256 compare");
         eprintln!("  mtk-frp-gpt <t> <da>  FRP bypass resolving lock partitions from device GPT (no scatter)");
         eprintln!("  qcom-detect            detect Qualcomm EDL devices");
         eprintln!("  spd-detect             detect Spreadtrum/UNISOC download devices");
@@ -68,6 +69,7 @@ fn main() {
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
         eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
         eprintln!("  qcom-flash-one <t> <part> <img> <sector> <count>  flash one partition (Path+Duration wiring)");
+        eprintln!("  qcom-verify-part <t> <part=file>...  verify-after-write: read back + SHA-256 compare");
         eprintln!("  qcom-backup <t> <prog> <out>  backup partitions via Firehose");
         eprintln!("  qcom-partitions <t>    get partition table via Firehose");
         eprintln!("  qcom-reboot <t> <mode> reboot device (normal|edl|recovery|fastboot)");
@@ -205,6 +207,25 @@ fn main() {
                 exit(2);
             }
             mtk_da::mtk_read_part_cli(&args[2], &args[3], &args[4], &args[5])
+        }
+        "mtk-verify-part" => {
+            // mtk-verify-part <target> <da_file> <partition=file>...
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge mtk-verify-part <target> <da_file> <partition=file>...");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let da = args[3].clone();
+            let mut entries = Vec::new();
+            for e in &args[4..] {
+                if let Some((part, file)) = e.split_once('=') {
+                    entries.push((part.to_string(), file.to_string()));
+                } else {
+                    eprintln!("usage: entry must be partition=file, got '{e}'");
+                    exit(2);
+                }
+            }
+            mtk_da::mtk_verify_part_cli(&target, &da, &entries)
         }
         "mtk-frp" => {
             if args.len() < 4 {
@@ -371,6 +392,24 @@ fn main() {
             let start: u64 = args[5].parse().unwrap_or(0);
             let count: u64 = args[6].parse().unwrap_or(0);
             qualcomm::qcom_flash_one(&args[2], &args[3], std::path::Path::new(&args[4]), start, count)
+        }
+        "qcom-verify-part" => {
+            // qcom-verify-part <target> <partition=file>...
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge qcom-verify-part <target> <partition=file>...");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let mut entries = Vec::new();
+            for e in &args[3..] {
+                if let Some((part, file)) = e.split_once('=') {
+                    entries.push((part.to_string(), file.to_string()));
+                } else {
+                    eprintln!("usage: entry must be partition=file, got '{e}'");
+                    exit(2);
+                }
+            }
+            qualcomm::qcom_verify_part_cli(&target, &entries)
         }
         "config-show" => {
             let ctx = config::app_config_for_operation(None);

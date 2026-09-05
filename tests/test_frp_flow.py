@@ -115,3 +115,149 @@ class TestRunGuard:
         assert _flow_start("Odin flash", destructive=True, key="adb:AAA")
         assert "Odin flash" in _flow_busy_msg(key="adb:AAA")
         _flow_end(key="adb:AAA")
+
+class TestNewSecurityFrpPack:
+    """QR provisioning + Alliance Shield registration and behavior."""
+
+    def test_registered_in_flows_and_frp_job(self):
+        from python.core import core
+        for key in ("frp_qr_provision", "frp_alliance"):
+            assert key in core.FLOWS
+        assert "frp_qr_provision" in core.JOBS["Remove FRP"]["ADB"]
+        assert "frp_alliance" in core.JOBS["Remove FRP"]["ADB"]
+        assert "QR" in core.FLOWS["frp_qr_provision"]().name
+        assert "Alliance" in core.FLOWS["frp_alliance"]().name
+
+    def test_qr_provision_generates_files(self, tmp_path, monkeypatch):
+        from python.core import core
+        import io
+        out = tmp_path / "frp_qr"
+        out.mkdir()
+        monkeypatch.setenv("FRP_QR_OUT_DIR", str(out))
+        monkeypatch.setattr(core.bridge, "adb_status", lambda: [])
+        buf = io.StringIO()
+        core.FLOWS["frp_qr_provision"]().run({}, buf.write)
+        pngs = list(out.rglob("provisioning_qr_*.png"))
+        assert pngs, buf.getvalue()
+        assert any("frp_testdpc" in p.name for p in pngs)
+
+    def test_alliance_uses_adb_when_authorized(self, monkeypatch):
+        from python.core import core
+        import io
+        monkeypatch.setattr(
+            core.bridge, "adb_status",
+            lambda: [{"serial": "X", "state": "device", "extra": ""}],
+        )
+        calls = []
+        monkeypatch.setattr(
+            core.bridge, "adb_shell",
+            lambda cmd, timeout=30: calls.append(cmd) or "ok",
+        )
+        buf = io.StringIO()
+        core.FLOWS["frp_alliance"]().run({}, buf.write)
+        assert any("setupwizard" in c for c in calls)
+
+
+class TestQcnInspectors:
+    """NV browser + EFS explorer registration and offline behavior."""
+
+    def test_registered(self):
+        from python.core import core
+        for key in ("qcn_nv_browser", "qcn_efs_explorer"):
+            assert key in core.FLOWS
+            assert key in core.JOBS["QCN / Modem"]["ADB"]
+            assert key in core.JOBS["QCN / Modem"]["EDL"]
+
+    def test_nv_browser_finds_ascii_imei(self, tmp_path, monkeypatch):
+        from python.core import core
+        import io
+        (tmp_path / "modemst1.img").write_bytes(
+            b"\x00" * 64 + b"356938035643809" + b"\x00" * 64)
+        monkeypatch.setenv("QCN_BACKUP_DIR", str(tmp_path))
+        monkeypatch.delenv("TARGET_IMEI", raising=False)
+        buf = io.StringIO()
+        core.FLOWS["qcn_nv_browser"]().run({}, buf.write)
+        assert "356938035643809" in buf.getvalue()
+        assert "0x40" in buf.getvalue()
+
+    def test_nv_browser_requires_backup_dir(self, tmp_path, monkeypatch):
+        from python.core import core
+        import io
+        monkeypatch.setenv("QCN_BACKUP_DIR", str(tmp_path / "missing"))
+        buf = io.StringIO()
+        with pytest.raises(RuntimeError, match="QCN_BACKUP_DIR"):
+            core.FLOWS["qcn_nv_browser"]().run({}, buf.write)
+
+    def test_efs_explorer_lists_and_extracts(self, tmp_path, monkeypatch):
+        import tarfile
+        from python.core import core
+        import io
+        tgz = tmp_path / "efs.tgz"
+        with tarfile.open(tgz, "w:gz") as tf:
+            import io as _io
+            data = b"mps_code=OJM\n"
+            ti = tarfile.TarInfo("mps_code.dat")
+            ti.size = len(data)
+            tf.addfile(ti, _io.BytesIO(data))
+        monkeypatch.setenv("QCN_EFS_TAR", str(tgz))
+        monkeypatch.delenv("QCN_EFS_EXTRACT", raising=False)
+        buf = io.StringIO()
+        core.FLOWS["qcn_efs_explorer"]().run({}, buf.write)
+        assert "mps_code.dat" in buf.getvalue()
+        out = tmp_path / "out"
+        out.mkdir()
+        monkeypatch.setenv("QCN_EFS_OUT", str(out))
+        monkeypatch.setenv("QCN_EFS_EXTRACT", "mps_code.dat")
+        buf = io.StringIO()
+        core.FLOWS["qcn_efs_explorer"]().run({}, buf.write)
+        assert (out / "mps_code.dat").read_bytes() == b"mps_code=OJM\n"
+
+
+class TestQcnRestoreVerify:
+    def test_restore_verifies_each_partition(self, tmp_path, monkeypatch):
+        from python.core import core
+        import io
+        from python.core import qcn as _qcn
+        src = tmp_path / "qcn"
+        src.mkdir()
+        (src / "modemst1.img").write_bytes(b"M" * 4096)
+        prog = tmp_path / "prog.mbn"
+        prog.write_bytes(b"P" * 128)
+        monkeypatch.setenv("QCN_BACKUP_DIR", str(src))
+        monkeypatch.setenv("QCOM_PROGRAMMER", str(prog))
+        calls = []
+        monkeypatch.setattr(core.bridge, "qcom_flash_one",
+                            lambda t, n, f, s, c: calls.append(("flash", n)) or "ok")
+        monkeypatch.setattr(core.bridge, "qcom_verify_part",
+                            lambda t, e, timeout=900: calls.append(("verify", e[0][0])) or "MATCH")
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        _qcn.flow_qcn_restore().run({"experimental_ack": True}, buf.write)
+        assert ("flash", "modemst1") in calls
+        assert ("verify", "modemst1") in calls
+        # verify follows its flash
+        fi = calls.index(("flash", "modemst1"))
+        vi = calls.index(("verify", "modemst1"))
+        assert vi == fi + 1
+
+    def test_restore_aborts_on_verify_mismatch(self, tmp_path, monkeypatch):
+        from python.core import core
+        import io
+        from python.core import qcn as _qcn
+        src = tmp_path / "qcn"
+        src.mkdir()
+        (src / "modemst1.img").write_bytes(b"M" * 4096)
+        prog = tmp_path / "prog.mbn"
+        prog.write_bytes(b"P" * 128)
+        monkeypatch.setenv("QCN_BACKUP_DIR", str(src))
+        monkeypatch.setenv("QCOM_PROGRAMMER", str(prog))
+        monkeypatch.setattr(core.bridge, "qcom_flash_one", lambda t, n, f, s, c: "ok")
+
+        def boom(t, e, timeout=900):
+            raise core.bridge.BridgeError("MISMATCH at offset 0x0")
+
+        monkeypatch.setattr(core.bridge, "qcom_verify_part", boom)
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        with pytest.raises(RuntimeError, match="VERIFY FAILED"):
+            _qcn.flow_qcn_restore().run({"experimental_ack": True}, buf.write)

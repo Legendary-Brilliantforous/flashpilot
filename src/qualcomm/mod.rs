@@ -188,6 +188,91 @@ pub fn qcom_flash_one(target: &str, partition: &str, image: &Path, start_sector:
     Ok(serde_json::json!({"status":"flashed","partition":partition,"file":image.display().to_string()}).to_string())
 }
 
+/// Verify-after-write for Firehose flashes: read back each partition and
+/// compare SHA-256 against the source file. Reads only as many sectors as
+/// the file needs (not the whole partition), then compares the prefix.
+/// Returns Err listing every MISMATCH so callers fail loudly.
+pub fn qcom_verify_part_cli(target: &str, entries: &[(String, String)]) -> Result<String> {
+    use crate::util::{sha256_file, verify_bytes_match};
+    if entries.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no partition=file entries provided".to_string(),
+        ));
+    }
+    let devices = usb::collect_devices(Some(crate::qualcomm::sahara::QCOM_VID))?;
+    let dev = resolve_qcom_device(&devices, target)?;
+    let mut sahara = SaharaSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
+    sahara.switch_to_streaming()?;
+    let mut firehose = FirehoseSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
+    firehose.configure("emmc", Some("emmc"))?;
+    let table = firehose.get_partition_table()?;
+    let sector_size = firehose.sector_size.max(512) as u64;
+
+    let mut out = Vec::new();
+    let mut bad = Vec::new();
+    for (name, file) in entries {
+        let expected = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) => {
+                bad.push(format!("{name}: cannot read source file: {e}"));
+                continue;
+            }
+        };
+        if expected.is_empty() {
+            bad.push(format!("{name}: source file is empty, refusing to compare"));
+            continue;
+        }
+        let part = match table.iter().find(|p| p.name == *name) {
+            Some(p) => p,
+            None => {
+                bad.push(format!("{name}: not found in device partition table"));
+                continue;
+            }
+        };
+        let sectors = (expected.len() as u64 + sector_size - 1) / sector_size;
+        let tmp = std::env::temp_dir().join(format!(
+            "fp_qcom_verify_{}_{}.bin",
+            std::process::id(),
+            name.replace('/', "_")
+        ));
+        match firehose.read_partition(name, &tmp, part.start_sector, sectors) {
+            Ok(()) => match std::fs::read(&tmp) {
+                Ok(actual) => {
+                    let actual = &actual[..actual.len().min(expected.len())];
+                    match verify_bytes_match(&expected, actual) {
+                        Ok(()) => {
+                            let hex = sha256_file(std::path::Path::new(file))
+                                .map(|h| h[..16].to_string())
+                                .unwrap_or_else(|_| "?".to_string());
+                            out.push(format!("  MATCH '{name}' ({} bytes, sha256:{hex}...)", expected.len()));
+                        }
+                        Err(e) => bad.push(format!("{name}: MISMATCH ({e})")),
+                    }
+                }
+                Err(e) => bad.push(format!("{name}: cannot read temp file: {e}")),
+            },
+            Err(e) => bad.push(format!("{name}: read-back failed: {e}")),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+    let _ = firehose.reset();
+    for line in &out {
+        println!("{line}");
+    }
+    if bad.is_empty() {
+        Ok(format!("verify: {} partition(s) MATCH", out.len()))
+    } else {
+        for line in &bad {
+            eprintln!("{line}");
+        }
+        Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("verify failed: {}", bad.join("; ")),
+        }))
+    }
+}
+
 /// Flash firmware via Firehose using rawprogram.xml
 pub fn qcom_flash_firmware(target: &str, _programmer_path: &str, xml_path: &str, fw_dir: &str) -> Result<String> {
     // Parse rawprogram.xml
@@ -341,6 +426,10 @@ pub fn qcom_backup(target: &str, _programmer_path: &str, out_dir: &str) -> Resul
         }));
     }
     
+    match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+        Ok(summary) => results.push(serde_json::json!({"manifest": summary})),
+        Err(e) => results.push(serde_json::json!({"manifest_warning": e.to_string()})),
+    }
     Ok(serde_json::json!({
         "status": "backup complete",
         "partitions": results,

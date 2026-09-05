@@ -191,3 +191,192 @@ class TestMtkCrashBrom:
         result = core.FLOWS["mtk_crash_brom"]().run({}, buf.write)
         assert result == [True]
         assert "Already in held BROM" in buf.getvalue()
+
+
+class TestMtkAuthFlash:
+    """Auth-bypass flash flow: DA gating, bypass fallback order, flash dispatch."""
+
+    def _brom(self, monkeypatch):
+        from python.core import core
+        monkeypatch.setattr(
+            core.mtk, "find_mtk",
+            lambda: [{"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2}],
+        )
+
+    def test_registered_in_flows_and_flash_job(self):
+        from python.core import core
+        assert "mtk_auth_flash" in core.FLOWS
+        assert "auth" in core.FLOWS["mtk_auth_flash"]().name.lower()
+        assert "mtk_auth_flash" in core.JOBS["Flash Firmware"]["MTK"]
+        assert "mtk_auth_flash" in core.JOBS["Flash Firmware"]["MTK BROM"]
+
+    def test_requires_da(self, monkeypatch):
+        from python.core import core
+        import io
+        monkeypatch.setenv("MTK_DA", "")
+        monkeypatch.setattr(core, "_find_mtk_da", lambda: "")
+        buf = io.StringIO()
+        with pytest.raises(RuntimeError, match="DA binary required"):
+            core.FLOWS["mtk_auth_flash"]().run({}, buf.write)
+
+    def test_auto_falls_through_to_working_mode_then_flashes(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        da = tmp_path / "MTK_AllInOne_DA.bin"
+        da.write_bytes(b"D" * 2048)
+        fw = tmp_path / "fw"
+        fw.mkdir()
+        scat = tmp_path / "MT6768_Android_scatter.txt"
+        scat.write_text("scatter")
+        monkeypatch.setenv("MTK_DA", str(da))
+        monkeypatch.setenv("MTK_SCATTER", str(scat))
+        monkeypatch.setenv("MTK_FW_DIR", str(fw))
+        monkeypatch.delenv("MTK_BYPASS_MODE", raising=False)
+        monkeypatch.delenv("MTK_FRP_ONLY", raising=False)
+        self._brom(monkeypatch)
+        calls = []
+
+        def fake_run(args, timeout=60):
+            calls.append(args)
+            if args[0] == "mtk-bypass" and args[3] == "brom_exploit":
+                raise core.bridge.BridgeError("auth reject")
+            return "ok"
+
+        monkeypatch.setattr(core.bridge, "_run", fake_run)
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        assert core.FLOWS["mtk_auth_flash"]().run({}, buf.write) == [True]
+        bypass_modes = [a[3] for a in calls if a[0] == "mtk-bypass"]
+        assert bypass_modes[0] == "brom_exploit"
+        assert "sla_bypass" in bypass_modes  # fell through after first failure
+        flash_calls = [a for a in calls if a[0] == "mtk-flash"]
+        assert len(flash_calls) == 1
+        assert flash_calls[0][2:5] == [str(da), str(scat), str(fw)]
+
+    def test_frp_only_uses_gpt_wipe(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        da = tmp_path / "MTK_AllInOne_DA.bin"
+        da.write_bytes(b"D" * 2048)
+        monkeypatch.setenv("MTK_DA", str(da))
+        monkeypatch.setenv("MTK_BYPASS_MODE", "standard")
+        monkeypatch.setenv("MTK_FRP_ONLY", "1")
+        self._brom(monkeypatch)
+        calls = []
+        monkeypatch.setattr(core.bridge, "_run", lambda a, timeout=60: calls.append(a) or "ok")
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        assert core.FLOWS["mtk_auth_flash"]().run({}, buf.write) == [True]
+        assert [a[0] for a in calls] == ["mtk-bypass", "mtk-frp-gpt"]
+
+    def test_all_modes_fail_aborts(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        da = tmp_path / "MTK_AllInOne_DA.bin"
+        da.write_bytes(b"D" * 2048)
+        monkeypatch.setenv("MTK_DA", str(da))
+        monkeypatch.delenv("MTK_BYPASS_MODE", raising=False)
+        monkeypatch.delenv("MTK_FRP_ONLY", raising=False)
+        self._brom(monkeypatch)
+        monkeypatch.setattr(
+            core.bridge, "_run",
+            lambda a, timeout=60: (_ for _ in ()).throw(core.bridge.BridgeError("nope")),
+        )
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        with pytest.raises(RuntimeError, match="auth bypass failed"):
+            core.FLOWS["mtk_auth_flash"]().run({}, buf.write)
+
+
+class TestMtkVerify:
+    def test_registered(self):
+        from python.core import core
+        assert "mtk_verify" in core.FLOWS
+        assert "mtk_verify" in core.JOBS["Read Device Info"]["MTK BROM"]
+        assert "qcom_verify" in core.FLOWS
+        assert "qcom_verify" in core.JOBS["Read Device Info"]["EDL"]
+
+    def test_parse_part_entries(self):
+        from python.core import core
+        assert core._parse_part_entries("frp=/tmp/a.img, nvdata=/tmp/b.img") == [
+            ("frp", "/tmp/a.img"), ("nvdata", "/tmp/b.img")]
+        assert core._parse_part_entries("  , bad , = ,x=") == []
+        assert core._parse_part_entries("") == []
+
+    def test_mtk_verify_flow_calls_bridge(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        da = tmp_path / "da.bin"
+        da.write_bytes(b"D" * 2048)
+        monkeypatch.setenv("MTK_DA", str(da))
+        monkeypatch.setenv("MTK_VERIFY_PARTS", "frp=/tmp/frp.img")
+        monkeypatch.setattr(
+            core.mtk, "find_mtk",
+            lambda: [{"vid": 0x0e8d, "pid": 0x0003, "bus": 1, "address": 2}],
+        )
+        calls = []
+        monkeypatch.setattr(core.bridge, "_run", lambda a, timeout=60: calls.append(a) or "verify: 1 partition(s) MATCH")
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        buf = io.StringIO()
+        assert core.FLOWS["mtk_verify"]().run({}, buf.write) == [True]
+        assert calls[0][:3] == ["mtk-verify-part", "1:2", str(da)]
+        assert calls[0][3] == "frp=/tmp/frp.img"
+
+    def test_mtk_verify_requires_parts(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        da = tmp_path / "da.bin"
+        da.write_bytes(b"D" * 2048)
+        monkeypatch.setenv("MTK_DA", str(da))
+        monkeypatch.delenv("MTK_VERIFY_PARTS", raising=False)
+        buf = io.StringIO()
+        with pytest.raises(RuntimeError, match="MTK_VERIFY_PARTS"):
+            core.FLOWS["mtk_verify"]().run({}, buf.write)
+
+    def test_simlock_patch_verifies_write(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        recipe = {"partition": "nvdata", "offset": 8,
+                  "lock_bytes": b"\x01\x00\x00\x00",
+                  "unlocked_bytes": b"\x00\x00\x00\x00"}
+        monkeypatch.setattr(core, "_MTK_SIMLOCK_RECIPES", {"SM-A065F": dict(recipe)})
+        monkeypatch.setenv("MTK_SIMLOCK_PATCH", "1")
+        img = tmp_path / "nvdata.img"
+        img.write_bytes(b"\x00" * 8 + b"\x01\x00\x00\x00" + b"\x00" * 16)
+        calls = []
+        monkeypatch.setattr(core.bridge, "_run", lambda a, timeout=60: calls.append(a) or "ok")
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+        monkeypatch.setattr(core.bridge, "mtk_verify_part", lambda *a, **k: calls.append(("verify",) + a) or "MATCH")
+        logs = []
+        core._mtk_simlock_patch({"model": "SM-A065F"}, logs.append, "auto", "auto",
+                                [("nvdata", str(img))])
+        kinds = [c[0] if isinstance(c, tuple) else c[0] for c in calls]
+        assert "mtk-flash-part" in kinds
+        assert "verify" in kinds
+
+    def test_simlock_patch_aborts_on_verify_mismatch(self, monkeypatch, tmp_path):
+        from python.core import core
+        import io
+        recipe = {"partition": "nvdata", "offset": 8,
+                  "lock_bytes": b"\x01\x00\x00\x00",
+                  "unlocked_bytes": b"\x00\x00\x00\x00"}
+        monkeypatch.setattr(core, "_MTK_SIMLOCK_RECIPES", {"SM-A065F": dict(recipe)})
+        monkeypatch.setenv("MTK_SIMLOCK_PATCH", "1")
+        img = tmp_path / "nvdata.img"
+        img.write_bytes(b"\x00" * 8 + b"\x01\x00\x00\x00" + b"\x00" * 16)
+
+        def boom(a, timeout=60):
+            if a[0] == "mtk-flash-part":
+                return "ok"
+            raise Exception("MISMATCH")
+
+        monkeypatch.setattr(core.bridge, "_run", boom)
+        monkeypatch.setattr(core.bridge, "BridgeError", Exception)
+
+        def boom_verify(*a, **k):
+            raise core.bridge.BridgeError("MISMATCH at offset 0x8")
+
+        monkeypatch.setattr(core.bridge, "mtk_verify_part", boom_verify)
+        with pytest.raises(RuntimeError, match="VERIFY FAILED"):
+            core._mtk_simlock_patch({"model": "SM-A065F"}, lambda m: None, "auto", "auto",
+                                    [("nvdata", str(img))])
