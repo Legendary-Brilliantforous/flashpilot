@@ -76,8 +76,14 @@ rm -f "$V/bin/pip" "$V/bin/pip3" "$V/bin/activate" "$V/bin/activate.csh" \
       "$V/bin/activate.fish" "$V/bin/Activate.ps1"
 rm -rf "$V/include"
 # dev / runtime-unused packages.
-rm -rf "$SP/pytest" "$SP/_pytest" "$SP/pluggy" "$SP/iniconfig"
+rm -rf "$SP/pytest" "$SP/_pytest" "$SP/pluggy" "$SP/iniconfig" "$SP/py"
 rm -rf "$SP/Pygments" "$SP/pygments" "$SP/packaging"
+# Unused heavyweight libs (verified: nothing in the app or in declared
+# dependencies imports them; strip defensively in case they get reinstalled).
+# NOTE: tqdm + Cryptodome stay — samloader (FUS firmware downloader) needs both.
+rm -rf "$SP/PySide6" "$SP/shiboken6" "$SP/pyside6_addons" "$SP/pyside6_essentials"
+rm -rf "$SP/lxml" "$SP/pyaxmlparser"
+rm -rf "$SP/asn1crypto" "$SP/click" "$SP/sipbuild" "$SP/sip" "$SP/py"
 rm -f "$V/bin/py.test" "$V/bin/pytest" "$V/bin/pygmentize" \
       "$V/bin/pip3.12"
 rm -rf "$SP"/*.dist-info
