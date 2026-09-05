@@ -185,6 +185,7 @@ flashpilot/
 │   ├── spd.rs                #   Spreadtrum/UNISOC BSL protocol (+ PAC)
 │   ├── mtp.rs at.rs adb.rs   #   MTP, AT command, ADB plumbing
 │   └── config.rs error.rs util.rs
+├── main.py                   # app entry (venv-safe launcher → python.gui.qt_app)
 ├── python/
 │   ├── core/
 │   │   ├── core.py           #   THE registry: FLOWS / JOBS / MODES + all flows
@@ -198,19 +199,22 @@ flashpilot/
 │   │   ├── mtk.py            #   MTK PIDs/stages/chips (0003=BROM, 2000=preloader)
 │   │   ├── knox.py qcn.py imei.py emmc.py pac.py  # EXPERIMENTAL domains
 │   │   ├── experimental.py   #   per-run ack gates + audit log (Q2-B strict)
-│   │   ├── pit.py pitstore.py safety.py flashing.py fastboot.py
-│   │   └── adb.py device_info.py health.py integrity.py knox.py ...
+│   │   ├── pit.py pitstore.py safety.py flashing.py fastboot.py fus.py
+│   │   └── adb.py device_info.py health.py integrity.py spd_adb.py
+│   │       updater.py usb_watch.py compat.py apple.py
 │   └── gui/
 │       ├── qt_app.py         #   the PyQt6 studio (~12k LOC)
 │       ├── devices.py        #   brand→model→action drill-down pages
 │       ├── nav.py            #   nav rail + OEM chip bar
 │       ├── theme.py          #   tokens (accent vs focus_ring/sel_border) + QSS
 │       ├── animations.py     #   Motion (shake/rubber serialized, no stuck state)
+│       ├── toast.py          #   toast notifications
 │       └── supported_devices.json  #   brand/model/chip research table
+├── operations/               # per-operation docs + research (frp/mdm/flashing/…)
 ├── docs/                     # screenshots (fresh) + logo
-├── root/                     # udev rules (odin4 fetched by scripts/fetch-odin4.sh)
-├── scripts/                  # fetch-odin4.sh, dev scripts
-├── pit/ mdm_qr/              # sample PIT + MDM QR provisioning assets (git-ignored)
+├── root/                     # udev rules + setup-usb.sh (odin4 fetched, not vendored)
+├── scripts/                  # fetch-odin4.sh, dump-connected.sh, validate_mtp_at.py
+├── INDEX.md CHANGELOG.md     # engineering index + release changelog
 └── tests/                    # pytest suite (flow, MTK, PIT, odin safety, devices…)
 ```
 
