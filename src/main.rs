@@ -13,6 +13,10 @@ mod mtp;
 mod odin;
 mod qualcomm;
 mod spd;
+mod fastboot;
+mod imgtools;
+mod pac;
+mod pit;
 mod usb;
 mod util;
 
@@ -80,8 +84,23 @@ fn main() {
         eprintln!("  mtk-detect-extended    extended MTK detect (wires mtk_detect_extended + OperationContext)");
         eprintln!("  mtk-mem-probe <t>      probe BROM memory (wires read16/write16/write32/reset_device)");
         eprintln!("  mtk-reset <t>          reset MTK device via BROM (wires reset_device)");
-        eprintln!("  adb-devices            print `adb devices -l` output as JSON");
-        eprintln!("  adb-shell <cmd>        run `adb shell <cmd>`, print stdout");
+        eprintln!("  adb-devices            native ADB scan as `adb devices -l` JSON lines");
+        eprintln!("  adb-shell <s|-> <ms> <cmd...>  native `adb shell` on serial (or first device)");
+        eprintln!("  adb-pull <s|-> <ms> <remote> <local>  native `adb pull` via sync");
+        eprintln!("  adb-push <s|-> <ms> <local> <remote>  native `adb push` via sync");
+        eprintln!("  fastboot-devices       list USB devices exposing a fastboot interface (JSON)");
+        eprintln!("  fastboot-cmd <t> <ms> <cmd...>  run one raw fastboot command on target (getvar/oem/erase/reboot)");
+        eprintln!("  pit-parse <file>       parse Samsung PIT: header + entries JSON");
+        eprintln!("  pit-model <file>       PIT header strings JSON (no magic check)");
+        eprintln!("  pit-health <file>      PIT forensic verdict JSON (always exit 0)");
+        eprintln!("  pit-find <file> <name> find one PIT entry by name (JSON or null)");
+        eprintln!("  pit-overlaps <file>    overlap pairs (all + significant) JSON");
+        eprintln!("  pac-parse <file>       parse SPD PAC container (JSON)");
+        eprintln!("  pac-extract <file> <dir>  extract PAC payloads (JSON file list)");
+        eprintln!("  pac-pack <dir> <out> [product]  pack folder into PAC");
+        eprintln!("  boot-info <img>        Android boot image header + prop list (JSON)");
+        eprintln!("  boot-patch-adb <in> <out>  patch boot ramdisk props for ADB (JSON summary)");
+        eprintln!("  vbmeta-patch <in> <out> [flags]  set AVB flags (JSON, false when not AVB)");
         eprintln!("  usb-config <t> <idx>   set USB configuration <idx> on target");
         eprintln!("  usb-detach-kernel <t>  detach kernel drivers (cdc_acm) from all interfaces");
         eprintln!("  at-send <t> <cmd> [ms]  send AT command over CDC ACM, read reply");
@@ -736,8 +755,146 @@ fn main() {
         }
         "adb-devices" => adb::devices_json(),
         "adb-shell" => {
-            let cmd = args[2..].join(" ");
-            adb::shell(&cmd)
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge adb-shell <serial|-> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::shell_cli(&args[2], timeout_ms, &args[4..])
+        }
+        "adb-pull" => {
+            if args.len() != 6 {
+                eprintln!("usage: flashpilot-bridge adb-pull <serial|-> <timeout_ms> <remote> <local>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::pull_cli(&args[2], timeout_ms, &args[4], &args[5])
+        }
+        "adb-push" => {
+            if args.len() != 6 {
+                eprintln!("usage: flashpilot-bridge adb-push <serial|-> <timeout_ms> <local> <remote>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::push_cli(&args[2], timeout_ms, &args[4], &args[5])
+        }
+        "fastboot-devices" => fastboot::fastboot_devices_cli(),
+        "pit-parse" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-parse <pit_file>");
+                exit(2);
+            }
+            pit::parse_cli(&args[2])
+        }
+        "pit-health" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-health <pit_file>");
+                exit(2);
+            }
+            pit::health_cli(&args[2])
+        }
+        "pit-model" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-model <pit_file>");
+                exit(2);
+            }
+            pit::model_cli(&args[2])
+        }
+        "pit-find" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge pit-find <pit_file> <name>");
+                exit(2);
+            }
+            pit::find_cli(&args[2], &args[3])
+        }
+        "pit-overlaps" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-overlaps <pit_file>");
+                exit(2);
+            }
+            pit::overlaps_cli(&args[2])
+        }
+        "pac-parse" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pac-parse <pac_file>");
+                exit(2);
+            }
+            pac::parse_cli(&args[2])
+        }
+        "pac-extract" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge pac-extract <pac_file> <out_dir>");
+                exit(2);
+            }
+            pac::extract_cli(&args[2], &args[3])
+        }
+        "pac-pack" => {
+            if args.len() < 4 || args.len() > 5 {
+                eprintln!("usage: flashpilot-bridge pac-pack <in_dir> <out_pac> [product]");
+                exit(2);
+            }
+            let product = args.get(4).map(|s| s.as_str()).unwrap_or("");
+            pac::pack_cli(&args[2], &args[3], product)
+        }
+        "boot-info" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge boot-info <boot_img>");
+                exit(2);
+            }
+            imgtools::boot_info_cli(&args[2])
+        }
+        "boot-patch-adb" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge boot-patch-adb <in.img> <out.img>");
+                exit(2);
+            }
+            imgtools::boot_patch_adb_cli(&args[2], &args[3])
+        }
+        "vbmeta-patch" => {
+            if args.len() < 4 || args.len() > 5 {
+                eprintln!("usage: flashpilot-bridge vbmeta-patch <in> <out> [flags]");
+                exit(2);
+            }
+            let flags: u32 = args
+                .get(4)
+                .map(|s| {
+                    let t = s.trim_start_matches("0x").trim_start_matches("0X");
+                    u32::from_str_radix(t, 16).unwrap_or(0x03)
+                })
+                .unwrap_or(0x03);
+            imgtools::vbmeta_patch_cli(&args[2], &args[3], flags)
+        }
+        "fastboot-cmd" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge fastboot-cmd <vid:pid@bus:addr> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            fastboot::fastboot_cmd_cli(&args[2], timeout_ms, &args[4..])
         }
         "usb-config" => {
             if args.len() < 4 {

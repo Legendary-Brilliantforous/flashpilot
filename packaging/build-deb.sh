@@ -50,19 +50,20 @@ mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 # 3. Rust bridge.
 install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
 
-# 4. Bundled venv (PyQt6 + segno + lz4). Reuses the repo's .venv when present
-#    (the user's environment), otherwise builds a fresh one with the system
-#    interpreter. Either way the CPython ABI must match the target's python3
-#    minor, which is enforced in Depends.
-SRC_VENV="$ROOT/.venv"
-if [ -x "$SRC_VENV/bin/python" ] && [ -d "$SRC_VENV/lib/python$PYVER/site-packages/PyQt6" ]; then
-    echo "-- reusing repo .venv (PyQt6 present)"
-    cp -a "$SRC_VENV" "$STAGE/usr/lib/flashpilot/venv"
+# 4. Bundled venv (PyQt6 + segno + lz4 + samloader + requests + tqdm).
+#    Default: build a FRESH, clean venv from requirements so the .deb is
+#    reproducible and immune to local .venv pollution.
+#    Opt-in: export FLASHPILOT_REUSE_VENV=1 to reuse the repo's .venv instead
+#    (faster dev builds, but caller must ensure .venv is clean).
+V="$STAGE/usr/lib/flashpilot/venv"
+if [ -n "${FLASHPILOT_REUSE_VENV:-}" ] && [ -x "$ROOT/.venv/bin/python" ] && [ -d "$ROOT/.venv/lib/python$PYVER/site-packages/PyQt6" ]; then
+    echo "-- FLASHPILOT_REUSE_VENV=1: reusing repo .venv (PyQt6 present)"
+    cp -a "$ROOT/.venv" "$V"
 else
-    echo "-- building fresh venv (pip install PyQt6 segno lz4 zstd)"
-    /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
-        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0" "zstandard>=0.22" "samloader>=0.2.0" "requests>=2.28.0" "tqdm>=4.0"
+    echo "-- building fresh venv (pip install from requirements.txt)"
+    /usr/bin/python3 -m venv "$V"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 "$V/bin/pip" install --quiet \
+        --only-binary=:all: --no-input -r "$ROOT/requirements.txt"
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"

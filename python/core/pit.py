@@ -30,7 +30,12 @@ numeric field one slot late (deviceType read as binaryType, etc.) while the
 partition names happened to still land correctly - masking the bug.
 """
 
+import contextlib
+import os
 import struct
+import tempfile
+
+from . import bridge
 
 PIT_MAGIC = 0x12349876
 HEADER_SIZE = 28   # magic + count + Unknown[8] + Project[8] + Reserved
@@ -152,6 +157,40 @@ class PitEntry:
             f"identifier={self.identifier} size={self.size_bytes()})"
         )
 
+    @classmethod
+    def from_dict(cls, d):
+        """Build from a native-engine entry dict (bridge `pit-parse`)."""
+        e = cls.__new__(cls)
+        e.index = d["index"]
+        e.binary_type = d["binary_type"]
+        e.device_type = d["device_type"]
+        e.identifier = d["identifier"]
+        e.attributes = d["attributes"]
+        e.update_attributes = d["update_attributes"]
+        e.block_size = d["block_size"]
+        e.block_count = d["block_count"]
+        e.file_offset = d["file_offset"]
+        e.file_size = d["file_size"]
+        e.name = d["name"]
+        e.flash_filename = d["flash_filename"]
+        e.delta_filename = d["delta_filename"]
+        return e
+
+
+@contextlib.contextmanager
+def _pit_tmp(raw: bytes):
+    """Stage raw PIT bytes as a temp file for bridge CLI input."""
+    fd, path = tempfile.mkstemp(prefix="fp_pit_", suffix=".pit")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(bytes(raw))
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
 
 def human_size(n):
     """Bytes -> compact human string."""
@@ -183,8 +222,8 @@ def _clean_str_at(data, offset):
     return ""
 
 
-def parse_header(raw: bytes):
-    """Return (model, unknown, project, reserved) from the 28-byte header."""
+def _parse_header_local(raw: bytes):
+    """Pure-Python header parse (fallback + unit-test path)."""
     if len(raw) < HEADER_SIZE:
         return "", "", "", 0
     unknown = _str_at(raw[:HEADER_SIZE], HDR_UNKNOWN_OFF)[:8]
@@ -194,12 +233,26 @@ def parse_header(raw: bytes):
     return model, unknown.rstrip("\x00"), project.rstrip("\x00"), reserved
 
 
+def parse_header(raw: bytes):
+    """Return (model, unknown, project, reserved) from the 28-byte header
+    (never raises; falls back locally on any bridge failure)."""
+    if len(raw) < HEADER_SIZE:
+        return "", "", "", 0
+    try:
+        with _pit_tmp(raw) as path:
+            d = bridge.pit_model(path)
+        return d["model"], d["unknown"], d["project"], d["reserved"]
+    except bridge.BridgeError:
+        return _parse_header_local(raw)
+
+
 def parse_model(raw: bytes):
     """Model/project string from the PIT header ('COM_TAR2MTK6765')."""
     return parse_header(raw)[0]
 
 
-def parse_pit(raw: bytes):
+def _parse_pit_local(raw: bytes):
+    """Pure-Python parse (fallback + unit-test path)."""
     if len(raw) < HEADER_SIZE:
         raise ValueError("PIT too short")
     magic = struct.unpack_from("<I", raw, HDR_MAGIC_OFF)[0]
@@ -215,6 +268,20 @@ def parse_pit(raw: bytes):
         if entry.is_flashable():
             entries.append(entry)
     return entries
+
+
+def parse_pit(raw: bytes):
+    """Parse flashable entries via the native engine (local fallback when
+    the bridge binary is absent). Raises ValueError on bad magic/short
+    input, like before."""
+    try:
+        with _pit_tmp(raw) as path:
+            doc = bridge.pit_parse(path)
+        return [PitEntry.from_dict(e) for e in doc["entries"]]
+    except bridge.BinaryNotFoundError:
+        return _parse_pit_local(raw)
+    except bridge.BridgeError as e:
+        raise ValueError(str(e))
 
 
 # Suffixes firmware archives put on image files that must not take part in
@@ -265,17 +332,8 @@ def validate_and_sanitize_pit(pit_raw: bytes, archive_part_names: list) -> tuple
         return True, [], [], ""
 
 
-def find_partition(entries_or_raw, name: str):
-    """Find a PIT entry by partition or flash-file name (normalized).
-    Accepts a parsed entry list or raw PIT bytes. Returns PitEntry or None.
-    """
-    if isinstance(entries_or_raw, (bytes, bytearray)):
-        try:
-            entries = parse_pit(bytes(entries_or_raw))
-        except ValueError:
-            return None
-    else:
-        entries = entries_or_raw
+def _find_in(entries, name: str):
+    """Two-pass normalized match over entry objects (name, then flash file)."""
     want = normalize_part_name(name)
     for e in entries:
         if normalize_part_name(e.name) == want:
@@ -284,6 +342,30 @@ def find_partition(entries_or_raw, name: str):
         if e.flash_filename and normalize_part_name(e.flash_filename) == want:
             return e
     return None
+
+
+def find_partition(entries_or_raw, name: str):
+    """Find a PIT entry by partition or flash-file name (normalized).
+    Accepts a parsed entry list or raw PIT bytes. Returns PitEntry or None.
+    Raw bytes go through the native engine (single spawn); lists match
+    locally (no per-entry subprocesses in hot loops or unit tests).
+    """
+    if isinstance(entries_or_raw, (bytes, bytearray)):
+        raw = bytes(entries_or_raw)
+        try:
+            with _pit_tmp(raw) as path:
+                d = bridge.pit_find(path, name)
+            return PitEntry.from_dict(d) if d else None
+        except bridge.BinaryNotFoundError:
+            pass
+        except bridge.BridgeError:
+            return None
+        try:
+            entries = _parse_pit_local(raw)
+        except ValueError:
+            return None
+        return _find_in(entries, name)
+    return _find_in(entries_or_raw, name)
 
 
 def is_meta_entry(entry):
@@ -396,7 +478,20 @@ def validate_pit(raw: bytes):
 
     odin4 rejects devices/archives on the FAIL-level findings; FlashPilot
     surfaces them before anything is written instead of after.
+
+    Computed by the native engine; never raises (falls back locally on any
+    bridge failure, matching the old contract).
     """
+    try:
+        with _pit_tmp(raw) as path:
+            d = bridge.pit_health(path)
+        d.pop("summary", None)
+        return d
+    except bridge.BridgeError:
+        return _validate_pit_local(raw)
+
+
+def _validate_pit_local(raw: bytes):
     findings = []
 
     def add(sev, code, msg):
@@ -489,27 +584,9 @@ def _health_result(findings, stats):
     return {"verdict": verdict, "findings": findings, "stats": stats}
 
 
-def pit_style(raw):
-    """Thor's old/new PIT semantic detection.
-
-    'new': blockSizeOrOffset varies between entries -> it carries START
-           BLOCKS (partition geometry present).
-    'old': uniform value -> legacy 'block size' semantics (RO/RW/STL +
-           FOTA/Secure bitmasks apply cleanly to attributes).
-    """
-    prev = None
-    for e in parse_pit(raw):
-        if e.block_size == 0 and e.block_count == 0:
-            continue  # placeholder rows carry no geometry
-        if prev is not None and e.block_size != prev:
-            return "new"
-        prev = e.block_size
-    return "old"
-
-
-def pit_health(raw: bytes):
-    """One-call health check used by flows/GUI: verdict + style + summary."""
-    result = validate_pit(raw)
+def _pit_health_local(raw: bytes):
+    """Pure-Python health (fallback + unit-test path)."""
+    result = _validate_pit_local(raw)
     stats = result["stats"]
     result["summary"] = (
         f"PIT {result['verdict'].upper()}: {stats['parsed_count']}/"
@@ -518,6 +595,44 @@ def pit_health(raw: bytes):
         + (f", model={stats['model']}" if stats["model"] else "")
     )
     return result
+
+
+def pit_health(raw: bytes):
+    """One-call health check used by flows/GUI: verdict + style + summary.
+    Computed by the native engine (local fallback, never raises)."""
+    try:
+        with _pit_tmp(raw) as path:
+            return bridge.pit_health(path)
+    except bridge.BridgeError:
+        return _pit_health_local(raw)
+
+
+def pit_style(raw):
+    """Thor's old/new PIT semantic detection.
+
+    'new': blockSizeOrOffset varies between entries -> it carries START
+           BLOCKS (partition geometry present).
+    'old': uniform value -> legacy 'block size' semantics (RO/RW/STL +
+           FOTA/Secure bitmasks apply cleanly to attributes).
+
+    Computed by the native engine; raises ValueError on bad input like
+    parse_pit does (local fallback when the bridge is absent)."""
+    try:
+        with _pit_tmp(raw) as path:
+            doc = bridge.pit_parse(path)
+        return doc["style"]
+    except bridge.BinaryNotFoundError:
+        pass
+    except bridge.BridgeError as e:
+        raise ValueError(str(e))
+    prev = None
+    for e in _parse_pit_local(raw):
+        if e.block_size == 0 and e.block_count == 0:
+            continue
+        if prev is not None and e.block_size != prev:
+            return "new"
+        prev = e.block_size
+    return "old"
 
 
 def pit_map(raw: bytes, width: int = 46):

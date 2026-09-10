@@ -13,9 +13,10 @@ a `restore` entry point writes it back.
 
 import os
 import struct
-import subprocess
 import tempfile
 import time
+
+from . import bridge
 
 
 # Android boot image magic
@@ -35,55 +36,12 @@ class BootImageError(RuntimeError):
     pass
 
 
-def _find_prop_files(ramdisk: bytes) -> list:
-    """Return offsets of candidate prop files inside a compressed ramdisk blob.
+def _patch_props_in_ramdisk(ramdisk: bytes, log) -> tuple:
+    """Decompress gzip ramdisk, patch prop files, recompress.
 
-    The ramdisk is usually gzip; we decompress with the system gzip tool so we
-    do not need a Python zlib stream helper for concatenated members."""
-    import gzip
-    import io
-
-    out = []
-    try:
-        raw = gzip.decompress(ramdisk)
-    except Exception:
-        # already uncompressed cpio? use as-is
-        raw = ramdisk
-
-    # Newer Androids ship props in 2nd-stage files too - patch every *.prop
-    # member we can find by scanning the cpio newc headers ("070701").
-    idx = 0
-    while True:
-        idx = raw.find(b"070701", idx)
-        if idx < 0:
-            break
-        # newc header is 110 ASCII bytes; namesize at offset 94 (6+13*8=110? see below)
-        try:
-            hdr = raw[idx:idx + 110]
-            if len(hdr) < 110 or not _is_hex_ascii(hdr):
-                idx += 6
-                continue
-            namesize = int(hdr[94:102], 16)
-            filesize = int(hdr[54:62], 16)
-            name_start = idx + 110
-            name = raw[name_start:name_start + namesize - 1].decode(
-                "ascii", errors="ignore")
-            data_start = name_start + namesize
-            data_start = (data_start + 3) & ~3  # 4-byte align
-            if any(name.endswith(s) for s in ("/default.prop", "/prop.default",
-                                              "/build.prop")) or \
-               name in ("default.prop", "prop.default", "build.prop"):
-                out.append((name, data_start, filesize, raw))
-            idx = data_start + ((filesize + 3) & ~3)
-        except Exception:
-            idx += 6
-            continue
-    return out
-
-
-def _patch_props_in_ramdisk(ramdisk: bytes, log) -> bytes:
-    """Decompress gzip ramdisk, patch prop files, recompress. Returns new
-    ramdisk bytes suitable to write back into the boot image."""
+    Returns (new_ramdisk_bytes, patched_names, was_gzipped). Pure-Python
+    path: fallback when the bridge is absent + unit-test oracle for the
+    native engine (byte parity on decompressed content)."""
     import gzip
     import io
 
@@ -94,7 +52,7 @@ def _patch_props_in_ramdisk(ramdisk: bytes, log) -> bytes:
         raw = ramdisk
         was_gz = False
 
-    patched = 0
+    patched = []
     idx = 0
     buf = bytearray(raw)
     while True:
@@ -126,31 +84,36 @@ def _patch_props_in_ramdisk(ramdisk: bytes, log) -> bytes:
             if len(nb) <= len(content):
                 nb = nb + b"\n" * (len(content) - len(nb))  # pad with newlines
                 buf[data_start:data_start + filesize] = nb
-                patched += 1
+                patched.append(name)
                 log(f"    patched {name} ({filesize}B)")
                 idx = data_start + ((filesize + 3) & ~3)
                 continue
             # Patched text is larger than the slot: grow the cpio by rewriting
             # this entry's header (new filesize) and splicing the rest after.
             # This is the standard approach used by magiskboot's cpio repack.
+            # Data position MUST use the same absolute alignment as the
+            # reader (align_up(110 + namesize)); padding the name length
+            # alone disagrees with the scan by (110 % 4) bytes and corrupts
+            # every entry after the splice.
             growth = ((len(nb) + 3) & ~3) - ((filesize + 3) & ~3)
             new_namesize = namesize  # name unchanged
             fields_new = bytearray(hdr)
             fields_new[54:62] = f"{len(nb):08X}".encode()
             # keep namesize as-is
+            data_pos = (110 + namesize + 3) & ~3
             new_entry = bytes(fields_new) + bytes(buf[name_start:name_start + namesize])
-            pad1 = b"\x00" * (((-namesize) % 4))
+            pad1 = b"\x00" * (data_pos - 110 - namesize)
             pad2 = b"\x00" * (((-len(nb)) % 4))
             new_entry += pad1 + nb + pad2
-            old_entry_len = 110 + namesize + ((-namesize) % 4) + ((filesize + 3) & ~3)
+            old_entry_len = data_pos + ((filesize + 3) & ~3)
             buf[idx:idx + old_entry_len] = new_entry
-            patched += 1
+            patched.append(name)
             log(f"    patched+grew {name} ({filesize} -> {len(nb)}B, +{growth})")
             idx += len(new_entry)
             continue
         idx = data_start + ((filesize + 3) & ~3)
 
-    if patched == 0:
+    if not patched:
         raise BootImageError("no prop file found/patched in ramdisk")
 
     new_raw = bytes(buf)
@@ -158,8 +121,8 @@ def _patch_props_in_ramdisk(ramdisk: bytes, log) -> bytes:
         bio = io.BytesIO()
         with gzip.GzipFile(fileobj=bio, mode="wb", mtime=0) as g:
             g.write(new_raw)
-        return bio.getvalue()
-    return new_raw
+        return bio.getvalue(), patched, True
+    return new_raw, patched, False
 
 
 def _patch_prop_text(text: str, log, name: str) -> str:
@@ -221,8 +184,54 @@ def write_boot(bridge, target, fdl1, a1, img_path, fdl2=None, a2=None,
     bridge._run(args, timeout=900)
 
 
+def _repack_local(img: bytearray, patched_path: str, log) -> dict:
+    """Pure-Python repack (fallback + unit-test oracle for the native
+    engine). Returns the same summary dict as `boot-patch-adb`."""
+    if len(img) < 40 or img[:8] != BOOT_MAGIC:
+        raise BootImageError("not a boot image (missing ANDROID! magic)")
+    # boot image v0-v3 header: kernel_size@8 kernel_addr@12 ramdisk_size@24
+    kernel_size = struct.unpack_from("<I", img, 8)[0]
+    ramdisk_size = struct.unpack_from("<I", img, 24)[0]
+    page_size = struct.unpack_from("<I", img, 36)[0]
+    if page_size == 0:
+        raise BootImageError("invalid page size 0")
+
+    def page_align(n):
+        return ((n + page_size - 1) // page_size) * page_size
+
+    rd_off = page_size + page_align(kernel_size)
+    ramdisk = bytes(img[rd_off:rd_off + ramdisk_size])
+    new_rd, patched_files, was_gz = _patch_props_in_ramdisk(ramdisk, log)
+
+    if len(new_rd) > ramdisk_size:
+        # grow image: shift second-stage/dt after ramdisk and fix header size
+        tail = bytes(img[rd_off + ramdisk_size:])
+        growth = len(new_rd) - ramdisk_size
+        img[rd_off:rd_off + ramdisk_size] = new_rd
+        img[rd_off + ramdisk_size:rd_off + ramdisk_size] = tail
+        struct.pack_into("<I", img, 24, len(new_rd))
+    else:
+        growth = 0
+        img[rd_off:rd_off + ramdisk_size] = new_rd.ljust(ramdisk_size, b"\x00")
+        struct.pack_into("<I", img, 24, ramdisk_size)  # unchanged but explicit
+
+    with open(patched_path, "wb") as f:
+        f.write(img)
+    return {
+        "kernel_size": kernel_size,
+        "ramdisk_size": ramdisk_size,
+        "page_size": page_size,
+        "ramdisk_offset": rd_off,
+        "ramdisk_old": ramdisk_size,
+        "ramdisk_new": len(new_rd),
+        "grew_by": growth,
+        "patched_files": patched_files,
+        "recompressed": was_gz,
+    }
+
+
 def enable_adb_via_boot_patch(bridge, target, fdl1, a1, fdl2=None, a2=None,
-                              part="boot", backup_dir="", log=print) -> dict:
+                               part="boot", backup_dir="", log=print) -> dict:
     """Full flow: read -> patch -> write. Returns dict with paths."""
     log(f"[adb-en] reading {part} ...")
     stock = read_boot(bridge, target, fdl1, a1, fdl2, a2, part, log=log)
@@ -240,34 +249,17 @@ def enable_adb_via_boot_patch(bridge, target, fdl1, a1, fdl2=None, a2=None,
     if img[:8] != BOOT_MAGIC:
         raise BootImageError(f"{part} has no ANDROID! magic - not a boot image?")
 
-    # boot image v0-v3 header: kernel_size@8 kernel_addr@12 ramdisk_size@24
-    kernel_size = struct.unpack_from("<I", img, 8)[0]
-    ramdisk_size = struct.unpack_from("<I", img, 24)[0]
-    page_size = struct.unpack_from("<I", img, 36)[0]
-    log(f"[adb-en] kernel={kernel_size} ramdisk={ramdisk_size} page={page_size}")
-
-    def page_align(n):
-        return ((n + page_size - 1) // page_size) * page_size
-
-    rd_off = page_size + page_align(kernel_size)
-    ramdisk = bytes(img[rd_off:rd_off + ramdisk_size])
-    new_rd = _patch_props_in_ramdisk(ramdisk, log)
-
-    if len(new_rd) > ramdisk_size:
-        # grow image: shift second-stage/dt after ramdisk and fix header size
-        tail = bytes(img[rd_off + ramdisk_size:])
-        growth = len(new_rd) - ramdisk_size
-        img[rd_off:rd_off + ramdisk_size] = new_rd
-        img[rd_off + ramdisk_size:rd_off + ramdisk_size] = tail
-        struct.pack_into("<I", img, 24, len(new_rd))
-        log(f"[adb-en] ramdisk grew by {growth}B - header size updated")
-    else:
-        img[rd_off:rd_off + ramdisk_size] = new_rd.ljust(ramdisk_size, b"\x00")
-        struct.pack_into("<I", img, 24, ramdisk_size)  # unchanged but explicit
-
     patched_path = stock.replace(".img", "_adb.img")
-    with open(patched_path, "wb") as f:
-        f.write(img)
+    try:
+        summary = bridge.boot_patch_adb(stock, patched_path)
+    except bridge.BinaryNotFoundError:
+        summary = _repack_local(img, patched_path, log)
+    except bridge.BridgeError as e:
+        raise BootImageError(str(e))
+    log(f"[adb-en] kernel={summary['kernel_size']} "
+        f"ramdisk={summary['ramdisk_size']} page={summary['page_size']}")
+    if summary["grew_by"] > 0:
+        log(f"[adb-en] ramdisk grew by {summary['grew_by']}B - header size updated")
     log(f"[adb-en] patched image: {patched_path}")
 
     log(f"[adb-en] flashing patched {part} ...")

@@ -1,7 +1,6 @@
 import json
 import os
 import subprocess
-import shutil
 import threading
 import time
 import signal
@@ -590,6 +589,107 @@ def mtp_info(target, timeout_ms=8000, timeout=20):
     )
 
 
+def fastboot_devices(timeout=15):
+    """List USB devices exposing a native fastboot interface.
+
+    Returns [{vid, pid, bus, address, serial, product, interface}] with
+    vid/pid as lowercase hex strings. Powers the target-pinned native
+    fastboot path (multi-device safe, no system fastboot binary needed)."""
+    return json.loads(_run(["fastboot-devices"], timeout=timeout))
+
+
+def fastboot_cmd(target, args, timeout_ms=20000, timeout=30):
+    """Run one raw fastboot command (getvar/oem/erase/reboot) on an explicit
+    ``vid:pid@bus:addr`` target via the native Rust transport.
+
+    Returns the system-fastboot-style transcript (``(bootloader) ...`` lines
+    + ``OKAY [...]`` / ``FAILED (remote: ...)``). A device-side FAIL is
+    rendered in-output with exit 0 (like the system binary); transport
+    failures raise BridgeError."""
+    if isinstance(args, str):
+        args = [args]
+    return _run(
+        ["fastboot-cmd", target, str(timeout_ms), *args],
+        timeout=timeout,
+    )
+
+
+def pit_parse(pit_file, timeout=30):
+    """Parse a Samsung PIT file via the native Rust engine.
+
+    Returns {model, unknown, project, reserved, style, entries[{index,
+    binary_type, device_type, identifier, attributes, update_attributes,
+    block_size, block_count, file_offset, file_size, name, flash_filename,
+    delta_filename}]}. Raises BridgeError on bad magic/truncation."""
+    return json.loads(_run(["pit-parse", pit_file], timeout=timeout))
+
+
+def pit_health(pit_file, timeout=30):
+    """PIT forensic verdict via the native Rust engine. Always returns
+    {verdict, summary, findings[{severity, code, message}], stats} —
+    a corrupt table is a `fail` verdict, never an error."""
+    return json.loads(_run(["pit-health", pit_file], timeout=timeout))
+
+
+def pit_find(pit_file, name, timeout=30):
+    """One PIT entry dict by name (or None). Never errors on a missing
+    name; bad magic still raises like parse."""
+    return json.loads(_run(["pit-find", pit_file, name], timeout=timeout))
+
+
+def pit_model(pit_file, timeout=30):
+    """PIT header strings {model, unknown, project, reserved} with no
+    magic validation (mirrors parse_model)."""
+    return json.loads(_run(["pit-model", pit_file], timeout=timeout))
+
+
+def pit_overlaps(pit_file, timeout=30):
+    """Overlap pairs {all: [[a, b, blocks]], significant: [...]}."""
+    return json.loads(_run(["pit-overlaps", pit_file], timeout=timeout))
+
+
+def pac_parse(pac_file, timeout=60):
+    """Parse an SPD PAC container via the native Rust engine.
+
+    Returns {path, count, flash_size, entries[{index, name, size, is_nv,
+    checksum, data_offset}], total_payload}. Raises BridgeError on bad
+    magic/truncation."""
+    return json.loads(_run(["pac-parse", pac_file], timeout=timeout))
+
+
+def pac_extract(pac_file, out_dir, timeout=300):
+    """Extract PAC payloads via the native Rust engine. Returns [paths]."""
+    return json.loads(_run(["pac-extract", pac_file, out_dir], timeout=timeout))
+
+
+def pac_pack(in_dir, out_pac, product="", timeout=300):
+    """Pack a folder into a PAC via the native Rust engine. Returns path."""
+    args = ["pac-pack", in_dir, out_pac]
+    if product:
+        args.append(product)
+    return _run(args, timeout=timeout).strip()
+
+
+def boot_info(image_path, timeout=60):
+    """Android boot image header + prop-file list via the native engine."""
+    return json.loads(_run(["boot-info", image_path], timeout=timeout))
+
+
+def boot_patch_adb(in_img, out_img, timeout=300):
+    """Patch a boot image ramdisk for ADB via the native engine.
+
+    Returns {kernel_size, ramdisk_size, page_size, ramdisk_offset,
+    ramdisk_old, ramdisk_new, grew_by, patched_files, recompressed}."""
+    return json.loads(_run(["boot-patch-adb", in_img, out_img], timeout=timeout))
+
+
+def vbmeta_patch(in_img, out_img, flags=0x03, timeout=60):
+    """Set AVB flags via the native engine. Returns {patched, size[, flags]}."""
+    return json.loads(
+        _run(["vbmeta-patch", in_img, out_img, f"0x{flags:x}"], timeout=timeout)
+    )
+
+
 def adb_devices():
     return json.loads(_run(["adb-devices"]))
 
@@ -610,8 +710,65 @@ def adb_status():
     return devs
 
 
-def adb_shell(cmd, timeout=20):
-    return _run(["adb-shell", cmd], timeout=timeout)
+def _ambient_adb_serial():
+    """Serial from the ambient device scope (GUI device picker), else ''."""
+    try:
+        from . import devices as _dev
+
+        key = _dev.current_key()
+    except Exception:
+        return ""
+    if isinstance(key, str) and key.startswith("adb:"):
+        return key[4:]
+    return ""
+
+
+def _resolve_adb_serial(serial=None, need_authorized=False):
+    """Explicit serial > ambient scope > first authorized device.
+
+    Pull/push set need_authorized=True and raise BridgeError when no
+    authorized device exists (fail before touching the filesystem). Shell
+    falls back to '-' (first device), matching legacy single-device
+    behaviour when no scope is set."""
+    if serial:
+        return serial
+    ambient = _ambient_adb_serial()
+    if ambient:
+        return ambient
+    try:
+        for d in adb_status():
+            if d.get("state") == "device":
+                return d["serial"]
+    except BridgeError:
+        pass
+    if need_authorized:
+        raise BridgeError("no authorized ADB device", code="ADB_NO_DEVICE")
+    return "-"
+
+
+def adb_shell(cmd, timeout=20, serial=None):
+    """Run `adb shell <cmd>` over the native Rust transport.
+
+    Serial pinning (explicit > ambient scope > first authorized) makes
+    multi-device ADB safe; previously the system binary picked (or
+    errored on) whatever was plugged in."""
+    ser = _resolve_adb_serial(serial)
+    return _run(["adb-shell", ser, str(int(timeout * 1000)), cmd],
+                timeout=timeout + 10)
+
+
+def adb_pull(serial, remote, local, timeout=300):
+    """Native `adb pull` via the sync service (serial-pinned)."""
+    ser = _resolve_adb_serial(serial, need_authorized=True)
+    return _run(["adb-pull", ser, str(int(timeout * 1000)), remote, local],
+                timeout=timeout + 15)
+
+
+def adb_push(serial, local, remote, timeout=300):
+    """Native `adb push` via the sync service (serial-pinned)."""
+    ser = _resolve_adb_serial(serial, need_authorized=True)
+    return _run(["adb-push", ser, str(int(timeout * 1000)), local, remote],
+                timeout=timeout + 15)
 
 
 def odin_connect(target, timeout=30):
@@ -666,7 +823,8 @@ def odin_send_pit(target, pit_file, timeout=120):
 
 
 def has_adb():
-    return shutil.which("adb") is not None
+    """Native ADB needs only the bridge binary (no platform-tools on PATH)."""
+    return BRIDGE.exists()
 
 
 # ---- USB re-enumeration helpers ----------------------------------------

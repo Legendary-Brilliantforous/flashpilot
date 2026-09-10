@@ -3834,6 +3834,11 @@ class FlashPilotWindow(QMainWindow):
                 "tecno_mdm_brom":        ("Remove MDM",          "Samsung BROM" if engine == "spd" else "MTK BROM"),
                 "tecno_device_info":     ("Read Device Info",     "ADB"),
                 "tecno_enable_adb":      ("Remove FRP",          "MTP"),
+                "moto_frp_adb":          ("Remove FRP",          "ADB"),
+                "moto_frp_fastboot":     ("Remove FRP",          "FASTBOOT"),
+                "moto_oem_unlock_token": ("Read Device Info",     "FASTBOOT"),
+                "pac_extract":           ("Flash Firmware",      "SPD"),
+                "pac_pack":              ("Flash Firmware",      "SPD"),
             }.get(act)
             if job_mode:
                 self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}")
@@ -3959,6 +3964,52 @@ class FlashPilotWindow(QMainWindow):
             if act == "info":
                 self._on_section("mtk")
                 self._spd_detect()
+                return
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
+            return
+
+        if engine == "motorola":
+            # Brand-wide Motorola/Lenovo routing (universal entry + any moto
+            # model). Moto-specific acts are handled above via core.FLOWS;
+            # generic acts map to the universal ADB flows or honest guidance.
+            if act == "screen_lock":
+                self._run_ops_flow("Remove Screen Lock", "ADB",
+                                   "screen_lock_locksettings",
+                                   f"{label} · screen lock remove (ADB)")
+                return
+            if act == "adb_enable":
+                # Motorola (22b8) has no Samsung AT path and no Linux MDL
+                # driver — on-phone steps only.
+                self.log_line(f"[device] {label}: Moto has no AT ADB enable (no diag port on Linux)")
+                self._toasts.show_info(
+                    f"{label} · Enable ADB",
+                    "No PC-side ADB enable on Motorola: on the phone use the "
+                    "Browser/TalkBack route to Settings → Developer options → "
+                    "USB debugging, or unlock via fastboot (see FRP REMOVE → FB).")
+                return
+            if act == "frp":
+                try:
+                    adb_up = any(d["state"] == "device" for d in bridge.adb_status())
+                except Exception:
+                    adb_up = False
+                if adb_up:
+                    self._run_ops_flow("Remove FRP", "ADB", "moto_frp_adb",
+                                       f"{label} · FRP reset (ADB)")
+                else:
+                    self.log_line(f"[device] {label}: Moto FRP — no ADB, use fastboot flow or on-phone route")
+                    self._toasts.show_info(
+                        f"{label} · FRP",
+                        "No authorized ADB. Either run FRP REMOVE → FB "
+                        "(unlock token → erase frp), or on-phone Browser → "
+                        "Settings → remove account.")
+                return
+            if act in ("flash", "backup"):
+                self._toasts.show_info(
+                    f"{label} · {act}",
+                    "Motorola flash/backup is fastboot-based with model-specific "
+                    "stock firmware (not bundled). Use the FASTBOOT job flows "
+                    "(fastboot_flash / fastboot_erase) with your firmware files.")
                 return
             self._toasts.show_info(f"{label} · {act}",
                                    "Wiring lands in the next step.")
@@ -8895,7 +8946,7 @@ class FlashPilotWindow(QMainWindow):
             ("Bridge binary", str(bridge.BRIDGE)),
             ("Bridge built", "yes" if bridge.BRIDGE.exists()
              else "no (run `cargo build --release`)"),
-            ("ADB available", "yes" if bridge.has_adb() else "no (adb not on PATH)"),
+            ("ADB available", "yes (native)" if bridge.has_adb() else "no (bridge not built)"),
         ]
         for label, value in rows:
             row = QHBoxLayout()

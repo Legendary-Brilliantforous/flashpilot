@@ -9,7 +9,7 @@ exists, the latest tagged release.
 
 Please **do not** open a public issue for security problems. Report privately:
 
-- Email / DM to the maintainer (see GitHub profile), or
+- Email: **flashpilot@proton.me** (create this address at proton.me → free account), or
 - GitHub's private vulnerability reporting form on this repository.
 
 Please include:

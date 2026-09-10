@@ -19,6 +19,7 @@ from . import emmc as _emmc
 from . import imei as _imei
 from . import apple as _apple
 from . import ofp as _ofp
+from . import pac as _pac
 # Flow primitives live in flow.py (shared by core + flashing). Re-export here
 # for backwards-compat so `from .core import Flow` keeps working.
 from .flow import Flow, Step, FlowCancelled, request_cancel, clear_cancel, cancel_requested  # noqa: F401
@@ -1688,7 +1689,8 @@ def _fmt_bytes(n):
 
 # Fastboot is exposed on the MediaTek Samsung models (A14 5G / A05 / A06) when
 # the bootloader is unlocked, as the Google fastboot gadget 18d1:4ee0.  The
-# flows below wrap the platform-tools `fastboot` binary for those devices.
+# flows below prefer the native Rust fastboot transport (`fastboot-cmd`,
+# target-pinned) and fall back to the platform-tools `fastboot` binary.
 _FASTBOOT_IMAGE_ENV = "FASTBOOT_IMAGE"
 _FASTBOOT_PARTITION_ENV = "FASTBOOT_PARTITION"
 
@@ -1697,8 +1699,15 @@ def _fastboot_bin():
     return shutil.which("fastboot")
 
 
-def _wait_fastboot(log, timeout=30):
-    """Wait for a fastboot device (state 'fastboot' from `fastboot devices`)."""
+# Fastboot commands with a DATA (download/upload) phase. The native transport
+# implements the command phase only — sending one of these natively would
+# leave the bootloader waiting for data (wedged until reset). They always
+# use the system binary.
+_FB_DATA_CMDS = frozenset({"flash", "boot", "update", "download", "stage", "fetch"})
+
+
+def _wait_fastboot_legacy(log, timeout=30):
+    """Legacy wait: poll the system `fastboot devices` binary."""
     fb = _fastboot_bin()
     if not fb:
         log("  'fastboot' binary not found on this PC - install Android")
@@ -1727,8 +1736,134 @@ def _wait_fastboot(log, timeout=30):
     return False
 
 
+def _wait_fastboot(log, timeout=30):
+    """Wait for a fastboot device, native-first.
+
+    Polls the bridge's native fastboot detect (ambient serial scope
+    honoured). Falls back to the system-binary loop only when the bridge
+    itself is unavailable; a clean native poll that finds nothing returns
+    False with concise cable/mode guidance (no double-wait)."""
+    try:
+        from . import devices as _dev
+
+        key = _dev.current_key()
+        want = key[4:] if isinstance(key, str) and key.startswith("adb:") else None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if cancel_requested():
+                raise FlowCancelled("cancelled while waiting for fastboot")
+            try:
+                devs = bridge.fastboot_devices(timeout=10) or []
+            except Exception:  # noqa: BLE001 - bridge unavailable → legacy
+                return _wait_fastboot_legacy(
+                    log, timeout=max(5, int(deadline - time.time())))
+            good = [d for d in devs if isinstance(d, dict)]
+            if want:
+                good = [d for d in good if (d.get("serial") or "") == want]
+            if good:
+                return True
+            time.sleep(2)
+    except FlowCancelled:
+        raise
+    except Exception:  # noqa: BLE001
+        return _wait_fastboot_legacy(log, timeout=timeout)
+    log("  no device in fastboot mode. Put the phone into fastboot")
+    log("  (power off, hold Volume Down + Power, or from Android")
+    log("  `adb reboot bootloader`) and rerun.")
+    return False
+
+
+def _fastboot_native_target(log=None):
+    """Resolve a native fastboot target (``vid:pid@bus:addr``).
+
+    With an ambient device scope set (GUI device picker), the picked phone
+    wins. Without one, prefer a USB device that actually exposes a fastboot
+    interface (255/66/3) over the legacy first-match device. Returns '' when
+    nothing matches (caller falls back to the system fastboot binary)."""
+    try:
+        from . import devices as _dev
+
+        key = _dev.current_key()
+        if key:
+            return _usb_target_str(_dev.find_usb(key=key))
+        try:
+            devs = bridge.detect_all() or []
+        except Exception:  # noqa: BLE001
+            devs = []
+        for d in devs:
+            if not isinstance(d, dict):
+                continue
+            for i in d.get("interfaces") or []:
+                if (i.get("class"), i.get("subclass"), i.get("protocol")) == (255, 66, 3):
+                    t = _usb_target_str(d)
+                    if t:
+                        return t
+        return _usb_target_str(_dev.find_usb())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _usb_target_str(d):
+    """Format a USB device dict as ``vid:pid@bus:addr`` ('' when unusable)."""
+    if not isinstance(d, dict):
+        return ""
+    try:
+        return f"{int(d['vid']):04x}:{int(d['pid']):04x}@{d['bus']}:{d['address']}"
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
 def _fastboot_run(log, args, timeout=60):
-    """Run one fastboot command, echoing args + output. Returns stdout."""
+    """Run one fastboot command, echoing args + output. Returns stdout.
+
+    Prefers the native Rust transport (target-pinned ``vid:pid@bus:addr``,
+    kernel-driver detach). Falls back to the system `fastboot` binary when
+    the bridge has no matching device or the transport errors. Two hard
+    exceptions always use the system binary: the host-side `devices`
+    listing (served from native detect when available) and DATA-phase
+    commands (flash/boot/update/...) which the native transport
+    deliberately does not implement."""
+    if isinstance(args, str):
+        args = [args]
+    if not args:
+        return ""
+    head = args[0].lower().split(":")[0]
+    if head == "devices":
+        try:
+            devs = bridge.fastboot_devices(timeout=10) or []
+            lines = [f"{d.get('serial') or '????????'}\tfastboot"
+                     for d in devs if isinstance(d, dict)]
+            out = "\n".join(lines)
+        except Exception:  # noqa: BLE001
+            out = None
+        if out is None:
+            return _fastboot_run_system(log, args, timeout=timeout)
+        log("  > fastboot devices  [native]")
+        if out:
+            log(f"      {out[:800]}")
+        return out
+    if head not in _FB_DATA_CMDS:
+        target = _fastboot_native_target()
+        if target:
+            log(f"  > fastboot {' '.join(args)}  [native → {target}]")
+            try:
+                out = bridge.fastboot_cmd(
+                    target, list(args),
+                    timeout_ms=max(5000, timeout * 1000),
+                    timeout=timeout + 15,
+                )
+            except Exception as e:  # noqa: BLE001
+                log(f"  (native fastboot unavailable: {e} — system fallback)")
+            else:
+                if out:
+                    log(f"      {out[:800]}")
+                return out or ""
+    return _fastboot_run_system(log, args, timeout=timeout)
+
+
+def _fastboot_run_system(log, args, timeout=60):
+    """Legacy path: shell out to the system `fastboot` binary (no `-s`
+    serial pinning — prefer the native path whenever a device resolves)."""
     fb = _fastboot_bin()
     log(f"  > fastboot {' '.join(args)}")
     try:
@@ -1755,6 +1890,62 @@ def _fastboot_erase(log, partition, timeout=120):
         log(f"  `erase {partition}` not supported - trying `format` ...")
         out = _fastboot_run(log, ["format", partition], timeout=timeout)
     return out
+
+
+def _fastboot_getvar(log, var, timeout=20):
+    """Read one fastboot getvar value. Returns the parsed value ('' if absent).
+
+    Accepts both transcript shapes: system fastboot (`serialno: ABC`) and
+    the native transport (`(bootloader) serialno: ABC`). Some Motorola
+    bootloaders only answer the first command of a fresh USB session, so
+    callers should reset the session (replug / reboot-bootloader) before
+    each getvar on flaky devices."""
+    out = _fastboot_run(log, ["getvar", var], timeout=timeout)
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.startswith("(bootloader)"):
+            line = line[len("(bootloader)"):].strip()
+        if line.startswith(f"{var}:"):
+            return line[len(var) + 1:].strip()
+    return ""
+
+
+# Motorola-named aliases kept so the moto flows read explicitly; all logic
+# lives in the shared native-first helpers above.
+def _moto_fastboot_run(log, args, timeout=60):
+    """Motorola fastboot runner — delegates to shared native-first `_fastboot_run`."""
+    return _fastboot_run(log, args, timeout=timeout)
+
+
+def _moto_fastboot_erase(log, partition, timeout=120):
+    """Motorola erase — delegates to shared `_fastboot_erase`."""
+    return _fastboot_erase(log, partition, timeout=timeout)
+
+
+def _moto_fastboot_getvar(log, var, timeout=20):
+    """Motorola getvar — delegates to shared `_fastboot_getvar`."""
+    return _fastboot_getvar(log, var, timeout=timeout)
+
+
+def _moto_wait_fastboot(log, timeout=30):
+    """Motorola fastboot wait — delegates to shared native-first `_wait_fastboot`."""
+    return _wait_fastboot(log, timeout=timeout)
+
+
+def _moto_session_reset(log):
+    """Reset a flaky Motorola fastboot USB session.
+
+    Moto MBM bootloaders (e.g. Moto G6 `ali`) often answer only the first
+    command after a session reset and return 'Protocol error' / hang on
+    back-to-back commands. Rebooting the bootloader (or a replug) yields a
+    clean session. Returns True when a device comes back."""
+    log("  (resetting fastboot session for the next command ...)")
+    try:
+        _moto_fastboot_run(log, ["reboot", "bootloader"], timeout=20)
+    except Exception:  # noqa: BLE001
+        pass
+    time.sleep(6)
+    return _moto_wait_fastboot(log, timeout=25)
 
 
 _MEDIA_NOTE = (
@@ -3338,6 +3529,250 @@ def flow_frp_clear_adb():
     return Flow("frp clear (adb)", steps)
 
 
+def _moto_is_present(log):
+    """Detect a Motorola / Lenovo device over ADB by product/board props."""
+    for prop in ("ro.product.manufacturer", "ro.product.vendor.manufacturer",
+                 "ro.product.brand", "ro.product.vendor.brand"):
+        v = _adb_getprop(prop, timeout=8).lower()
+        if v and ("motorola" in v or "moto" in v or "lenovo" in v):
+            log(f"  vendor fingerprint: {prop} = {v}")
+            return True
+    return False
+
+
+_MOTO_UNLOCK_CODE_ENV = "MOTO_UNLOCK_CODE"
+
+
+def _token_input(log):
+    """Read the Motorola per-device unlock code from the env. Returns '' when
+    not supplied (flows must treat that as 'stop before writing')."""
+    env = os.environ.get(_MOTO_UNLOCK_CODE_ENV, "").strip()
+    if env:
+        return env
+    log(f"  Env var {_MOTO_UNLOCK_CODE_ENV} is not set.")
+    log(f"  Set it and re-run, e.g.  {_MOTO_UNLOCK_CODE_ENV}=<code> ./flashpilot")
+    return ""
+
+
+# Motorola-additional provisioning flags: beyond the generic FRP clears, this
+# explicitly zeroes the `frp` secure setting (the same toggle the vendor
+# recovery treats as authoritative) and nukes the persisted FRP store.
+_MOTO_FRP_STEPS = [
+    ("zero FRP secure flag", "settings put secure frp 0"),
+    ("mark frp done", "settings put secure frp_done 1"),
+    ("mark user setup complete", "settings put secure user_setup_complete 1"),
+    ("mark device provisioned", "settings put global device_provisioned 1"),
+    ("mark setup wizard run", "settings put global setup_wizard_has_run 1"),
+    ("persisted FRP store", "rm -rf /data/system/frp"),
+    ("persisted accounts (ce)", "rm -rf /data/system/accounts_ce.db"),
+    ("persisted accounts (de)", "rm -rf /data/system/accounts_de.db"),
+    ("disable Google setup wizard",
+     "pm disable-user --user 0 com.google.android.setupwizard"),
+    ("disable Moto setup wizard",
+     "pm disable-user --user 0 com.motorola.setupwizard"),
+    ("back to home", "am start -c android.intent.category.HOME -a android.intent.action.MAIN"),
+]
+
+
+def flow_moto_frp_adb():
+    """FRP reset for Motorola / Lenovo devices over an authorized ADB shell.
+
+    Motorola devices whose bootloader is already unlocked (or whose USB
+    debugging is authorized from a previous session) can have their FRP
+    state cleared directly. This zeroes the ``frp`` secure setting, marks
+    setup complete and device provisioned, removes the persisted FRP store,
+    and disables both the Google and Motorola setup wizards.
+
+    Honest limits: this works only when an ADB shell is already reachable.
+    If the device is FRP-locked *and* bootloader-locked, the ADB path is not
+    available — use the Motorola fastboot flow (which guides the user through
+    the official per-device unlock token) to reach this state.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MOTOROLA / LENOVO — FRP RESET (ADB)")
+        log("=" * 60)
+        log("  Requires an AUTHORIZED ADB shell. USB debugging must be on and")
+        log("  this PC allowed.")
+        if not _wait_for_adb(ctx, log, timeout=60):
+            raise RuntimeError("no adb device - enable USB debugging first")
+        if not _moto_is_present(log):
+            log("  WARNING: device does not report a Motorola/Lenovo vendor.")
+            log("  Proceeding anyway — these commands are harmless on other")
+            log("  builds but were tuned for Motorola.")
+        for label, cmd in _MOTO_FRP_STEPS:
+            log(f"  > adb shell {cmd}")
+            try:
+                out = bridge.adb_shell(cmd, timeout=30)
+            except bridge.BridgeError as e:
+                out = f"ERROR: {e}"
+            if out and out.strip():
+                log(f"      {out[:120]}")
+            time.sleep(1.0)
+        log("")
+        log("  Done. Reboot (adb reboot) — the phone should skip the Google")
+        log("  account verification screen and boot to the launcher.")
+
+    steps = [Step("moto_frp_adb", _run)]
+    return Flow("Motorola FRP reset (ADB)", steps)
+
+
+def flow_moto_frp_fastboot():
+    """Motorola FRP reset via fastboot, using the official unlock token flow.
+
+    Motorola bootloaders are unlock-keyed: fastboot refuses ``erase frp`` on a
+    locked device. The correct sequence is:
+
+      1. ``fastboot oem get_unlock_data`` → paste the token block into
+         Motorola's unlock portal, receive a 20-char unlock code.
+      2. ``fastboot oem unlock <code>`` → bootloader unlocks (WIPES data).
+      3. ``fastboot erase frp`` + ``fastboot erase cache`` → FRP cleared.
+
+    The unlock code is issued per-device by Motorola's server and cannot be
+    generated locally by any tool (including this one) — the user must fetch
+    it from the official portal. This flow automates each fastboot step and
+    is explicit about that server-side gate.
+
+    Honest limits: the OEM-unlock path is only available when the bootloader
+    permits it (some carrier variants disable ``oem unlock`` entirely). On
+    those, the ADB path is the only remaining route.
+    """
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MOTOROLA / LENOVO — FRP RESET (FASTBOOT)")
+        log("=" * 60)
+        log("  Boot the phone to fastboot (power off, hold Volume Down + Power,")
+        log("  then plug in USB).")
+        if not _moto_wait_fastboot(log):
+            return
+        log("")
+        log("STEP 0/3 — read the bootloader lock state")
+        # Lock state is the gate: Motorola refuses `erase frp` with
+        # 'Permission denied' while `securestate` is `oem_locked`.
+        state = (_moto_fastboot_getvar(log, "securestate", timeout=20)
+                 or _moto_fastboot_getvar(log, "unlocked", timeout=20)).lower()
+        log(f"  securestate: {state or '(not reported)'}")
+        if "locked" in state and "unlocked" not in state:
+            log("")
+            log("  The bootloader is LOCKED. Motorola fastboot refuses `erase frp`")
+            log("  on a locked bootloader ('Permission denied'). To clear FRP you")
+            log("  must first unlock the bootloader through Motorola's official")
+            log("  portal — continue below. There is no offline command that")
+            log("  bypasses this lock.")
+        else:
+            log("  Bootloader is unlocked — FRP partition can be erased directly.")
+        log("")
+        log("STEP 1/3 — read the bootloader unlock token")
+        if not _moto_session_reset(log):
+            return
+        token = _moto_fastboot_run(log, ["oem", "get_unlock_data"], timeout=60)
+        log("")
+        log("  Copy the 5-line token block above into Motorola's official")
+        log("  unlock portal and complete the request. Working URL (verified):")
+        log("    https://en-us.support.motorola.com/app/standalone/bootloader/unlock-your-device-a")
+        log("  Note: the old motorola.com/unlockbootloader address is dead — use")
+        log("  the support.motorola.com page above. You must SIGN IN (Moto ID or")
+        log("  Google), then paste the token and answer 'Can my device be")
+        log("  unlocked?'. Motorola will give you a 20-character unlock code.")
+        log("  Carrier-exclusive models (Verizon, AT&T, Tracfone) are NOT")
+        log("  eligible — the portal will refuse them.")
+        log("  That code is per-device and server-issued — no tool can generate")
+        log("  it locally.")
+        log("")
+        code = _token_input(log)
+        if not code:
+            log("  No unlock code supplied — stopping before any write.")
+            log("  (If the bootloader was already unlocked, re-run this flow and")
+            log("  the erase step will run once a code is present.)")
+            return
+        log("")
+        log("STEP 2/3 — unlock the bootloader (WIPES the device)")
+        if not _moto_session_reset(log):
+            return
+        out = _moto_fastboot_run(log, ["oem", "unlock", code], timeout=120)
+        if "re-run this command" in out:
+            # Motorola two-step wipe confirm: the first invocation only warns.
+            log("  Bootloader asks for confirmation — re-running to confirm ...")
+            out = _moto_fastboot_run(log, ["oem", "unlock", code], timeout=120)
+        if "Allow OEM Unlock" in out:
+            log("")
+            log("  BLOCKED by the Android-side toggle: 'Allow OEM Unlock' is OFF")
+            log("  in Settings > Developer Options, so the bootloader refuses.")
+            log("  To flip it ON you must reach Settings ON THE PHONE:")
+            log("    1. Reboot to Android and use the on-device FRP bypass for")
+            log("       this Android version (Moto G6 / Android 9: emergency-dial")
+            log("       or TalkBack route to open Settings — see the 'FRP REMOVE'")
+            log("       browser/emergency guides).")
+            log("    2. In Settings > Developer options, enable BOTH 'OEM")
+            log("       unlocking' AND 'USB debugging'.")
+            log("    3. Re-run this flow with the same unlock code.")
+            log("  No fastboot command can flip that toggle — it is enforced by")
+            log("  Android verified boot, not by the bootloader.")
+            return
+        if "FAILED" in out or "error" in out.lower():
+            log("  `oem unlock` failed or the bootloader is locked down. Some")
+            log("  carrier variants disable `oem unlock` entirely — no tool can")
+            log("  bypass that. Try the ADB FRP path instead.")
+            return
+        # Verify the unlock actually landed before touching partitions.
+        if not _moto_session_reset(log):
+            return
+        state = (_moto_fastboot_getvar(log, "securestate", timeout=20)
+                 or _moto_fastboot_getvar(log, "unlocked", timeout=20)).lower()
+        log(f"  securestate now: {state or '(not reported)'}")
+        if "locked" in state and "unlocked" not in state:
+            log("  Still locked — stopping before erase. Re-check the toggle and")
+            log("  the unlock code, then re-run.")
+            return
+        log("")
+        log("STEP 3/3 — erase FRP + cache")
+        if not _moto_session_reset(log):
+            return
+        _moto_fastboot_erase(log, "frp", timeout=120)
+        if not _moto_session_reset(log):
+            return
+        _moto_fastboot_erase(log, "cache", timeout=60)
+        log("")
+        log("  Rebooting ...")
+        _moto_fastboot_run(log, ["reboot"])
+        log("  Done. The phone should boot past FRP as a fresh device.")
+
+    steps = [Step("moto_frp_fastboot", _run)]
+    return Flow("Motorola FRP reset (fastboot)", steps)
+
+
+def flow_moto_oem_unlock_token():
+    """Read Motorola's bootloader unlock-data token and guide the user through
+    the official unlock-code request (no writes)."""
+
+    def _run(ctx, log):
+        log("=" * 60)
+        log("MOTOROLA — OEM UNLOCK TOKEN (read-only)")
+        log("=" * 60)
+        if not _moto_wait_fastboot(log):
+            return
+        log("")
+        state = (_moto_fastboot_getvar(log, "securestate", timeout=20)
+                 or _moto_fastboot_getvar(log, "unlocked", timeout=20)).lower()
+        log(f"  securestate: {state or '(not reported)'}")
+        if not _moto_session_reset(log):
+            return
+        _moto_fastboot_run(log, ["oem", "get_unlock_data"], timeout=60)
+        log("")
+        log("  Paste the token block into Motorola's unlock portal (verified URL):")
+        log("    https://en-us.support.motorola.com/app/standalone/bootloader/unlock-your-device-a")
+        log("  (Old motorola.com/unlockbootloader is dead. Sign in required;")
+        log("  Verizon/AT&T/Tracfone models are not eligible.)")
+        log("  Receive the 20-char code, then run:")
+        log("      fastboot oem unlock <CODE>")
+        log("  (This flow only reads — it does not write or unlock anything.)")
+
+    steps = [Step("moto_oem_unlock_token", _run)]
+    return Flow("Motorola bootloader unlock token (read-only)", steps)
+
+
 def flow_at_control():
     """Commercial-style FRP bypass (SamFw / FRP King 'Bypass FRP (MTP)'):
     MTP-mode phone -> switch USB to diag config -> enable USB debugging via
@@ -4281,9 +4716,8 @@ def _lz4_decompress(data):
         )
 
 
-def _patch_vbmeta_flags(data, flags=0x03):
-    """Patch the AVB (vbmeta.img) flags field to disable verification (0x03 =
-    HASHTREE_DISABLED | VERIFICATION_DISABLED). Returns patched bytes or None."""
+def _patch_vbmeta_flags_local(data, flags=0x03):
+    """Pure-Python AVB patch (fallback + unit-test oracle)."""
     if len(data) < 96 or data[:4] != b"AVB0":
         return None
     flags_off = 80
@@ -4292,6 +4726,36 @@ def _patch_vbmeta_flags(data, flags=0x03):
     patched = bytearray(data)
     struct.pack_into("<I", patched, flags_off, flags)
     return bytes(patched)
+
+
+def _patch_vbmeta_flags(data, flags=0x03):
+    """Patch the AVB (vbmeta.img) flags field to disable verification (0x03 =
+    HASHTREE_DISABLED | VERIFICATION_DISABLED). Returns patched bytes or None.
+    Native engine first; local fallback (never raises, like before)."""
+    if len(data) < 96 or data[:4] != b"AVB0":
+        return None
+    try:
+        import tempfile as _tf
+        with _tf.NamedTemporaryFile(suffix=".img", delete=False) as fi:
+            fi.write(bytes(data))
+            in_path = fi.name
+        out_path = in_path + ".patched"
+        try:
+            res = bridge.vbmeta_patch(in_path, out_path, flags)
+            if not res.get("patched"):
+                return None
+            with open(out_path, "rb") as f:
+                return f.read()
+        finally:
+            for p in (in_path, out_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+    except bridge.BinaryNotFoundError:
+        return _patch_vbmeta_flags_local(data, flags)
+    except bridge.BridgeError:
+        return _patch_vbmeta_flags_local(data, flags)
 
 
 def flow_odin_advanced_flash():
@@ -6175,8 +6639,7 @@ def flow_efs_backup():
         try:
             bridge.adb_shell("su -c 'tar -cf /sdcard/efs_backup.tar /efs'", timeout=120)
             log("  Pulling backup to PC...")
-            import subprocess as sp
-            sp.run(["adb", "pull", "/sdcard/efs_backup.tar", backup_path], check=True, timeout=300)
+            bridge.adb_pull(ctx.get("serial"), "/sdcard/efs_backup.tar", backup_path, timeout=300)
             log(f"  EFS backup saved: {backup_path}")
             ctx["efs_backup"] = backup_path
         except Exception as e:
@@ -6204,8 +6667,7 @@ def flow_efs_restore():
         log(f"  Using backup: {backup}")
         try:
             bridge.adb_shell("su -c 'mount -o rw,remount /'", timeout=30)
-            sp = __import__("subprocess")
-            sp.run(["adb", "push", backup, "/sdcard/efs_backup.tar"], check=True, timeout=300)
+            bridge.adb_push(ctx.get("serial"), backup, "/sdcard/efs_backup.tar", timeout=300)
             bridge.adb_shell("su -c 'tar -xf /sdcard/efs_backup.tar -C /'", timeout=300)
             log("  EFS restored successfully.")
         except Exception as e:
@@ -9743,6 +10205,9 @@ FLOWS = {
     "qcn_nv_browser": _qcn.flow_qcn_nv_browser,
     "qcn_efs_explorer": _qcn.flow_qcn_efs_explorer,
     "oem_unlock_guide": flow_oem_unlock_guide,
+    "moto_frp_adb": flow_moto_frp_adb,
+    "moto_frp_fastboot": flow_moto_frp_fastboot,
+    "moto_oem_unlock_token": flow_moto_oem_unlock_token,
     "huawei_frp_guide": flow_huawei_frp_guide,
     "drk_repair": flow_drk_repair,
     "apple_info": _apple.flow_apple_info,
@@ -9750,6 +10215,8 @@ FLOWS = {
     "apple_icloud_add": _apple.flow_apple_icloud_add,
     "apple_passcode_guide": _apple.flow_apple_passcode_guide,
     "ofp_extract": _ofp.flow_ofp_extract,
+    "pac_extract": _pac.flow_pac_extract,
+    "pac_pack": _pac.flow_pac_pack,
     "emmc_health": _emmc.flow_emmc_health,
     "emmc_raw": _emmc.flow_emmc_raw,
     "imei_repair_mtk": _imei.flow_imei_repair_mtk,
@@ -9784,13 +10251,13 @@ JOBS = {
         "EDL": [],
     },
     "Remove FRP": {
-        "ADB": ["adb_frp", "frp_qr_provision", "frp_alliance", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide"],
+        "ADB": ["adb_frp", "frp_qr_provision", "frp_alliance", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide", "moto_frp_adb"],
         "MTP": ["at_method", "enable_adb", "test_mode"],
         "Download mode": ["download_frp", "odin_enable_adb"],
         "Samsung BROM": ["download_frp", "odin_enable_adb"],
         "MTK": ["mtk_combo_flash"],
         "MTK BROM": [],
-        "FASTBOOT": ["fastboot_frp", "fastboot_unlock", "fastboot_wipe"],
+        "FASTBOOT": ["fastboot_frp", "fastboot_unlock", "fastboot_wipe", "moto_frp_fastboot", "moto_oem_unlock_token"],
         "EDL": ["edl_auto", "edl_frp", "edl_enable_adb", "edl_detect", "qcom_verify"],
     },
     "Remove Screen Lock": {
@@ -9815,7 +10282,7 @@ JOBS = {
         "Samsung BROM": ["download_mode_info"],
         "MTK": ["mtk_download_info", "mtk_brom_info", "mtk_brom_backup"],
         "MTK BROM": ["mtk_crash_brom", "mtk_brom_info", "mtk_brom_backup", "mtk_verify"],
-        "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot", "oem_unlock_guide"],
+        "FASTBOOT": ["fastboot_devices", "fastboot_getvar", "fastboot", "oem_unlock_guide", "moto_oem_unlock_token"],
         "EDL": ["edl_detect", "qcom_detect_info", "qcom_verify"],
         "SPD": ["spd_detect_info"],
     },

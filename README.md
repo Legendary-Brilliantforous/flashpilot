@@ -159,6 +159,8 @@ No decision will be made without contributor voices. Come and be one of them.
 
 ```bash
 ./target/release/flashpilot-bridge detect          # all USB + Samsung filter (JSON)
+./target/release/flashpilot-bridge fastboot-devices  # USB devices with a fastboot interface (JSON)
+./target/release/flashpilot-bridge fastboot-cmd 22b8:2e80@2:16 20000 getvar securestate  # one raw fastboot command
 ./target/release/flashpilot-bridge mtk-detect      # MediaTek BROM (0e8d:0003) / preloader (0e8d:2000) / DA
 ./target/release/flashpilot-bridge mtk-crash-brom <bus:addr>  # crash preloader into held BROM
 ./target/release/flashpilot-bridge qcom-detect     # Qualcomm EDL

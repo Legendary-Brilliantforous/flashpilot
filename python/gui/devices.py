@@ -64,6 +64,9 @@ _ACTION_META = {
     "tecno_mdm_brom":        ("MDM Remove · BROM","🛠", "SPD/BSL wipe. Routes to SPD tab (TECNO Spark 20/10C)"),
     "tecno_device_info":     ("Device Check",     "ℹ", "Getprop dump + OEM fingerprint + lock state (TECNO Spark 10/20/10C)"),
     "tecno_enable_adb":      ("Enable ADB",       "⚙", "On-device secret code *#*#49#*#* (UMS9230) + BROM fallback (TECNO Spark 10/20/10C)"),
+    "moto_frp_adb":          ("FRP Remove · ADB", "⚡", "Any Motorola/Lenovo on authorized ADB: zero frp flag + provision + disable Google/Moto setup wizards"),
+    "moto_frp_fastboot":     ("FRP Remove · FB",  "🛠", "Any Motorola/Lenovo: oem get_unlock_data → unlock code → erase frp + cache"),
+    "moto_oem_unlock_token": ("Unlock Token",     "ℹ", "Read-only: dump oem get_unlock_data and guide the Motorola unlock portal"),
     "apple_icloud_remove": ("iCloud Remove",     "🧪", "EXPERIMENTAL — DFU/ramdisk iCloud remove (usbmuxd). Educational, own device only (at-apple-icloud-remove)."),
     "apple_icloud_add":    ("iCloud Add",        "🧪", "EXPERIMENTAL — Push activation plist via lockdownd (at-apple-icloud-add)."),
     "health":              ("Health Report",     "🧪", "EXPERIMENTAL — Device health JSON + HTML/PDF (health_report)."),
@@ -222,7 +225,10 @@ def _build_model_page(win, brand, m, back):
         v.addWidget(n)
 
     researched = m.get("status") == "researched"
-    if not researched:
+    # Motorola flows are brand-wide (vendor-detected at runtime via getprop /
+    # fastboot), so every Motorola model renders actions regardless of its
+    # per-model research flag. All other brands keep the researched gate.
+    if not researched and brand.get("key") != "motorola":
         empty = _Lbl("No wired actions yet for this model — research in progress.")
         empty.setStyleSheet(f"color:{C['mute']}; font-size:12px;")
         v.addWidget(empty)
@@ -251,8 +257,29 @@ def _build_model_page(win, brand, m, back):
                 ("tecno_enable_adb", "On-device secret code + BROM fallback", "⚙"),
             ]),
         ]
+    elif brand.get("key") == "motorola":
+        groups = [
+            ("FRP REMOVE", [
+                ("moto_frp_adb", "ADB · FRP flag + provision + wizards", "⚡"),
+                ("moto_frp_fastboot", "FASTBOOT · unlock token + erase frp", "🛠"),
+                ("moto_oem_unlock_token", "FASTBOOT · read unlock token (no write)", "ℹ"),
+            ]),
+            ("SCREEN LOCK REMOVE", [
+                ("screen_lock", "ADB locksettings / fastboot", "🔓"),
+            ]),
+            ("DEVICE CHECK", [
+                ("info", "USB + ADB fingerprint", "ℹ"),
+            ]),
+            ("FLASH / BACKUP", [
+                ("flash", "Workbench firmware flash", "⬆"),
+                ("backup", "Dump partitions", "⬇"),
+            ]),
+            ("ENABLE ADB", [
+                ("adb_enable", "MTP / secret-code path", "⚙"),
+            ]),
+        ]
     else:
-        # Generic wired actions (motorola G6, nokia G20, samsung, etc.) — routed in qt_app.start_model_action.
+        # Generic wired actions (nokia G20, samsung, etc.) — routed in qt_app.start_model_action.
         groups = [
             ("FRP REMOVE", [
                 ("frp", "Browser / fastboot erase frp", "⚡"),

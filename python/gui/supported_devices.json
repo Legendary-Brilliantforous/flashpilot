@@ -474,6 +474,20 @@
       "icon": "Ⓜ",
       "models": [
         {
+          "model": "All Motorola / Lenovo (universal)",
+          "chip": "any (Snapdragon / Helio / Dimensity)",
+          "vid": "22b8",
+          "engine": "motorola",
+          "status": "researched",
+          "actions": [
+            "frp",
+            "info",
+            "flash",
+            "screen_lock"
+          ],
+          "notes": "Brand-wide flows (moto_frp_adb / moto_frp_fastboot / moto_oem_unlock_token). Vendor is detected at runtime; per-model detail in operations/frp/devices/motorola/."
+        },
+        {
           "model": "Moto G6 (ali)",
           "chip": "Snapdragon 450 (SDM450)",
           "vid": "22b8",

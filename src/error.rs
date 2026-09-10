@@ -76,6 +76,8 @@ pub enum AuthError {
     BootloaderLocked,
     InvalidCredentials,
     ExploitFailed(String),
+    /// ADB RSA authorization rejected (or user never tapped Allow).
+    Unauthorized(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -166,6 +168,7 @@ impl fmt::Display for AuthError {
             AuthError::BootloaderLocked => write!(f, "Bootloader locked"),
             AuthError::InvalidCredentials => write!(f, "Invalid credentials"),
             AuthError::ExploitFailed(s) => write!(f, "Exploit failed: {}", s),
+            AuthError::Unauthorized(s) => write!(f, "Unauthorized: {}", s),
         }
     }
 }

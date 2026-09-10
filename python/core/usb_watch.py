@@ -1,18 +1,38 @@
 #!/usr/bin/env python3
-"""Watch for Samsung USB devices appearing/disappearing (for key-combo modes)."""
+"""Watch for Samsung USB devices appearing/disappearing (for key-combo modes).
+
+Uses the Rust bridge (`detect`) instead of parsing `lsusb` output, so the
+same enumeration the GUI sees is what this script reports — no text scraping,
+no lsusb dependency.
+"""
 import argparse
-import subprocess
 import sys
 import time
 
+sys.path.insert(0, ".")
+
+from python.core import bridge
+
 
 def lsusb_samsung():
-    out = subprocess.run(["lsusb"], capture_output=True, text=True).stdout
-    devs = []
-    for line in out.splitlines():
-        if "04e8" in line:
-            devs.append(line)
-    return devs
+    try:
+        devs = bridge.detect_all() or []
+    except Exception:
+        return []
+    out = []
+    for d in devs:
+        if not isinstance(d, dict) or d.get("vid") != 0x04E8:
+            continue
+        try:
+            line = (
+                f"Bus {int(d['bus']):03d} Device {int(d['address']):03d}: "
+                f"ID 04e8:{int(d['pid']):04x} "
+                f"{d.get('manufacturer') or ''} {d.get('product') or ''}".strip()
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append(line)
+    return out
 
 
 def main(timeout=120):

@@ -1985,19 +1985,7 @@ struct PacFileEntry {
     size: u32,
 }
 
-const PAC_FILE_ENTRY_SIZE: usize = 2560;
-const PAC_HEADER_SIZE: u64 = 2124;
-const PAC_FOOTER_SIZE: u64 = 3076;
 
-fn write_utf16le(buf: &mut [u8], s: &str) {
-    for (i, unit) in s.encode_utf16().enumerate() {
-        let off = i * 2;
-        if off + 1 < buf.len() {
-            buf[off] = (unit & 0xff) as u8;
-            buf[off + 1] = (unit >> 8) as u8;
-        }
-    }
-}
 
 /// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part]`
 ///
@@ -2047,7 +2035,8 @@ pub fn spd_readback_cli(
     let mut manifest = String::new();
     let mut total_bytes = 0u64;
     // Data region starts right after header + one entry-slot per file.
-    let mut cursor = PAC_HEADER_SIZE + (wanted.len() as u64) * PAC_FILE_ENTRY_SIZE as u64;
+    let mut cursor =
+        crate::pac::PAC_HEADER_SIZE as u64 + (wanted.len() as u64) * crate::pac::PAC_ENTRY_SIZE as u64;
     for (idx, (name, size)) in wanted.iter().enumerate() {
         let part_path = tmpdir.join(format!("{idx:03}_{}.bin", sanitize(name)));
         let path_str = part_path.to_string_lossy().to_string();
@@ -2081,25 +2070,15 @@ pub fn spd_readback_cli(
     let mut out = fs::File::create(out_pac).map_err(|e| format!("create {out_pac}: {e}"))?;
     use std::io::Write;
 
-    // Header (2124 bytes)
-    let mut hdr = vec![0u8; PAC_HEADER_SIZE as usize];
-    hdr[0..4].copy_from_slice(&0xD3u32.to_le_bytes());
-    hdr[4..6].copy_from_slice(&1u16.to_le_bytes());          // version
-    hdr[6..8].copy_from_slice(&2116u16.to_le_bytes());        // header size
-    let mct = b"MCT_DOWNLOAD_HEADER";
-    hdr[8..8 + mct.len()].copy_from_slice(mct);
-    // product string @0x20 (leave zeros -> tools accept blank model)
-    hdr[0x60..0x64].copy_from_slice(&(entries.len() as u32).to_le_bytes());
-    hdr[0x848..0x84c].copy_from_slice(&(total_bytes as u32).to_le_bytes());
+    // Header + file-entry slots via the shared PAC builders (byte-identical
+    // to the historical inline writer). NOTE: readback keeps its quirky
+    // doubled slot names (`{name}_{name}.img`); pack-from-folder uses plain
+    // basenames. Quirk quarantined here, not propagated.
+    let hdr = crate::pac::build_header(entries.len() as u32, total_bytes, "")
+        .map_err(|e| format!("pac header: {e}"))?;
     out.write_all(&hdr).map_err(|e| format!("write hdr: {e}"))?;
-
-    // File-entry slots
     for e in &entries {
-        let mut slot = vec![0u8; PAC_FILE_ENTRY_SIZE];
-        write_utf16le(&mut slot[..512], &format!("{}_{}.img", e.name, e.name)); // name field
-        slot[0x30C..0x310].copy_from_slice(&e.size.to_le_bytes());
-        slot[0x310..0x314].copy_from_slice(&0u32.to_le_bytes()); // is_nv = false
-        slot[0x318..0x31A].copy_from_slice(&0x5433u16.to_le_bytes()); // checksum marker
+        let slot = crate::pac::build_slot(&format!("{}_{}.img", e.name, e.name), e.size, false);
         out.write_all(&slot).map_err(|err| format!("write entry {}: {err}", e.name))?;
     }
 
@@ -2112,7 +2091,8 @@ pub fn spd_readback_cli(
     }
 
     // Footer
-    out.write_all(&vec![0u8; PAC_FOOTER_SIZE as usize]).map_err(|e| format!("write footer: {e}"))?;
+    out.write_all(&vec![0u8; crate::pac::PAC_FOOTER_SIZE])
+        .map_err(|e| format!("write footer: {e}"))?;
     out.flush().ok();
 
     let _ = fs::remove_dir_all(&tmpdir);

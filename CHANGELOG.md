@@ -57,3 +57,84 @@
 - Fresh screenshots (`docs/samsung.png`, `mtk.png`, `spd.png`), rewritten
   README highlights/matrix/layout, CONTRIBUTING architecture + flow rules,
   this changelog.
+
+### boot.img + AVB (single native engine)
+- New image-surgery engine in the Rust bridge (`src/imgtools.rs`): Android
+  boot header parse, cpio newc scan, prop patching (pad-in-place or
+  magiskboot-style grow with header rewrite), deterministic gzip
+  (mtime=0, level 9), AVB vbmeta flags. `boot-info` / `boot-patch-adb` /
+  `vbmeta-patch` CLI.
+- Python `spd_adb` repack + `core._patch_vbmeta_flags` delegate with local
+  fallback (signatures and return contracts unchanged).
+- Equivalence work fixed two real bugs: the grow splice disagreed with the
+  reader's alignment by 2 bytes (corrupting every later entry — both
+  implementations), and re-patching grew by `\n` each run (both sides now
+  idempotent). gzip bytes are intentionally excluded from parity (zlib
+  implementations differ); decompressed content, sizes and fields match.
+- 6 Rust unit tests + 9 cross-implementation tests.
+
+### PAC (single native engine + wired GUI actions)
+- New SPD PAC engine in the Rust bridge (`src/pac.rs`): parse/extract/pack
+  with the YGDP layout, shared header/slot builders now also used by the
+  `spd-readback` writer (byte-identical output; its historical doubled slot
+  names quarantined, not propagated). `pac-parse` / `pac-extract` /
+  `pac-pack` CLI.
+- Python `pac.*` delegates with local fallback; new `flow_pac_extract` /
+  `flow_pac_pack` (file-only, ofp-style env inputs) registered in FLOWS and
+  mapped in the GUI dispatcher — the previously dead PAC buttons now run.
+- Equivalence tests caught and fixed a real bug: the local packer silently
+  dropped the product string (slice-copy write); plus u32 overflow guards
+  with identical messages on both engines.
+- 5 Rust unit tests + 7 cross-implementation tests (roundtrips both
+  directions, sanitize parity incl. dir collision, error mapping).
+
+### PIT (single native engine)
+- New Samsung PIT engine in the Rust bridge (`src/pit.rs`): parse (28/132
+  layout), header/model strings, name normalization, find, overlap scan,
+  forensic validation + health verdicts — byte-identical messages, summaries
+  and verdicts to the Python implementation on real dumps and edge cases
+  (including Python-`repr` parity for junk names).
+- `pit-parse` / `pit-health` / `pit-find` / `pit-overlaps` / `pit-model`
+  CLI; Python `pit.*` raw-bytes paths delegate with local fallback when the
+  binary is absent (contracts preserved: ValueError/None/never-raise).
+  In-memory object paths and display helpers stay local and fast; shared
+  rules pinned by 11 cross-implementation equivalence tests.
+- 8 Rust unit tests (layout vectors, normalize table, meta overlap
+  classification, summary/human-size shapes).
+
+### ADB (native transport, no platform-tools)
+- New native ADB client in the Rust bridge (`src/adb.rs`): USB transport
+  (255/66/1) with kernel-driver detach, CNXN handshake, RSA-SHA256/SHA-1
+  AUTH (reuses `~/.android/adbkey`, generated when missing), `shell:` and
+  `sync:` (STAT/RECV/SEND) services.
+- `adb-devices` keeps its `adb devices -l` line contract from a native scan
+  (`device` / `unauthorized` / `no permissions`); `adb-shell` takes a serial
+  (`-` = first authorized), plus new serial-pinned `adb-pull` / `adb-push`.
+- Python: `bridge.adb_shell()` resolves explicit > ambient-scope > first
+  authorized serial (multi-device ADB is now target-pinned); `adb.py`
+  delegates to the bridge; EFS backup/restore pull/push go through the
+  bridge instead of unpinned system `adb` calls. `has_adb()` now means
+  "bridge built".
+- 6 Rust tests (framing, banner, PKCS#1 sign/verify, DER roundtrip,
+  bit-identical pubkey blob vs system adb's key) + 9 Python tests.
+
+### Fastboot (native transport + Motorola universal)
+- New native fastboot USB transport in the Rust bridge (`src/fastboot.rs`):
+  `fastboot-devices` (JSON) + `fastboot-cmd <vid:pid@bus:addr> <ms> <cmd…>`
+  for the command phase (getvar/oem/erase/reboot) with kernel-driver detach.
+  Device-side FAIL renders as `FAILED (remote: …)` with exit 0, matching the
+  system binary's transcript shape (including lone `getvar` values that ride
+  in the OKAY packet on Moto MBM bootloaders).
+- Shared Python helpers (`_fastboot_run`, `_wait_fastboot`,
+  `_fastboot_getvar`) are native-first with system-binary fallback;
+  DATA-phase commands (flash/boot/…) always use the system binary, and the
+  host-side `devices` listing is served from native detect. All fastboot
+  traffic is now target-pinned (`vid:pid@bus:addr`), closing the no-`-s`
+  wrong-phone hazard.
+- New brand-wide Motorola flows (`moto_frp_adb`, `moto_frp_fastboot`,
+  `moto_oem_unlock_token`): ADB provisioning reset, official unlock-token
+  flow with lock-state read + session resets, read-only token reader. Shown
+  under Motorola → All Motorola / Lenovo (universal) and every Moto model;
+  unlock portal URL corrected (old `motorola.com/unlockbootloader` is dead).
+- `python/core/fastboot.py` (Pixel) and `usb_watch.py` (lsusb scraping) moved
+  onto the bridge; 7 new `tests/test_fastboot_native.py` tests.
