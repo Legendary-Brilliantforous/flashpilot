@@ -5,10 +5,10 @@
     {
       "key": "samsung",
       "label": "Samsung",
-      "icon": "\u25c9",
+      "icon": "Ⓢ",
       "models": [
         {
-          "model": "Galaxy A14 (SM-A145F/M/P \u00b7 SM-A146B/P)",
+          "model": "Galaxy A14 (SM-A145F/M/P · SM-A146B/P)",
           "chip": "Exynos 850 / Exynos 1330 / Helio G80 (variant-dependent)",
           "vid": "04e8|0e8d",
           "engine": "odin",
@@ -98,7 +98,7 @@
     {
       "key": "tecno",
       "label": "Tecno",
-      "icon": "\u25a4",
+      "icon": "🅣",
       "models": [
         {
           "model": "Pop 8",
@@ -186,7 +186,7 @@
     {
       "key": "infinix",
       "label": "Infinix",
-      "icon": "\u25a4",
+      "icon": "Ⓘ",
       "models": [
         {
           "model": "Hot 30i / 40i",
@@ -228,7 +228,7 @@
     {
       "key": "itel",
       "label": "itel",
-      "icon": "\u25a4",
+      "icon": "ℹ",
       "models": [
         {
           "model": "A14 / A18",
@@ -272,7 +272,7 @@
     {
       "key": "xiaomi",
       "label": "Xiaomi / Redmi / Poco",
-      "icon": "\u25a3",
+      "icon": "🅧",
       "models": [
         {
           "model": "Redmi 12",
@@ -325,7 +325,7 @@
     {
       "key": "oppo",
       "label": "Oppo",
-      "icon": "\u25c8",
+      "icon": "🅞",
       "models": [
         {
           "model": "A17 / A18 / A38",
@@ -355,7 +355,7 @@
     {
       "key": "realme",
       "label": "Realme",
-      "icon": "\u25c8",
+      "icon": "🅡",
       "models": [
         {
           "model": "C53 / C55",
@@ -384,7 +384,7 @@
     {
       "key": "oneplus",
       "label": "OnePlus",
-      "icon": "\u25c8",
+      "icon": "⨁",
       "models": [
         {
           "model": "Nord N20 / N30 / CE3",
@@ -415,7 +415,7 @@
     {
       "key": "vivo",
       "label": "Vivo / iQOO",
-      "icon": "\u2726",
+      "icon": "Ⓥ",
       "models": [
         {
           "model": "Y02 / Y17 / Y27 / Y36",
@@ -444,7 +444,7 @@
     {
       "key": "huawei",
       "label": "Huawei (+Honor)",
-      "icon": "\u2b21",
+      "icon": "Ⓗ",
       "models": [
         {
           "model": "Y5p / Y6p / Y9a",
@@ -529,7 +529,7 @@
     {
       "key": "nokia",
       "label": "Nokia",
-      "icon": "\u25cd",
+      "icon": "🅝",
       "models": [
         {
           "model": "G20",
@@ -572,7 +572,7 @@
     {
       "key": "tcl_zte",
       "label": "TCL / ZTE",
-      "icon": "\u25ce",
+      "icon": "Ⓣ",
       "models": [
         {
           "model": "TCL 30 / 40 SE / 305",
@@ -601,7 +601,7 @@
     {
       "key": "lg",
       "label": "LG",
-      "icon": "\u25d0",
+      "icon": "Ⓛ",
       "models": [
         {
           "model": "K40 / K52",
@@ -628,7 +628,7 @@
     {
       "key": "asus_sharp",
       "label": "Asus / Sharp",
-      "icon": "\u25c7",
+      "icon": "Ⓐ",
       "models": [
         {
           "model": "Zenfone 9 / 10",

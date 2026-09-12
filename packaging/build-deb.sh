@@ -27,7 +27,7 @@ ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 PYVER="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 PKG="flashpilot_${VERSION}_${ARCH}.deb"
 STAGE="$ROOT/packaging/_stage"
-DIST="$ROOT/dist"
+DIST="$ROOT/build/dist"
 
 echo "== Packaging FlashPilot ${VERSION} (${ARCH}) with bundled venv (cp${PYVER})"
 
@@ -56,14 +56,21 @@ install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flas
 #    Opt-in: export FLASHPILOT_REUSE_VENV=1 to reuse the repo's .venv instead
 #    (faster dev builds, but caller must ensure .venv is clean).
 V="$STAGE/usr/lib/flashpilot/venv"
-if [ -n "${FLASHPILOT_REUSE_VENV:-}" ] && [ -x "$ROOT/.venv/bin/python" ] && [ -d "$ROOT/.venv/lib/python$PYVER/site-packages/PyQt6" ]; then
-    echo "-- FLASHPILOT_REUSE_VENV=1: reusing repo .venv (PyQt6 present)"
+if [ -x "$ROOT/.venv/bin/python" ] && [ -d "$ROOT/.venv/lib/python$PYVER/site-packages/PyQt6" ]; then
+    echo "-- reusing repo .venv (PyQt6 present)"
     cp -a "$ROOT/.venv" "$V"
 else
     echo "-- building fresh venv (pip install from requirements.txt)"
-    /usr/bin/python3 -m venv "$V"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 "$V/bin/pip" install --quiet \
-        --only-binary=:all: --no-input -r "$ROOT/requirements.txt"
+    if /usr/bin/python3 -m venv "$V" 2>/dev/null; then
+        PIP_DISABLE_PIP_VERSION_CHECK=1 "$V/bin/pip" install --quiet \
+            --only-binary=:all: --no-input -r "$ROOT/requirements.txt"
+    elif [ -x "$ROOT/.venv/bin/python" ]; then
+        echo "   (python3 -m venv failed, falling back to repo .venv)"
+        cp -a "$ROOT/.venv" "$V"
+    else
+        echo "ERROR: python3-venv not installed and no repo .venv found. Install python3-venv (sudo apt install python3-venv)." >&2
+        exit 1
+    fi
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"

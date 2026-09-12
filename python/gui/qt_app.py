@@ -2316,7 +2316,8 @@ class FlashPilotWindow(QMainWindow):
 
         # --- content: OEM chips on top, scene on left, page fills middle ---
         self._section_index = {"samsung": 0}
-        oem_items = [("samsung", "◉", "Samsung")]
+        samsung_icon = next((b.get('icon', 'Ⓢ') for b in device_pages.BRANDS if b['key'] == 'samsung'), 'Ⓢ')
+        oem_items = [("samsung", samsung_icon, "Samsung")]
         for b in device_pages.BRANDS:
             if b["key"] == "samsung":
                 continue

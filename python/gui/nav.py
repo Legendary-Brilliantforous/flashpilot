@@ -166,16 +166,39 @@ class OemChipBar(QFrame):
         b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         f = b.font(); f.setPixelSize(11); b.setFont(f)
         b.setFixedHeight(26)
+        
+        brand_bg_colors = {
+            "samsung": ("rgba(30,58,138,0.85)", "#60a5fa"),
+            "apple": ("rgba(51,65,85,0.85)", "#f87171"),
+            "motorola": ("rgba(3,105,161,0.85)", "#38bdf8"),
+            "xiaomi": ("rgba(194,65,12,0.85)", "#fb923c"),
+            "oppo": ("rgba(21,128,61,0.85)", "#4ade80"),
+            "realme": ("rgba(161,98,7,0.85)", "#facc15"),
+            "oneplus": ("rgba(185,28,28,0.85)", "#f87171"),
+            "vivo": ("rgba(29,78,216,0.85)", "#93c5fd"),
+            "huawei": ("rgba(153,27,27,0.85)", "#fca5a5"),
+            "tecno": ("rgba(180,83,9,0.85)", "#fbbf24"),
+            "infinix": ("rgba(4,120,87,0.85)", "#34d399"),
+            "itel": ("rgba(153,27,27,0.85)", "#f87171"),
+            "nokia": ("rgba(30,64,175,0.85)", "#93c5fd"),
+            "tcl_zte": ("rgba(76,29,149,0.85)", "#c4b5fd"),
+            "lg": ("rgba(165,0,52,0.85)", "#fecdd3"),
+            "asus_sharp": ("rgba(55,65,81,0.85)", "#d1d5db"),
+            "general": ("rgba(71,85,105,0.85)", "#38bdf8"),
+        }
+        clean_key = key.removeprefix("dev_")
+        bg_col, accent_col = brand_bg_colors.get(clean_key, ("rgba(24,36,55,0.72)", "#22d3ee"))
+
         if accent:
             b.setStyleSheet(
-                "QPushButton { color:#dbe6f2; background:rgba(24,36,55,0.72);"
-                " border:1px solid rgba(255,255,255,0.09); border-radius:13px; padding:0 12px; }"
-                "QPushButton:hover { border:1px solid rgba(34,211,238,0.75); color:#fff;"
-                                   " background:rgba(30,45,68,0.85); }"
-                "QPushButton:checked { background:#22d3ee; color:#04121a;"
-                " border:1px solid #22d3ee; }"
-                "QPushButton:focus { border:1px solid rgba(255,255,255,0.09); outline:none; }"
-                "QPushButton:checked:focus { border:1px solid #22d3ee; outline:none; }"
+                f"QPushButton {{ color:#dbe6f2; background:{bg_col};"
+                f" border:1px solid rgba(255,255,255,0.12); border-radius:13px; padding:0 12px; }}"
+                f"QPushButton:hover {{ border:1px solid {accent_col}; color:#fff;"
+                f" background:rgba(30,45,68,0.95); }}"
+                f"QPushButton:checked {{ background:{accent_col}; color:#04121a;"
+                f" border:1px solid {accent_col}; font-weight:800; }}"
+                f"QPushButton:focus {{ border:1px solid rgba(255,255,255,0.12); outline:none; }}"
+                f"QPushButton:checked:focus {{ border:1px solid {accent_col}; outline:none; }}"
             )
         else:
             b.setStyleSheet(

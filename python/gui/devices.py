@@ -86,7 +86,7 @@ def nav_entries():
     return [(f"dev_{b['key']}", b.get("icon", "▣"), b["label"]) for b in BRANDS]
 
 
-def _card(text, sub="", accent=None, clickable=True):
+def _card(text, sub="", accent=None, clickable=True, **kwargs):
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
     from PyQt6.QtWidgets import QSizePolicy as _SP2
     card = QFrame()
@@ -100,11 +100,11 @@ def _card(text, sub="", accent=None, clickable=True):
         f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
         f" stop:0 {C['card']}, stop:1 {C['inset']});"
         f" border: {border}; border-radius: 12px; }}"
-        f"QFrame:hover {{ border-color: {accent}; }}"
+        f"QFrame:hover {{ border-color: {accent}; background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #1a365d, stop:1 #0f172a); }}"
         f"QFrame:focus {{ border-color: {accent}; outline:none; }}"
     )
     lay = QVBoxLayout(card)
-    lay.setContentsMargins(10, 7, 10, 7)
+    lay.setContentsMargins(12, 9, 12, 9)
     lay.setSpacing(4)
     t = QLabel(text)
     t.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800;"
@@ -114,7 +114,7 @@ def _card(text, sub="", accent=None, clickable=True):
     if sub:
         s = QLabel(sub)
         s.setStyleSheet(f"color:{C['dim']}; font-size:10px;"
-                        f" background:transparent; border:none;")
+                        f" background:transparent; border:none; font-family:'Consolas','Monaco',monospace;")
         s.setWordWrap(True)
         lay.addWidget(s)
     return card
@@ -157,7 +157,8 @@ def build_brand_page(win, key):
         sub = f"{chip_badge}\n{status_txt}"
         card = _card(m["model"], sub,
                      accent=C["ok"] if researched else C["mute"],
-                     clickable=True)
+                     clickable=True,
+                     status=m.get("status", ""))
         card.setToolTip(m.get("notes") or "")
         r, c = divmod(i, 3)
         grid.addWidget(card, r, c)
@@ -173,6 +174,17 @@ def build_brand_page(win, key):
     # keep one model-page instance per model, created lazily on first click
     def open_model(m):
         page = _build_model_page(win, brand, m, back=lambda: stack.setCurrentIndex(0))
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        eff = QGraphicsOpacityEffect(page)
+        page.setGraphicsEffect(eff)
+        anim = QPropertyAnimation(eff, b"opacity")
+        anim.setDuration(160)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
+        win._active_page_anim = anim
         stack.addWidget(page)
         stack.setCurrentWidget(page)
 
@@ -207,10 +219,21 @@ def _build_model_page(win, brand, m, back):
     title = _Lbl(f"{brand['label']} · {m['model']}")
     title.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     top.addWidget(title, 1)
+    brand_key = brand.get("key", "")
+    badge_bg, badge_fg, left_border = "#d4b78f", "#04121a", "#d4b78f"
+    if brand_key == "apple":
+        badge_bg, badge_fg, left_border = "#e2e8f0", "#0f172a", "#94a3b8"
+    elif brand_key == "samsung":
+        badge_bg, badge_fg, left_border = "#3b82f6", "#ffffff", "#60a5fa"
+    elif brand_key == "motorola":
+        badge_bg, badge_fg, left_border = "#38bdf8", "#04121a", "#0ea5e9"
+    elif brand_key == "tecno":
+        badge_bg, badge_fg, left_border = "#f59e0b", "#04121a", "#f59e0b"
+
     chip_lbl = _Lbl(f"{m.get('chip','')}   engine: {m.get('engine','—').upper()}")
     chip_lbl.setStyleSheet(
-        "color:#04121a; background:#d4b78f; border-radius:8px;"
-        " padding:3px 10px; font-size:11px; font-weight:800;"
+        f"color:{badge_fg}; background:{badge_bg}; border-radius:8px;"
+        " padding:4px 12px; font-size:11px; font-weight:800; font-family:'Consolas', 'Monaco', monospace;"
     )
     top.addWidget(chip_lbl)
     v.addLayout(top)
@@ -225,10 +248,8 @@ def _build_model_page(win, brand, m, back):
         v.addWidget(n)
 
     researched = m.get("status") == "researched"
-    # Motorola flows are brand-wide (vendor-detected at runtime via getprop /
-    # fastboot), so every Motorola model renders actions regardless of its
-    # per-model research flag. All other brands keep the researched gate.
-    if not researched and brand.get("key") != "motorola":
+    # Motorola and Apple flows are handled per brand/runtime
+    if not researched and brand.get("key") not in ("motorola", "apple"):
         empty = _Lbl("No wired actions yet for this model — research in progress.")
         empty.setStyleSheet(f"color:{C['mute']}; font-size:12px;")
         v.addWidget(empty)
@@ -255,6 +276,16 @@ def _build_model_page(win, brand, m, back):
             ]),
             ("ENABLE ADB", [
                 ("tecno_enable_adb", "On-device secret code + BROM fallback", "⚙"),
+            ]),
+        ]
+    elif brand.get("key") == "apple":
+        groups = [
+            ("iCLOUD ACTIVATION LOCK", [
+                ("apple_icloud_remove", "DFU / ramdisk iCloud remove (usbmuxd)", "🔓"),
+                ("apple_icloud_add", "Push activation plist via lockdownd", "➕"),
+            ]),
+            ("DEVICE CHECK", [
+                ("info", "Lockdown / DFU device info", "ℹ"),
             ]),
         ]
     elif brand.get("key") == "motorola":
@@ -337,8 +368,8 @@ def _build_model_page(win, brand, m, back):
         )
         return btn
 
-    # --- Horizontal layout: FRP REMOVE horizontal + rest as tabs (all researched, Spark 10C was pilot) ---
-    is_horizontal = m.get("status") == "researched"
+    # --- Horizontal layout: FRP REMOVE horizontal + rest as tabs (all researched, Spark 10C was pilot, Motorola and Apple devices) ---
+    is_horizontal = m.get("status") == "researched" or brand.get("key") in ("motorola", "apple")
     if is_horizontal:
         from PyQt6.QtWidgets import QStackedWidget as _Stk
         tab_bar = _HL()
@@ -400,7 +431,7 @@ def _build_model_page(win, brand, m, back):
             page_card = _Fr()
             page_card.setStyleSheet(
                 f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
-                " border:1px solid #1c3052; border-left:3px solid #d4b78f; border-radius:10px; }"
+                f" border:1px solid rgba(255,255,255,0.14); border-left:3px solid {left_border}; border-radius:10px; }}"
             )
             cl = _VL(page_card)
             cl.setContentsMargins(12, 12, 12, 12)
@@ -421,6 +452,17 @@ def _build_model_page(win, brand, m, back):
             try:
                 w = stack.currentWidget()
                 if w:
+                    from PyQt6.QtWidgets import QGraphicsOpacityEffect
+                    from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+                    eff = QGraphicsOpacityEffect(w)
+                    w.setGraphicsEffect(eff)
+                    anim = QPropertyAnimation(eff, b"opacity")
+                    anim.setDuration(140)
+                    anim.setStartValue(0.2)
+                    anim.setEndValue(1.0)
+                    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                    anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
+                    win._active_tab_anim = anim
                     for child in w.findChildren(QFrame):
                         lay = child.layout()
                         if lay and hasattr(lay, "invalidate"):
@@ -433,7 +475,10 @@ def _build_model_page(win, brand, m, back):
         tab_bar.addStretch(1)
         badge_txt = f"{m.get('chip','')[:22]} · {m.get('model','').upper()}"
         badge = _Lbl(badge_txt)
-        badge.setStyleSheet("color:#04121a; background:#d4b78f; border-radius:8px; padding:4px 10px; font-size:10px; font-weight:800; letter-spacing:0.6px;")
+        badge.setStyleSheet(
+            f"color:{badge_fg}; background:{badge_bg}; border-radius:8px;"
+            " padding:4px 10px; font-size:10px; font-weight:800; letter-spacing:0.6px; font-family:'Consolas', 'Monaco', monospace;"
+        )
         badge.setToolTip(m.get("notes","")[:120])
         tab_bar.addWidget(badge)
         v.addLayout(tab_bar)
@@ -467,9 +512,9 @@ def _build_model_page(win, brand, m, back):
         card = _Fr()
         card.setObjectName("modelgroup")
         card.setStyleSheet(
-            "QFrame#modelgroup { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f"QFrame#modelgroup {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             " stop:0 #122a4a, stop:1 #0a1529);"
-            " border: 1px solid #1c3052; border-left: 3px solid #d4b78f;"
+            f" border: 1px solid rgba(255,255,255,0.14); border-left: 3px solid {left_border};"
             " border-radius: 10px; }"
         )
         cl = _VL(card)
