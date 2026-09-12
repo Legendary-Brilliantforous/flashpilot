@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (toward 1.2.1)
+## 1.2.1 (Stable Release)
 
 ### Multi-device support (new)
 - Plug in several phones: the connection bar lists each one (model · serial ·
