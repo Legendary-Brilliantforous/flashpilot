@@ -633,7 +633,7 @@ pub fn brom_handshake(
                 break;
             }
             match session.read_exact(1, Duration::from_millis(600)) {
-                Ok(r) if r[0] == (!b) & 0xff => {}
+                Ok(r) if r[0] == !b => {}
                 Ok(r) if r[0] == b => {
                     last_err = format!(
                         "device echoed our own byte 0x{:02x} verbatim - this is NOT a handshake-capable BootROM/preloader state (wrong entry mode or protected SoC). Enter true BROM (power fully off, battery out if possible, plug cable) and retry.",
@@ -645,7 +645,7 @@ pub fn brom_handshake(
                 Ok(r) => {
                     last_err = format!(
                         "sync echo mismatch: sent 0x{b:02x}, expected 0x{:02x}, got 0x{:02x}",
-                        (!b) & 0xff,
+                        !b,
                         r[0]
                     );
                     ok = false;

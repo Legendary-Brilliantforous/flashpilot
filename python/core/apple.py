@@ -89,10 +89,10 @@ def flow_apple_info():
 
 def flow_apple_icloud_remove():
     def _run(ctx, log):
-        from .experimental import check_gate, audit_log
+        from .experimental import check_gate_strict, per_run_acked_from_ctx, audit_log
 
-        if not check_gate("apple_icloud_remove", log):
-            raise RuntimeError("Apple iCloud Remove is EXPERIMENTAL — ack required in GUI")
+        if not check_gate_strict("apple_icloud_remove", per_run_acked_from_ctx(ctx), log):
+            raise RuntimeError("Apple iCloud Remove is EXPERIMENTAL — per-run ack required")
         audit_log("apple_icloud_remove", "remove_attempt")
         log("[EXPERIMENTAL] Apple iCloud Remove — educational purpose only. You certify you own this device.")
         # Check for DFU or usbmuxd path
@@ -118,10 +118,10 @@ def flow_apple_icloud_remove():
 
 def flow_apple_icloud_add():
     def _run(ctx, log):
-        from .experimental import check_gate, audit_log
+        from .experimental import check_gate_strict, per_run_acked_from_ctx, audit_log
 
-        if not check_gate("apple_icloud_add", log):
-            raise RuntimeError("Apple iCloud Add is EXPERIMENTAL — ack required")
+        if not check_gate_strict("apple_icloud_add", per_run_acked_from_ctx(ctx), log):
+            raise RuntimeError("Apple iCloud Add is EXPERIMENTAL — per-run ack required")
         audit_log("apple_icloud_add", "add_attempt")
         log("[EXPERIMENTAL] Apple iCloud Add — educational, own device only")
         plist = os.environ.get("APPLE_ACTIVATION_PLIST", "").strip()

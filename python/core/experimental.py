@@ -197,11 +197,13 @@ def audit_log(feature: str, action: str, detail: str = "") -> None:
 
 
 def check_gate(feature: str, log_fn=None) -> bool:
-    """Legacy persisted-ack gate (kept for low-risk / headless flows).
+    """Legacy persisted-ack gate (kept for API compat only).
 
     Returns True if a per-version ack was stored via set_acknowledged().
-    Audit is always written. Prefer check_gate_strict() for high-risk
-    operations where a stored ack must NOT auto-pass.
+    Audit is always written. No in-tree flow uses this anymore — every
+    experimental flow goes through check_gate_strict(), so a stored ack
+    can never auto-pass a high-risk operation. Kept so external/headless
+    scripts importing it don't break.
     """
     if is_acknowledged(feature):
         audit_log(feature, "gate_pass")
@@ -253,3 +255,68 @@ def per_run_acked_from_ctx(ctx=None) -> bool:
     except Exception:
         pass
     return False
+
+
+# Action/flow key -> experimental feature id. Single source: the GUI
+# drill-down router (devices._dispatch) and the flow runners resolve through
+# this instead of carrying private copies that can drift.
+FLOW_FEATURE_IDS: Dict[str, str] = {
+    "apple_icloud_remove": "apple_icloud_remove",
+    "apple_icloud_add": "apple_icloud_add",
+    "knox_check": "knox_warranty",
+    "knox_bypass": "knox_bypass",
+    "qcn_backup": "qcn_backup",
+    "qcn_imei_repair": "qcn_imei_repair",
+    "emmc_health": "emmc_ufs_raw",
+    "health": "qcn_backup",  # health uses generic health gate still EXPERIMENTAL-ish
+    "pac_extract": "pac_flash",
+    "pac_pack": "pac_flash",
+    "pixel_fastboot": "fastboot_pixel",
+}
+
+# How long a GUI checkbox confirm authorizes a run. Bounds the blast radius
+# of a confirm: even if token bookkeeping races, a stale confirm cannot
+# authorize a run started much later.
+ACK_TOKEN_TTL = 600.0
+
+
+def token_note(store: dict, feature: str, now: float = None) -> dict:
+    """Record one GUI ownership-checkbox confirm (append-only, counted).
+
+    Counted, not boolean: two confirms authorize two runs, so rapid
+    sequential confirms on parallel devices can never starve each other.
+    Returns the store for convenience.
+    """
+    if not isinstance(store, dict):
+        return {}
+    try:
+        store.setdefault(feature, []).append(
+            time.monotonic() if now is None else now)
+    except Exception:
+        pass
+    return store
+
+
+def token_consume(store: dict, feature: str, now: float = None) -> bool:
+    """Consume one fresh confirm token for `feature`, if any.
+
+    Drops expired tokens (>ACK_TOKEN_TTL old) instead of honouring them, so
+    a confirm can never authorize a run started much later. Returns True
+    exactly when a fresh token existed (single-use: it is removed).
+    """
+    if not isinstance(store, dict) or not feature:
+        return False
+    try:
+        ts = now if now is not None else time.monotonic()
+        kept = [t for t in store.get(feature, []) if ts - t <= ACK_TOKEN_TTL]
+        if not kept:
+            store.pop(feature, None)
+            return False
+        kept.pop(0)
+        if kept:
+            store[feature] = kept
+        else:
+            store.pop(feature, None)
+        return True
+    except Exception:
+        return False

@@ -156,10 +156,10 @@ def flow_fastboot_info():
 
 def flow_fastboot_unlock():
     def _run(ctx, log):
-        from .experimental import check_gate, audit_log
+        from .experimental import check_gate_strict, per_run_acked_from_ctx, audit_log
 
-        if not check_gate("fastboot_pixel", log):
-            raise RuntimeError("Fastboot unlock is EXPERIMENTAL — ack required in GUI dialog")
+        if not check_gate_strict("fastboot_pixel", per_run_acked_from_ctx(ctx), log):
+            raise RuntimeError("Fastboot unlock is EXPERIMENTAL — per-run ack required")
         audit_log("fastboot_pixel", "unlock_attempt")
         log("[EXPERIMENTAL] Fastboot bootloader unlock — THIS WIPES ALL DATA")
         if not _is_fastboot_device():
@@ -172,10 +172,10 @@ def flow_fastboot_unlock():
 
 def flow_fastboot_flash_factory():
     def _run(ctx, log):
-        from .experimental import check_gate, audit_log
+        from .experimental import check_gate_strict, per_run_acked_from_ctx, audit_log
 
-        if not check_gate("fastboot_pixel", log):
-            raise RuntimeError("Factory flash is EXPERIMENTAL — ack required")
+        if not check_gate_strict("fastboot_pixel", per_run_acked_from_ctx(ctx), log):
+            raise RuntimeError("Factory flash is EXPERIMENTAL — per-run ack required")
         audit_log("fastboot_pixel", "factory_flash")
         zip_path = os.environ.get("PIXEL_FACTORY_ZIP", "").strip() or ctx.get("factory_zip", "")
         if not zip_path or not os.path.isfile(zip_path):
@@ -227,10 +227,10 @@ def flow_fastboot_flash_factory():
 
 def flow_fastboot_flash_single():
     def _run(ctx, log):
-        from .experimental import check_gate
+        from .experimental import check_gate_strict, per_run_acked_from_ctx
 
-        if not check_gate("fastboot_pixel", log):
-            raise RuntimeError("Fastboot flash is EXPERIMENTAL — ack required")
+        if not check_gate_strict("fastboot_pixel", per_run_acked_from_ctx(ctx), log):
+            raise RuntimeError("Fastboot flash is EXPERIMENTAL — per-run ack required")
         part = os.environ.get("FASTBOOT_PARTITION", "").strip() or ctx.get("partition", "")
         img = os.environ.get("FASTBOOT_IMAGE", "").strip() or ctx.get("image", "")
         if not part or not img:

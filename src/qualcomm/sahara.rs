@@ -156,6 +156,56 @@ pub struct SaharaReadMemoryResp {
     pub reserved: u32,
 }
 
+/// Parse + validate a raw HELLO packet (pure: unit-testable without USB).
+///
+/// Enforcement (previously missing — any ≥32-byte blob was trusted):
+/// command must be Hello, version must be ≥ 2 (same rule the handshake
+/// enforces, now applied at every entry point), mode must be a known
+/// Sahara mode, and max_packet_size must be non-zero (a zero would cause
+/// zero-length transfers downstream).
+pub fn parse_hello(buf: &[u8]) -> Result<SaharaHello> {
+    if buf.len() < 32 {
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+            "HELLO packet too short".to_string(),
+        )));
+    }
+    let le = |off: usize| u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+    let command = le(0);
+    if command != SaharaCommand::Hello as u32 {
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(format!(
+            "expected HELLO (0x01), got command 0x{command:08x}"
+        ))));
+    }
+    let version = le(4);
+    if version < 2 {
+        return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("Unsupported Sahara version: {version}"),
+        }));
+    }
+    let mode = le(16);
+    if mode > 4 {
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(format!(
+            "unknown Sahara mode: {mode}"
+        ))));
+    }
+    let max_packet_size = le(12);
+    if max_packet_size == 0 {
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+            "HELLO max_packet_size is 0".to_string(),
+        )));
+    }
+    Ok(SaharaHello {
+        command,
+        version,
+        compatible_version: le(8),
+        max_packet_size,
+        mode,
+        reserved: [le(20), le(24), le(28), 0, 0, 0],
+    })
+}
+
 /// Sahara session for EDL communication
 pub struct SaharaSession {
     pub device: UsbDevice,
@@ -177,8 +227,11 @@ impl SaharaSession {
                 reason: "No bulk endpoints found".to_string(),
             }))?;
 
-        device.claim_interface(0)?;
+        // Detach BEFORE claiming: auto-detach only affects future claims,
+        // so claiming first leaves a kernel driver (e.g. qcserial) holding
+        // the bulk endpoints and every transfer fails.
         device.set_auto_detach_kernel_driver(true)?;
+        device.claim_interface(0)?;
 
         let mut session = Self {
             device,
@@ -196,18 +249,11 @@ impl SaharaSession {
         Ok(session)
     }
 
-    /// Perform Sahara handshake
+    /// Perform Sahara handshake (version/mode/size rules enforced inside
+    /// `parse_hello`, so every entry point validates identically).
     fn handshake(&mut self) -> Result<()> {
         // Wait for HELLO from device
         let hello = self.read_hello()?;
-        
-        // Validate version compatibility
-        if hello.version < 2 {
-            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
-                reason: format!("Unsupported Sahara version: {}", hello.version),
-            }));
-        }
 
         self.max_packet_size = hello.max_packet_size;
         self.version = hello.version;
@@ -236,31 +282,13 @@ impl SaharaSession {
         Ok(())
     }
 
-    /// Read HELLO packet from device
+    /// Read HELLO packet from device (I/O only; parsing+validation lives in
+    /// `parse_hello` so it is unit-testable without USB).
     fn read_hello(&mut self) -> Result<SaharaHello> {
         let mut buf = vec![0u8; 64];
         let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         buf.truncate(n);
-
-        if buf.len() < 32 {
-            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
-                "HELLO packet too short".to_string()
-            )));
-        }
-
-        Ok(SaharaHello {
-            command: u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
-            version: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
-            compatible_version: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
-            max_packet_size: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
-            mode: u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]),
-            reserved: [
-                u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]),
-                u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]),
-                u32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]),
-                0, 0, 0,
-            ],
-        })
+        parse_hello(&buf)
     }
 
     /// Send a Sahara packet
@@ -386,26 +414,92 @@ impl SaharaSession {
         Ok(info)
     }
 
-    /// Load-bearing: exercise SaharaReadData/SaharaEndImageTx/SaharaDone packet structs
-    /// and ProtocolError handling. Used by `qcom_flash` diagnostics to validate the wire format.
-    pub fn handle_image_transfer(&mut self, image_id: u32, data: &[u8]) -> Result<()> {
-        let rd = SaharaReadData { command: SaharaCommand::ReadData as u32, image_id, offset: 0, length: data.len() as u32 };
-        let _ = bincode::serialize(&rd).map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed { cmd: rd.command as u8, sub: 0, reason: e.to_string() }))?;
-        let end = SaharaEndImageTx { command: SaharaCommand::EndImageTx as u32, image_id, status: SaharaStatus::Success as u32 };
-        let _ = bincode::serialize(&end).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
-        let done = SaharaDone { command: SaharaCommand::Done as u32 };
-        let _ = bincode::serialize(&done).map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed { cmd: done.command as u8, sub: 0, reason: e.to_string() }))?;
-        let resp = SaharaDoneResp { command: SaharaCommand::DoneResp as u32, status: SaharaStatus::Success as u32 };
-        let _ = bincode::serialize(&resp).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
-        let mem_resp = SaharaReadMemoryResp { command: SaharaCommand::ReadMemoryResp as u32, status: SaharaStatus::Success as u32, address: 0, length: data.len() as u32, reserved: 0 };
-        let _ = bincode::serialize(&mem_resp).map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
-        Ok(())
+    /// Load-bearing wire-format self-check for the image-transfer packet
+    /// family (SaharaReadData / EndImageTx / Done / DoneResp /
+    /// ReadMemoryResp). Each struct is serialized, deserialized back, and
+    /// re-serialized, with byte equality enforced — a struct-layout drift
+    /// that would put garbage on the wire fails LOUDLY here instead of
+    /// bricking a flash. Sends nothing (device I/O stays in the flashing
+    /// paths, which are covered by hardware runs, not by this check).
+    /// Returns the number of packet layouts verified.
+    pub fn handle_image_transfer(&mut self, image_id: u32, data: &[u8]) -> Result<usize> {
+        fn roundtrip<T>(value: &T, what: &str) -> Result<()>
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned,
+        {
+            let bytes = bincode::serialize(value).map_err(|e| {
+                BridgeError::Protocol(ProtocolError::CommandFailed {
+                    cmd: 0,
+                    sub: 0,
+                    reason: format!("{what} serialize: {e}"),
+                })
+            })?;
+            let back: T = bincode::deserialize(&bytes).map_err(|e| {
+                BridgeError::Protocol(ProtocolError::UnexpectedResponse(format!(
+                    "{what} deserialize: {e}"
+                )))
+            })?;
+            let again = bincode::serialize(&back).map_err(|e| {
+                BridgeError::Protocol(ProtocolError::CommandFailed {
+                    cmd: 0,
+                    sub: 0,
+                    reason: format!("{what} re-serialize: {e}"),
+                })
+            })?;
+            if again != bytes {
+                return Err(BridgeError::Protocol(ProtocolError::ChecksumMismatch));
+            }
+            Ok(())
+        }
+        let rd = SaharaReadData {
+            command: SaharaCommand::ReadData as u32,
+            image_id,
+            offset: 0,
+            length: data.len() as u32,
+        };
+        roundtrip(&rd, "SaharaReadData")?;
+        let end = SaharaEndImageTx {
+            command: SaharaCommand::EndImageTx as u32,
+            image_id,
+            status: SaharaStatus::Success as u32,
+        };
+        roundtrip(&end, "SaharaEndImageTx")?;
+        let done = SaharaDone {
+            command: SaharaCommand::Done as u32,
+        };
+        roundtrip(&done, "SaharaDone")?;
+        let resp = SaharaDoneResp {
+            command: SaharaCommand::DoneResp as u32,
+            status: SaharaStatus::Success as u32,
+        };
+        roundtrip(&resp, "SaharaDoneResp")?;
+        let mem_resp = SaharaReadMemoryResp {
+            command: SaharaCommand::ReadMemoryResp as u32,
+            status: SaharaStatus::Success as u32,
+            address: 0,
+            length: data.len() as u32,
+            reserved: 0,
+        };
+        roundtrip(&mem_resp, "SaharaReadMemoryResp")?;
+        Ok(5)
     }
 
-    /// Perform clean session close: requires read_exact + send_done to be load-bearing.
+    /// Close the Sahara session cleanly: drain any trailing bytes, send Done,
+    /// and explicitly reset the device (rebooting it out of EDL mode).
+    /// Returns an error if the device refuses the reset — the caller MUST
+    /// handle this, as a stuck device will fail the next operation.
     pub fn close_session(&mut self) -> Result<()> {
-        let _ = self.read_exact(8).unwrap_or_default();
-        self.send_done()
+        // Drain any trailing bytes with a short timeout
+        if let Err(e) = self.read_exact(8) {
+            eprintln!("[sahara] close: drain failed ({e}) — continuing to Done");
+        }
+        // Explicitly send Done and wait for DONE_RESP
+        self.send_done()?;
+        // Explicitly reset the device (reboots it out of EDL mode).
+        // This is MANDATORY - the device will not accept new commands
+        // until it reboots. Caller MUST handle this result.
+        self.reset_device()?;
+        Ok(())
     }
 
     pub fn reset_device(&mut self) -> Result<()> {
@@ -527,4 +621,49 @@ pub fn all_sahara_commands() -> Vec<SaharaCommand> {
         SaharaCommand::ExecuteCommand, SaharaCommand::ExecuteCommandResp, SaharaCommand::ExecuteData, SaharaCommand::ExecuteDataResp,
         SaharaCommand::SwitchMode, SaharaCommand::SwitchModeResp, SaharaCommand::ReadModem, SaharaCommand::ReadModemResp,
     ]
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hello_bytes(command: u32, version: u32, max_packet: u32, mode: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 48];
+        b[0..4].copy_from_slice(&command.to_le_bytes());
+        b[4..8].copy_from_slice(&version.to_le_bytes());
+        b[8..12].copy_from_slice(&2u32.to_le_bytes());
+        b[12..16].copy_from_slice(&max_packet.to_le_bytes());
+        b[16..20].copy_from_slice(&mode.to_le_bytes());
+        b
+    }
+
+    #[test]
+    fn good_hello_parses_with_negotiated_size() {
+        let h = parse_hello(&hello_bytes(0x1, 2, 4096, 0)).unwrap();
+        assert_eq!((h.version, h.max_packet_size, h.mode), (2, 4096, 0));
+    }
+
+    #[test]
+    fn short_wrong_command_old_version_rejected() {
+        assert!(parse_hello(&[0u8; 10]).unwrap_err().to_string().contains("too short"));
+        assert!(parse_hello(&hello_bytes(0x2, 2, 4096, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("expected HELLO"));
+        assert!(parse_hello(&hello_bytes(0x1, 1, 4096, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported Sahara version"));
+    }
+
+    #[test]
+    fn unknown_mode_and_zero_packet_size_rejected() {
+        assert!(parse_hello(&hello_bytes(0x1, 2, 4096, 99))
+            .unwrap_err()
+            .to_string()
+            .contains("unknown Sahara mode"));
+        assert!(parse_hello(&hello_bytes(0x1, 2, 0, 0))
+            .unwrap_err()
+            .to_string()
+            .contains("max_packet_size is 0"));
+    }
 }

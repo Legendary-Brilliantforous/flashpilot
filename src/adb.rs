@@ -15,6 +15,7 @@
 //! * AUTH TOKEN is 20 bytes; SIGNATURE is PKCS#1 v1.5 over the token.
 //! * adbkey.pub is base64 of the 524-byte RSAPublicKey struct (64 LE words).
 
+use crate::config::{get_read_chunk_secs, OperationContext};
 use crate::error::{BridgeError, Result, UsbError};
 use crate::usb::{self, UsbDevice};
 use num_bigint::BigUint;
@@ -46,7 +47,8 @@ const AUTH_RSAPUBLICKEY: u32 = 3;
 const A_VERSION: u32 = 0x0100_0000;
 const MAXDATA: usize = 4096;
 const TOKEN_LEN: usize = 20;
-const READ_CHUNK: Duration = Duration::from_secs(2);
+/// ADB read chunk timeout (overridable via config)
+// const DEFAULT_READ_CHUNK_SECS: u64 = 2;
 
 // RSA-2048 adb key layout.
 const RSA_WORDS: usize = 64;
@@ -421,6 +423,12 @@ impl AdbKey {
     }
 }
 
+/// Backoff between AUTH token rounds: 100ms doubling, capped at 2s.
+/// Pure function so the schedule is unit-tested, not hoped-for.
+fn auth_backoff_ms(round: u32) -> u64 {
+    100u64.saturating_mul(1u64 << round.min(5)).min(2000)
+}
+
 fn load_or_create_key() -> Result<AdbKey> {
     let path = adb_key_path();
     if path.exists() {
@@ -431,6 +439,9 @@ fn load_or_create_key() -> Result<AdbKey> {
     }
     // Generate fresh 2048-bit key (first run / CI machines). rsa::BigUint
     // IS num_bigint::BigUint (re-exported), so no conversion is needed.
+    // One-time cost (~1s prime search), persisted forever — announced so
+    // the pause is never mistaken for a hang.
+    eprintln!("[adb] generating fresh ADB keypair (one-time, ~1s)...");
     let mut rng = rand::thread_rng();
     let privk = rsa::RsaPrivateKey::new(&mut rng, 2048)
         .map_err(|e| BridgeError::Internal(format!("rsa keygen: {e}")))?;
@@ -480,6 +491,7 @@ struct Session {
     ep_out: u8,
     next_id: u32,
     deadline: Instant,
+    ctx: Option<OperationContext>,
 }
 
 impl Session {
@@ -493,19 +505,20 @@ impl Session {
     fn write_msg(&self, cmd: u32, a0: u32, a1: u32, payload: &[u8]) -> Result<()> {
         let pkt = encode_msg(cmd, a0, a1, payload);
         // ADB payloads never exceed MAXDATA here; chunk by endpoint MPS.
+        let _timeout = Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref()));
         self.dev
-            .write_bulk(self.ep_out, &pkt, READ_CHUNK)
+            .write_bulk(self.ep_out, &pkt, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))
             .map(|_| ())
     }
 
     fn read_msg(&self) -> Result<Msg> {
         self.check_deadline()?;
         let mut hdr = [0u8; 24];
-        self.dev.read_exact(self.ep_in, &mut hdr, READ_CHUNK)?;
+        self.dev.read_exact(self.ep_in, &mut hdr, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))?;
         let (cmd, a0, a1, len) = decode_header(&hdr)?;
         let mut payload = vec![0u8; len as usize];
         if len > 0 {
-            self.dev.read_exact(self.ep_in, &mut payload, READ_CHUNK)?;
+            self.dev.read_exact(self.ep_in, &mut payload, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))?;
             let (_, _, _, _) = decode_header(&hdr)?; // re-validated; checksum below
             let (_, got) = (len, checksum(&payload));
             let expected = u32::from_le_bytes(hdr[16..20].try_into().unwrap());
@@ -553,6 +566,14 @@ impl Session {
                         self.write_msg(A_AUTH, AUTH_RSAPUBLICKEY, 0, pubkey.as_bytes())?;
                         pubkey_sent = true;
                         continue;
+                    }
+                    // Back off between rounds (capped exponential): hammering
+                    // TOKEN replies back-to-back desyncs slow/noisy links and
+                    // burns the whole deadline on transport retries.
+                    if token_rounds >= 2 {
+                        std::thread::sleep(Duration::from_millis(auth_backoff_ms(
+                            token_rounds,
+                        )));
                     }
                     // Alternate hashes across rounds: new adbd wants
                     // SHA-256, old (pre-10-era) wants SHA-1.
@@ -687,7 +708,8 @@ impl Session {
     /// so waiting would misreport success as SessionEnded).
     fn sync_write_noreply(&self, local: u32, remote: u32, payload: &[u8]) {
         let raw = encode_msg(A_WRTE, local, remote, payload);
-        let _ = self.dev.write_bulk(self.ep_out, &raw, READ_CHUNK);
+        let _timeout = Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref()));
+            let _ = self.dev.write_bulk(self.ep_out, &raw, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())));
     }
 
     /// `adb pull`: STAT then RECV, streaming DATA to `local_path`.
@@ -766,7 +788,7 @@ impl Session {
             // read acks lazily would desync — instead write raw and drain.
             let raw = encode_msg(A_WRTE, local, remote_id, &pkt);
             self.dev
-                .write_bulk(self.ep_out, &raw, READ_CHUNK)
+                .write_bulk(self.ep_out, &raw, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))
                 .map(|_| ())?;
             // Drain the OKAY ack for each DATA chunk.
             loop {
@@ -875,7 +897,7 @@ fn open_session(t: &AdbTarget, deadline: Instant) -> Result<Session> {
     let (ep_in, ep_out) = dev.find_bulk_endpoints(iface).ok_or_else(|| {
         BridgeError::InvalidArgument("no bulk endpoints on ADB iface".to_string())
     })?;
-    Ok(Session { dev, ep_in, ep_out, next_id: 1, deadline })
+    Ok(Session { dev, ep_in, ep_out, next_id: 1, deadline, ctx: None })
 }
 
 fn extras(banner: &HashMap<String, String>) -> String {
@@ -1142,6 +1164,17 @@ mod tests {
         let file_raw =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, file_b64).unwrap();
         assert_eq!(mine_raw, file_raw, "pubkey blob differs from system adb's");
+    }
+
+    #[test]
+    fn auth_backoff_rises_then_caps() {
+        assert_eq!(auth_backoff_ms(1), 200);
+        assert_eq!(auth_backoff_ms(2), 400);
+        assert_eq!(auth_backoff_ms(3), 800);
+        assert_eq!(auth_backoff_ms(4), 1600);
+        assert_eq!(auth_backoff_ms(5), 2000);
+        assert_eq!(auth_backoff_ms(6), 2000);
+        assert_eq!(auth_backoff_ms(100), 2000);
     }
 
     #[test]

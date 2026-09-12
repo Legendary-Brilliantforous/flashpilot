@@ -200,12 +200,29 @@ for e in &entries {
 }
 
 /// DA (Download Agent) session for partition operations
+/// Default DA-protocol write chunk (previous hardcoded behavior everywhere).
+pub const DEFAULT_PACKET_SIZE: usize = 64 * 1024;
+/// Hard bounds for configured packet sizes: smaller wastes round-trips,
+/// larger risks endpoint stalls; zero would panic chunking outright.
+pub const MIN_PACKET_SIZE: usize = 512;
+pub const MAX_PACKET_SIZE: usize = 1024 * 1024;
+
+/// Clamp a configured packet size (pure: unit-tested without USB).
+pub(crate) fn clamp_packet_size(size: usize) -> usize {
+    if size < MIN_PACKET_SIZE || size > MAX_PACKET_SIZE {
+        DEFAULT_PACKET_SIZE
+    } else {
+        size
+    }
+}
+
 pub struct DaSession {
     session: BromSession,
     da_addr: u32,
     da_len: u32,
     da_arg: u32,
     hw_code: u32,
+    packet_size: usize,
 }
 
 impl DaSession {
@@ -216,7 +233,21 @@ impl DaSession {
             da_len: 0,
             da_arg: 0,
             hw_code: 0,
+            packet_size: DEFAULT_PACKET_SIZE,
         }
+    }
+
+    /// Apply the configured MTK packet size (clamped to sane bounds; 0 or
+    /// out-of-range falls back to the default instead of panicking chunk
+    /// iteration or stalling the endpoint).
+    pub fn set_packet_size(&mut self, size: usize) {
+        let clamped = clamp_packet_size(size);
+        if clamped != size {
+            eprintln!(
+                "[mtk] packet size {size} out of range [{MIN_PACKET_SIZE}..{MAX_PACKET_SIZE}], using default {DEFAULT_PACKET_SIZE}"
+            );
+        }
+        self.packet_size = clamped;
     }
 
     pub fn da_info(&self) -> (u32, u32, u32, u32) {
@@ -332,9 +363,8 @@ impl DaSession {
         // WRITE_PARTITION (0xF2)
         self.send_cmd(0xF2, &payload, 2)?;
 
-        // Send data in chunks
-        const CHUNK: usize = 64 * 1024;
-        for chunk in file_data.chunks(CHUNK) {
+        // Send data in configured chunks (see set_packet_size).
+        for chunk in file_data.chunks(self.packet_size) {
             self.session.write(chunk)?;
             let ack = self.session.read_exact(2, Duration::from_secs(10))?;
             if ack != [0xF2, 0x00] && ack != [0x00, 0x00] {
@@ -415,9 +445,8 @@ impl DaSession {
         payload.extend_from_slice(&1u32.to_be_bytes()); // is_download = true
         self.send_cmd(0xF2, &payload, 2)?;
         let mut remaining = *size;
-        const CHUNK: usize = 64 * 1024;
         while remaining > 0 {
-            let n = std::cmp::min(CHUNK as u64, remaining) as usize;
+            let n = std::cmp::min(self.packet_size as u64, remaining) as usize;
             self.session.write(&chunk[..n])?;
             let ack = self.session.read_exact(2, Duration::from_secs(10))?;
             if ack != [0xF2, 0x00] && ack != [0x00, 0x00] {
@@ -1668,10 +1697,12 @@ pub fn mtk_flash_flow(
     let _ = crate::mtk::brom_mem_probe(&session);
     
     let mut da_session = DaSession::new(session);
-    // Wire OperationContext + config packet size
+    // Apply the configured MTK packet size to the DA session (previously
+    // computed and dropped — the session always wrote 64K chunks).
     let ctx = crate::config::app_config_for_operation(Some(dev.clone()));
-    let _pkt = crate::config::mtk_packet_size(&ctx.mtk);
-    eprintln!("[mtk] packet_size {ctx:?} -> {_pkt}");
+    let pkt = crate::config::mtk_packet_size(&ctx.mtk);
+    da_session.set_packet_size(pkt);
+    eprintln!("[mtk] packet size {pkt} (config: {:?})", ctx.mtk);
     da_session.upload_da(da_path)?;
 
     let scatter = ScatterFile::parse(scatter_path)?;
@@ -1920,5 +1951,17 @@ is_download: true
         std::fs::write("/tmp/test_scatter_zero.txt", content).unwrap();
         let err = ScatterFile::parse("/tmp/test_scatter_zero.txt").unwrap_err();
         assert!(err.contains("zero partition_size"), "got: {err}");
+    }
+
+    #[test]
+    fn packet_size_clamp_keeps_default_sane() {
+        assert_eq!(DEFAULT_PACKET_SIZE, 64 * 1024);
+        assert_eq!(clamp_packet_size(0), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(100), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(512), 512);
+        assert_eq!(clamp_packet_size(64 * 1024), 64 * 1024);
+        assert_eq!(clamp_packet_size(1024 * 1024), 1024 * 1024);
+        assert_eq!(clamp_packet_size(1024 * 1024 + 1), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(usize::MAX), DEFAULT_PACKET_SIZE);
     }
 }

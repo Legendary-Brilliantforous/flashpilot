@@ -78,13 +78,22 @@ pub struct AppConfig {
     pub defaults: DefaultsConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UsbConfig {
     pub timeout_ms: u64,
     pub bulk_timeout_ms: u64,
     pub control_timeout_ms: u64,
     pub retry_count: u32,
     pub auto_detach_kernel: bool,
+    /// Per-operation timeouts (milliseconds)
+    pub flash_timeout_ms: u64,
+    pub edl_timeout_ms: u64,
+    pub samsung_download_timeout_ms: u64,
+    pub mtk_da_timeout_ms: u64,
+    pub spd_readback_timeout_ms: u64,
+    pub spd_flash_timeout_ms: u64,
+    pub mtk_flash_timeout_ms: u64,
+    pub qcom_edl_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +186,13 @@ pub fn mtk_da_timeout(cfg: &MtkConfig) -> Duration {
     Duration::from_millis(cfg.da_timeout_ms)
 }
 
+/// ADB read chunk timeout (overridable via config)
+pub fn get_read_chunk_secs(ctx: Option<&OperationContext>) -> u64 {
+    ctx.map(|ctx| ctx.config.usb.flash_timeout_ms)
+        .unwrap_or(2000)
+        .max(1) // minimum 1 second
+}
+
 pub fn config_summary(ctx: &OperationContext) -> serde_json::Value {
     serde_json::json!({
         "usb_timeout_ms": ctx.config.usb.timeout_ms,
@@ -192,7 +208,23 @@ pub fn config_summary(ctx: &OperationContext) -> serde_json::Value {
 }
 
 pub fn default_app_config() -> AppConfig { AppConfig::default() }
-pub fn default_usb_config() -> UsbConfig { UsbConfig { timeout_ms: 5000, bulk_timeout_ms: 30000, control_timeout_ms: 5000, retry_count: 3, auto_detach_kernel: true } }
+pub fn default_usb_config() -> UsbConfig { 
+    UsbConfig { 
+        timeout_ms: 5000, 
+        bulk_timeout_ms: 30000, 
+        control_timeout_ms: 5000, 
+        retry_count: 3, 
+        auto_detach_kernel: true,
+        flash_timeout_ms: 300000,
+        edl_timeout_ms: 60000,
+        samsung_download_timeout_ms: 1800000,
+        mtk_da_timeout_ms: 10000,
+        spd_readback_timeout_ms: 120000,
+        spd_flash_timeout_ms: 1800000,
+        mtk_flash_timeout_ms: 1800000,
+        qcom_edl_timeout_ms: 60000,
+    } 
+}
 pub fn default_logging_config() -> LoggingConfig { LoggingConfig { level: "info".to_string(), json_output: false, log_usb_traffic: false } }
 pub fn default_defaults_config() -> DefaultsConfig { DefaultsConfig { samsung_packet_size: 1048576, mtk_packet_size: 1048576, flash_timeout_secs: 300 } }
 pub fn default_samsung_config() -> SamsungConfig { SamsungConfig::default() }
@@ -201,13 +233,7 @@ pub fn default_mtk_config() -> MtkConfig { MtkConfig::default() }
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            usb: UsbConfig {
-                timeout_ms: 5000,
-                bulk_timeout_ms: 30000,
-                control_timeout_ms: 5000,
-                retry_count: 3,
-                auto_detach_kernel: true,
-            },
+            usb: UsbConfig::default(),
             logging: LoggingConfig {
                 level: "info".to_string(),
                 json_output: false,

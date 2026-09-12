@@ -37,6 +37,22 @@
   loss; `.tar.md5` trailer anchored to end-of-file (streaming, no full RAM read).
 - Native smart flash logs per-partition MB/s + ETA.
 
+### Robustness hardening (review-driven)
+- Sahara: HELLO command/version/mode/packet-size validated at parse (was:
+  any ≥32-byte blob trusted); transfer-format self-check now round-trips
+  structs instead of dropping bytes; close failures logged; detach runs
+  before claim; handshake reports transfer/close/reset outcomes in JSON
+  instead of discarding them (reset is explicit and visible).
+- ADB auth: capped exponential backoff between token rounds; one-time
+  keygen pause announced instead of looking hung.
+- MTK: configured packet size actually reaches the DA session (was computed
+  and dropped; sessions hardcoded 64K), clamped to 512B–1MB.
+- Safety backups: failures print an unmissable banner with elapsed time
+  and a STOP hint (contract unchanged: never blocks the operation).
+- Experimental gates: iCloud + Pixel flows migrated to strict per-run acks;
+  GUI ack tokens are now counted per feature with expiry (no cross-feature
+  bleed, no lost acks, no stale authorizations).
+
 ### GUI fixes
 - Top-bar red borders + button shrink traced to concurrent shake/rubber
   animations and accent-tinted focus rings: animations serialized with

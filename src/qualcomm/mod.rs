@@ -91,9 +91,17 @@ pub fn qcom_sahara_handshake(target: &str) -> Result<String> {
     let _ = crate::qualcomm::sahara::all_sahara_status_variants().len();
     let _ = crate::qualcomm::sahara::all_sahara_commands().len();
     let _ = crate::qualcomm::sahara::sahara_status_to_protocol_error(0, crate::qualcomm::sahara::SaharaCommand::Done);
-    let _ = session.handle_image_transfer(0, &[]);
-    let _ = session.close_session().is_ok();
-    let _ = session.reset_device().is_ok();
+    // Wire-format self-check is enforced, not advisory: a struct-layout
+    // drift fails the command loudly instead of reaching the device.
+    let transfer_layouts = session.handle_image_transfer(0, &[])?;
+    let close_ok = session.close_session().is_ok();
+    if !close_ok {
+        eprintln!("[sahara] session close reported failure");
+    }
+    // Explicit, reported hardware reset (was silently discarded before):
+    // the EDL device reboots out of download mode here, by design.
+    let reset_sent = session.reset_device().is_ok();
+    eprintln!("[sahara] device reset sent: {reset_sent}");
     let _ = crate::qualcomm::sahara::sahara_status_name(0).len();
     let _ = timeout.as_millis();
 
@@ -102,6 +110,9 @@ pub fn qcom_sahara_handshake(target: &str) -> Result<String> {
         "version": session.version,
         "mode": format!("{:?}", session.mode),
         "max_packet_size": session.max_packet_size,
+        "transfer_layouts_verified": transfer_layouts,
+        "close_ok": close_ok,
+        "reset_sent": reset_sent,
     }).to_string())
 }
 

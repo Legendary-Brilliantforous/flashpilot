@@ -532,25 +532,13 @@ def _dispatch(win, act, brand_label, m):
         try:
             from python.core import experimental as _exp
 
-            # Map act key to experimental feature id for ack store
-            _map = {
-                "apple_icloud_remove": "apple_icloud_remove",
-                "apple_icloud_add": "apple_icloud_add",
-                "knox_check": "knox_warranty",
-                "knox_bypass": "knox_bypass",
-                "qcn_backup": "qcn_backup",
-                "qcn_imei_repair": "qcn_imei_repair",
-                "emmc_health": "emmc_ufs_raw",
-                "health": "qcn_backup",  # health uses generic health gate still EXPERIMENTAL-ish
-                "pac_extract": "pac_flash",
-                "pac_pack": "pac_flash",
-                "pixel_fastboot": "fastboot_pixel",
-            }
-            feat = _map.get(act, act)
+            # Act key -> experimental feature id (single source; the flow
+            # runners resolve the same map so tokens stay feature-bound).
+            feat = _exp.FLOW_FEATURE_IDS.get(act, act)
             title, warn = _exp.get_warning(feat)
 
-            def _go():
-                win.start_model_action(act, brand_label, m)
+            def _go(_feat=feat):
+                win.start_model_action(act, brand_label, m, feature=_feat)
 
             # Use the window's experimental overlay if available, else direct
             if hasattr(win, "_confirm_experimental_overlay"):

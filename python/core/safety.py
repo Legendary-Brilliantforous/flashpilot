@@ -53,8 +53,34 @@ def latest_backup_dir(chip: str) -> str:
     return cands[0] if cands else ""
 
 
+def _backup_failed_banner(log, what, err, elapsed):
+    """Loud, unmissable backup-failure banner.
+
+    A failed safety backup must never look like a quiet footnote: the
+    operation continues by design, but the user has to SEE that they are
+    proceeding without a restore point. Timeouts here are generous on
+    purpose (full-flash readback on slow eMMC genuinely takes many
+    minutes); the bridge streams per-partition progress while it runs and
+    the STOP button aborts a stalled backup at any time.
+    """
+    for line in (
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        f"!! PRE-FLASH BACKUP FAILED ({what}, after {elapsed:.0f}s) !!",
+        f"!!   {err}",
+        "!! Proceeding WITHOUT a restore point. If the flash goes wrong,",
+        "!! there may be no way back. Press STOP now to abort instead.",
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+    ):
+        try:
+            log(line)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _dump_spd(bridge, target, fdl1, a1, fdl2, a2, out_dir, log) -> list:
     """Dump critical partitions via spd-backup subset (Rust reads by name)."""
+    import time as _time
+
     parts = _CRITICAL_PARTITIONS["spd"]
     args = ["spd-readback", target, fdl1, f"0x{a1:x}"]
     if fdl2:
@@ -64,18 +90,21 @@ def _dump_spd(bridge, target, fdl1, a1, fdl2, a2, out_dir, log) -> list:
     # afterwards to keep the operation single-pass and simple.
     tmp_pac = os.path.join(out_dir, "_all.pac")
     args += [tmp_pac, ",".join(parts)]
+    started = _time.monotonic()
     try:
         bridge._run(args, timeout=1200)
     except Exception as e:  # noqa: BLE001
-        log(f"  backup readback failed (non-fatal): {e}")
+        _backup_failed_banner(log, "SPD readback", e, _time.monotonic() - started)
         return []
     saved = [tmp_pac]
-    log(f"  packed backup: {tmp_pac}")
+    log(f"  packed backup: {tmp_pac} ({_time.monotonic() - started:.0f}s)")
     return saved
 
 
 def _dump_mtk(bridge, da, scatter, out_dir, log) -> list:
     """MTK: use mtk-backup on the critical set via existing bridge command."""
+    import time as _time
+
     if not da:
         return []
     args = ["mtk-backup", "auto", da]
@@ -86,18 +115,20 @@ def _dump_mtk(bridge, da, scatter, out_dir, log) -> list:
         log("  (no scatter - skipping MTK pre-flash backup)")
         return []
     args.append(out_dir)
+    started = _time.monotonic()
     try:
         bridge._run(args, timeout=1800)
     except Exception as e:  # noqa: BLE001
-        log(f"  backup failed (non-fatal): {e}")
+        _backup_failed_banner(log, "MTK backup", e, _time.monotonic() - started)
         return []
+    log(f"  backup done ({_time.monotonic() - started:.0f}s)")
     return [out_dir]
 
 
 def preflash_backup(chip: str, bridge, log, target="", fdl1="", a1=None,
                     fdl2="", a2=None, da="", scatter="", ident="") -> str:
     """Best-effort safety backup. Never raises - a failed backup must not
-    block the user's actual operation; it just logs."""
+    block the user's actual operation; failures are bannered loudly."""
     try:
         parts_list = _CRITICAL_PARTITIONS.get(chip, [])
         if not parts_list:
@@ -110,8 +141,5 @@ def preflash_backup(chip: str, bridge, log, target="", fdl1="", a1=None,
             _dump_mtk(bridge, da, scatter, out_dir, log)
         return out_dir
     except Exception as e:  # noqa: BLE001
-        try:
-            log(f"[safety] backup skipped: {e}")
-        except Exception:  # noqa: BLE001
-            pass
+        _backup_failed_banner(log, "safety setup", e, 0)
         return ""

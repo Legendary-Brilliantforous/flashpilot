@@ -3774,11 +3774,13 @@ class FlashPilotWindow(QMainWindow):
             pass
 
     # --------------------- model action router (devices drill-down) --------
-    def start_model_action(self, act, brand_label, meta):
+    def start_model_action(self, act, brand_label, meta, feature=None):
         """Wire a Devices drill-down action to the real engine for its chip.
 
         act: frp | info | backup | flash | adb_enable | kg_unlock
         meta: model dict from supported_devices.json (engine, vid, ...)
+        feature: experimental feature id when routed through the ownership
+        overlay (lets the runner consume the matching per-run ack token).
         Only researched models reach here with enabled buttons; guards below
         keep un-researched or missing-input cases safe and guided."""
         engine = (meta.get("engine") or "").lower()
@@ -3841,10 +3843,12 @@ class FlashPilotWindow(QMainWindow):
                 "pac_pack":              ("Flash Firmware",      "SPD"),
             }.get(act)
             if job_mode:
-                self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}")
+                self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}",
+                                   feature=feature)
             else:
                 # Generic fallback: just run the flow under a synthetic label
-                self._run_ops_flow("Read Device Info", "ADB", act, f"{label} · {act}")
+                self._run_ops_flow("Read Device Info", "ADB", act, f"{label} · {act}",
+                                   feature=feature)
             return
 
         if engine == "spd":
@@ -6401,11 +6405,14 @@ class FlashPilotWindow(QMainWindow):
             except Exception:
                 pass
             # Per-run ack token consumed by _run_ops_flow/_run_job_flow into
-            # ctx['experimental_ack'] so core's strict gate passes this run only.
+            # ctx['experimental_ack'] so core's strict gate passes this run
+            # only. Counted per feature with timestamps (see token_note):
+            # two confirms authorize two runs, and stale confirms expire
+            # instead of authorizing a much later run.
             try:
-                if not hasattr(self, "_exp_ack_once"):
-                    self._exp_ack_once = set()
-                self._exp_ack_once.add(feature)
+                if not isinstance(getattr(self, "_exp_ack_once", None), dict):
+                    self._exp_ack_once = {}
+                experimental.token_note(self._exp_ack_once, feature)
             except Exception:
                 pass
             close()
@@ -11786,11 +11793,15 @@ class FlashPilotWindow(QMainWindow):
             return "__cancelled__"
         return checked.property("device_key") or "__cancelled__"
 
-    def _run_ops_flow(self, job, mode, method, label, device_key=None):
+    def _run_ops_flow(self, job, mode, method, label, device_key=None,
+                      feature=None):
         """Run a Samsung Operations flow directly from its button - no
         job/mode/method dropdowns, each operation is its own button.
         ``device_key`` pins the run to one phone (None = ambient/legacy);
-        other phones may run operations in parallel."""
+        other phones may run operations in parallel.
+        ``feature`` is the experimental feature id when the caller came
+        through the ownership overlay; only a matching per-run token sets
+        ctx['experimental_ack'] (no cross-feature bleed, no stale auth)."""
         if device_key is None:
             picked = self._choose_device(job, mode)
             if picked == "__cancelled__":
@@ -11904,11 +11915,13 @@ class FlashPilotWindow(QMainWindow):
                         ctx["target"] = tgt
                 except Exception:
                     pass
+            # Same feature-bound consumption as _run_job_flow: only a fresh
+            # token for this flow's feature sets the per-run ack.
             try:
-                pending = getattr(self, "_exp_ack_once", set())
-                if pending:
+                feat = feature or experimental.FLOW_FEATURE_IDS.get(method)
+                if feat and experimental.token_consume(
+                        getattr(self, "_exp_ack_once", None), feat):
                     ctx["experimental_ack"] = True
-                    self._exp_ack_once = set()
             except Exception:
                 pass
             try:
@@ -12095,13 +12108,15 @@ class FlashPilotWindow(QMainWindow):
                         ctx["target"] = tgt
                 except Exception:
                     pass
-            # Consume a per-run experimental ack token if the experimental
-            # dialog just approved this run (single-use, never persisted).
+            # Consume one per-run experimental ack token for this flow's
+            # feature, if the ownership dialog just approved it. Feature-
+            # bound and single-use: one confirm authorizes one run, stale
+            # confirms expire, and no other feature's token can leak in.
             try:
-                pending = getattr(self, "_exp_ack_once", set())
-                if pending:
+                feat = experimental.FLOW_FEATURE_IDS.get(method)
+                if feat and experimental.token_consume(
+                        getattr(self, "_exp_ack_once", None), feat):
                     ctx["experimental_ack"] = True
-                    self._exp_ack_once = set()
             except Exception:
                 pass
             try:

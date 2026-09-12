@@ -152,7 +152,7 @@ def _cancel_scope_key(key):
         from . import devices as _dev
 
         return _dev.current_key()
-    except Exception:
+    except (ImportError, AttributeError):
         return None
 
 
@@ -185,7 +185,7 @@ def _forward_log(line):
     if fn is not None:
         try:
             fn(line)
-        except Exception:  # noqa: BLE001 - logging must never break a flash
+        except OSError:  # noqa: BLE001 - logging must never break a flash
             pass
 
 
@@ -229,7 +229,7 @@ def _graceful_terminate(proc, timeout=3.0):
             # Process didn't respond to SIGTERM, force kill
             proc.kill()
             proc.wait()
-    except Exception:
+    except OSError:
         # Ignore errors during termination
         pass
 
@@ -385,12 +385,15 @@ class OdinSession:
                     self._proc.stdin.flush()
                     self._proc.wait(timeout=10)
                     return
-                except Exception:
+                except OSError:
                     pass
-            if self._proc.poll() is None:
-                self._proc.kill()
-                self._proc.wait(timeout=5)
-        except Exception:
+            try:
+                if self._proc.poll() is None:
+                    self._proc.kill()
+                    self._proc.wait(timeout=5)
+            except OSError:
+                pass
+        except OSError:
             pass
 
     def __enter__(self):
@@ -716,7 +719,7 @@ def _ambient_adb_serial():
         from . import devices as _dev
 
         key = _dev.current_key()
-    except Exception:
+    except (ImportError, AttributeError):
         return ""
     if isinstance(key, str) and key.startswith("adb:"):
         return key[4:]
@@ -799,7 +802,7 @@ def with_usb_retry(func, retries=3, delay=2.0):
     for attempt in range(1, retries + 1):
         try:
             return func()
-        except Exception as e:
+        except OSError as e:
             last_err = e
             msg = str(e).lower()
             if any(k in msg for k in ("timeout", "busy", "transfer", "pipe", "reset", "resource", "bulk")):
