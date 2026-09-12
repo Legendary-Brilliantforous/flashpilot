@@ -33,7 +33,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 ---
 
-## 🚀 Highlights — 1.2.1-beta (0 warnings)
+## 🚀 Highlights — 1.2.1 Stable (0 warnings)
 
 - **9 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
 - **13 job categories** — Flash Firmware, Remove FRP, Remove Screen Lock, Remove MDM, Unlock Carrier, Read Device Info, Detect Devices, Reboot, Repair Settings, plus per-chip EXPERIMENTAL: Knox / Warranty (Samsung), QCN / Modem (Qualcomm), IMEI Repair / Change (MTK/SPD/Qualcomm), eMMC / UFS.
@@ -45,7 +45,9 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
   - **SPD/UNISOC**: clean-room BSL — all `BSL_CMD/REP`, `iface`, `flush/read_flash/chip_uid/power_off` wired.
   - Plus **MTP**, **AT-command**, and full **ADB** plumbing.
 - **A studio-grade GUI** — frameless translucent window, 10 accent themes, animated cable/status scene, live console.
-  - **Dynamic version** — installed `APP_VERSION` via `importlib.metadata` (deb truth), `_display_version` `1.2.0→1.2`, live GitHub latest stable, BETA pill.
+  - **Brand Icons & Distinct Button Backgrounds** — crisp brand icons (Samsung Ⓢ, Apple red apple 🍎, Motorola Ⓜ, LG Ⓛ, etc.) and tailored brand background colors on every OEM button in the top chip bar.
+  - **Horizontal Views for Motorola & Apple** — model action boards default to clean horizontal tabbed layouts.
+  - **Micro-Interactions & Glassmorphism** — smooth 160ms page-switch fade-in animations, monospaced metadata badge typography (`Consolas`, `Monaco`), and enhanced glassmorphic card borders.
   - **Big centered dialogs (620px, draggable, ✕)** — beta gate + stable `UPDATE/AHEAD/PATCH` + flash/FRP confirms, chip colors `MTK amber` `QCOM red` `SPD violet` `SAMSUNG blue`, high-contrast text.
   - **Per-chip EXPERIMENTAL collapsibles** — Knox (Samsung), QCN/IMEI (Qualcomm), IMEI (MTK/SPD): amber banner, every-run ownership checkbox, `I UNDERSTAND` type-to-confirm for IMEI change, audit-logged.
   - **⏹ STOP** in titlebar stops all running operations; per-device locks let other phones keep working.
