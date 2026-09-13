@@ -4449,6 +4449,42 @@ class FlashPilotWindow(QMainWindow):
 
         lay.addWidget(form_card)
 
+        # SamFW-style firmware details card: shows the exact firmware the
+        # connected device needs. Auto-filled by Detect / Check Version.
+        details_card = QFrame()
+        details_card.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 3px solid {C['accent']}; border-radius: 10px; }}"
+        )
+        details_lay = QVBoxLayout(details_card)
+        details_lay.setContentsMargins(12, 10, 12, 10)
+        details_lay.setSpacing(6)
+        details_title = QLabel("📋 FIRMWARE FOR THIS DEVICE")
+        details_title.setStyleSheet(f"color:{C['accent_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;")
+        details_lay.addWidget(details_title)
+        details_grid = QGridLayout()
+        details_grid.setContentsMargins(0, 0, 0, 0)
+        details_grid.setHorizontalSpacing(12)
+        details_grid.setVerticalSpacing(3)
+        self.fus_detail_vals = {}
+        for _row, (_dkey, _dlabel) in enumerate((
+            ("model", "Model"), ("region", "Region / CSC"),
+            ("pda", "PDA (AP)"), ("csc_ver", "CSC"), ("cp", "Modem (CP)"),
+            ("size", "Size"), ("file", "File"),
+        )):
+            _k = QLabel(_dlabel + ":")
+            _k.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:600;")
+            _v = QLabel("—")
+            _v.setStyleSheet(f"color:{C['text']}; font-size:11px; font-weight:700; font-family:'Consolas','Monaco',monospace;")
+            _v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            _v.setWordWrap(True)
+            details_grid.addWidget(_k, _row, 0)
+            details_grid.addWidget(_v, _row, 1)
+            self.fus_detail_vals[_dkey] = _v
+        details_grid.setColumnStretch(1, 1)
+        details_lay.addLayout(details_grid)
+        lay.addWidget(details_card)
+
         # Actions row
         act_row = QHBoxLayout()
         self.fus_download_btn = QPushButton("⬇ Download & Decrypt Firmware")
@@ -4506,38 +4542,171 @@ class FlashPilotWindow(QMainWindow):
         return panel
 
     def _fus_detect_device(self):
-        self.fus_status_lbl.setText("Scanning connected Samsung device...")
+        self.fus_status_lbl.setText("Scanning connected Samsung device (ADB or Download mode)...")
         def work():
             try:
-                devs = bridge.adb_devices()
-                if not devs:
-                    raise RuntimeError("No ADB device authorized/connected. Please connect phone in normal/ADB mode.")
-                model = bridge.adb_shell("getprop ro.product.model", timeout=5).strip()
-                csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5).strip()
-                if not csc:
-                    csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5).strip()
-                if not csc:
-                    csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5).strip()
-                if not model:
-                    model = "SM-S918B"
-                if not csc:
-                    csc = "EUX"
-
-                def ok():
+                try:
+                    devs = bridge.adb_devices()
+                except Exception:
+                    devs = []
+                if devs:
+                    model, csc = self._fus_detect_via_adb()
+                    def ok_adb():
+                        self.fus_model_input.setText(model)
+                        self.fus_region_input.setText(csc)
+                        self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
+                        self.show_toast(f"Detected {model} [{csc}]", "success")
+                        self._fus_check_version()
+                    self._ui.ui.emit(ok_adb)
+                    return
+                # No ADB: fall back to download (Odin) mode.
+                def _dlog(msg):
+                    try:
+                        if hasattr(self, "_ui") and self._ui:
+                            self._ui.line.emit(f"[fus-detect] {msg}")
+                    except Exception:
+                        pass
+                # Zero-USB fast path: the background monitor may already have
+                # resolved the model via its own Odin probe - reuse it instead
+                # of contending the port with a second probe.
+                cached = (getattr(self, "_cached_model", "") or "").strip()
+                if cached and not cached.startswith(("0x", "--", "(")) and cached.strip().lower() not in (
+                    "adb", "samsung", "mediatek", "qualcomm", "unknown",
+                ):
+                    _dlog(f"using already-known model {cached} (no USB probe needed)")
+                    model = cached.upper()
+                else:
+                    _dlog("no ADB device - trying download (Odin) mode ...")
+                    model = self._fus_detect_via_download_mode(log=_dlog)
+                def ok_dl():
+                    region = self.fus_region_input.text().strip() or "EUX"
                     self.fus_model_input.setText(model)
-                    self.fus_region_input.setText(csc)
-                    self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
-                    self.show_toast(f"Detected {model} [{csc}]", "success")
+                    try:
+                        if model and model != getattr(self, "_cached_model", None):
+                            self._cached_model = model
+                        if hasattr(self, "info") and "Device Model" in self.info:
+                            self.info["Device Model"].set(model)
+                    except Exception:
+                        pass
+                    self.fus_status_lbl.setText(
+                        f"Detected download-mode phone: {model} "
+                        f"(CSC unreadable in download mode - verify region [{region}], then Check Version)"
+                    )
+                    self.show_toast(f"Detected {model} (download mode)", "success")
                     self._fus_check_version()
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(ok_dl)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"Detection failed: {err}")
                     self.show_toast(f"Device detection failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _fus_detect_via_adb(self):
+        """Return (model, csc) from an ADB-connected phone. Raises on failure."""
+        model = bridge.adb_shell("getprop ro.product.model", timeout=5).strip()
+        csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5).strip()
+        if not csc:
+            csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5).strip()
+        if not csc:
+            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5).strip()
+        if not model:
+            model = "SM-S918B"
+        if not csc:
+            csc = "EUX"
+        return model, csc
+
+    def _fus_detect_via_download_mode(self, log=None):
+        """Read the SM- model from a phone in Odin download mode.
+
+        Returns the model string (e.g. 'SM-A145M'). CSC/region cannot be
+        read in download mode, so the caller keeps the region field as-is.
+        Raises RuntimeError when no download-mode phone is present or the
+        model cannot be determined.
+        """
+        import re
+        def _log(msg):
+            try:
+                if log:
+                    log(msg)
+            except Exception:
+                pass
+        _log("scanning USB for Samsung download-mode phone ...")
+        d = core._download_mode_device()
+        if not d:
+            raise RuntimeError(
+                "No ADB device authorized/connected and no Samsung phone in "
+                "download mode found. Connect the phone in normal/ADB mode, "
+                "or in Download mode (Vol Down + Power, then Vol Up)."
+            )
+        target = f"{d['vid']:04x}:{d['pid']:04x}@{d['bus']}:{d['address']}"
+        _log(f"found {d['vid']:04x}:{d['pid']:04x} at bus={d['bus']} addr={d['address']} -> target {target}")
+        try:
+            res = bridge.usb_detach_kernel(target, timeout=15)
+            _log(f"detach result: {res.get('detached') if isinstance(res, dict) else res}")
+        except Exception as e:
+            _log(f"kernel detach skipped: {e}")
+        # Retry on transient "Resource busy": our own background monitor
+        # fires odin-model probes on its own cycle and may briefly hold the
+        # port. A persistent busy across all attempts means an external
+        # holder (cdc_acm/ModemManager) - see the hint below.
+        last_err: Exception | None = None
+        info = None
+        for attempt in range(3):
+            try:
+                _log(f"reading model via odin-model probe (attempt {attempt + 1}/3) ...")
+                info = bridge.odin_model(target)
+                _log(f"probe answered: {info}")
+                break
+            except Exception as e:
+                last_err = e
+                _log(f"probe attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    import time as _t
+                    _t.sleep(3)
+        else:
+            raise RuntimeError(
+                f"Download-mode phone found at {target} but the model probe failed 3x: {last_err} "
+                "(reinstall the latest .deb so udev rules apply, reload with "
+                "`sudo udevadm control --reload-rules && sudo udevadm trigger`, replug the phone; "
+                "if 'Resource busy' persists, ModemManager/cdc_acm is holding the port - "
+                "try `sudo systemctl stop ModemManager`)"
+            )
+        model = (info.get("model") or "").strip() if isinstance(info, dict) else str(info or "").strip()
+        if not model or model.startswith("("):
+            raise RuntimeError(
+                f"Could not read model from download-mode phone (got {model!r}). "
+                "Type the SM- model manually."
+            )
+        # FUS wants the marketing model (SM-A145M). The Odin probe sometimes
+        # returns a bare code (A145M); restore the SM- prefix in that case.
+        if not model.startswith(("SM-", "GT-", "SC-")) and re.match(r"^[A-Z]\d", model):
+            model = "SM-" + model
+        return model.upper()
+
+    def _fus_set_details(self, details):
+        """Fill the SamFW-style firmware card. Runs on the GUI thread."""
+        def _fmt_size(n):
+            if not n:
+                return "—"
+            if n >= 1024 ** 3:
+                return f"{n / (1024 ** 3):.2f} GB"
+            return f"{n / (1024 ** 2):.1f} MB"
+        vals = {
+            "model": details.get("model") or "—",
+            "region": details.get("region") or "—",
+            "pda": details.get("pda") or "—",
+            "csc_ver": details.get("csc") or "—",
+            "cp": details.get("cp") or "—",
+            "size": _fmt_size(details.get("size_bytes")),
+            "file": details.get("filename") or "—",
+        }
+        for k, v in vals.items():
+            lbl = (self.fus_detail_vals or {}).get(k)
+            if lbl is not None:
+                lbl.setText(v)
 
     def _fus_check_version(self):
         model = self.fus_model_input.text().strip()
@@ -4546,24 +4715,31 @@ class FlashPilotWindow(QMainWindow):
             self.show_toast("Enter device model and region first.", "error")
             return
         self.fus_check_btn.setEnabled(False)
-        self.fus_status_lbl.setText(f"Checking latest version for {model} ({region})...")
+        self.fus_status_lbl.setText(f"Fetching firmware for {model} ({region})...")
 
         def work():
             try:
-                ver = fus.check_latest_version(model, region)
+                details = fus.get_firmware_details(model, region)
                 def ok():
-                    self.fus_version_input.setText(ver)
-                    self.fus_status_lbl.setText(f"Latest version found: {ver}")
+                    self.fus_version_input.setText(details["version"])
+                    self._fus_set_details(details)
+                    size_txt = (
+                        f" ({details['size_bytes'] / (1024 ** 2):.0f} MB)"
+                        if details.get("size_bytes") else ""
+                    )
+                    self.fus_status_lbl.setText(
+                        f"Latest firmware for {model} ({region}): {details['version']}{size_txt}"
+                    )
                     self.fus_check_btn.setEnabled(True)
-                    self.show_toast(f"Latest firmware: {ver}", "success")
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                    self.show_toast(f"Latest firmware: {details['version']}", "success")
+                self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"Check failed: {err}")
                     self.fus_check_btn.setEnabled(True)
                     self.show_toast(f"Check failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4584,14 +4760,14 @@ class FlashPilotWindow(QMainWindow):
                     self.fus_list_btn.setEnabled(True)
                     self.fus_status_lbl.setText(f"Found {len(versions)} versions for {model} ({region})")
                     self.show_toast(f"Found {len(versions)} firmware versions", "success")
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"List failed: {err}")
                     self.fus_list_btn.setEnabled(True)
                     self.show_toast(f"List failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4612,7 +4788,7 @@ class FlashPilotWindow(QMainWindow):
         for v in versions:
             size_mb = v['size'] / (1024 * 1024)
             item = QListWidgetItem(f"{v['version']}  ({size_mb:.1f} MB, rcount={v['rcount']})")
-            item.setData(Qt.ItemDataRole.UserRole, v['version'])
+            item.setData(Qt.ItemDataRole.UserRole, v)
             list_w.addItem(item)
         lay.addWidget(list_w)
         
@@ -4633,8 +4809,21 @@ class FlashPilotWindow(QMainWindow):
     def _select_version_from_dialog(self, dlg, list_w):
         item = list_w.currentItem()
         if item:
-            ver = item.data(Qt.ItemDataRole.UserRole)
+            data = item.data(Qt.ItemDataRole.UserRole)
+            ver = data.get("version") if isinstance(data, dict) else data
             self.fus_version_input.setText(ver)
+            if isinstance(data, dict):
+                parts = (ver or "").split("/")
+                self._fus_set_details({
+                    "model": self.fus_model_input.text().strip().upper(),
+                    "region": self.fus_region_input.text().strip().upper(),
+                    "pda": parts[0] if len(parts) > 0 else "",
+                    "csc": parts[1] if len(parts) > 1 else "",
+                    "cp": parts[2] if len(parts) > 2 else "",
+                    "size_bytes": data.get("size"),
+                    "filename": None,
+                })
+                self.fus_status_lbl.setText(f"Selected firmware: {ver}")
             dlg.accept()
             self.show_toast(f"Selected version: {ver}", "info")
 
@@ -4661,12 +4850,12 @@ class FlashPilotWindow(QMainWindow):
                 def upd():
                     self.fus_progress.setValue(pct)
                     self.fus_status_lbl.setText(f"Downloading... {downloaded/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB ({pct}%)")
-                QMetaObject.invokeMethod(self, upd, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(upd)
 
         def log_cb(msg):
             def l():
                 self._append_console(f"[fus] {msg}")
-            QMetaObject.invokeMethod(self, l, Qt.ConnectionType.QueuedConnection)
+            self._ui.ui.emit(l)
 
         def work():
             try:
@@ -4683,7 +4872,7 @@ class FlashPilotWindow(QMainWindow):
                     self.show_toast("Firmware downloaded & decrypted successfully!", "success")
                     self._last_decrypted_fw = dec_file
                     _flow_end()
-                QMetaObject.invokeMethod(self, done, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(done)
             except Exception as e:
                 err = str(e)
                 def fail():
@@ -4692,7 +4881,7 @@ class FlashPilotWindow(QMainWindow):
                     self._append_console(f"[fus] ERROR: {err}")
                     self.show_toast(f"Download failed: {err}", "error")
                     _flow_end()
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6735,7 +6924,7 @@ class FlashPilotWindow(QMainWindow):
         overlay.raise_()
         cb.setFocus()
 
-    def _show_centered_notice(self, title, message, pill="INFO", pill_grad=(" #0ea5e9", "#22d3ee"), ok_label="OK"):
+    def _show_centered_notice(self, title, message, pill="INFO", pill_grad=(" #0ea5e9", "#22d3ee"), ok_label="OK", ok_callback=None, secondary_label=None, secondary_callback=None):
         """Generic big centered notice for stable channels — same UX as beta
         dialog (620px, draggable, X to close, high-contrast text) so stable
         toasts don't look 'not good enough' next to the beta gate."""
@@ -6823,6 +7012,21 @@ class FlashPilotWindow(QMainWindow):
 
         btns = QHBoxLayout()
         btns.setSpacing(12)
+
+        if secondary_label and secondary_callback:
+            sec_btn = QPushButton(secondary_label)
+            sec_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            sec_btn.setFixedWidth(160)
+            sec_btn.setStyleSheet(
+                "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #10b981, stop:1 #06b6d4); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+                "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #34d399, stop:1 #06b6d4); }"
+            )
+            btns.addWidget(sec_btn)
+            def _sec_clicked():
+                close()
+                secondary_callback()
+            sec_btn.clicked.connect(_sec_clicked)
+
         ok = QPushButton(ok_label)
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
         ok.setFixedWidth(160)
@@ -6840,7 +7044,11 @@ class FlashPilotWindow(QMainWindow):
             self._centered_open = False  # type: ignore
 
         x_btn.clicked.connect(close)
-        ok.clicked.connect(close)
+        def _ok_clicked():
+            close()
+            if ok_callback:
+                ok_callback()
+        ok.clicked.connect(_ok_clicked)
 
         def center():
             card.adjustSize()
@@ -9111,6 +9319,156 @@ class FlashPilotWindow(QMainWindow):
         lay.addStretch(1)
         return page
 
+    def _download_and_prompt_install(self, latest_url, stable_tag):
+        import threading
+
+        fpath = os.path.expanduser("~/flashpilot_update.deb")
+        self.show_toast("Downloading update", f"Downloading FlashPilot {stable_tag}...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit(f"[check] Downloading {stable_tag} ...")
+            except Exception:
+                pass
+
+        def _worker(url=latest_url, tag=stable_tag, dest=fpath):
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(url, dest)
+                if os.path.exists(dest):
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] Downloaded {tag} to {dest}")
+                        except Exception:
+                            pass
+                        self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
+                else:
+                    self._ui.ui.emit(lambda: self.show_toast("Download failed", "File missing after download.", "error"))
+            except Exception as e:
+                try:
+                    if hasattr(self, "_ui") and self._ui:
+                        self._ui.line.emit(f"[check] Download failed: {e}")
+                        self._ui.ui.emit(lambda _e=e: self.show_toast("Download failed", str(_e), "error"))
+                    else:
+                        self.show_toast("Download failed", str(e), "error")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _prompt_install_update(self, stable_tag, fpath):
+        self._show_centered_notice(
+            "Update Downloaded",
+            f"FlashPilot {stable_tag} has been downloaded successfully.\n\nDo you want to install this update now?",
+            pill="INSTALL",
+            pill_grad=("#10b981", "#06b6d4"),
+            ok_label="Later",
+            secondary_label="Install Now",
+            secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
+        )
+
+    def _execute_sudo_install(self, fpath):
+        import threading
+
+        if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
+            self.show_toast("Installation Failed", "Update file not found.", "error")
+            return
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        password, ok = QInputDialog.getText(
+            self,
+            "Sudo Password Required",
+            "Enter your sudo password to install the FlashPilot update:",
+            QLineEdit.EchoMode.Password
+        )
+        if not (ok and password):
+            return
+        self.show_toast("Installing update", "Running sudo dpkg -i ...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit("[check] Installing update (sudo dpkg -i) ...")
+            except Exception:
+                pass
+
+        def _worker(pw=password, dest=fpath):
+            import subprocess
+            try:
+                res = subprocess.run(
+                    ["sudo", "-S", "dpkg", "-i", dest],
+                    input=pw + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except Exception as e:
+                self._ui.ui.emit(lambda _e=e: self.show_toast("Installation Failed", str(_e), "error"))
+                return
+            finally:
+                # Never keep the password referenced longer than needed.
+                pw = ""
+            if res.returncode == 0:
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit("[check] Update installed - restarting into the new version ...")
+                    except Exception:
+                        pass
+                self._ui.ui.emit(lambda: self.show_toast("Update Installed", "Restarting FlashPilot...", "success"))
+                QTimer.singleShot(1500, self._restart_application)
+            else:
+                err = (res.stderr or "").strip() or (res.stdout or "").strip() or "Installation failed"
+                # Avoid echoing a wrong-password sudo prompt verbatim forever; keep it short.
+                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast("Installation Failed", _e, "error"))
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit(f"[check] Install failed: {err[-500:]}")
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _restart_application(self):
+        import os
+        import sys
+        try:
+            from PyQt6.QtCore import QProcess
+            from PyQt6.QtWidgets import QApplication
+            # Installed .deb runs via /usr/bin/flashpilot (venv python + /usr/share/flashpilot/main.py).
+            # Prefer relaunching through the launcher so the new install is picked up,
+            # instead of re-execing the possibly-stale current interpreter path.
+            launcher = "/usr/bin/flashpilot"
+            try:
+                from python.core import APP_VERSION  # noqa: F401  (keeps import cheap/local)
+            except Exception:
+                pass
+            using_installed_tree = os.path.exists("/usr/share/flashpilot/main.py")
+            if os.path.exists(launcher) and os.access(launcher, os.X_OK) and using_installed_tree:
+                try:
+                    QProcess.startDetached(launcher, [])
+                    try:
+                        QApplication.quit()
+                    except Exception:
+                        pass
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    return
+                except Exception:
+                    pass
+            # Source checkout / dev run: re-exec the same interpreter + argv.
+            try:
+                self.close()
+            except Exception:
+                pass
+            try:
+                QApplication.quit()
+            except Exception:
+                pass
+            os.execl(sys.executable, sys.executable, *sys.argv)
+        except Exception:
+            try:
+                self.close()
+            except Exception:
+                pass
+
     def _check_update(self):
         # Auto-check: silent, must not block model refresh or close window
         if self._update_check_in_progress:
@@ -9264,31 +9622,41 @@ class FlashPilotWindow(QMainWindow):
                     if a["name"].endswith("_amd64.deb"):
                         latest_url = a["browser_download_url"]
                         break
-                if latest_url and auto_download:
-                    fpath = os.path.expanduser("~/flashpilot_update.deb")
-                    try:
-                        urllib.request.urlretrieve(latest_url, fpath)
-                        if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
-                            try:
-                                self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
-                            except Exception:
-                                pass
-                    except Exception as dl_err:
+                if latest_url:
+                    if auto_download:
+                        fpath = os.path.expanduser("~/flashpilot_update.deb")
+                        try:
+                            urllib.request.urlretrieve(latest_url, fpath)
+                            if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
+                                    self._ui.ui.emit(lambda tag=stable_tag, fp=fpath: self._prompt_install_update(tag, fp))
+                                except Exception:
+                                    pass
+                        except Exception as dl_err:
+                            if hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                                    self._ui.ui.emit(lambda tag=stable_tag: self._show_centered_notice(
+                                        "Stable update available",
+                                        f"New stable version {tag} is available.\n\nAuto-download failed. Visit GitHub or try manual download.",
+                                        pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
+                                    ))
+                                except Exception:
+                                    pass
+                    else:
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                                self._ui.ui.emit(lambda url=latest_url, tag=stable_tag: self._show_centered_notice(
+                                    "Stable update available",
+                                    f"New stable version {tag} is available.\n\nClick 'Download Update' to download and install automatically, or visit GitHub.",
+                                    pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"),
+                                    ok_label="OK",
+                                    secondary_label="Download Update",
+                                    secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                ))
                             except Exception:
                                 pass
-                if hasattr(self, "_ui") and self._ui:
-                    try:
-                        dl_msg = "Downloaded to ~/flashpilot_update.deb.\n\n" if auto_download and latest_url else ""
-                        self._ui.ui.emit(lambda tag=stable_tag, ad=dl_msg: self._show_centered_notice(
-                            "Stable update available",
-                            f"New stable version {tag} is available.\n\n{ad}Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                            pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
-                        ))
-                    except Exception:
-                        pass
             else:
                 # No newer stable version – distinguish ahead / up-to-date / beta
                 if current_alpha:
@@ -9328,8 +9696,32 @@ class FlashPilotWindow(QMainWindow):
                             except Exception:
                                 pass
                 
-                # Beta channel notice
+                # Beta channel notice (with download/install, mirroring the stable path)
                 if newer_beta:
+                    beta_url = None
+                    try:
+                        for a in (latest_beta.get("assets", []) if latest_beta else []):
+                            if a["name"].endswith("_amd64.deb"):
+                                beta_url = a["browser_download_url"]
+                                break
+                    except Exception:
+                        beta_url = None
+                    if beta_url and auto_download:
+                        try:
+                            fpath = os.path.expanduser("~/flashpilot_update.deb")
+                            urllib.request.urlretrieve(beta_url, fpath)
+                            if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag} to {fpath}")
+                                    self._ui.ui.emit(lambda tag=beta_tag, fp=fpath: self._prompt_install_update(tag, fp))
+                                except Exception:
+                                    pass
+                        except Exception as dl_err:
+                            if hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Beta auto-download failed: {dl_err}")
+                                except Exception:
+                                    pass
                     if current_alpha:
                         # Already on beta but newer beta available
                         if hasattr(self, "_ui") and self._ui:
@@ -9339,11 +9731,21 @@ class FlashPilotWindow(QMainWindow):
                                 pass
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.ui.emit(lambda tag=beta_tag, cur=current: self._show_centered_notice(
-                                    "Beta update available",
-                                    f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
-                                ))
+                                if beta_url:
+                                    self._ui.ui.emit(lambda url=beta_url, tag=beta_tag, cur=current: self._show_centered_notice(
+                                        "Beta update available",
+                                        f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nClick 'Download Beta' to download and install automatically.",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"),
+                                        ok_label="Later",
+                                        secondary_label="Download Beta",
+                                        secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                    ))
+                                else:
+                                    self._ui.ui.emit(lambda tag=beta_tag, cur=current: self._show_centered_notice(
+                                        "Beta update available",
+                                        f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                    ))
                             except Exception:
                                 pass
                     else:
@@ -9354,11 +9756,21 @@ class FlashPilotWindow(QMainWindow):
                                 pass
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.ui.emit(lambda tag=beta_tag: self._show_centered_notice(
-                                    "Beta version available",
-                                    f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
-                                ))
+                                if beta_url:
+                                    self._ui.ui.emit(lambda url=beta_url, tag=beta_tag: self._show_centered_notice(
+                                        "Beta version available",
+                                        f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nClick 'Download Beta' to download and install automatically.",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"),
+                                        ok_label="Later",
+                                        secondary_label="Download Beta",
+                                        secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                    ))
+                                else:
+                                    self._ui.ui.emit(lambda tag=beta_tag: self._show_centered_notice(
+                                        "Beta version available",
+                                        f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                    ))
                             except Exception:
                                 pass
                 
@@ -10548,7 +10960,7 @@ class FlashPilotWindow(QMainWindow):
                             # there is NO AT channel there, only a bulk session.
                             # Attempting AT on it spams 'bulk read: timed out'
                             # every poll. Only probe AT when not in download mode.
-                            _is_dl = _sam.get("pid") in (0x685d, 0x685c, 0x685e) \
+                            _is_dl = _sam.get("pid") in (0x6601, 0x685d, 0x685c, 0x685e, 0x68c3, 0x68ef, 0x4eee, 0x4eef) \
                                 or _sam.get("mode") == "samsung-odin"
                             if not _is_dl and mtp.is_diag_config(_sam):
                                 model = mtp.read_model_via_at(timeout_ms=5000)
@@ -10559,25 +10971,12 @@ class FlashPilotWindow(QMainWindow):
                                     )
                         except Exception:  # noqa: BLE001
                             pass
-                    # Try Odin model probe if in Download mode (no MTP/AT)
-                    if not model:
-                        try:
-                            _sam_dl = mtp.find_samsung() or {}
-                            if _sam_dl.get("pid") == 0x685d and not mtp.is_adb_composite(_sam_dl):
-                                target_dl = mtp.target(_sam_dl)
-                                try:
-                                    info_dl = bridge.odin_model(target_dl)
-                                    if isinstance(info_dl, dict) and info_dl.get("model"):
-                                        cand_dl = info_dl["model"].strip()
-                                        if cand_dl and cand_dl.lower() != "adb" and not cand_dl.startswith("("):
-                                            model = cand_dl
-                                            if model and model != self._cached_model:
-                                                self._cached_model = model
-                                                self._ui.line.emit(f"Device Model: {model} (via Odin)")
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+                    # No automatic Odin model probe here - by design. Probing
+                    # opens a USB session on the download-mode port, and an
+                    # unsolicited background probe contends with (and breaks)
+                    # explicit user actions (FUS Detect, flashing). The model
+                    # for download-mode phones is resolved on demand by those
+                    # actions, which publish it to _cached_model.
                     # Last fallback for non-ADB: use USB product/serial strings directly (target phone)
                     if (not model and not self._cached_model) or not serial_prop:
                         # Use already known product from _last_usb_product if available

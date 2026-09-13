@@ -214,21 +214,52 @@ fn open_device(target: &str) -> OdinResult<Device> {
     handle
         .set_auto_detach_kernel_driver(true)
         .map_err(|e| OdinError(format!("auto detach: {e}")))?;
+    // Evict kernel drivers BEFORE touching configuration: cdc_acm (and
+    // ModemManager probes) bind Samsung download mode's CDC ACM function,
+    // and set_active_configuration fails with EBUSY ("Resource busy") while
+    // any driver is bound. auto-detach only applies at claim time, which is
+    // too late for the set_config call below.
+    for i in &target_dev.interfaces {
+        if handle.kernel_driver_active(i.number).unwrap_or(false) {
+            let _ = handle.detach_kernel_driver(i.number);
+        }
+    }
     // Some download-mode enumerations come up unconfigured (config value 0);
     // libusb refuses to claim interfaces until a configuration is active.
     // Setting configuration 1 before claiming mirrors what Windows' usbccgp
-    // does automatically and un-breaks those devices.
-    let claimed = handle.claim_interface(iface.number);
-    if claimed.is_err() {
+    // does automatically and un-breaks those devices. Skip the call when
+    // config 1 is already active - a redundant set_config can itself return
+    // EBUSY on some kernels.
+    let need_config = handle.active_configuration().map(|c| c != 1).unwrap_or(true);
+    if need_config {
         if let Err(e) = handle.set_active_configuration(1) {
             eprintln!("[odin] set_active_configuration(1): {e}");
         }
-        handle
-            .claim_interface(iface.number)
-            .map_err(|e| OdinError(format!("claim iface: {e}")))?;
     }
-
-    Ok(Device { handle, in_ep, out_ep })
+    // Claim with retries: cdc_acm/ModemManager can re-bind the CDC ACM
+    // function between our detach and the claim (the classic "Resource busy"
+    // race on Samsung download mode). Re-evict before every attempt instead
+    // of failing on the first EBUSY.
+    let mut last_err = String::from("claim iface: unknown");
+    for attempt in 0..4 {
+        for i in &target_dev.interfaces {
+            if handle.kernel_driver_active(i.number).unwrap_or(false) {
+                let _ = handle.detach_kernel_driver(i.number);
+            }
+        }
+        match handle.claim_interface(iface.number) {
+            Ok(()) => {
+                return Ok(Device { handle, in_ep, out_ep });
+            }
+            Err(e) => {
+                last_err = format!("claim iface: {e}");
+                if attempt < 3 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
+    }
+    return Err(OdinError(last_err));
 }
 
 impl Device {

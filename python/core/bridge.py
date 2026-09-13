@@ -789,10 +789,23 @@ def odin_info(target, pit_file, timeout=90):
     return _run(["odin-info", target, pit_file], timeout=timeout)
 
 
+# Serializes Odin model probes across threads. Concurrent `odin-model`
+# processes contend the same bulk interface and every contender fails with
+# "claim iface: Resource busy" - including our own background monitor firing
+# while the user clicks Detect. The wait scales with the probe timeout so a
+# wedged holder (killed at its own deadline) can never deadlock waiters.
+_odin_probe_lock = threading.Lock()
+
+
 def odin_model(target, timeout=40):
     """Read the device model string over the Odin session probe (0x64/0x01),
     falling back to the 0x69 device-info dump. Returns dict."""
-    return json.loads(_run(["odin-model", target], timeout=timeout))
+    acquired = _odin_probe_lock.acquire(timeout=timeout + 15)
+    try:
+        return json.loads(_run(["odin-model", target], timeout=timeout))
+    finally:
+        if acquired:
+            _odin_probe_lock.release()
 
 
 def with_usb_retry(func, retries=3, delay=2.0):
