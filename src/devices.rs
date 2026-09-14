@@ -21,6 +21,10 @@ pub struct DeviceRow {
     pub serial: Option<String>,
     pub is_adb: bool,
     pub adb_state: Option<String>,
+    /// USB string descriptors so the GUI can show model/manufacturer without
+    /// re-enumerating from Python (Rust core owns enumeration).
+    pub usb_product: Option<String>,
+    pub usb_manufacturer: Option<String>,
 }
 
 /// Merge USB + ADB into GUI rows.
@@ -66,6 +70,8 @@ pub fn list_devices_filtered_vid(vid_filter: Option<u16>) -> Result<String> {
             serial: usb.serial.clone(),
             is_adb: false,
             adb_state: adb_match.map(|a| a.state.clone()),
+            usb_product: usb.product.clone(),
+            usb_manufacturer: usb.manufacturer.clone(),
         });
     }
 
@@ -85,6 +91,8 @@ pub fn list_devices_filtered_vid(vid_filter: Option<u16>) -> Result<String> {
             serial: Some(adb.serial.clone()),
             is_adb: true,
             adb_state: Some(adb.state.clone()),
+            usb_product: None,
+            usb_manufacturer: None,
         });
     }
 

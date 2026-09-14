@@ -7,7 +7,7 @@ The USB device filtering and ADB merging logic currently lives in **Python** (`p
 1. **Volatile identity** — every USB re-enumeration changes bus:addr, breaking stored device keys
 2. **Filtering duplication** — `is_phone()` re-checks VID/PID/interfaces each time the UI polls
 3. **Merging complexity** — Python reconstructs the same USB→ADB serial map on every call
-4. **FUS firmware detection issue** — The USB FUS mode (Firmware Upload Service) isn't properly classified before Python tries to merge it, leading to duplicate device rows
+4. **Download-mode classification** — Samsung download-mode (`samsung-odin`) phones must be recognized as phones so the FUS/flash workflows can target them; mis-classification previously produced duplicate or dropped rows. (FUS itself is a *server* protocol for fetching Samsung firmware — there is no "USB FUS mode". The device-side marker for firmware work is Odin download mode.)
 
 ## Solution: Move to Rust
 
@@ -17,7 +17,12 @@ Move the entire USB device classification, filtering, and USB↔ADB merging pipe
 
 ## Architecture
 
-### 1. **Rust-Side Changes** (`src/usb.rs` + new `src/usb/filtering.rs`)
+### 1. **Rust-Side Changes** (`src/usb/mod.rs` + new `src/usb/filtering.rs` + `src/devices.rs`)
+
+> Module layout note: `src/usb.rs` became `src/usb/mod.rs` so the filtering
+> engine can live at `src/usb/filtering.rs`. Filtering/classification/merging
+> (the engine) lives in `usb::filtering`; the GUI-facing row schema
+> (`DeviceRow`, `list_devices_filtered`) lives in `src/devices.rs`.
 
 #### New Types
 
@@ -218,46 +223,58 @@ pub fn merge_devices(
 }
 ```
 
-#### FUS Firmware Detection
+#### Download-Mode Classification (Python-compatible mode strings)
+
+> Terminology: there is no "USB FUS mode" — FUS is the Samsung *server*
+> protocol (Firmware Upload Service), and it is consumed host-side by the
+> FUS tab. The device-side marker for firmware work is Odin **download
+> mode**: `0x685D` IS an Odin PID. Classifying it as a distinct
+> `samsung-fus` mode would mislabel every download-mode phone with a string
+> no GUI code understands, so `classify_mode()` emits
+> Python-compatible strings (`samsung-odin`, `mediatek-brom`, ...) and the
+> FUS tab consumes `samsung-odin` rows.
 
 ```rust
 pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
-    // Existing logic + FUS detection
-    
+    let has_adb_iface = interfaces.iter().any(|i| i.class == 255 && i.subclass == 66);
+
     match vid {
-        0x04e8 => {  // Samsung
-            // FUS (Firmware Upload Service) PIDs
-            if pid == 0x685D {  // Common FUS PID
-                if !interfaces.iter().any(|i| i.class == 255 && i.subclass == 66) {
-                    // Not ADB, likely FUS download mode
-                    return "samsung-fus".to_string();
-                }
+        0x04E8 => {  // Samsung
+            if SAMSUNG_ODIN_PIDS.contains(&pid) && !has_adb_iface {
+                return "samsung-odin".to_string();  // 0x685D lands here
             }
-            
-            if SAMSUNG_ODIN_PIDS.contains(&pid) {
-                return "samsung-odin".to_string();
+            if pid == 0x685C {
+                return "samsung-brom".to_string();
             }
-            
-            let has_adb = interfaces.iter().any(|i| i.class == 255 && i.subclass == 66);
-            if has_adb {
-                return "android-adb".to_string();
-            }
-            
-            let has_mtp = interfaces.iter().any(|i| i.class == 6);
-            if has_mtp {
+            if pid == 0x6860 {
                 return "android-mtp".to_string();
             }
-            
-            let has_hid = interfaces.iter().any(|i| i.class == 3);
-            if has_hid {
+            if has_adb_iface {
+                return "android-adb".to_string();
+            }
+            if interfaces.iter().any(|i| i.class == 3) {
                 return "samsung-hid".to_string();
             }
-            
-            return "samsung".to_string();
+            "samsung".to_string()
         }
-        
-        // ... other VIDs
-        _ => { /* ... */ }
+        0x0E8D => match pid {
+            // MTK stage comes from PIDs, NOT mode strings: mode_hint()
+            // returns "mediatek" for every 0x0e8d PID (verified in
+            // usb/mod.rs tests), so string-keyed transport detection
+            // never fires. PIDs: 0x0003=brom, 0x2000=preloader,
+            // 0x0004/0x1004=DA (matches Python's pid_stage).
+            0x0003 => "mediatek-brom".to_string(),
+            0x2000 => "mediatek-preloader".to_string(),
+            0x0004 | 0x1004 => "mediatek-da".to_string(),
+            _ => "mediatek".to_string(),
+        },
+        0x05C6 if pid == 0x9008 => "qualcomm-edl".to_string(),
+        0x18D1 => "fastboot".to_string(),
+        0x1782 => "spd".to_string(),
+        0x05AC => "apple".to_string(),
+        _ if has_adb_iface => "android-adb".to_string(),
+        _ if interfaces.iter().any(|i| i.class == 6) => "android-mtp".to_string(),
+        _ => "other".to_string(),
     }
 }
 ```
@@ -277,24 +294,28 @@ pub async fn main_bridge() {
         
         // NEW: merged device detection (filters + merges in one call)
         "detect-merged" => {
-            // Usage: flashpilot-bridge detect-merged [--vid 0x04e8] [--adb-timeout 5000]
-            // Output: JSON array of MergedDeviceInfo
-            let merged = usb::detect_merged(None)?;  // Or with vid filter
+            // Usage: flashpilot-bridge detect-merged [--vid 0x04e8]
+            // Output: JSON array of DeviceRow (GUI schema, src/devices.rs):
+            //   {key, label, transports, vid, pid, bus, address, serial,
+            //    is_adb, adb_state}
+            let merged = devices::list_devices_filtered_vid(vid_filter)?;  // Or None
             println!("{}", merged);
-        }
-        
-        // NEW: low-level raw calls (for testing)
-        "list-phones-only" => {
-            // USB only, filtered
-            let devices = usb::collect_devices(None)?;
-            let phones = usb::filter_phones(&devices);
-            println!("{}", serde_json::to_string_pretty(&phones)?);
         }
         
         _ => { /* ... */ }
     }
 }
 ```
+
+> ADB merge note: the Rust bridge speaks ADB natively
+> (`adb::devices_json()` returns `"SERIAL\tstate extras"` lines in the same
+> contract as `adb devices -l`); `devices.rs` parses those lines into
+> `AdbDevice`s before merging. No external `adb` binary is needed.
+>
+> Monitor cadence note: `detect-merged` is heavier than `detect-all`
+> (the native ADB probe costs up to ~6s per ADB-mode device), so the GUI
+> monitor must call it on change-detection (keyed off last-seen device
+> keys), not on every 3s poll. USB-only refreshes can stay cheap.
 
 ---
 
@@ -340,13 +361,17 @@ def list_devices():
 ```python
 # In python/core/bridge.py:
 
-def detect_merged(timeout=30):
-    """Unified USB + ADB device list.
-    
-    Returns [{key, label, usb, adb, transports}] for all phones,
-    with USB+ADB entries merged by serial and standalone ADB entries appended.
+def list_merged(vid_filter=None, timeout=30):
+    """Unified, phone-filtered USB + ADB device rows (Rust core).
+
+    Returns a list of dicts, each: {key, label, transports, vid, pid, bus,
+    address, serial, is_adb, adb_state}. Phones and ADB entries are merged by
+    serial; classes/modes are classified by the Rust bridge.
     """
-    return json.loads(_run(["detect-merged"], timeout=timeout))
+    args = ["detect-merged"]
+    if vid_filter is not None:
+        args.append(f"--vid={vid_filter:04x}")
+    return json.loads(_run(args, timeout=timeout))
 ```
 
 ---
@@ -358,7 +383,7 @@ def detect_merged(timeout=30):
 | **Filtering logic** | Python ✗ (re-runs on each poll) | Rust ✓ (native, deterministic) |
 | **USB↔ADB merging** | Python ✗ (reconstructed each call) | Rust ✓ (single atomic operation) |
 | **Device stability** | Volatile (bus:addr changes) | Stable (`usb:<ports>` per slot) |
-| **FUS detection** | Missing | ✓ Proper classification in Rust |
+| **FUS targeting** | Missing | ✓ `samsung-odin` rows drive the FUS/flash workflows |
 | **Re-enumeration handling** | Manual, fragile Python logic | Native, robust Rust design |
 | **Performance** | Multiple bridge calls + Python overhead | Single bridge call, native perf |
 | **Testability** | Tests split across Python/Rust | ✓ Unit tests in Rust |
@@ -369,28 +394,29 @@ def detect_merged(timeout=30):
 ## Migration Path (Staged)
 
 ### Phase 1: Build Rust side (this PR)
-- [ ] Add `src/usb/filtering.rs` with `is_phone()`, `normalize_serial()`, `device_key()`, `classify_mode()`
-- [ ] Implement `merge_devices()` + `detect_merged()` 
-- [ ] Add `detect-merged` CLI command
-- [ ] Add comprehensive unit tests in Rust
-- [ ] **Keep Python side unchanged** (detect_all → detect-merged under the hood later)
+- [x] Add `src/usb/filtering.rs` with `is_phone()`, `normalize_serial()`, `device_key()`, `classify_mode()`
+- [x] Implement `merge_devices()` + `detect_merged()`
+- [x] Add `detect-merged` CLI command
+- [x] Add comprehensive unit tests in Rust
+- [x] **Keep Python side unchanged** (detect_all → detect-merged under the hood later)
 
 ### Phase 2: Wire Python wrapper (follow-up PR)
-- [ ] Update `python/core/bridge.py` with `detect_merged()` method
-- [ ] Migrate `python/core/devices.py` to use `detect_merged()`
-- [ ] Run full test suite (no behavioral change)
-- [ ] **Kill the old Python filtering/merging code**
+- [x] Update `python/core/bridge.py` with `list_merged()` method
+- [x] Migrate `python/core/devices.py` to use `list_merged()` (legacy path kept as rollback)
+- [x] Run full test suite (no behavioral change)
+- [ ] Old Python filtering/merging code stays until Phase 3 (rollback path)
 
 ### Phase 3: GUI integration (follow-up PR)
-- [ ] Update `gui/` device monitor to use new keys
+- [ ] Update `gui/` device monitor to use new keys (on change-detection, not every poll)
 - [ ] Verify USB re-enumeration handling
-- [ ] Test FUS firmware detection in the GUI
+- [ ] Test download-mode (`samsung-odin`) targeting in the FUS/flash GUI
+- [ ] **Kill the old Python filtering/merging code** once merged-output parity is proven on test devices
 
 ---
 
 ## Testing Strategy
 
-### Rust Unit Tests (in src/usb.rs)
+### Rust Unit Tests (in src/usb/filtering.rs)
 
 ```rust
 #[cfg(test)]
@@ -411,7 +437,7 @@ mod tests {
     fn test_merge_usb_adb_by_serial() { ... }
     
     #[test]
-    fn test_classify_mode_fus_detection() { ... }
+    fn test_classify_mode_samsung_odin() { ... }
 }
 ```
 
@@ -432,10 +458,10 @@ def test_fus_mode_classification():
     for device in merged:
         if device['usb'] and device['usb']['vid'] == 0x04e8:
             transports = device['transports']
-            # Check FUS mode is classified
+            # 0x685D is an Odin download-mode PID: should be "Download mode"
+            # (samsung-odin), NOT a separate samsung-fus mode
             if device['usb']['pid'] == 0x685D:
-                # Should be samsung-fus or similar
-                pass
+                assert "Download mode" in transports or "MTP" in transports
 ```
 
 ---
@@ -446,9 +472,9 @@ def test_fus_mode_classification():
 - `src/usb/filtering.rs` — New filtering & merging module
 
 ### Modify
-- `src/usb.rs` — Add `detect_merged()` CLI command + new types
-- `src/main.rs` — Wire `detect-merged` CLI subcommand
-- `python/core/bridge.py` — Add `detect_merged()` function
+- `src/usb.rs` → renamed `src/usb/mod.rs` — declares `pub mod filtering;` (pure rename, all `crate::usb::` paths unchanged)
+- `src/main.rs` — Wire `detect-merged` CLI subcommand (→ `devices::list_devices_filtered_vid`)
+- `python/core/bridge.py` — Add `list_merged()` wrapper over `detect-merged`
 - `python/core/devices.py` — Rewrite `list_devices()` to call Rust (Phase 2)
 - `tests/test_devices.py` — Add test cases for merged output
 
@@ -475,7 +501,7 @@ A: Because Python re-runs the logic on every poll. The Rust side is deterministi
 A: Only if users switch midway. After Phase 2 stabilizes, the new key format is the canonical one.
 
 **Q: What about ADB detection latency?**  
-A: The `detect-merged` command can take an ADB timeout param (e.g., `--adb-timeout 2000` ms). If ADB probe is too slow, we poll ADB in a background thread.
+A: The Rust bridge speaks ADB natively (no external `adb` binary); the ADB probe costs up to ~6s per ADB-mode device, so the GUI monitor should call `detect-merged` on change-detection rather than on every poll.
 
 **Q: How do I test this locally?**  
 A: `cargo build --release` → `./target/release/flashpilot-bridge detect-merged | jq`

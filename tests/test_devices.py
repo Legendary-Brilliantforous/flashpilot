@@ -213,6 +213,7 @@ class TestPhoneFilter:
     def test_peripherals_excluded(self, monkeypatch):
         from python.core import bridge
 
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
         monkeypatch.setattr(bridge, "detect_all", lambda: [
             self._peripheral(0x1D6B, 0x0002, "1", 9),          # hub
             self._peripheral(0x0461, 0x0010, "1-4", 3),        # keyboard (HID)
@@ -225,6 +226,7 @@ class TestPhoneFilter:
     def test_known_vendor_vids_included(self, monkeypatch):
         from python.core import bridge
 
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
         monkeypatch.setattr(bridge, "detect_all", lambda: [
             {"vid": v, "pid": 0x0001, "bus": 1, "address": 2, "serial": "",
              "port_numbers": f"9-{i}", "interfaces": []}
@@ -238,6 +240,7 @@ class TestPhoneFilter:
 
         adb_iface = [{"class": 255, "subclass": 66, "protocol": 1}]
         mtp_iface = [{"class": 6, "subclass": 1, "protocol": 1}]
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
         monkeypatch.setattr(bridge, "detect_all", lambda: [
             {"vid": 0x2717, "pid": 1, "bus": 1, "address": 2, "serial": "",
              "port_numbers": "7-1", "interfaces": []},                       # generic VID (Xiaomi)
@@ -256,3 +259,66 @@ class TestPhoneFilter:
         assert devices.is_phone({"vid": 0x04E8, "interfaces": []}) is True
         assert devices.is_phone({"vid": 0x1D6B, "interfaces": [{"class": 9}]}) is False
         assert devices.is_phone("not-a-dict") is False
+
+
+class TestRustMergedRows:
+    """Phase 2: list_devices() consumes Rust `detect-merged` rows and adapts
+    them to the legacy shape so GUI consumers are unchanged."""
+
+    def test_rust_rows_adapted_to_legacy_shape(self, monkeypatch):
+        from python.core import bridge
+
+        rust_rows = [
+            {
+                "key": "adb:R9X", "label": "Samsung Galaxy · R9X",
+                "transports": ["ADB"], "vid": 1256, "pid": 26717,
+                "bus": 1, "address": 2, "serial": "R9X",
+                "is_adb": False, "adb_state": "device",
+                "usb_product": "SAMSUNG_Android",
+                "usb_manufacturer": "SAMSUNG",
+            },
+            {
+                "key": "adb:EMU1", "label": "EMU1 [device]",
+                "transports": ["ADB"], "vid": 0, "pid": 0,
+                "bus": 0, "address": 0, "serial": "EMU1",
+                "is_adb": True, "adb_state": "device",
+                "usb_product": None, "usb_manufacturer": None,
+            },
+        ]
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: rust_rows)
+        rows = devices.list_devices()
+        assert [r["key"] for r in rows] == ["adb:R9X", "adb:EMU1"]
+        # USB row: legacy usb dict carries the string descriptors the GUI reads
+        assert rows[0]["usb"]["product"] == "SAMSUNG_Android"
+        assert rows[0]["usb"]["manufacturer"] == "SAMSUNG"
+        assert rows[0]["usb"]["serial"] == "R9X"
+        assert rows[0]["adb"]["state"] == "device"
+        # Standalone ADB row: no usb payload
+        assert rows[1]["usb"] is None
+        assert rows[1]["adb"]["serial"] == "EMU1"
+
+    def test_falls_back_to_legacy_on_bridge_error(self, monkeypatch):
+        from python.core import bridge
+
+        def boom(*a, **k):
+            raise bridge.BridgeError("bridge gone")
+
+        monkeypatch.setattr(bridge, "list_merged", boom)
+        monkeypatch.setattr(bridge, "detect_all", lambda: [
+            {"vid": 0x04E8, "pid": 1, "bus": 1, "address": 2, "serial": "",
+             "port_numbers": "9-1", "interfaces": []},
+        ])
+        monkeypatch.setattr(bridge, "adb_status", lambda: [])
+        rows = devices.list_devices()
+        assert [r["key"] for r in rows] == ["usb:9-1"]
+
+    def test_malformed_rust_rows_dropped(self, monkeypatch):
+        from python.core import bridge
+
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [
+            {"label": "no key"},                # no key -> dropped
+            {"key": "adb:X", "label": "ok", "transports": ["ADB"],
+             "is_adb": True, "adb_state": "device", "serial": "X"},
+        ])
+        rows = devices.list_devices()
+        assert [r["key"] for r in rows] == ["adb:X"]
