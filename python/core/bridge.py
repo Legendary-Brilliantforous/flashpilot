@@ -410,6 +410,20 @@ def detect_all():
     return json.loads(_run(["detect-all"]))
 
 
+def list_merged(vid_filter=None, timeout=30):
+    """Unified, phone-filtered USB + ADB device rows (Rust core).
+
+    Returns a list of dicts, each: {key, label, transports, vid, pid, bus,
+    address, serial, is_adb, adb_state}. Phones and ADB entries are merged by
+    serial; classes/modes are classified by the Rust bridge (single source of
+    truth under the "Rust core, Python GUI" split).
+    """
+    args = ["detect-merged"]
+    if vid_filter is not None:
+        args.append(f"--vid={vid_filter:04x}")
+    return json.loads(_run(args, timeout=timeout))
+
+
 def detect_mtk():
     """MediaTek low-level USB devices (BROM/preloader/DA) - VID 0x0e8d."""
     return json.loads(_run(["mtk-detect"]))

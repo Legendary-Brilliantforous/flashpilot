@@ -732,3 +732,5 @@ mod tests {
         assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
     }
 }
+
+pub mod filtering;

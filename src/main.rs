@@ -2,6 +2,7 @@ mod adb;
 mod at;
 mod bulk;
 mod config;
+mod devices;
 mod error;
 mod hid;
 mod mtk;
@@ -30,6 +31,7 @@ fn main() {
         eprintln!("usage: flashpilot-bridge <command> [args...]");
         eprintln!("commands:");
         eprintln!("  detect                 list USB devices (all + Samsung filter)");
+        eprintln!("  detect-merged          filter phones + merge USB/ADB into unified rows");
         eprintln!("  hid-list               list HID interfaces on Samsung devices");
         eprintln!("  hid-open <path> <out>  send hex bytes <out> to HID report, print response hex");
         eprintln!("  bulk-list              list bulk endpoints on Samsung devices");
@@ -1029,6 +1031,16 @@ fn main() {
                 exit(2);
             }
             odin::odin_send_pit(&args[2], &args[3])
+        }
+        "detect-merged" => {
+            if args.len() > 3 {
+                eprintln!("usage: flashpilot-bridge detect-merged [--vid 0xXXXX]");
+                exit(2);
+            }
+            let vid_filter = args.iter().skip(2).find(|s| s.starts_with("--vid")).and_then(|s| {
+                s.strip_prefix("--vid=").or_else(|| s.strip_prefix("--vid")).and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            });
+            devices::list_devices_filtered_vid(vid_filter)
         }
         "odin-agent" => {
             if args.len() < 3 {

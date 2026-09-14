@@ -132,3 +132,30 @@ def test_odin_model_waits_for_inflight_probe(monkeypatch):
         bridge._odin_probe_lock.release()
     t.join(timeout=30)
     assert done == [{"model": "SM-A145M"}]
+
+
+def test_list_merged_wraps_detect_merged(monkeypatch):
+    """list_merged() shells out to `detect-merged` and parses merged rows."""
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(list(args))
+        return '[{"key":"adb:R9X","label":"Samsung Galaxy · R9X","transports":["ADB"],"vid":1256,"pid":26717,"bus":1,"address":2,"serial":"R9X","is_adb":true,"adb_state":"device"}]'
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    rows = bridge.list_merged()
+    assert rows[0]["key"] == "adb:R9X"
+    assert rows[0]["transports"] == ["ADB"]
+    assert calls == [["detect-merged"]]
+
+
+def test_list_merged_passes_vid_filter(monkeypatch):
+    captured = []
+
+    def fake_run(args, timeout=30):
+        captured.append(list(args))
+        return "[]"
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    bridge.list_merged(vid_filter=0x04E8)
+    assert captured[-1] == ["detect-merged", "--vid=04e8"]
