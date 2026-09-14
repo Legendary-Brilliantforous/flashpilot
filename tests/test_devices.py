@@ -63,6 +63,7 @@ class TestListDevices:
     def test_usb_adb_merge_and_standalone(self, monkeypatch):
         from python.core import bridge
 
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
         monkeypatch.setattr(
             bridge, "detect_all",
             lambda: [_usb(serial="R9X", ports="1-2"),
@@ -85,6 +86,8 @@ class TestListDevices:
     def test_candidates_for_modes(self, monkeypatch):
         from python.core import bridge
 
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
+        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
         monkeypatch.setattr(
             bridge, "detect_all",
             lambda: [_usb(serial="R9X", ports="1-2"),
