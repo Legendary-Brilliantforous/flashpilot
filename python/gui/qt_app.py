@@ -10553,10 +10553,29 @@ class FlashPilotWindow(QMainWindow):
             self._update_device_info(False, None, None)
         # Multi-device list refresh (additive — never disturbs the single-
         # device display above). Keeps the inspected row if still present.
+        # Change-detection cadence: detect-merged is heavier than detect-all
+        # (the native ADB probe costs up to ~6s per ADB-mode device), so the
+        # merged rebuild only runs when the device set actually changes —
+        # not on every 3s poll. Keys are Rust-stable (usb:<ports> /
+        # adb:<serial>), so a re-enumeration that keeps the physical port
+        # still counts as "unchanged" and keeps the inspected row selected.
         try:
-            self._refresh_device_list()
+            sig = (
+                mode,
+                tuple(sorted(
+                    f"{d.get('vid', 0):04x}:{d.get('pid', 0):04x}@{d.get('bus')}:{d.get('address')}"
+                    for d in (samsung + mtk_devs + fastboot + edl_devs + qcom_devs + spd_devs + apple_devs + other_android)
+                )),
+                tuple(sorted(str(a.get("serial", "")) for a in adb_devs)),
+            )
         except Exception:
-            pass
+            sig = None
+        if sig != getattr(self, "_last_device_list_sig", None):
+            self._last_device_list_sig = sig
+            try:
+                self._refresh_device_list()
+            except Exception:
+                pass
 
     def _refresh_device_list(self):
         """Rebuild the connection-bar device list from devices.list_devices()."""
