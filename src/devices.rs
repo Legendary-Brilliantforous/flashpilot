@@ -57,7 +57,7 @@ pub fn list_devices_filtered_vid(vid_filter: Option<u16>) -> Result<String> {
             adb_devices.iter().find(|a| normalize_serial(Some(&a.serial)) == serial).cloned()
         };
         if let Some(a) = &adb_match {
-            claimed.insert(a.serial.clone());
+            claimed.insert(normalize_serial(Some(&a.serial)));
         }
         rows.push(DeviceRow {
             key: device_key(Some(&usb), adb_match.as_ref()),
