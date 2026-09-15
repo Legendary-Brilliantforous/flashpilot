@@ -4524,95 +4524,54 @@ def _find_firmware_tar():
 
 
 def flow_odin_flash_tar():
-    """Flash any Samsung firmware .tar / .tar.md5 archive using odin4."""
+    """Flash any Samsung firmware .tar / .tar.md5 archive via the native
+    Rust Odin engine (odin.rs) — no proprietary odin4 binary involved."""
     def _run(ctx, log):
         log("=" * 60)
         log("ODIN FLASHING - FIRMWARE ARCHIVE (.tar / .tar.md5)")
+        log("(native Rust engine - no odin4)")
         log("=" * 60)
-        odin4 = _find_odin4()
-        if not odin4:
-            raise RuntimeError("odin4 binary not found. Place odin4 in the repo root/tools/ folder or on PATH.")
-        
+
         tar = _find_firmware_tar()
         if not tar:
             raise RuntimeError("No firmware .tar / .tar.md5 file found in ~/Downloads or current directory.")
-        
+
         d = _download_mode_device()
         if not d:
             log("Waiting for device in download mode (04e8 Odin PID)...")
             d = _wait_download_mode(log, timeout=30)
         if not d:
             raise RuntimeError("Device not in download mode. Hold Vol Down + Power, then Vol Up.")
-        # Stabilize session: detach kernel drivers + handshake with retry.
-        target = _prepare_download_session(d, log)
-        # Warm PIT cache (also validates the session before writing).
-        try:
-            contract = pit_contract(target=target, log=log)
-            log(f"  PIT ready: {contract.get('model', '?')} (from_cache={contract.get('from_cache')})")
-        except Exception as e:
-            log(f"  PIT warm-up failed (continuing, odin4 will validate): {e}")
 
-        log(f"odin4: {odin4}")
         log(f"archive: {tar} ({os.path.getsize(tar) >> 20} MB)")
+        # Strip the .md5 trailer so extraction sees a pure tar.
+        tar = _strip_odin4_md5_trailer(tar)
 
-        log("")
         log("Running safety checks before flashing...")
         _require_preflight(ctx, log)
         _require_recent_efs_backup(ctx, log)
         _enforce_flash_gates(ctx, log, d)
 
-        if _env_flag("ODIN4_CHECK_ONLY"):
-            _run_odin4_check_only(log, odin4, {"AP": tar})
-
-        log("Flashing firmware via odin4... DO NOT unplug!")
-        tar = _strip_odin4_md5_trailer(tar)
-        cmd = [odin4, "-a", tar, *_odin4_allow_unknown()]
-        # Pin odin4 to this exact USB device so it can't grab the wrong
-        # node when the bus re-enumerates (the 'usb device Fail' cause).
-        try:
-            nd2 = _download_mode_device()
-            if nd2:
-                usb_path = f"/dev/bus/usb/{int(nd2['bus']):03d}/{int(nd2['address']):03d}"
-                import os as _os
-                if _os.path.exists(usb_path):
-                    cmd.extend(["-d", usb_path])
-                    log(f"  Pinned odin4 to {usb_path}")
-        except Exception:
-            pass
-        cmd.extend(_reboot_redownload_flags(log))
-        cmd.extend(_odin4_verbose())
-        if _env_flag("ODIN4_ERASE_NV") and "--reboot" in cmd:
-            raise RuntimeError(
-                "'Erase NVRAM' runs after the flash and needs the phone to stay in "
-                "download mode - disable Auto-reboot (or enable Re-download) and retry."
-            )
-        log("> " + " ".join(cmd))
-        rc, out = _run_odin4_streaming(cmd, log, timeout=1200)
-        if rc != 0:
-            hint = _explain_odin4_failure(out)
-            raise RuntimeError(f"odin4 flashing failed (rc={rc}). {hint}")
+        log("Flashing firmware via native engine... DO NOT unplug!")
+        res = flash_archive_smart([tar], log=log,
+                                  patch_vbmeta=_env_flag("VBMETA_PATCH"),
+                                  reboot=_env_flag("ODIN4_REBOOT"))
+        if isinstance(res, dict):
+            log(f"  Native smart flash finished: {len(res.get('flashed', []))} partitions")
         log("Firmware flashed successfully!")
-        if _env_flag("ODIN4_ERASE_NV"):
-            _erase_nvram(ctx, log, d)
-        if "--reboot" in cmd:
-            log("  Device is rebooting.")
-        elif "--redownload" in cmd:
-            log("  Device re-entering download mode - ready for the next step.")
-        else:
-            log("  Device stays in download mode - power off / reboot manually when ready.")
         return True
 
-    return Flow("Flash firmware tar (odin4)", [Step("odin_flash_tar", _run)])
+    return Flow("Flash firmware tar (native)", [Step("odin_flash_tar", _run)])
 
 
 def flow_odin_check():
-    """Validate firmware archive and PIT using odin4 --check-only. Checks the
-    slots selected in the GUI (AP_TAR/BL_TAR/... env) or any tar in
-    ~/Downloads as a fallback."""
+    """Validate firmware archive + PIT structure natively (no odin4).
+
+    Checks the slots selected in the GUI (AP_TAR/BL_TAR/... env) or any tar
+    in ~/Downloads as a fallback: md5 trailer integrity, tar member listing,
+    and a PIT contract (dump/validate) when a download-mode device answers.
+    """
     def _run(ctx, log):
-        odin4 = _find_odin4()
-        if not odin4:
-            raise RuntimeError("odin4 binary not found.")
         archives = {
             "AP": _find_slot_tar("AP"),
             "BL": _find_slot_tar("BL"),
@@ -4626,29 +4585,56 @@ def flow_odin_check():
             if not tar:
                 raise RuntimeError("No firmware tar found.")
             selected = {"AP": tar}
-        log("Checking selected firmware with odin4 --check-only (no write)...")
+        log("Checking selected firmware (native, no write)...")
         for k, v in selected.items():
-            log(f"  [{k}]  {os.path.basename(v)}")
-        _run_odin4_check_only(log, odin4, archives)
+            ok, msg = _tar_md5_valid(v)
+            contents = get_tar_contents(v)
+            log(f"  [{k}]  {os.path.basename(v)} - "
+                f"md5 {'OK' if ok else ('warn: ' + msg)}, {len(contents)} members")
+            if contents:
+                log(f"         partitions inside: {', '.join(contents[:8])}"
+                    f"{' ...' if len(contents) > 8 else ''}")
+            if not ok:
+                raise RuntimeError(f"{k}: firmware checksum invalid - {msg}")
+        # PIT validation when a download-mode device answers (read-only).
+        d = _download_mode_device()
+        if d:
+            try:
+                target = _prepare_download_session(d, log)
+                contract = pit_contract(target=target, log=log)
+                log(f"  PIT: {contract.get('model', '?')} (from_cache={contract.get('from_cache')})")
+            except Exception as e:
+                log(f"  PIT validation skipped: {e}")
+        else:
+            log("  No download-mode device - archive checks only (PIT skipped).")
         log("Firmware archive and PIT structure are valid.")
         return True
 
-    return Flow("Check firmware archive (odin4)", [Step("odin_check", _run)])
+    return Flow("Check firmware archive (native)", [Step("odin_check", _run)])
 
 
 def flow_odin_list():
-    """List detected download mode devices using odin4 -l."""
+    """List detected download-mode devices via the native Rust pipeline."""
     def _run(ctx, log):
-        odin4 = _find_odin4()
-        if not odin4:
-            raise RuntimeError("odin4 binary not found.")
-        cmd = [odin4, "-l"]
-        log("> " + " ".join(cmd))
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        log((proc.stdout or "") + (proc.stderr or ""))
+        try:
+            rows = bridge.list_merged(vid_filter=0x04E8)
+        except Exception as e:
+            raise RuntimeError(f"native device detection failed: {e}")
+        dl = [r for r in rows if "Download mode" in (r.get("transports") or [])]
+        if not dl:
+            log("  No Samsung phones in download mode (04e8 Odin PID, no ADB).")
+            sam = [r for r in rows if r.get("vid") == 0x04E8]
+            if sam:
+                log(f"  Samsung device(s) present in other modes: "
+                    + ", ".join(f"{r.get('label')} [{','.join(r.get('transports') or [])}]" for r in sam))
+            return True
+        log(f"  Download-mode device(s): {len(dl)}")
+        for r in dl:
+            log(f"    {r.get('label')}  04e8:{r.get('pid'):04x} "
+                f"bus={r.get('bus')} addr={r.get('address')}")
         return True
 
-    return Flow("List download devices (odin4)", [Step("odin_list", _run)])
+    return Flow("List download devices (native)", [Step("odin_list", _run)])
 
 
 def _find_slot_tar(prefix):

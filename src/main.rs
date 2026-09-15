@@ -1,4 +1,5 @@
 mod adb;
+mod apple;
 mod at;
 mod bulk;
 mod config;
@@ -1032,6 +1033,8 @@ fn main() {
             }
             odin::odin_send_pit(&args[2], &args[3])
         }
+        "apple-detect" => apple::apple_detect_cli(),
+        "apple-info" => apple::apple_info_cli(),
         "detect-merged" => {
             if args.len() > 3 {
                 eprintln!("usage: flashpilot-bridge detect-merged [--vid 0xXXXX]");

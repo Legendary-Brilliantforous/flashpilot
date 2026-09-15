@@ -54,9 +54,40 @@ def _usbmuxd_present() -> bool:
     return shutil.which("ideviceinfo") is not None or shutil.which("pymobiledevice3") is not None
 
 
+def _native_lockdown_info(log) -> dict:
+    """Native Rust usbmuxd + lockdown info (no external tools).
+
+    device_id = -1 -> use the first attached device. Returns the lockdown
+    GetValue dict (unpaired: non-protected keys) or {} when usbmuxd is not
+    running / no device attached."""
+    from . import bridge as _bridge
+
+    try:
+        out = _bridge._run(["apple-info"], timeout=15)
+        import json as _json
+        data = _json.loads(out or "{}") if isinstance(out, str) else {}
+    except Exception as e:
+        log(f"  native usbmuxd: {e}")
+        return {}
+    vals = data.get("lockdown") or {}
+    if vals:
+        for k in ("DeviceName", "ProductType", "ProductVersion", "ActivationState",
+                  "SerialNumber", "BuildVersion", "UniqueDeviceID"):
+            if vals.get(k):
+                log(f"  native: {k}: {vals[k]}")
+    return {k: str(v) for k, v in vals.items()} if isinstance(vals, dict) else {}
+
+
 def _idevice_info(log, timeout=12) -> dict:
     info = {}
-    # Try pymobiledevice3
+    # Native first: Rust usbmuxd + lockdown GetValue (no external tools).
+    try:
+        info = _native_lockdown_info(log)
+        if info:
+            return info
+    except Exception as e:
+        log(f"  native usbmuxd: {e}")
+    # Fallback: external tools (pymobiledevice3 / ideviceinfo)
     if shutil.which("pymobiledevice3"):
         try:
             out = subprocess.run(["pymobiledevice3", "usbmux", "list"], capture_output=True, text=True, timeout=timeout).stdout
