@@ -1,3 +1,32 @@
+//! Samsung Download mode ("Odin" protocol) engine — native Rust.
+//!
+//! This module is the complete, self-contained replacement for Samsung's
+//! proprietary `odin4` Linux binary. The odin4 bugs and failure modes it
+//! corrects (each verified on live devices):
+//!
+//! 1. One-session-per-plug: odin4 burns the single Loke session and goes
+//!    deaf until replug. We rescue with blind EndSession + USB port reset.
+//! 2. Stale `-d /dev/bus/usb` path on re-enumeration ("usb device Fail").
+//!    We re-resolve targets by stable port path instead of pinning.
+//! 3. cdc_acm / ModemManager holding the CDC ACM port ("Resource busy").
+//!    We detach kernel drivers BEFORE set_config and retry claims.
+//! 4. Small buffer reads -> LIBUSB_ERROR_OVERFLOW (full-size bulk packets).
+//! 5. md5 trailer mis-parse (two-space/newline variant) -> aborted flash.
+//!    Native fwtar:: verifies the trailer with a real digest round-trip.
+//! 6. Per-file total-byte declarations make the 4th+ commit fail -5
+//!    (running received-byte counter). We declare the GRAND total once.
+//! 7. up_param commit poisons the next write. We force it last.
+//! 8. is_last=1 closes the flash context -> next commit fails -5. We send
+//!    it only on the session's true final partition.
+//! 9. "Secure check fail" at boot without boot_update in EndSequence.
+//!    We always set boot_update for bootloader/firmware partitions.
+//! 10. EndSequence -5 while the device validates async md5hdr. We retry
+//!     with exponential backoff instead of failing.
+//!
+//! Naming: module file is sam_download.rs (Rust forbids dashes in module
+//! names); the protocol and CLI names keep the odin-* prefixes for
+//! compatibility with the Python bridge and existing scripts.
+
 use std::time::Duration;
 
 use serde::Serialize;
@@ -6,8 +35,9 @@ use serde_json::json;
 use crate::error::{Result, BridgeError};
 use crate::usb;
 
-// Protocol constants from the Heimdall project (MIT) - the reverse-engineered
-// Samsung "Odin 3" download protocol.
+// Protocol reference: the Heimdall project (MIT) - the reverse-engineered
+// Samsung download protocol.
+
 const CTRL_SESSION: u32 = 0x64;
 const CTRL_PIT_FILE: u32 = 0x65;
 #[allow(dead_code)]
@@ -1662,6 +1692,7 @@ fn flash_one_partition_ext(
     // Report progress to stderr as parseable lines so the Python bridge can
     // show live percentage on screen. Emitted at least once per sequence.
     let mut last_report_pct = 0u32;
+    let partition_start = std::time::Instant::now();
 
     let sequence_count = if legacy { 240 } else { 30 };
     let max_seq_bytes = packet_size as usize * sequence_count;
@@ -1699,7 +1730,20 @@ fn flash_one_partition_ext(
             }
             let pct = (sent * 100 / total) as u32;
             if pct >= last_report_pct + 2 || sent >= total {
-                eprintln!("[progress] {partition}: {pct}% ({sent}/{total})");
+                // Throughput + ETA: elapsed since this partition's start.
+                let elapsed = partition_start.elapsed().as_secs_f64();
+                let mbps = if elapsed > 0.05 {
+                    sent as f64 / (1024.0 * 1024.0) / elapsed
+                } else {
+                    0.0
+                };
+                let eta = if mbps > 0.01 && sent > 0 {
+                    let remain = total - sent;
+                    format!(", eta {:.0}s", remain as f64 / (1024.0 * 1024.0) / mbps)
+                } else {
+                    String::new()
+                };
+                eprintln!("[progress] {partition}: {pct}% ({sent}/{total}, {mbps:.1} MB/s{eta})");
                 last_report_pct = pct;
             }
         }

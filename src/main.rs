@@ -12,7 +12,7 @@ mod mtk_exploit;
 mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
-mod odin;
+mod sam_download;
 mod qualcomm;
 mod spd;
 mod fastboot;
@@ -990,35 +990,35 @@ fn main() {
                 eprintln!("usage: flashpilot-bridge odin-connect <target>");
                 exit(2);
             }
-            odin::odin_connect(&args[2])
+            sam_download::odin_connect(&args[2])
         }
         "odin-pit" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-pit <target> [outfile]");
                 exit(2);
             }
-            odin::odin_pit(&args[2], args.get(3).map(|s| s.as_str()))
+            sam_download::odin_pit(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-pit-mtk" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-pit-mtk <target> [outfile]");
                 exit(2);
             }
-            odin::odin_pit_mtk(&args[2], args.get(3).map(|s| s.as_str()))
+            sam_download::odin_pit_mtk(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-info" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge odin-info <target> <pit_file>");
                 exit(2);
             }
-            odin::odin_info(&args[2], &args[3])
+            sam_download::odin_info(&args[2], &args[3])
         }
         "odin-model" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-model <target>");
                 exit(2);
             }
-            odin::odin_model(&args[2])
+            sam_download::odin_model(&args[2])
         }
         "odin-flash-tar" => {
             if args.len() < 4 {
@@ -1027,7 +1027,7 @@ fn main() {
             }
             let allow_unknown = args.iter().any(|a| a == "--allow-unknown");
             let reboot = args.iter().any(|a| a == "--reboot");
-            odin::odin_flash_tar(&args[2], &args[3], allow_unknown, reboot)
+            sam_download::odin_flash_tar(&args[2], &args[3], allow_unknown, reboot)
         }
         "odin-flash" => {
             if args.len() < 6 {
@@ -1035,14 +1035,14 @@ fn main() {
                 exit(2);
             }
             let image = &args[5];
-            odin::odin_flash_partition(&args[2], &args[3], &args[4], image)
+            sam_download::odin_flash_partition(&args[2], &args[3], &args[4], image)
         }
         "odin-send-pit" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge odin-send-pit <target> <pit_file>");
                 exit(2);
             }
-            odin::odin_send_pit(&args[2], &args[3])
+            sam_download::odin_send_pit(&args[2], &args[3])
         }
         "apple-detect" => apple::apple_detect_cli(),
         "apple-info" => apple::apple_info_cli(),
@@ -1061,7 +1061,7 @@ fn main() {
                 eprintln!("usage: flashpilot-bridge odin-agent <target>");
                 exit(2);
             }
-            odin::odin_agent(&args[2])
+            sam_download::odin_agent(&args[2])
         }
         "odin-flash-multi" => {
             if args.len() < 6 {
@@ -1083,7 +1083,7 @@ fn main() {
                 .iter()
                 .map(|(p, f)| (p.as_str(), f.as_str()))
                 .collect();
-            odin::odin_flash_multi(&args[2], &args[3], &refs, reboot)
+            sam_download::odin_flash_multi(&args[2], &args[3], &refs, reboot)
         }
         other => {
             eprintln!("unknown command: {other}");
