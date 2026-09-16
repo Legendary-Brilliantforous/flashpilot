@@ -24,7 +24,7 @@ python main.py
 | `python/` | The whole app. Split into `python/core/` (engine) and `python/gui/` (PyQt6). | 99% of your work. |
 | `src/` | Rust sources. Mirrored layout to `python/core/`. | When you add a new bridge command or change a USB protocol. |
 | `tests/` | pytest suite. ~149 tests, runs in ~1s. | Run with `.venv/bin/python -m pytest tests/ -q`. |
-| `scripts/` | Standalone shell tools. Today: `dump-connected.sh`, `fetch-odin4.sh`, `validate_mtp_at.py`. | When you need a non-GUI batch operation. |
+| `scripts/` | Standalone shell tools. Today: `dump-connected.sh`, `validate_mtp_at.py`. | When you need a non-GUI batch operation. |
 | `docs/` | README assets (screenshots, logo). | For the README. |
 | `packaging/` | `.deb` build script + control files. | To ship a release. |
 | `root/` | udev rules (so phones work without sudo). | One-time setup. |
@@ -133,7 +133,6 @@ the code is the source of truth.
 | `build/target/` | Rust `cargo build` output | `cargo build` |
 | `build/dist/` | `.deb` packages | `packaging/build-deb.sh` |
 | `build/cache/` | Per-device TAR caches and reverse-engineered dumps | GUI / `scripts/dump-connected.sh` |
-| `build/odin4_cache/` | Cached Odin4 archive downloads | `scripts/fetch-odin4.sh` |
 | `build/mdm_qr/` | Generated MDM provisioning QR codes | GUI MDM flow |
 | `build/pit/` | Cached `.pit` partition-table files | GUI PIT flow |
 

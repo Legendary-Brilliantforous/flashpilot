@@ -633,11 +633,24 @@ let handle = device.open()?;
 
     // Detach the *matched* device's interfaces (not devices[0] - with several
     // phones plugged in that would release the wrong device).
+    //
+    // Live-device finding: release_interface() alone does NOT evict a kernel
+    // driver - cdc_acm stays bound to Samsung download mode's CDC ACM
+    // function and every later set_active_configuration/claim fails with
+    // "Resource busy". Explicitly detach wherever a kernel driver is active.
+    // The `detached` list is load-bearing: Python logs `res.get('detached')`
+    // after every download-mode session setup.
+    let mut detached = Vec::new();
     for iface in &dev.interfaces {
         let _ = handle.release_interface(iface.number);
+        if handle.kernel_driver_active(iface.number).unwrap_or(false) {
+            if handle.detach_kernel_driver(iface.number).is_ok() {
+                detached.push(iface.number);
+            }
+        }
     }
     
-    Ok(serde_json::json!({"status": "kernel drivers detached"}).to_string())
+    Ok(serde_json::json!({"status": "kernel drivers detached", "detached": detached}).to_string())
 }
 
 #[cfg(test)]
@@ -719,3 +732,5 @@ mod tests {
         assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
     }
 }
+
+pub mod filtering;

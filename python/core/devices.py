@@ -225,14 +225,63 @@ def _usb_label(d, adb_state_by_serial):
     return " · ".join(bits)
 
 
+def _merged_row_to_legacy(row):
+    """Adapt a Rust `detect-merged` DeviceRow to the legacy list_devices()
+    row shape ({key, label, transports, usb, adb}) so GUI consumers are
+    unchanged while filtering/merge runs in the Rust core."""
+    adb_state = row.get("adb_state")
+    adb = None
+    if row.get("is_adb") or adb_state:
+        adb = {
+            "serial": row.get("serial") or "",
+            "state": adb_state or "device",
+            "extra": "",
+        }
+    usb = None
+    if not row.get("is_adb"):
+        usb = {
+            "vid": row.get("vid", 0),
+            "pid": row.get("pid", 0),
+            "bus": row.get("bus", 0),
+            "address": row.get("address", 0),
+            "serial": row.get("serial"),
+            "product": row.get("usb_product"),
+            "manufacturer": row.get("usb_manufacturer"),
+        }
+    return {
+        "key": row.get("key", ""),
+        "label": row.get("label", ""),
+        "transports": row.get("transports", []),
+        "usb": usb,
+        "adb": adb,
+    }
+
+
 def list_devices():
     """Unified device list across USB + ADB.
 
-    Returns a list of ``{"key", "label", "transports", "usb", "adb"}`` dicts.
-    USB entries carrying an ADB-listed serial are merged into a single row
-    (key ``adb:<serial>``); standalone ADB entries (e.g. TCP/emulator) and
-    USB entries without serials each get their own row.
+    Filtering/merge now runs in the Rust core (`detect-merged`): one atomic,
+    deterministic call instead of per-poll Python re-computation. Rows are
+    adapted back to the legacy shape so GUI consumers are unchanged. On any
+    bridge failure the legacy Python path below remains the rollback.
     """
+    from . import bridge as _bridge
+
+    try:
+        merged = _bridge.list_merged()
+    except Exception:
+        merged = []
+    if isinstance(merged, list) and merged:
+        return [
+            _merged_row_to_legacy(r) for r in merged
+            if isinstance(r, dict) and r.get("key")
+        ]
+
+    return _list_devices_legacy()
+
+
+def _list_devices_legacy():
+    """Legacy Python filtering/merge (rollback path; Phase 3 removes this)."""
     from . import bridge as _bridge
 
     try:

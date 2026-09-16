@@ -1,14 +1,18 @@
 """Google Pixel Fastboot support — unlock, factory images, slot A/B, vbmeta.
 
-Prefers the native Rust fastboot transport (target-pinned
-`vid:pid@bus:addr`, kernel-driver detach) via ``bridge.fastboot_cmd``;
-falls back to the system `fastboot` CLI when the bridge has no matching
-device. All high-risk ops are EXPERIMENTAL behind the experimental gate
+All fastboot device communication runs on the native Rust transport
+(target-pinned `vid:pid@bus:addr`, kernel-driver detach) via
+``bridge.fastboot_cmd`` — the protocol lives in the Rust core
+(`src/fastboot.rs`), not in Python and not in an external binary.
+All high-risk ops are EXPERIMENTAL behind the experimental gate
 (fastboot_pixel).
 
 Factory images: extracts Pixel factory zip (contains bootloader/radio/*.img +
-flash-all.sh) and flashes slot-aware. `flash-all.sh` itself always runs as a
-vendor script through bash (never reimplemented).
+flash-all.sh) and flashes slot-aware over the native transport.
+`flash-all.sh` itself always runs as a vendor script through bash
+(never reimplemented) — the only path that still reaches for the system
+fastboot binary, and it is skipped when the native per-image path can do
+the job.
 """
 
 import glob
@@ -23,19 +27,12 @@ from . import bridge
 from .flow import Flow, Step
 
 
-def _find_fastboot() -> str:
-    for cand in [shutil.which("fastboot"), "/usr/bin/fastboot", "/usr/local/bin/fastboot"]:
-        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
-    return ""
-
-
 def _native_target() -> str:
     """Resolve a native fastboot target (``vid:pid@bus:addr``).
 
     Prefers the ambient device scope (GUI device picker); otherwise the
     first device exposing a fastboot interface. Returns '' when none —
-    callers fall back to the system fastboot binary."""
+    callers raise with the native-mode instructions."""
     try:
         from . import devices as _dev
 
@@ -62,40 +59,35 @@ def _target_str(d) -> str:
 
 
 def _run_fastboot(args, timeout=120, log=None):
+    """Run one fastboot command over the native Rust transport.
+
+    Device communication is Rust-only (`src/fastboot.rs`): no external
+    fastboot binary is invoked from Python."""
     if isinstance(args, str):
         args = [args]
     target = _native_target()
-    if target:
-        if log:
-            log(f"$ fastboot {' '.join(args)}  [native → {target}]")
-        try:
-            out = bridge.fastboot_cmd(
-                target, list(args),
-                timeout_ms=max(5000, timeout * 1000),
-                timeout=timeout + 15,
-            )
-        except Exception as e:  # noqa: BLE001 - BridgeError subclasses + BinaryNotFound
-            raise RuntimeError(f"native fastboot failed: {e}")
-        if log:
-            for line in out.splitlines():
-                log(f"  {line}")
-        if "FAILED" in (out or ""):
-            raise RuntimeError(f"fastboot {' '.join(args)} failed:\n{out}")
-        return out or ""
-    fb = _find_fastboot()
-    if not fb:
-        raise RuntimeError("fastboot not found. Install android-platform-tools (apt install fastboot) and ensure device is in fastboot (VID 18d1 PID 4ee0).")
-    cmd = [fb] + args
+    if not target:
+        raise RuntimeError(
+            "No fastboot device detected by the native transport. "
+            "Boot the device to fastboot mode (VID 18d1 PID 4ee0), "
+            "replug, and retry."
+        )
     if log:
-        log(f"$ {' '.join(cmd)}")
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    out = (proc.stdout or "") + (proc.stderr or "")
+        log(f"$ fastboot {' '.join(args)}  [native → {target}]")
+    try:
+        out = bridge.fastboot_cmd(
+            target, list(args),
+            timeout_ms=max(5000, timeout * 1000),
+            timeout=timeout + 15,
+        )
+    except Exception as e:  # noqa: BLE001 - BridgeError subclasses + BinaryNotFound
+        raise RuntimeError(f"native fastboot failed: {e}")
     if log:
         for line in out.splitlines():
             log(f"  {line}")
-    if proc.returncode != 0:
+    if "FAILED" in (out or ""):
         raise RuntimeError(f"fastboot {' '.join(args)} failed:\n{out}")
-    return out
+    return out or ""
 
 
 def _is_fastboot_device() -> bool:
@@ -113,12 +105,6 @@ def _is_fastboot_device() -> bool:
             for iface in d.get("interfaces", []):
                 if iface.get("class") == 255 and iface.get("subclass") == 66 and iface.get("protocol") == 3:
                     return True
-        # also try fastboot devices
-        fb = _find_fastboot()
-        if fb:
-            out = subprocess.run([fb, "devices"], capture_output=True, text=True, timeout=5).stdout
-            if out.strip():
-                return True
     except Exception:
         pass
     return False
@@ -137,8 +123,8 @@ def _vbmeta_patch_flags(data: bytes, disable: bool = True) -> bytes:
 def flow_fastboot_info():
     def _run(ctx, log):
         log("Fastboot info — listing devices and vars")
-        if not _find_fastboot():
-            log("  fastboot binary not found — install android-platform-tools")
+        if not _native_target() and not _is_fastboot_device():
+            log("  No fastboot devices detected by the native transport.")
         try:
             out = _run_fastboot(["devices", "-l"], log=log)
             if not out.strip():
@@ -197,9 +183,11 @@ def flow_fastboot_flash_factory():
                         log(f"  Patched {os.path.basename(vb)} AVB -> 0x03")
                 except Exception as e:
                     log(f"  vbmeta patch skip {vb}: {e}")
-        # Prefer flash-all.sh if present
+        # Prefer the vendor script if present (the one documented exception
+        # that shells out to the system fastboot binary inside bash — never
+        # reimplemented). Everything else flashes over the native transport.
         flash_sh = glob.glob(os.path.join(work, "flash-all.sh"))
-        if flash_sh and os.path.isfile(flash_sh[0]):
+        if flash_sh and os.path.isfile(flash_sh[0]) and shutil.which("fastboot"):
             log(f"Running {flash_sh[0]}")
             # ensure fastboot in PATH for the script
             env = os.environ.copy()

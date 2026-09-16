@@ -15,8 +15,8 @@
 #   /usr/share/applications/flashpilot.desktop
 #   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/flashpilot.png
 #
-# The proprietary odin4 binary is NOT shipped (legal); users fetch it via
-# /usr/share/flashpilot/scripts/fetch-odin4.sh after install.
+# Samsung download-mode flashing is native (Rust Odin protocol) - no
+# proprietary odin4 binary is shipped or needed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -142,9 +142,9 @@ echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 cp main.py "$STAGE/usr/share/flashpilot/"
 cp -r python "$STAGE/usr/share/flashpilot/"
 cp -r scripts "$STAGE/usr/share/flashpilot/"
-# root/ is copied EXCEPT root/tools/odin4: the proprietary Samsung binary is
-# never redistributed (see fetch-odin4.sh for the after-install download).
-rsync -a --exclude 'tools/odin4' root/ "$STAGE/usr/share/flashpilot/root/"
+# root/ is copied as-is (the proprietary odin4 path is gone - the native Odin
+# engine replaces it).
+rsync -a root/ "$STAGE/usr/share/flashpilot/root/"
 [ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
@@ -207,4 +207,3 @@ echo ""
 echo "Install with:  sudo dpkg -i $DIST/$PKG"
 echo "Then run:      flashpilot"
 echo "USB rules are applied automatically on install."
-echo "Fetch odin4 (Samsung download mode): bash /usr/share/flashpilot/scripts/fetch-odin4.sh"

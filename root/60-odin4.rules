@@ -1,1 +1,4 @@
-SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", MODE="0660", GROUP="plugdev"
+# FlashPilot - Samsung download mode (Odin) access (plugdev).
+# ID_MM_DEVICE_IGNORE keeps ModemManager from grabbing the CDC ACM function
+# and holding the bulk endpoints busy ("Resource busy" on claim).
+SUBSYSTEM=="usb", ATTR{idVendor}=="04e8", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="plugdev"
