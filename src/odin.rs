@@ -1867,6 +1867,154 @@ pub fn odin_flash_multi(
     .to_string())
 }
 
+/// Flash a full Samsung firmware archive (.tar / .tar.md5) natively.
+///
+/// Engine-level odin4 parity and more: md5 trailer verify + strip, tar
+/// extraction, LZ4/zstd decompression, Android sparse expansion, PIT-mapped
+/// multi-partition flash in ONE session, then reboot or re-download.
+///
+/// `allow_unknown`: archive members with no PIT partition match are skipped
+/// with a warning instead of aborting (odin4's --allow-unknown semantics).
+/// `reboot`: send the reboot command after the flash; false leaves the phone
+/// in download mode (odin4's --redownload behavior - the reliable way to
+/// chain a second flash).
+pub fn odin_flash_tar(
+    target: &str,
+    tar_path: &str,
+    allow_unknown: bool,
+    reboot: bool,
+) -> Result<String> {
+    use crate::fwtar;
+    use std::path::PathBuf;
+
+    // 1. Stage the archive: md5 check, extract, decompress, sparse expand.
+    let workdir = std::env::temp_dir().join(format!(
+        "fp_odin_tar_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&workdir);
+    let staged = fwtar::prepare_archive(tar_path, &workdir)
+        .map_err(|e| format!("archive staging failed: {e}"))?;
+    if staged.is_empty() {
+        let _ = std::fs::remove_dir_all(&workdir);
+        return Err("archive contains no members".into());
+    }
+
+    // 2. Open the session and dump the device's own PIT (partition lookups).
+    let dev = open_and_handshake(target).map_err(|e| e.to_string())?;
+    let (packet_size, legacy) = begin_session_v2(&dev).map_err(|e| e.to_string())?;
+    eprintln!("[flash] session ok, packet_size={packet_size}, legacy={legacy}");
+    let pit = dev
+        .dump_pit()
+        .map_err(|e| format!("PIT dump failed: {e}"))?;
+    eprintln!("[flash] device PIT dumped ({} bytes)", pit.len());
+
+    // 3. Map members to PIT partitions (odin4 ordering: BL, AP, CP, CSC,
+    //    then USERDATA; up_param last - its commit poisons the next write).
+    fn member_base(name: &str) -> String {
+        let base = std::path::Path::new(name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(name);
+        base.rsplit('.').nth(1).unwrap_or(base).to_string()
+    }
+    let mut mapped: Vec<(String, PathBuf)> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for (name, path) in &staged {
+        let base = member_base(name);
+        match find_pit_entry(&pit, &base) {
+            Ok(_) => mapped.push((base, path.clone())),
+            Err(_) => unknown.push(name.clone()),
+        }
+    }
+    if !unknown.is_empty() {
+        if allow_unknown {
+            eprintln!(
+                "[archive] members without a PIT match SKIPPED (--allow-unknown): {unknown:?}"
+            );
+        } else {
+            let _ = std::fs::remove_dir_all(&workdir);
+            return Err(format!(
+                "archive members with no PIT partition match: {unknown:?} \
+                 (pass --allow-unknown to skip them)"
+            )
+            .into());
+        }
+    }
+    // Ordering: up_param last, USERDATA last-ish, BL/AP/CP/CSC first.
+    mapped.sort_by_key(|(name, _)| {
+        let rank = match name.as_str() {
+            "up_param" => 9,
+            "userdata" => 8,
+            _ => 0,
+        };
+        rank
+    });
+
+    // 4. SetTotalBytes ONCE with the grand total (matches odin4 + the
+    //    flash_multi flow), then flash every partition in one session.
+    let mut total_bytes = 0u64;
+    for (_, path) in &mapped {
+        total_bytes += std::fs::metadata(path)
+            .map_err(|e| format!("stat {}: {e}", path.display()))?
+            .len();
+    }
+    set_total_bytes(&dev, total_bytes).map_err(|e| e.to_string())?;
+    eprintln!("[flash] set_total_bytes ok ({total_bytes} bytes total)");
+
+    let mut results = Vec::new();
+    for (idx, (partition, path)) in mapped.iter().enumerate() {
+        let is_large = matches!(partition.as_str(), "super" | "system" | "userdata");
+        let session_last = idx + 1 == mapped.len();
+        let path_str = path.to_string_lossy().to_string();
+        let sequences = flash_one_partition_ext(
+            &dev,
+            &pit,
+            partition,
+            &path_str,
+            packet_size,
+            legacy,
+            is_large,
+            session_last,
+        )
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&workdir);
+            format!("{partition}: {e}")
+        })?;
+        results.push((partition.clone(), sequences));
+    }
+
+    // 5. Teardown: end session, then reboot (or stay in download mode for
+    //    the next flash - odin4's --redownload behavior).
+    if let Err(e) = end_session_v2(&dev) {
+        if strict_mode() {
+            let _ = std::fs::remove_dir_all(&workdir);
+            return Err(format!("end_session failed under ODIN_STRICT=1: {e}").into());
+        }
+        eprintln!("[flash] end_session warning (non-fatal): {e}");
+    }
+    if reboot {
+        if let Err(e) = reboot_v2(&dev) {
+            if strict_mode() {
+                let _ = std::fs::remove_dir_all(&workdir);
+                return Err(format!("reboot failed under ODIN_STRICT=1: {e}").into());
+            }
+            eprintln!("[flash] reboot command warning: {e}");
+        } else {
+            eprintln!("[flash] reboot command sent");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&workdir);
+
+    Ok(serde_json::json!({
+        "flashed": results.iter().map(|(p, s)| json!({"partition": p, "sequences": s})).collect::<Vec<_>>(),
+        "skipped_unknown": unknown,
+        "total_bytes": total_bytes,
+        "reboot": reboot,
+    })
+    .to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

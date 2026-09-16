@@ -18,6 +18,8 @@ mod spd;
 mod fastboot;
 mod imgtools;
 mod pac;
+mod sparse;
+mod fwtar;
 mod pit;
 mod usb;
 mod util;
@@ -1017,6 +1019,15 @@ fn main() {
                 exit(2);
             }
             odin::odin_model(&args[2])
+        }
+        "odin-flash-tar" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge odin-flash-tar <target> <tar> [--allow-unknown] [--reboot]");
+                exit(2);
+            }
+            let allow_unknown = args.iter().any(|a| a == "--allow-unknown");
+            let reboot = args.iter().any(|a| a == "--reboot");
+            odin::odin_flash_tar(&args[2], &args[3], allow_unknown, reboot)
         }
         "odin-flash" => {
             if args.len() < 6 {
