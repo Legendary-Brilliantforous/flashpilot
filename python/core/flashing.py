@@ -18,22 +18,19 @@ shared helpers into ``flow.py``).
 # Re-export flashing symbols from the legacy location.
 # Keep the list explicit so import cost stays low and linters see it.
 from .core import (  # noqa: F401
-    _find_odin4, _find_slot_tar, _tar_md5_valid, _strip_odin4_md5_trailer,
+    _find_slot_tar, _tar_md5_valid, _strip_odin4_md5_trailer,
 )
 from .core import (  # noqa: F401
     flow_efs_backup, flow_efs_restore, flow_change_sales_code,
     flow_odin_enable_adb, flow_odin_flash_tar, flow_odin_check, flow_odin_list,
     flow_odin_pit_tools, flow_odin_flash_partition_gui, flow_odin_vbmeta,
     flow_odin_flash_multi, flow_odin_send_pit, flow_odin_advanced_flash,
-    flow_preflight, _run_odin4_streaming,
+    flow_preflight,
     _enforce_flash_gates, _enforce_bl_downgrade_gate,
     _require_preflight, _require_recent_efs_backup,
 )
 
 __all__ = [
-    "ODIN4_SHA256",
-    "ODIN4_SHA256_MTK",
-    "ODIN4_SHA256S",
     "flow_odin_enable_adb",
     "flow_odin_flash_tar",
     "flow_odin_check",
