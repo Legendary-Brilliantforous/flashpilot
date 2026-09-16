@@ -25,7 +25,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 
 | Commercial tool | Windows-only, closed source | This project |
 |---|---|---|
-| Odin / Smart Switch | Windows, GUI only | Open-source Odin protocol + leaked odin4 + PIT tools |
+| Odin / Smart Switch | Windows, GUI only | Open-source Odin protocol (Rust, native) + PIT tools |
 | MTK flash tools | Windows, closed DA | MTK BROM/DA flashing & backup (scatter + GPT) |
 | Qualcomm EDL tools | Windows | Sahara + Firehose protocol implementation |
 | SPD/UNISOC tools | Windows | Clean-room BSL download implementation |
@@ -67,7 +67,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 | Capability | Samsung | MediaTek | Qualcomm | SPD/UNISOC | Any ADB |
 |---|---|---|---|---|---|
 | Detect / info | ✅ | ✅ (+ crash preloader→BROM) | ✅ (Sahara) | ✅ | ✅ |
-| Flash firmware | ✅ (Odin / odin4) | ✅ (scatter + GPT) | ✅ (Firehose) | ✅ (FDL/regions) | — |
+| Flash firmware | ✅ (Odin, native Rust) | ✅ (scatter + GPT) | ✅ (Firehose) | ✅ (FDL/regions) | — |
 | Backup partitions | ✅ (EFS) | ✅ | ✅ | ✅ | — |
 | FRP bypass | ✅ (ADB + download) | ✅ | ✅ (EDL) | ✅ | ✅ |
 | Screen-lock removal | ✅ | ✅ | ✅ (EDL) | — | ✅ |
@@ -108,11 +108,6 @@ cargo build --release
 # 2. (Recommended) install the USB udev rules so phones need no sudo
 sudo bash root/setup-usb.sh
 
-# 2b. Fetch the proprietary odin4 binary (Samsung download-mode flashing).
-#     It is NOT redistributed here for legal reasons; this pulls it from a
-#     public mirror and verifies it runs.
-bash scripts/fetch-odin4.sh
-
 # 3. Python environment
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -121,7 +116,7 @@ python3 -m venv .venv
 .venv/bin/python -m python.main        # or: python3 main.py
 ```
 
-The **odin4** tool (Samsung download-mode flashing) is fetched at setup by `scripts/fetch-odin4.sh` — Samsung's proprietary binary is not redistributed in this repo. Samsung combo firmware should be sourced from Samsung's official support pages or trusted firmware archives.
+The Samsung download-mode flashing is native (Rust Odin protocol) — no proprietary odin4 binary is fetched, shipped, or required. Samsung combo firmware should be sourced from Samsung's official support pages or trusted firmware archives.
 
 ---
 
@@ -133,8 +128,6 @@ target Linux, and that is not changing.
 
 **Windows / macOS are not supported today**, for practical reasons:
 
-- `odin4` (Samsung flashing) is a Linux-only binary — Windows would need a
-  different flash path entirely.
 - Windows USB is driver hell per phone mode (Zadig/WinUSB, QDLoader, Samsung
   drivers fighting each other); most "phone not detected" reports would be
   undebuggable remotely.
@@ -216,8 +209,8 @@ flashpilot/
 │       └── supported_devices.json  #   brand/model/chip research table
 ├── operations/               # per-operation docs + research (frp/mdm/flashing/…)
 ├── docs/                     # screenshots (fresh) + logo
-├── root/                     # udev rules + setup-usb.sh (odin4 fetched, not vendored)
-├── scripts/                  # fetch-odin4.sh, dump-connected.sh, validate_mtp_at.py
+├── root/                     # udev rules + setup-usb.sh
+├── scripts/                  # dump-connected.sh, validate_mtp_at.py
 ├── INDEX.md CHANGELOG.md     # engineering index + release changelog
 └── tests/                    # pytest suite (flow, MTK, PIT, odin safety, devices…)
 ```

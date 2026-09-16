@@ -4,8 +4,14 @@
 available) and EXPERIMENTAL-gated bypass stubs. Full ramdisk bypass requires
 HIL with checkm8 DFU samples.
 
-Dep: optional `pymobiledevice3` or `libimobiledevice` tools (ideviceinfo).
-Falls back to usbmuxd socket / lsusb detection when deps absent.
+Device detection runs on the native Rust bridge (`detect-all`: VID 0x05AC
+classified with PID, so DFU 1227 / Recovery 1281 / Normal 12a8 are told
+apart without shelling out to lsusb).
+
+Lockdown-level detail (ActivationState, SerialNumber, ProductType) needs the
+usbmuxd + lockdown plist protocol — no Rust implementation yet, so the
+optional `pymobiledevice3` / `libimobiledevice` tools remain the only source
+for that tier (flagged as the pending Rust usbmuxd migration).
 """
 
 import os
@@ -13,10 +19,26 @@ import re
 import shutil
 import subprocess
 
+from . import bridge
 from .flow import Flow, Step
 
 
+def _detect_apple_native() -> list:
+    """Apple devices from the native Rust enumeration (no lsusb).
+
+    Returns [{vid, pid, bus, address, mode, bcd_device}] for VID 0x05AC."""
+    try:
+        devs = bridge.detect_all() or []
+    except Exception:
+        return []
+    return [
+        d for d in devs
+        if isinstance(d, dict) and d.get("vid") == 0x05AC
+    ]
+
+
 def _lsusb_apple() -> str:
+    """Legacy lsusb text (kept for callers; primary path is _detect_apple_native)."""
     try:
         out = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=5).stdout
         apple = [l for l in out.splitlines() if "05ac" in l.lower()]
@@ -32,9 +54,40 @@ def _usbmuxd_present() -> bool:
     return shutil.which("ideviceinfo") is not None or shutil.which("pymobiledevice3") is not None
 
 
+def _native_lockdown_info(log) -> dict:
+    """Native Rust usbmuxd + lockdown info (no external tools).
+
+    device_id = -1 -> use the first attached device. Returns the lockdown
+    GetValue dict (unpaired: non-protected keys) or {} when usbmuxd is not
+    running / no device attached."""
+    from . import bridge as _bridge
+
+    try:
+        out = _bridge._run(["apple-info"], timeout=15)
+        import json as _json
+        data = _json.loads(out or "{}") if isinstance(out, str) else {}
+    except Exception as e:
+        log(f"  native usbmuxd: {e}")
+        return {}
+    vals = data.get("lockdown") or {}
+    if vals:
+        for k in ("DeviceName", "ProductType", "ProductVersion", "ActivationState",
+                  "SerialNumber", "BuildVersion", "UniqueDeviceID"):
+            if vals.get(k):
+                log(f"  native: {k}: {vals[k]}")
+    return {k: str(v) for k, v in vals.items()} if isinstance(vals, dict) else {}
+
+
 def _idevice_info(log, timeout=12) -> dict:
     info = {}
-    # Try pymobiledevice3
+    # Native first: Rust usbmuxd + lockdown GetValue (no external tools).
+    try:
+        info = _native_lockdown_info(log)
+        if info:
+            return info
+    except Exception as e:
+        log(f"  native usbmuxd: {e}")
+    # Fallback: external tools (pymobiledevice3 / ideviceinfo)
     if shutil.which("pymobiledevice3"):
         try:
             out = subprocess.run(["pymobiledevice3", "usbmux", "list"], capture_output=True, text=True, timeout=timeout).stdout
@@ -63,20 +116,21 @@ def flow_apple_info():
         log("=" * 60)
         log("Apple device info (read-only, EXPERIMENTAL)")
         log("=" * 60)
-        apple = _lsusb_apple()
-        if apple:
-            log("  lsusb Apple devices:")
-            for line in apple.splitlines():
-                log(f"    {line}")
+        apples = _detect_apple_native()
+        if apples:
+            log("  Native (Rust) Apple devices:")
+            for d in apples:
+                pid = d.get("pid", 0)
+                log(f"    05ac:{pid:04x} bus={d.get('bus')} addr={d.get('address')} mode={d.get('mode')}")
                 # DFU 05ac:1227, Recovery 05ac:1281, Normal 05ac:12a8
-                if "1227" in line:
+                if pid == 0x1227:
                     log("    -> DFU mode (05ac:1227) — checkm8 candidate if A5-A11")
-                elif "1281" in line:
+                elif pid == 0x1281:
                     log("    -> Recovery mode (05ac:1281)")
-                elif "12a8" in line:
-                    log("    -> Normal mode (05ac:12a8) — needs usbmuxd")
+                elif pid == 0x12a8 or d.get("mode") == "apple":
+                    log("    -> Normal/Recovery mode — needs usbmuxd for lockdown")
         else:
-            log("  No Apple 05ac device on lsusb. Plug iPhone/iPad via USB.")
+            log("  No Apple 05ac device detected (native USB scan). Plug iPhone/iPad via USB.")
         log(f"  usbmuxd: {'present' if _usbmuxd_present() else 'not found (install libimobiledevice / pymobiledevice3)'}")
         info = _idevice_info(log)
         if not info:
@@ -95,9 +149,10 @@ def flow_apple_icloud_remove():
             raise RuntimeError("Apple iCloud Remove is EXPERIMENTAL — per-run ack required")
         audit_log("apple_icloud_remove", "remove_attempt")
         log("[EXPERIMENTAL] Apple iCloud Remove — educational purpose only. You certify you own this device.")
-        # Check for DFU or usbmuxd path
-        apple = _lsusb_apple()
-        if "1227" not in apple and not _usbmuxd_present():
+        # Check for DFU or usbmuxd path (native Rust detection)
+        apples = _detect_apple_native()
+        pids = {d.get("pid") for d in apples}
+        if 0x1227 not in pids and not _usbmuxd_present():
             log("  No DFU (05ac:1227) and no usbmuxd — plug device in DFU (checkm8) or Recovery/Normal with trust")
             log("  DFU enter: vary by model — e.g. iPhone X: Vol Down + Side, hold Power sequence")
         log("  In beta: ramdisk SSH path not yet HIL-validated — preparing placeholder flow only")

@@ -198,13 +198,9 @@ class TestScreenLockCscRegistration:
     def test_flow_rejects_mismatched_csc_model(self, monkeypatch, tmp_path):
         """A CSC for a different model must refuse before flashing."""
         from python.core import pit as _pit
-        fake_odin4 = tmp_path / "odin4"
-        fake_odin4.write_bytes(b"#!/bin/sh\nexit 0\n")
-        fake_odin4.chmod(0o755)
         fake_csc = tmp_path / "CSC_OJM_A065FOJMAAA.tar.md5"
         fake_csc.write_bytes(b"fakedata")
         monkeypatch.setenv("CSC_TAR", str(fake_csc))
-        monkeypatch.setattr(core, "_find_odin4", lambda: str(fake_odin4))
         monkeypatch.setattr(core, "_find_slot_tar", lambda pre: str(fake_csc))
         monkeypatch.setattr(core, "_download_mode_device",
                             lambda: {"pid": 0x685d, "bus": 1, "address": 2})
@@ -243,7 +239,6 @@ class TestScreenLockCscAdbFirst:
             core.bridge, "adb_shell",
             lambda cmd, timeout=30: calls["adb_shell"].append(cmd) or "ok",
         )
-        monkeypatch.setattr(core, "_find_odin4", lambda: "/nope")
         monkeypatch.setattr(core, "_find_slot_tar", lambda pre: "")
         monkeypatch.setattr(core, "_download_mode_device", lambda: None)
         monkeypatch.setattr(_pit, "parse_pit", lambda raw: [])
