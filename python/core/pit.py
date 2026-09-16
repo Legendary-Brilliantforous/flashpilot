@@ -557,6 +557,26 @@ def _validate_pit_local(raw: bytes):
         else:
             seen_ids[e.identifier] = e.name
 
+    # Consistency: duplicate partition NAMES (parity with the Rust engine:
+    # a PIT-mapped flash would write two images onto one partition) and
+    # zero-size flashable entries (a flash that silently writes nothing).
+    seen_names = {}
+    zero_size = []
+    for e in flashable:
+        if e.name in seen_names:
+            add("fail", "DUPLICATE_NAME",
+                f"PIT entries {seen_names[e.name]} and {e.index} both claim "
+                f"partition name '{e.name}' - a flash would write both images "
+                "to one partition")
+        else:
+            seen_names[e.name] = e.index
+        if e.block_count == 0:
+            zero_size.append(e.name)
+    if zero_size:
+        add("warn", "ZERO_SIZE_FLASHABLE",
+            "Flashable partition(s) with zero block count: "
+            f"{', '.join(zero_size)} - flashing them is a no-op")
+
     sig = significant_overlaps(flashable)
     for a, b, blocks in sig[:8]:
         add("fail", "OVERLAP",
