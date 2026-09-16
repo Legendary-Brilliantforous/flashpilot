@@ -22,6 +22,9 @@
 //!    We always set boot_update for bootloader/firmware partitions.
 //! 10. EndSequence -5 while the device validates async md5hdr. We retry
 //!     with exponential backoff instead of failing.
+//! 11. ZLP (zero-length packet) expectations changed across successive
+//!     firmware releases. We send the explicit ZLP odin4 sent with the
+//!     EndSequence empty transfer, keeping packet-boundary semantics exact.
 //!
 //! Naming: module file is sam_download.rs (Rust forbids dashes in module
 //! names); the protocol and CLI names keep the odin-* prefixes for
@@ -1952,6 +1955,62 @@ pub fn odin_flash_tar(
         .dump_pit()
         .map_err(|e| format!("PIT dump failed: {e}"))?;
     eprintln!("[flash] device PIT dumped ({} bytes)", pit.len());
+
+    // Deeper preflight (before any write): the firmware archive name carries
+    // the model (AP_A145M_...); the device PIT header carries the internal
+    // model string. A mismatch means wrong-model firmware - the #1 brick
+    // cause - so refuse before touching a partition.
+    {
+        let pit_model = crate::pit::parse_header(&pit).model;
+        let archive_base = std::path::Path::new(tar_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let archive_model: String = archive_base
+            .split(['_', '-'])
+            .find_map(|tok| {
+                if tok.len() >= 6 && tok.starts_with("SM") && tok[2..].chars().all(|c| c.is_ascii_alphanumeric()) {
+                    Some(tok.to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                // Combination firmware: COMBINATION_A065F_U1_...
+                archive_base.split('_').find_map(|tok| {
+                    if tok.len() >= 5
+                        && tok.starts_with('A')
+                        && tok[1..].chars().take(3).all(|c| c.is_ascii_digit())
+                    {
+                        Some(tok.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+        if !pit_model.is_empty() && !archive_model.is_empty() {
+            // The PIT model is often the internal codename (A145M...); the
+            // archive token is the marketing model (SM-A145M). Compare the
+            // numeric core so the SM- prefix never causes a false refusal.
+            let strip = |s: &str| s.trim_start_matches("SM-").to_string();
+            let pm = strip(&pit_model);
+            let am = strip(&archive_model);
+            let pm_core: String = pm.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let am_core: String = am.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let models_match = pm_core.starts_with(&am_core) || am_core.starts_with(&pm_core);
+            if !models_match {
+                let _ = std::fs::remove_dir_all(&workdir);
+                return Err(format!(
+                    "Model mismatch: the firmware archive says '{archive_model}' but the device PIT says '{pit_model}'.                      Refusing to flash - a firmware must only be used on its matching model."
+                )
+                .into());
+            }
+            eprintln!("[flash] preflight model check OK (archive={archive_model}, pit={pit_model})");
+        } else {
+            eprintln!("[flash] preflight model check skipped (archive or PIT model unknown)");
+        }
+    }
 
     // 3. Map members to PIT partitions (odin4 ordering: BL, AP, CP, CSC,
     //    then USERDATA; up_param last - its commit poisons the next write).

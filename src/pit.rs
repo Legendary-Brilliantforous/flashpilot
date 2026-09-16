@@ -458,7 +458,30 @@ pub fn validate_pit(raw: &[u8]) -> Health {
         .filter(|e| is_flashable_name(&e.name))
         .collect();
     let mut seen_ids: HashMap<u32, String> = HashMap::new();
+    // Consistency: duplicate partition NAMES (two entries claiming the same
+    // name makes a PIT-mapped flash land both images on one partition) and
+    // zero-size flashable entries (a flash that would silently write nothing).
+    let mut seen_names: HashMap<&str, usize> = HashMap::new();
+    let mut zero_size: Vec<String> = Vec::new();
     for e in &flashable {
+        match seen_names.get(e.name.as_str()) {
+            Some(first) => add(
+                "fail",
+                "DUPLICATE_NAME",
+                format!(
+                    "PIT entries {} and {} both claim partition name '{}' - a flash would write both images to one partition",
+                    first,
+                    e.index,
+                    e.name
+                ),
+            ),
+            None => {
+                seen_names.insert(e.name.as_str(), e.index);
+            }
+        }
+        if e.block_count == 0 {
+            zero_size.push(e.name.clone());
+        }
         if e.name.trim().is_empty() {
             add(
                 "fail",
@@ -500,6 +523,16 @@ pub fn validate_pit(raw: &[u8]) -> Health {
         }
     }
     let flash_owned: Vec<PitEntry> = flashable.into_iter().cloned().collect();
+    if !zero_size.is_empty() {
+        add(
+            "warn",
+            "ZERO_SIZE_FLASHABLE",
+            format!(
+                "Flashable partition(s) with zero block count: {} - flashing them is a no-op",
+                zero_size.join(", ")
+            ),
+        );
+    }
     let sig = significant_overlaps(&flash_owned);
     for (a, b, blocks) in sig.iter().take(8) {
         add(
@@ -762,4 +795,42 @@ mod tests {
         // U+FFFD is printable per CPython str.isprintable: stays raw.
         assert_eq!(py_repr("\u{fffd}\u{fffd}AB"), "'\u{fffd}\u{fffd}AB'");
     }
+    /// Consistency: duplicate partition names are a FAIL (a PIT-mapped flash
+    /// would write two images onto one partition).
+    #[test]
+    fn duplicate_partition_names_fail() {
+        let mut pit = vec![0u8; 28];
+        pit[0..4].copy_from_slice(&super::PIT_MAGIC.to_le_bytes());
+        pit[4..8].copy_from_slice(&2u32.to_le_bytes());
+        for i in 0..2 {
+            let mut e = vec![0u8; super::ENTRY_SIZE];
+            e[0..4].copy_from_slice(&1u32.to_le_bytes());
+            e[8..12].copy_from_slice(&(i as u32).to_le_bytes());
+            e[20..24].copy_from_slice(&512u32.to_le_bytes());
+            e[24..28].copy_from_slice(&8u32.to_le_bytes());
+            e[36..36 + 4].copy_from_slice(b"boot");
+            pit.extend_from_slice(&e);
+        }
+        let h = health(&pit);
+        assert!(h.findings.iter().any(|f| f.code == "DUPLICATE_NAME"), "{:?}", h.findings.iter().map(|f| f.code.clone()).collect::<Vec<_>>());
+    }
+
+    /// Consistency: zero-size flashable entries are a WARN (flashing them
+    /// would silently write nothing).
+    #[test]
+    fn zero_size_flashable_warns() {
+        let mut pit = vec![0u8; 28];
+        pit[0..4].copy_from_slice(&super::PIT_MAGIC.to_le_bytes());
+        pit[4..8].copy_from_slice(&1u32.to_le_bytes());
+        let mut e = vec![0u8; super::ENTRY_SIZE];
+        e[0..4].copy_from_slice(&1u32.to_le_bytes());
+        e[8..12].copy_from_slice(&0u32.to_le_bytes());
+        e[20..24].copy_from_slice(&512u32.to_le_bytes());
+        e[24..28].copy_from_slice(&0u32.to_le_bytes());
+        e[36..36 + 4].copy_from_slice(b"boot");
+        pit.extend_from_slice(&e);
+        let h = health(&pit);
+        assert!(h.findings.iter().any(|f| f.code == "ZERO_SIZE_FLASHABLE"));
+    }
+
 }

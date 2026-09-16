@@ -13,6 +13,8 @@ mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
 mod sam_download;
+mod sam_errors;
+mod sam_setup;
 mod qualcomm;
 mod spd;
 mod fastboot;
@@ -35,6 +37,7 @@ fn main() {
         eprintln!("commands:");
         eprintln!("  detect                 list USB devices (all + Samsung filter)");
         eprintln!("  detect-merged          filter phones + merge USB/ADB into unified rows");
+        eprintln!("  setup-check            diagnose udev rules / permissions / ModemManager / usbmuxd setup");
         eprintln!("  hid-list               list HID interfaces on Samsung devices");
         eprintln!("  hid-open <path> <out>  send hex bytes <out> to HID report, print response hex");
         eprintln!("  bulk-list              list bulk endpoints on Samsung devices");
@@ -1044,6 +1047,10 @@ fn main() {
             }
             sam_download::odin_send_pit(&args[2], &args[3])
         }
+        "setup-check" => {
+            let with_apple = args.iter().any(|a| a == "--apple");
+            sam_setup::setup_check(with_apple)
+        }
         "apple-detect" => apple::apple_detect_cli(),
         "apple-info" => apple::apple_info_cli(),
         "detect-merged" => {
@@ -1095,6 +1102,12 @@ fn main() {
         Ok(out) => println!("{out}"),
         Err(e) => {
             eprintln!("error: {e}");
+            // Actionable explanation: convert raw protocol/USB errors into
+            // (why, fix) pairs so users know what to do next.
+            let hint = sam_errors::render(&e.to_string());
+            if !hint.is_empty() {
+                eprintln!("{hint}");
+            }
             exit(1);
         }
     }

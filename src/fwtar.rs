@@ -250,15 +250,33 @@ pub fn prepare_archive(tar_path: &str, out_dir: &Path) -> Result<Vec<(String, Pa
         tar_path.to_string()
     };
     let paths = extract_tar(&work, out_dir)?;
+    // Parallel member preparation: every member is decompressed (LZ4/zstd)
+    // and sparse-expanded independently - preparing them on threads gives
+    // the same result in a fraction of the wall time on multi-core hosts
+    // (Samsung super.img members are multi-GB each).
+    let results: Vec<std::result::Result<(String, PathBuf), BridgeError>> =
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = paths
+                .iter()
+                .map(|p| {
+                    let p = p.clone();
+                    scope.spawn(move || {
+                        let name = p
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let prepared = prepare_member(&p)?;
+                        Ok((name, prepared))
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
     let mut staged = Vec::new();
-    for p in paths {
-        let name = p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-        let prepared = prepare_member(&p)?;
-        staged.push((name, prepared));
+    // Preserve tar order: results are collected in spawn order.
+    for r in results {
+        staged.push(r?);
     }
     Ok(staged)
 }
@@ -315,6 +333,34 @@ mod tests {
         // but keep the trailer intact (last 66 bytes untouched)
         fs::write(&p, &data).unwrap();
         assert!(verify_md5_trailer(&p).is_err());
+    }
+
+    #[test]
+    fn prepare_archive_stages_plain_tar_in_order() {
+        // Exercises the parallel member-preparation path end-to-end with a
+        // multi-member plain tar: staging must preserve tar order.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut b = tar::Builder::new(Vec::new());
+        for (i, name) in ["boot.img", "recovery.img", "vbmeta.img"].iter().enumerate() {
+            let body = vec![b'A' + i as u8; 1024];
+            let mut h = tar::Header::new_ustar();
+            h.set_path(name).unwrap();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append(&h, body.as_slice()).unwrap();
+        }
+        let tar_bytes = b.into_inner().unwrap();
+        let path = tmp.path().join("fw.tar");
+        fs::write(&path, &tar_bytes).unwrap();
+        let out_dir = tmp.path().join("stage");
+        let staged = prepare_archive(&path.to_string_lossy(), &out_dir).unwrap();
+        let names: Vec<&str> = staged.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["boot.img", "recovery.img", "vbmeta.img"]);
+        for (name, p) in &staged {
+            assert!(p.exists(), "{name} not staged");
+            assert_eq!(fs::metadata(p).unwrap().len(), 1024);
+        }
     }
 
     #[test]
