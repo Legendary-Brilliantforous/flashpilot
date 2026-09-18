@@ -889,8 +889,21 @@ fn open_session(t: &AdbTarget, deadline: Instant) -> Result<Session> {
         })?;
     let _ = dev.set_auto_detach_kernel_driver(true);
     dev.claim_interface(iface).map_err(|e| match e {
-        BridgeError::Usb(UsbError::TransferFailed(_)) => {
-            BridgeError::Usb(UsbError::PermissionDenied)
+        BridgeError::Usb(UsbError::TransferFailed(msg)) => {
+            // Distinguish the claim failure classes - a blanket "no
+            // permissions" mis-mapping hid the real cause: the system adb
+            // server (or another process) holding the interface claimed
+            // ("Resource busy"), which is NOT a permissions problem.
+            let lower = msg.to_lowercase();
+            if lower.contains("busy") {
+                BridgeError::Usb(UsbError::TransferFailed(format!(
+                    "claim_interface: Resource busy - the system adb server (or another process) is holding this interface"
+                )))
+            } else if lower.contains("permission") || lower.contains("access") {
+                BridgeError::Usb(UsbError::PermissionDenied)
+            } else {
+                BridgeError::Usb(UsbError::TransferFailed(msg))
+            }
         }
         other => other,
     })?;
@@ -942,6 +955,18 @@ pub fn devices_json() -> Result<String> {
             }
             Err(BridgeError::Usb(UsbError::PermissionDenied)) => {
                 lines.push(format!("{}\tno permissions transport:usb", t.serial));
+            }
+            Err(BridgeError::Usb(UsbError::TransferFailed(msg))) => {
+                // "Resource busy" (the system adb server or another process
+                // holds the interface) is a real device state, not a gone
+                // device - surface it honestly instead of skipping.
+                if msg.to_lowercase().contains("busy") {
+                    lines.push(format!(
+                        "{}\tbusy (system adb server holds this interface) transport:usb",
+                        t.serial
+                    ));
+                }
+                // Other transfer failures: transient GONE - skip like adb does.
             }
             Err(_) => {} // transient GONE device — skip like adb does
         }

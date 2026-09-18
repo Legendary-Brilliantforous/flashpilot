@@ -1048,6 +1048,13 @@ fn main() {
             }
             sam_download::odin_send_pit(&args[2], &args[3])
         }
+        "usb-reset" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge usb-reset <vid:pid@bus:addr>");
+                exit(2);
+            }
+            usb::usb_reset(&args[2])
+        }
         "emmc-host" => hostinfo::emmc_host_cli(),
         "setup-check" => {
             let with_apple = args.iter().any(|a| a == "--apple");

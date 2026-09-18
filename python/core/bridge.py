@@ -707,15 +707,77 @@ def vbmeta_patch(in_img, out_img, flags=0x03, timeout=60):
     )
 
 
+def _free_adb_interface(err_str: str) -> bool:
+    """When the native ADB claim fails with "Resource busy", the system adb
+    server (or another process) is holding the phone's interface - our
+    native bridge cannot coexist with an exclusive claim. Kill the system
+    adb server (a HOST-side op, not device I/O) so the native transport can
+    claim it. Returns True when a kill was attempted."""
+    import subprocess as _sp
+    low = (err_str or "").lower()
+    if "busy" not in low:
+        return False
+    try:
+        _sp.run(["adb", "kill-server"], capture_output=True, timeout=10)
+        # The dying adb process releases its usbfs claim asynchronously -
+        # a retry issued instantly hits "Input/Output Error" (the kernel
+        # hasn't finished teardown). Let it settle first.
+        import time as _t
+        _t.sleep(1.5)
+        # USB-reset the device so the kernel state is clean (the dying adb
+        # server leaves usbfs wedged - EIO on claim). The phone
+        # re-enumerates; the serial-pinned retry re-resolves the new address.
+        try:
+            devs = json.loads(_run(["detect-all"], timeout=15))
+            for d in devs:
+                if not isinstance(d, dict):
+                    continue
+                vid = d.get("vid", 0)
+                if vid in (0x0e8d, 0x04e8, 0x18d1, 0x05c6, 0x1782):
+                    tgt = f"{vid:04x}:{d.get('pid', 0):04x}@{d.get('bus')}:{d.get('address')}"
+                    try:
+                        _run(["usb-reset", tgt], timeout=15)
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
+        _t.sleep(2.0)
+        return True
+    except Exception:
+        return False
+
+
 def adb_devices():
-    return json.loads(_run(["adb-devices"]))
+    """Native `adb-devices` row list, with the busy-holder rescue: when the
+    system adb server holds the interface, kill it and retry once."""
+    try:
+        return json.loads(_run(["adb-devices"]))
+    except BridgeError as e:
+        if _free_adb_interface(str(e)):
+            return json.loads(_run(["adb-devices"]))
+        raise
 
 
 def adb_status():
     """Parsed `adb devices -l`: list of {serial, state, extra}.
     state is 'device' (authorized), 'unauthorized', 'offline', 'recovery', ..."""
+    import time as _t
     devs = []
-    for line in adb_devices():
+    lines = None
+    for attempt in range(3):
+        try:
+            lines = adb_devices()
+            break
+        except BridgeError as e:
+            if attempt == 2:
+                if _free_adb_interface(str(e)):
+                    lines = adb_devices()
+                else:
+                    raise
+            else:
+                _t.sleep(1.5)
+    for line in (lines or []):
         parts = line.split(None, 2)
         if len(parts) < 2:
             continue
@@ -770,8 +832,36 @@ def adb_shell(cmd, timeout=20, serial=None):
     multi-device ADB safe; previously the system binary picked (or
     errored on) whatever was plugged in."""
     ser = _resolve_adb_serial(serial)
-    return _run(["adb-shell", ser, str(int(timeout * 1000)), cmd],
-                timeout=timeout + 10)
+    last = None
+    rescued = False
+    for attempt in range(4):
+        try:
+            return _run(["adb-shell", ser, str(int(timeout * 1000)), cmd],
+                        timeout=timeout + 10)
+        except BridgeError as e:
+            last = e
+            err_l = str(e).lower()
+            transient = any(k in err_l for k in (
+                "busy", "timed out", "timeout", "input/output error",
+                "io error", "no device", "device not found", "pipe", "stall",
+            ))
+            if not transient:
+                raise
+            # Rescue 1 (once): "Resource busy" = the system adb server holds
+            # the interface - kill it (host-side) so the native transport
+            # can claim; the usb-reset unwedges the kernel state.
+            if not rescued and _free_adb_interface(str(e)):
+                rescued = True
+                import time as _t
+                _t.sleep(1.0)
+                continue
+            # Transient backoff: right after enumeration the phone's adbd
+            # has not re-attached to the USB function yet (EIO on the first
+            # bulk) - the system adb server survives this because it polls;
+            # we retry with backoff for the same effect.
+            import time as _t
+            _t.sleep(2.0 * (attempt + 1))
+    raise last
 
 
 def adb_pull(serial, remote, local, timeout=300):

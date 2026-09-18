@@ -607,6 +607,25 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
     Ok(serde_json::json!({"status": "configuration set", "config": config_idx}).to_string())
 }
 
+/// USB-level port reset (USBDEVFS_RESET): forces the device to
+/// re-enumerate without touching the cable - the reliable way to unwedge
+/// a device whose usbfs state went bad (EIO on claim after another
+/// process died holding the interface).
+pub fn usb_reset(target: &str) -> Result<String> {
+    let (bus, address) = parse_target(target)?;
+    let context = rusb::Context::new()?;
+    let device = context
+        .devices()?
+        .iter()
+        .find(|d| d.bus_number() == bus && d.address() == address)
+        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+    let handle = device.open()?;
+    handle
+        .reset()
+        .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(format!("usb reset: {e}"))))?;
+    Ok(serde_json::json!({"status": "usb reset sent", "target": target}).to_string())
+}
+
 /// Detach kernel drivers from all interfaces of a device
 pub fn detach_kernel_drivers(target: &str) -> Result<String> {
     let (bus, address) = parse_target(target)?;

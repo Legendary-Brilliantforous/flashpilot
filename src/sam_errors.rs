@@ -20,10 +20,18 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
 
     // ---- USB transport classes ----
     if lower.contains("resource busy") || lower.contains("claim iface") {
-        return Some(Explanation {
-            why: "Another driver (cdc_acm, ModemManager) or process is holding the phone's USB port, so FlashPilot cannot claim it.".into(),
-            fix: "Replug the phone; if it persists run `sudo systemctl stop ModemManager`, then retry. The latest .deb installs udev rules that keep ModemManager away.".into(),
-        });
+        let adb_holder = lower.contains("adb server") || lower.contains("adb");
+        let why = if adb_holder {
+            "The system adb server (running from your adb command or another tool) is holding the phone's ADB interface claimed - FlashPilot's native ADB cannot coexist with an exclusive claim.".to_string()
+        } else {
+            "Another driver (cdc_acm, ModemManager) or process is holding the phone's USB port, so FlashPilot cannot claim it.".to_string()
+        };
+        let fix = if adb_holder {
+            "FlashPilot kills the system adb server automatically and retries (`adb kill-server` is a host-side operation - your phone stays connected). If it persists, replug and retry.".to_string()
+        } else {
+            "Replug the phone; if it persists run `sudo systemctl stop ModemManager`, then retry. The latest .deb installs udev rules that keep ModemManager away.".to_string()
+        };
+        return Some(Explanation { why, fix });
     }
     if lower.contains("bulk read: operation timed out") || lower.contains("bulk write: operation timed out") || lower.contains("timed out") {
         return Some(Explanation {
