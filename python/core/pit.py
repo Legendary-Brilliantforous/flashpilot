@@ -251,35 +251,15 @@ def parse_model(raw: bytes):
     return parse_header(raw)[0]
 
 
-def _parse_pit_local(raw: bytes):
-    """Pure-Python parse (fallback + unit-test path)."""
-    if len(raw) < HEADER_SIZE:
-        raise ValueError("PIT too short")
-    magic = struct.unpack_from("<I", raw, HDR_MAGIC_OFF)[0]
-    if magic != PIT_MAGIC:
-        raise ValueError(f"bad PIT magic: {magic:#x}")
-    count = struct.unpack_from("<I", raw, HDR_COUNT_OFF)[0]
-    entries = []
-    for i in range(count):
-        off = HEADER_SIZE + i * ENTRY_SIZE
-        if off + ENTRY_SIZE > len(raw):
-            break
-        entry = PitEntry(raw[off : off + ENTRY_SIZE], i)
-        if entry.is_flashable():
-            entries.append(entry)
-    return entries
-
-
 def parse_pit(raw: bytes):
     """Parse flashable entries via the native engine (local fallback when
     the bridge binary is absent). Raises ValueError on bad magic/short
     input, like before."""
+    # Rust-only: no Python fallback - a missing bridge raises (BinaryNotFound).
     try:
         with _pit_tmp(raw) as path:
             doc = bridge.pit_parse(path)
         return [PitEntry.from_dict(e) for e in doc["entries"]]
-    except bridge.BinaryNotFoundError:
-        return _parse_pit_local(raw)
     except bridge.BridgeError as e:
         raise ValueError(str(e))
 
@@ -360,11 +340,7 @@ def find_partition(entries_or_raw, name: str):
             pass
         except bridge.BridgeError:
             return None
-        try:
-            entries = _parse_pit_local(raw)
-        except ValueError:
-            return None
-        return _find_in(entries, name)
+        return None
     return _find_in(entries_or_raw, name)
 
 
@@ -479,152 +455,35 @@ def validate_pit(raw: bytes):
     odin4 rejects devices/archives on the FAIL-level findings; FlashPilot
     surfaces them before anything is written instead of after.
 
-    Computed by the native engine; never raises (falls back locally on any
-    bridge failure, matching the old contract).
+    Computed by the native engine; a bridge failure surfaces as an unknown
+    verdict (error path - not a Python re-implementation).
     """
     try:
         with _pit_tmp(raw) as path:
             d = bridge.pit_health(path)
         d.pop("summary", None)
         return d
-    except bridge.BridgeError:
-        return _validate_pit_local(raw)
-
-
-def _validate_pit_local(raw: bytes):
-    findings = []
-
-    def add(sev, code, msg):
-        findings.append({"severity": sev, "code": code, "message": msg})
-
-    stats = {"declared_count": 0, "parsed_count": 0, "model": "",
-             "style": "unknown", "total_bytes": 0}
-
-    if len(raw) < HEADER_SIZE:
-        add("fail", "PIT_TOO_SHORT", f"PIT too small ({len(raw)} bytes)")
-        return _health_result(findings, stats)
-    magic = struct.unpack_from("<I", raw, HDR_MAGIC_OFF)[0]
-    if magic != PIT_MAGIC:
-        add("fail", "BAD_MAGIC", f"PIT file identifier mismatch: 0x{magic:08x}")
-        return _health_result(findings, stats)
-
-    model, unknown, project, reserved = parse_header(raw)
-    declared = struct.unpack_from("<I", raw, HDR_COUNT_OFF)[0]
-    stats["declared_count"] = declared
-    stats["model"] = model
-
-    if declared == 0:
-        add("warn", "NO_ENTRIES", "PIT declares zero entries")
-    elif declared > MAX_SANE_ENTRIES:
-        add("fail", "COUNT_INSANE",
-            f"Invalid PIT entry count: {declared} (>{MAX_SANE_ENTRIES})")
-
-    # Truncation check (odin4: "PIT truncated: expected at least N bytes")
-    needed = HEADER_SIZE + declared * ENTRY_SIZE
-    if len(raw) < needed:
-        add("fail", "TRUNCATED",
-            f"PIT truncated: expected at least {needed} bytes, got {len(raw)}")
-
-    try:
-        all_entries = []
-        for i in range(min(declared, MAX_SANE_ENTRIES)):
-            off = HEADER_SIZE + i * ENTRY_SIZE
-            if off + ENTRY_SIZE > len(raw):
-                break
-            all_entries.append(PitEntry(raw[off : off + ENTRY_SIZE], i))
-    except Exception as e:  # pragma: no cover - defensive
-        add("fail", "PARSE_ERROR", f"PIT parse error: {e}")
-        return _health_result(findings, stats)
-
-    stats["parsed_count"] = len(all_entries)
-    flashable = [e for e in all_entries if e.is_flashable()]
-
-    seen_ids = {}
-    for e in flashable:
-        if not e.name.strip():
-            add("fail", "EMPTY_NAME",
-                f"PIT entry {e.index} has an empty partition name")
-        elif _clean_str_at(raw, HEADER_SIZE + e.index * ENTRY_SIZE + NAME_OFF) != e.name:
-            add("fail", "INVALID_NAME",
-                f"PIT entry {e.index} has an invalid partition name: {e.name!r}")
-        if e.identifier == 0:
-            add("fail", "IDENTIFIER_ZERO",
-                f"PIT entry '{e.name}' has an invalid identifier (0)")
-        if e.identifier in seen_ids:
-            add("fail", "DUPLICATE_IDENTIFIER",
-                f"PIT contains duplicate partition identifier "
-                f"{e.identifier}: '{seen_ids[e.identifier]}' and '{e.name}'")
-        else:
-            seen_ids[e.identifier] = e.name
-
-    # Consistency: duplicate partition NAMES (parity with the Rust engine:
-    # a PIT-mapped flash would write two images onto one partition) and
-    # zero-size flashable entries (a flash that silently writes nothing).
-    seen_names = {}
-    zero_size = []
-    for e in flashable:
-        if e.name in seen_names:
-            add("fail", "DUPLICATE_NAME",
-                f"PIT entries {seen_names[e.name]} and {e.index} both claim "
-                f"partition name '{e.name}' - a flash would write both images "
-                "to one partition")
-        else:
-            seen_names[e.name] = e.index
-        if e.block_count == 0:
-            zero_size.append(e.name)
-    if zero_size:
-        add("warn", "ZERO_SIZE_FLASHABLE",
-            "Flashable partition(s) with zero block count: "
-            f"{', '.join(zero_size)} - flashing them is a no-op")
-
-    sig = significant_overlaps(flashable)
-    for a, b, blocks in sig[:8]:
-        add("fail", "OVERLAP",
-            f"partitions '{a}' and '{b}' overlap by {blocks} blocks "
-            f"({blocks * SECTOR_SIZE} bytes) - corrupt or foreign table")
-
-    meta_pairs = [p for p in find_overlaps(flashable)
-                  if p not in {(x[0], x[1], x[2]) for x in sig}]
-    for a, b, blocks in meta_pairs[:4]:
-        add("info", "META_CONTAINMENT",
-            f"'{b}' is contained in '{a}' ({blocks} blocks) - normal for "
-            f"platform tables")
-
-    stats["total_bytes"] = sum(e.block_count for e in flashable) * SECTOR_SIZE
-    stats["style"] = pit_style(raw)
-    return _health_result(findings, stats)
-
-
-def _health_result(findings, stats):
-    verdict = "ok"
-    if any(f["severity"] == "fail" for f in findings):
-        verdict = "fail"
-    elif any(f["severity"] == "warn" for f in findings):
-        verdict = "warn"
-    return {"verdict": verdict, "findings": findings, "stats": stats}
-
-
-def _pit_health_local(raw: bytes):
-    """Pure-Python health (fallback + unit-test path)."""
-    result = _validate_pit_local(raw)
-    stats = result["stats"]
-    result["summary"] = (
-        f"PIT {result['verdict'].upper()}: {stats['parsed_count']}/"
-        f"{stats['declared_count']} entries, style={stats['style']}, "
-        f"{human_size(stats['total_bytes'])} accounted"
-        + (f", model={stats['model']}" if stats["model"] else "")
-    )
-    return result
+    except Exception as e:
+        return {"verdict": "unknown", "findings": [], "stats": {},
+                "error": str(e)}
 
 
 def pit_health(raw: bytes):
     """One-call health check used by flows/GUI: verdict + style + summary.
     Computed by the native engine (local fallback, never raises)."""
+    # Rust-only: the typed PIT validator + consistency checks live in the
+    # bridge. No Python fallback; a bridge failure surfaces as an unknown
+    # verdict (error path - not a Python re-implementation).
     try:
         with _pit_tmp(raw) as path:
             return bridge.pit_health(path)
-    except bridge.BridgeError:
-        return _pit_health_local(raw)
+    except Exception as e:
+        return {
+            "verdict": "unknown",
+            "summary": f"PIT health unavailable: {e}",
+            "findings": [],
+            "stats": {},
+        }
 
 
 def pit_style(raw):
@@ -641,18 +500,8 @@ def pit_style(raw):
         with _pit_tmp(raw) as path:
             doc = bridge.pit_parse(path)
         return doc["style"]
-    except bridge.BinaryNotFoundError:
-        pass
     except bridge.BridgeError as e:
         raise ValueError(str(e))
-    prev = None
-    for e in _parse_pit_local(raw):
-        if e.block_size == 0 and e.block_count == 0:
-            continue
-        if prev is not None and e.block_size != prev:
-            return "new"
-        prev = e.block_size
-    return "old"
 
 
 def pit_map(raw: bytes, width: int = 46):

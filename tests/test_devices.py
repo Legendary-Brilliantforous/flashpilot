@@ -59,58 +59,6 @@ class TestDeviceScope:
         assert devices.current_key() is None
 
 
-class TestListDevices:
-    def test_usb_adb_merge_and_standalone(self, monkeypatch):
-        from python.core import bridge
-
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(
-            bridge, "detect_all",
-            lambda: [_usb(serial="R9X", ports="1-2"),
-                     _usb(pid=0x685D, serial="", ports="1-3",
-                          interfaces=[{"class": 10, "subclass": 0, "protocol": 0}])],
-        )
-        monkeypatch.setattr(
-            bridge, "adb_status",
-            lambda: [{"serial": "R9X", "state": "device", "extra": ""},
-                     {"serial": "EMUL", "state": "device", "extra": ""}],
-        )
-        rows = devices.list_devices()
-        by_key = {r["key"]: r for r in rows}
-        assert "adb:R9X" in by_key  # merged USB+ADB row
-        assert by_key["adb:R9X"]["adb"]["state"] == "device"
-        assert "ADB" in by_key["adb:R9X"]["transports"]
-        assert "adb:EMUL" in by_key  # standalone ADB row
-        assert "usb:1-3" in by_key  # serial-less USB row
-
-    def test_candidates_for_modes(self, monkeypatch):
-        from python.core import bridge
-
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(
-            bridge, "detect_all",
-            lambda: [_usb(serial="R9X", ports="1-2"),
-                     _usb(vid=0x0E8D, pid=0x0003, bus=1, address=2,
-                          serial="", ports="1-4", product="MediaTek USB Port")],
-        )
-        monkeypatch.setattr(bridge, "adb_status", lambda: [])
-        got = devices.candidates_for_modes({"MTK BROM"})
-        assert [r["key"] for r in got] == ["usb:1-4"]
-
-    def test_resolve_usb_target_follows_reenumeration(self, monkeypatch):
-        from python.core import bridge
-
-        state = {"addr": 7}
-        monkeypatch.setattr(
-            bridge, "detect_all",
-            lambda: [_usb(bus=2, address=state["addr"], ports="1-2")],
-        )
-        assert devices.resolve_usb_target("usb:1-2") == "04e8:6860@2:7"
-        state["addr"] = 13  # phone re-enumerated
-        assert devices.resolve_usb_target("usb:1-2") == "04e8:6860@2:13"
-        assert devices.resolve_usb_target("usb:9-9") is None
-
 
 class TestKeyedResolvers:
     def test_find_samsung_picks_keyed_device(self, monkeypatch):
@@ -203,66 +151,6 @@ class TestScopedCancel:
         assert _flow.cancel_requested(key="adb:A") is False
 
 
-class TestPhoneFilter:
-    """list_devices() must show phones only — never hubs, HID, webcams or
-    card readers (regression: one plugged-in modem showed as ~10 devices)."""
-
-    def _peripheral(self, vid, pid, ports, cls, serial=""):
-        return {"vid": vid, "pid": pid, "bus": 1, "address": 2,
-                "product": "p", "manufacturer": "m", "serial": serial,
-                "port_numbers": ports,
-                "interfaces": [{"class": cls, "subclass": 0, "protocol": 0}]}
-
-    def test_peripherals_excluded(self, monkeypatch):
-        from python.core import bridge
-
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(bridge, "detect_all", lambda: [
-            self._peripheral(0x1D6B, 0x0002, "1", 9),          # hub
-            self._peripheral(0x0461, 0x0010, "1-4", 3),        # keyboard (HID)
-            self._peripheral(0x1BCF, 0x2802, "1-5", 14),       # webcam (video)
-            self._peripheral(0x0A5C, 0x5800, "1-6", 11, serial="0123456789ABCD"),  # card reader
-        ])
-        monkeypatch.setattr(bridge, "adb_status", lambda: [])
-        assert devices.list_devices() == []
-
-    def test_known_vendor_vids_included(self, monkeypatch):
-        from python.core import bridge
-
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(bridge, "detect_all", lambda: [
-            {"vid": v, "pid": 0x0001, "bus": 1, "address": 2, "serial": "",
-             "port_numbers": f"9-{i}", "interfaces": []}
-            for i, v in enumerate([0x04E8, 0x05C6, 0x0E8D, 0x1782, 0x18D1, 0x05AC])
-        ])
-        monkeypatch.setattr(bridge, "adb_status", lambda: [])
-        assert len(devices.list_devices()) == 6
-
-    def test_generic_android_heuristics(self, monkeypatch):
-        from python.core import bridge
-
-        adb_iface = [{"class": 255, "subclass": 66, "protocol": 1}]
-        mtp_iface = [{"class": 6, "subclass": 1, "protocol": 1}]
-        monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [])
-        monkeypatch.setattr(bridge, "detect_all", lambda: [
-            {"vid": 0x2717, "pid": 1, "bus": 1, "address": 2, "serial": "",
-             "port_numbers": "7-1", "interfaces": []},                       # generic VID (Xiaomi)
-            {"vid": 0x1234, "pid": 1, "bus": 1, "address": 3, "serial": "",
-             "port_numbers": "7-2", "interfaces": adb_iface},                # ADB gadget
-            {"vid": 0x1234, "pid": 2, "bus": 1, "address": 4, "serial": "",
-             "port_numbers": "7-3", "interfaces": mtp_iface},                # MTP iface
-            {"vid": 0x1234, "pid": 3, "bus": 1, "address": 5, "serial": "",
-             "port_numbers": "7-4", "product": "Redmi Note", "interfaces": []},  # name
-        ])
-        monkeypatch.setattr(bridge, "adb_status", lambda: [])
-        rows = devices.list_devices()
-        assert sorted(r["key"] for r in rows) == ["usb:7-1", "usb:7-2", "usb:7-3", "usb:7-4"]
-
-    def test_is_phone_unit(self):
-        assert devices.is_phone({"vid": 0x04E8, "interfaces": []}) is True
-        assert devices.is_phone({"vid": 0x1D6B, "interfaces": [{"class": 9}]}) is False
-        assert devices.is_phone("not-a-dict") is False
-
 
 class TestRustMergedRows:
     """Phase 2: list_devices() consumes Rust `detect-merged` rows and adapts
@@ -300,20 +188,15 @@ class TestRustMergedRows:
         assert rows[1]["usb"] is None
         assert rows[1]["adb"]["serial"] == "EMU1"
 
-    def test_falls_back_to_legacy_on_bridge_error(self, monkeypatch):
+    def test_bridge_error_propagates_no_fallback(self, monkeypatch):
         from python.core import bridge
 
         def boom(*a, **k):
             raise bridge.BridgeError("bridge gone")
 
         monkeypatch.setattr(bridge, "list_merged", boom)
-        monkeypatch.setattr(bridge, "detect_all", lambda: [
-            {"vid": 0x04E8, "pid": 1, "bus": 1, "address": 2, "serial": "",
-             "port_numbers": "9-1", "interfaces": []},
-        ])
-        monkeypatch.setattr(bridge, "adb_status", lambda: [])
-        rows = devices.list_devices()
-        assert [r["key"] for r in rows] == ["usb:9-1"]
+        with pytest.raises(bridge.BridgeError):
+            devices.list_devices()
 
     def test_malformed_rust_rows_dropped(self, monkeypatch):
         from python.core import bridge

@@ -523,15 +523,33 @@ class DeviceMonitor(QObject):
         self._stop.set()
 
     def _poll(self):
+        # Robustness: the poll loop must NEVER die. A stray non-BridgeError
+        # (an unexpected bridge JSON shape, an AttributeError in a helper)
+        # used to kill this thread silently - detection then stopped forever
+        # and the GUI showed a stale connection. Any exception is treated
+        # like a transient failure: counted on the same streak gate.
         while not self._stop.is_set():
             try:
                 usb = bridge.detect_all()
                 hid = bridge.list_samsung_hid()
-            except bridge.BridgeError as e:
+                self._poll_err_streak = 0
+            except Exception as e:
+                # Transient poll failure (USB timeout, our own probes
+                # contending the port, re-enumeration window): a single
+                # failure must NOT drop the connection display - that is
+                # the exact flap users see. Only after consecutive failed
+                # polls does the error state surface.
+                self._poll_err_streak = getattr(self, "_poll_err_streak", 0) + 1
+                if self._poll_err_streak < 2:
+                    self._stop.wait(self.interval)
+                    continue
                 self.state.emit({"error": str(e)})
-            else:
-                # ADB probe is lazy: only spawn `adb` when USB hints at ADB or previous poll saw ADB.
-                # This avoids `adb start-server` at every startup for MTP-only devices.
+                self._stop.wait(self.interval)
+                continue
+            try:
+                # ADB probe is lazy: only spawn `adb` when USB hints at ADB or
+                # previous poll saw ADB (avoids `adb start-server` at every
+                # startup for MTP-only devices).
                 samsung_pre = [d for d in usb if isinstance(d, dict) and d.get("is_samsung")]
                 has_usb_adb = any(_has_adb_iface(d) for d in usb)
                 # Also consider Samsung ADB composite PIDs that expose ADB without explicit iface
@@ -547,10 +565,19 @@ class DeviceMonitor(QObject):
                 if should_probe_adb:
                     try:
                         adb_devs = bridge.adb_status()
-                    except bridge.BridgeError:
-                        adb_devs = []
+                    except Exception:
+                        # Retain last-known ADB devices on a transient failure:
+                        # resetting to [] flips the mode display off/on every
+                        # time our own probes contend the adb server (the flap).
+                        # Only while USB still sees a device - a retained entry
+                        # for an unplugged phone would be a ghost row.
+                        if getattr(self, "_last_adb_devs", None) and usb:
+                            adb_devs = self._last_adb_devs
+                        else:
+                            adb_devs = []
                 else:
-                    adb_devs = []
+                    adb_devs = self._last_adb_devs if usb else []
+                self._last_adb_devs = adb_devs
                 samsung = samsung_pre
                 mtk_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == mtk.MTK_VID]
                 fastboot = [d for d in usb if isinstance(d, dict) and _is_fastboot(d)]
@@ -578,7 +605,14 @@ class DeviceMonitor(QObject):
                 if current_state != self._last_state:
                     self.state.emit(current_state)
                     self._last_state = current_state
+            except Exception:
+                # A stray error inside the success block (bad JSON shape, a
+                # helper crash) must not kill the poll loop: keep the last
+                # known state and treat it as transient.
+                self._poll_err_streak = getattr(self, "_poll_err_streak", 0) + 1
             self._stop.wait(self.interval)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -10263,6 +10297,14 @@ class FlashPilotWindow(QMainWindow):
     # ----------------------------- device state ---------------------------
     def _on_device_state(self, state):
         if "error" in state:
+            # Sticky connection: a scan error (even after consecutive failed
+            # polls) must not visually drop a device we saw connected moments
+            # ago - that is the exact flap users report. Keep the orb/scene
+            # lit and show re-scanning instead; the next good poll restores
+            # the exact state.
+            if getattr(self, "_last_conn", False) or getattr(self, "_device_connected", False):
+                self.conn_state.setText("Re-scanning USB ... (last scan failed)")
+                return
             self.badge.set_state(None)
             self.orb.set_connected(False)
             self.scene.set_connected(False)

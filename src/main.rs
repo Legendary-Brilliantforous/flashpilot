@@ -15,6 +15,7 @@ mod mtp;
 mod sam_download;
 mod sam_errors;
 mod sam_setup;
+mod hostinfo;
 mod qualcomm;
 mod spd;
 mod fastboot;
@@ -1047,6 +1048,7 @@ fn main() {
             }
             sam_download::odin_send_pit(&args[2], &args[3])
         }
+        "emmc-host" => hostinfo::emmc_host_cli(),
         "setup-check" => {
             let with_apple = args.iter().any(|a| a == "--apple");
             sam_setup::setup_check(with_apple)

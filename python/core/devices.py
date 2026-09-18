@@ -94,35 +94,6 @@ _PHONE_NAME_KEYWORDS = (
 )
 
 
-def is_phone(d):
-    """True if a USB device dict plausibly is a phone/tablet.
-
-    Hubs, HID keyboards/mice, webcams, smartcard readers (e.g. the Broadcom
-    BCM5880 with its bogus 0123456789ABCD serial) and similar peripherals
-    must never appear as device rows — otherwise one plugged-in modem shows
-    up as a dozen "devices".
-    """
-    if not isinstance(d, dict):
-        return False
-    vid = d.get("vid", 0)
-    if vid in KNOWN_PHONE_VIDS:
-        return True
-    ifaces = d.get("interfaces") or []
-    if any(isinstance(i, dict) and i.get("class") == 255
-           and i.get("subclass") == 66 for i in ifaces):
-        return True  # ADB gadget (255/66/*)
-    if any(isinstance(i, dict) and i.get("class") == 6 for i in ifaces):
-        return True  # MTP/PTP image interface
-    if vid in ANDROID_GENERIC_VIDS:
-        return True
-    prod = (d.get("product") or "").lower() if isinstance(d.get("product"), str) else ""
-    mfr = (d.get("manufacturer") or "").lower() if isinstance(d.get("manufacturer"), str) else ""
-    for kw in _PHONE_NAME_KEYWORDS:
-        if kw in prod or kw in mfr:
-            return True
-    return False
-
-
 def device_key(d):
     """Stable identity string for a USB device dict or ADB entry dict.
 
@@ -158,71 +129,6 @@ def match_key(d, key):
     if not key:
         return True
     return device_key(d) == key
-
-
-def _usb_transports(d, adb_serials):
-    """Job-mode transport names for one USB device dict."""
-    from . import mtp as _mtp
-
-    transports = []
-    vid = d.get("vid")
-    pid = d.get("pid")
-    if _mtp.is_adb_composite(d):
-        transports.append("ADB")
-    if vid == 0x04E8:
-        from .core import _ODIN_PIDS as _odin_pids
-
-        if pid == 0x685C:
-            transports.append("Samsung BROM")
-        elif pid in _odin_pids and not _mtp.is_adb_composite(d):
-            transports.append("Download mode")
-        elif pid == 0x6860 or not transports:
-            transports.append("MTP")
-        # A Samsung in any USB mode may also expose ADB via its serial.
-        serial = _norm_serial(d.get("serial"))
-        if serial and serial in adb_serials and "ADB" not in transports:
-            transports.append("ADB")
-    elif vid == 0x0E8D:
-        from . import mtk as _mtk
-
-        stage = _mtk.pid_stage(pid or 0)
-        if stage in ("brom", "preloader"):
-            transports.append("MTK BROM")
-        elif stage == "da":
-            transports.append("MTK")
-    elif vid == 0x05C6 and pid == 0x9008:
-        transports.append("EDL")
-    elif vid == 0x18D1:
-        transports.append("FASTBOOT")
-    elif vid == 0x1782:
-        transports.append("SPD")
-    if not transports:
-        transports.append("MTP")
-    # De-duplicate, preserve order.
-    seen = set()
-    out = []
-    for t in transports:
-        if t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-
-
-def _usb_label(d, adb_state_by_serial):
-    """Short human label: model/product + serial + pid."""
-    mfr = (d.get("manufacturer") or "").strip()
-    prod = (d.get("product") or "").strip()
-    serial = _norm_serial(d.get("serial"))
-    name = prod or mfr or "USB device"
-    bits = [name]
-    if serial:
-        state = adb_state_by_serial.get(serial, "")
-        bits.append(f"{serial}" + (f" [{state}]" if state else ""))
-    try:
-        bits.append(f"{int(d.get('vid') or 0):04x}:{int(d.get('pid') or 0):04x}")
-    except (TypeError, ValueError):
-        pass
-    return " · ".join(bits)
 
 
 def _merged_row_to_legacy(row):
@@ -267,84 +173,14 @@ def list_devices():
     """
     from . import bridge as _bridge
 
-    try:
-        merged = _bridge.list_merged()
-    except Exception:
-        merged = []
-    if isinstance(merged, list) and merged:
-        return [
-            _merged_row_to_legacy(r) for r in merged
-            if isinstance(r, dict) and r.get("key")
-        ]
-
-    return _list_devices_legacy()
-
-
-def _list_devices_legacy():
-    """Legacy Python filtering/merge (rollback path; Phase 3 removes this)."""
-    from . import bridge as _bridge
-
-    try:
-        usb_devs = _bridge.detect_all()
-    except _bridge.BridgeError:
-        usb_devs = []
-    if not isinstance(usb_devs, list):
-        usb_devs = []
-    try:
-        adb_devs = _bridge.adb_status()
-    except _bridge.BridgeError:
-        adb_devs = []
-    if not isinstance(adb_devs, list):
-        adb_devs = []
-
-    adb_by_serial = {}
-    for a in adb_devs:
-        if isinstance(a, dict):
-            s = _norm_serial(a.get("serial"))
-            if s:
-                adb_by_serial[s] = a.get("state", "")
-
-    rows = []
-    claimed_adb = set()
-    for d in usb_devs:
-        if not isinstance(d, dict):
-            continue
-        if not is_phone(d):
-            continue  # hub / HID / webcam / card reader — not a phone
-        serial = _norm_serial(d.get("serial"))
-        key = device_key(d)
-        if not key:
-            continue
-        adb_entry = adb_by_serial.get(serial) and next(
-            (a for a in adb_devs if _norm_serial(a.get("serial")) == serial), None
-        )
-        if serial and serial in adb_by_serial:
-            claimed_adb.add(serial)
-        rows.append(
-            {
-                "key": key,
-                "label": _usb_label(d, adb_by_serial),
-                "transports": _usb_transports(d, set(adb_by_serial)),
-                "usb": d,
-                "adb": adb_entry,
-            }
-        )
-    for a in adb_devs:
-        if not isinstance(a, dict):
-            continue
-        s = _norm_serial(a.get("serial"))
-        if not s or s in claimed_adb:
-            continue
-        rows.append(
-            {
-                "key": f"adb:{s}",
-                "label": f"{s} [{a.get('state', '')}]",
-                "transports": ["ADB"],
-                "usb": None,
-                "adb": a,
-            }
-        )
-    return rows
+    # Rust-only: filtering/merge/classification live in the bridge
+    # (detect-merged). No Python fallback - a bridge failure propagates so
+    # callers surface it instead of silently degrading.
+    merged = _bridge.list_merged()
+    return [
+        _merged_row_to_legacy(r) for r in merged
+        if isinstance(r, dict) and r.get("key")
+    ]
 
 
 def candidates_for_modes(modes):

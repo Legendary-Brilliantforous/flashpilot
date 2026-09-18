@@ -78,39 +78,6 @@ def _native_lockdown_info(log) -> dict:
     return {k: str(v) for k, v in vals.items()} if isinstance(vals, dict) else {}
 
 
-def _idevice_info(log, timeout=12) -> dict:
-    info = {}
-    # Native first: Rust usbmuxd + lockdown GetValue (no external tools).
-    try:
-        info = _native_lockdown_info(log)
-        if info:
-            return info
-    except Exception as e:
-        log(f"  native usbmuxd: {e}")
-    # Fallback: external tools (pymobiledevice3 / ideviceinfo)
-    if shutil.which("pymobiledevice3"):
-        try:
-            out = subprocess.run(["pymobiledevice3", "usbmux", "list"], capture_output=True, text=True, timeout=timeout).stdout
-            log(f"  pymobiledevice3 usbmux list: {out[:400]}")
-        except Exception as e:
-            log(f"  pymobiledevice3: {e}")
-    # Try libimobiledevice ideviceinfo
-    idev = shutil.which("ideviceinfo")
-    if idev:
-        try:
-            out = subprocess.run([idev, "-s"], capture_output=True, text=True, timeout=timeout).stdout
-            for line in out.splitlines()[:60]:
-                if any(k in line for k in ["ActivationState", "ProductVersion", "ProductType", "UniqueDeviceID", "SerialNumber", "DeviceName"]):
-                    log(f"  {line.strip()}")
-                    # parse k: v
-                    if ":" in line:
-                        k, v = line.split(":", 1)
-                        info[k.strip()] = v.strip()
-        except Exception as e:
-            log(f"  ideviceinfo: {e}")
-    return info
-
-
 def flow_apple_info():
     def _run(ctx, log):
         log("=" * 60)
@@ -132,7 +99,7 @@ def flow_apple_info():
         else:
             log("  No Apple 05ac device detected (native USB scan). Plug iPhone/iPad via USB.")
         log(f"  usbmuxd: {'present' if _usbmuxd_present() else 'not found (install libimobiledevice / pymobiledevice3)'}")
-        info = _idevice_info(log)
+        info = _native_lockdown_info(log)
         if not info:
             log("  No lockdown info — device may be in DFU/Recovery or not trusted")
         log("  Tip: Trust this computer on device when prompted, then re-run.")
@@ -186,7 +153,7 @@ def flow_apple_icloud_add():
             log("  No APPLE_ACTIVATION_PLIST — set path to activation_record.plist to attempt push")
         if not _usbmuxd_present():
             raise RuntimeError("usbmuxd / libimobiledevice not available — install and trust device first")
-        _idevice_info(log)
+        _native_lockdown_info(log)
         log("  Add flow placeholder — HIL required.")
 
     return Flow("Apple iCloud Add (EXPERIMENTAL — edu only)", [Step("apple_icloud_add", _run)])
@@ -217,7 +184,7 @@ def flow_apple_passcode_guide():
             log("  Install libimobiledevice for USB access:")
             log("    sudo apt install libimobiledevice-utils usbmuxd")
         log("")
-        info = _idevice_info(log)
+        info = _native_lockdown_info(log)
         act = (info.get("ActivationState") or "").lower()
         if act:
             log(f"  ActivationState: {act}")

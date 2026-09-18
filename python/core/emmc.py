@@ -32,18 +32,26 @@ def _host_emmc_health(log=None) -> dict:
                         info[f"{ent}_{key}"] = open(fp).read().strip()
                     except Exception:
                         pass
-    # mmc extcsd via mmc-utils if present
-    mmc = next((p for p in ["/usr/bin/mmc", "/usr/local/bin/mmc"] if os.path.isfile(p)), "")
-    if mmc:
-        try:
-            out = subprocess.run([mmc, "extcsd", "read", "/dev/mmcblk0"], capture_output=True, text=True, timeout=8).stdout
-            for line in out.splitlines()[:80]:
-                if "Life Time" in line or "Pre EOL" in line or "EXT_CSD" in line:
-                    if log:
-                        log(f"  [mmc extcsd] {line.strip()}")
-                    info["extcsd_line"] = line.strip()
-        except Exception:
-            pass
+    # Host health via the native Rust engine (no external mmc binary):
+    # life_time / pre_eol_info / model / rev / cid from sysfs directly.
+    try:
+        import json as _json
+        from . import bridge as _bridge
+        h = _json.loads(_bridge._run(["emmc-host"], timeout=8))
+        if h.get("life_time"):
+            info["host_life_time"] = h["life_time"]
+        if h.get("pre_eol_info"):
+            info["host_pre_eol_info"] = h["pre_eol_info"]
+        if h.get("model"):
+            info["host_model"] = h["model"]
+        if h.get("rev"):
+            info["host_rev"] = h["rev"]
+        if h.get("cid"):
+            info["host_cid"] = h["cid"]
+        if h.get("device") and log:
+            log(f"  [host emmc] device={h['device']}")
+    except Exception:
+        pass
     return info
 
 

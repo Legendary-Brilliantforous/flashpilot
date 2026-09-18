@@ -124,42 +124,27 @@ def _mtp_serial_and_build() -> tuple:
 
 
 def _apple_lockdown_info() -> dict:
-    """Apple UDID / Serial / iOS ver / Build via lockdown, no fake."""
-    info = {}
-    # ideviceinfo -k per key (fast, per-key)
-    idev = shutil.which("ideviceinfo")
-    if idev:
-        for k in ("SerialNumber", "UniqueDeviceID", "ProductVersion", "BuildVersion", "ProductType", "DeviceName"):
-            try:
-                out = subprocess.run([idev, "-k", k], capture_output=True, text=True, timeout=5).stdout.strip()
-                if out and "ERROR" not in out and len(out) < 128:
-                    info[k] = out
-            except Exception:
-                continue
-        # If we got at least one, parse full dump for cross-check
-        if info:
-            return info
-    # pymobiledevice3 fallback via usbmux list json
-    if shutil.which("pymobiledevice3"):
-        try:
-            out = subprocess.run(["pymobiledevice3", "usbmux", "list", "-o", "json"], capture_output=True, text=True, timeout=6).stdout
-            if out:
-                import json
+    """Native Rust usbmuxd + lockdown info (no external tools).
 
-                data = json.loads(out)
-                # list may be array of devices
-                devs = data if isinstance(data, list) else [data]
-                if devs and isinstance(devs[0], dict):
-                    d = devs[0]
-                    if d.get("SerialNumber") and "SerialNumber" not in info:
-                        info["SerialNumber"] = d["SerialNumber"]
-                    if d.get("UniqueDeviceID") and "UniqueDeviceID" not in info:
-                        info["UniqueDeviceID"] = d["UniqueDeviceID"]
-                    if d.get("ProductVersion") and "ProductVersion" not in info:
-                        info["ProductVersion"] = d["ProductVersion"]
-        except Exception:
-            pass
-    return info
+    Uses the bridge's apple-info command (usbmuxd Listen + lockdown
+    GetValue over the port-62078 relay, unpaired: non-protected keys)."""
+    import json as _json
+    from . import bridge as _bridge
+    try:
+        out = _bridge._run(["apple-info"], timeout=15)
+        data = _json.loads(out or "{}")
+    except Exception:
+        return {}
+    lock = data.get("lockdown") or {}
+    if not isinstance(lock, dict):
+        return {}
+    # Normalize to the field names the callers read.
+    out = {}
+    for k in ("SerialNumber", "UniqueDeviceID", "ProductVersion", "BuildVersion",
+              "ProductType", "DeviceName", "ActivationState"):
+        if lock.get(k):
+            out[k] = str(lock[k])
+    return out
 
 
 def get_live_identity() -> dict:

@@ -184,52 +184,6 @@ def write_boot(bridge, target, fdl1, a1, img_path, fdl2=None, a2=None,
     bridge._run(args, timeout=900)
 
 
-def _repack_local(img: bytearray, patched_path: str, log) -> dict:
-    """Pure-Python repack (fallback + unit-test oracle for the native
-    engine). Returns the same summary dict as `boot-patch-adb`."""
-    if len(img) < 40 or img[:8] != BOOT_MAGIC:
-        raise BootImageError("not a boot image (missing ANDROID! magic)")
-    # boot image v0-v3 header: kernel_size@8 kernel_addr@12 ramdisk_size@24
-    kernel_size = struct.unpack_from("<I", img, 8)[0]
-    ramdisk_size = struct.unpack_from("<I", img, 24)[0]
-    page_size = struct.unpack_from("<I", img, 36)[0]
-    if page_size == 0:
-        raise BootImageError("invalid page size 0")
-
-    def page_align(n):
-        return ((n + page_size - 1) // page_size) * page_size
-
-    rd_off = page_size + page_align(kernel_size)
-    ramdisk = bytes(img[rd_off:rd_off + ramdisk_size])
-    new_rd, patched_files, was_gz = _patch_props_in_ramdisk(ramdisk, log)
-
-    if len(new_rd) > ramdisk_size:
-        # grow image: shift second-stage/dt after ramdisk and fix header size
-        tail = bytes(img[rd_off + ramdisk_size:])
-        growth = len(new_rd) - ramdisk_size
-        img[rd_off:rd_off + ramdisk_size] = new_rd
-        img[rd_off + ramdisk_size:rd_off + ramdisk_size] = tail
-        struct.pack_into("<I", img, 24, len(new_rd))
-    else:
-        growth = 0
-        img[rd_off:rd_off + ramdisk_size] = new_rd.ljust(ramdisk_size, b"\x00")
-        struct.pack_into("<I", img, 24, ramdisk_size)  # unchanged but explicit
-
-    with open(patched_path, "wb") as f:
-        f.write(img)
-    return {
-        "kernel_size": kernel_size,
-        "ramdisk_size": ramdisk_size,
-        "page_size": page_size,
-        "ramdisk_offset": rd_off,
-        "ramdisk_old": ramdisk_size,
-        "ramdisk_new": len(new_rd),
-        "grew_by": growth,
-        "patched_files": patched_files,
-        "recompressed": was_gz,
-    }
-
-
 def enable_adb_via_boot_patch(bridge, target, fdl1, a1, fdl2=None, a2=None,
                                part="boot", backup_dir="", log=print) -> dict:
     """Full flow: read -> patch -> write. Returns dict with paths."""
@@ -253,7 +207,7 @@ def enable_adb_via_boot_patch(bridge, target, fdl1, a1, fdl2=None, a2=None,
     try:
         summary = bridge.boot_patch_adb(stock, patched_path)
     except bridge.BinaryNotFoundError:
-        summary = _repack_local(img, patched_path, log)
+        raise
     except bridge.BridgeError as e:
         raise BootImageError(str(e))
     log(f"[adb-en] kernel={summary['kernel_size']} "
