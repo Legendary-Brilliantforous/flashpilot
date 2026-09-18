@@ -134,7 +134,10 @@ fn main() {
     }
 
     let result = match args[1].as_str() {
-        "detect" => usb::detect(Some(SAMSUNG_VID)),
+        // All VIDs (not Samsung-only): a TECNO/Moto/Qualcomm ADB phone
+        // must appear in plain `detect` too - the Samsung filter is
+        // `detect`'s caller's choice (bridge.find_samsung filters in Python).
+        "detect" => usb::detect(None),
         "detect-all" => usb::detect(None),
         "hid-list" => hid::list_samsung_hid(),
         "hid-open" => {

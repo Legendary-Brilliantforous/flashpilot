@@ -724,25 +724,12 @@ def _free_adb_interface(err_str: str) -> bool:
         # hasn't finished teardown). Let it settle first.
         import time as _t
         _t.sleep(1.5)
-        # USB-reset the device so the kernel state is clean (the dying adb
-        # server leaves usbfs wedged - EIO on claim). The phone
-        # re-enumerates; the serial-pinned retry re-resolves the new address.
-        try:
-            devs = json.loads(_run(["detect-all"], timeout=15))
-            for d in devs:
-                if not isinstance(d, dict):
-                    continue
-                vid = d.get("vid", 0)
-                if vid in (0x0e8d, 0x04e8, 0x18d1, 0x05c6, 0x1782):
-                    tgt = f"{vid:04x}:{d.get('pid', 0):04x}@{d.get('bus')}:{d.get('address')}"
-                    try:
-                        _run(["usb-reset", tgt], timeout=15)
-                    except Exception:
-                        pass
-                    break
-        except Exception:
-            pass
-        _t.sleep(2.0)
+        # NO usb-reset here: after kill-server the phone's adbd resets its
+        # USB function itself (known adb behavior on client disconnect) and
+        # re-enumerates - a forced reset during that window triggers another
+        # reset (crash loop). Wait for the adbd reset + fresh enumeration to
+        # settle instead; the serial-pinned retry re-resolves the address.
+        _t.sleep(3.0)
         return True
     except Exception:
         return False
