@@ -290,8 +290,23 @@ impl UsbDevice {
             if tt != TransferType::Bulk {
                 eprintln!("[usb] read_bulk endpoint 0x{addr:02x} type {tt:?} interval {interval} mps {mps}");
             }
-            let _ = mps;
             let _ = interval;
+            // Babble/overflow guard: the device sends FULL max-packet-size
+            // bulk packets (adbd and Samsung download mode both do). A URB
+            // smaller than mps that receives a full packet makes the host
+            // controller flag BABBLE -> PORT RESET (the device
+            // re-enumerates!) -> the read dies with EIO. Always submit at
+            // least mps-sized URBs and copy back only what fits.
+            let need = mps.max(512) as usize;
+            if buf.len() < need {
+                let mut tmp = vec![0u8; need];
+                let n = self.handle.read_bulk(endpoint, &mut tmp, timeout).map_err(
+                    |e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())),
+                )?;
+                let take = n.min(buf.len());
+                buf[..take].copy_from_slice(&tmp[..take]);
+                return Ok(take);
+            }
         }
         self.handle
             .read_bulk(endpoint, buf, timeout)

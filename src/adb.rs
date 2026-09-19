@@ -534,14 +534,18 @@ impl Session {
     /// CNXN handshake with AUTH. Returns device banner props on success.
     fn connect(&self, banner: &mut HashMap<String, String>) -> Result<()> {
         let host = b"host::features=shell_v2,cmd,stat_v2,ls_v2";
+        eprintln!("[adb] connect: sending CNXN (version {A_VERSION:#010x}, maxdata {MAXDATA}) ...");
         self.write_msg(A_CNXN, A_VERSION, MAXDATA as u32, host)?;
+        eprintln!("[adb] connect: CNXN written OK");
         let key = load_or_create_key()?;
         let mut pubkey_sent = false;
         let mut token_rounds = 0u32;
         let mut use_sha256 = true;
         loop {
             self.check_deadline()?;
+            eprintln!("[adb] connect: reading reply ...");
             let m = self.read_msg()?;
+            eprintln!("[adb] connect: got 0x{:08x} (len {})", m.cmd, m.payload.len());
             match m.cmd {
                 A_CNXN => {
                     parse_banner(&m.payload, banner);

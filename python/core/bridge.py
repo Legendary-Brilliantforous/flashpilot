@@ -736,14 +736,19 @@ def _free_adb_interface(err_str: str) -> bool:
 
 
 def adb_devices():
-    """Native `adb-devices` row list, with the busy-holder rescue: when the
-    system adb server holds the interface, kill it and retry once."""
-    try:
-        return json.loads(_run(["adb-devices"]))
-    except BridgeError as e:
-        if _free_adb_interface(str(e)):
-            return json.loads(_run(["adb-devices"]))
-        raise
+    """Native `adb-devices` row list, with the busy-holder rescue.
+
+    The busy state is returned as an honest state LINE (not an error), so
+    the rescue triggers on it here: when the system adb server holds the
+    interface, kill it (host-side op) and retry once over the native
+    transport."""
+    import time as _t
+    lines = json.loads(_run(["adb-devices"]))
+    if any("busy" in (l or "") for l in lines):
+        if _free_adb_interface("busy"):
+            _t.sleep(0.5)
+            lines = json.loads(_run(["adb-devices"]))
+    return lines
 
 
 def adb_status():
