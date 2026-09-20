@@ -622,6 +622,39 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
     Ok(serde_json::json!({"status": "configuration set", "config": config_idx}).to_string())
 }
 
+/// Claim-only test: open + claim + release, NO transfer. Isolates whether
+/// the claim itself or a subsequent transfer wedges a device.
+pub fn claim_test(target: &str) -> Result<String> {
+    let (bus, address) = parse_target(target)?;
+    let context = rusb::Context::new()?;
+    let device = context
+        .devices()?
+        .iter()
+        .find(|d| d.bus_number() == bus && d.address() == address)
+        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+    let handle = device.open()?;
+    let _ = handle.set_auto_detach_kernel_driver(true);
+    // Claim every interface (like the real open paths do).
+    let desc = device.device_descriptor().ok();
+    let cfg = device.active_config_descriptor().ok();
+    let mut claimed = Vec::new();
+    if let Some(cfg) = cfg {
+        for iface in cfg.interfaces() {
+            for d in iface.descriptors() {
+                match handle.claim_interface(d.interface_number()) {
+                    Ok(()) => claimed.push(d.interface_number()),
+                    Err(e) => eprintln!("[usb] claim iface {}: {e}", d.interface_number()),
+                }
+            }
+        }
+    }
+    let _ = desc;
+    for c in &claimed {
+        let _ = handle.release_interface(*c);
+    }
+    Ok(serde_json::json!({"claimed": claimed}).to_string())
+}
+
 /// USB-level port reset (USBDEVFS_RESET): forces the device to
 /// re-enumerate without touching the cable - the reliable way to unwedge
 /// a device whose usbfs state went bad (EIO on claim after another

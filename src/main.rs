@@ -1051,6 +1051,13 @@ fn main() {
             }
             sam_download::odin_send_pit(&args[2], &args[3])
         }
+        "usb-claim-test" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge usb-claim-test <vid:pid@bus:addr>");
+                exit(2);
+            }
+            usb::claim_test(&args[2])
+        }
         "usb-reset" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge usb-reset <vid:pid@bus:addr>");

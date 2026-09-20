@@ -44,8 +44,11 @@ const AUTH_TOKEN: u32 = 1;
 const AUTH_SIGNATURE: u32 = 2;
 const AUTH_RSAPUBLICKEY: u32 = 3;
 
-const A_VERSION: u32 = 0x0100_0000;
-const MAXDATA: usize = 4096;
+// Modern system adb speaks 0x01000001 with maxdata 256KiB - matching it
+// exactly; older 0x01000000/4096 CNXNs crash some MTK/Pixel adbd builds
+// (the phone's USB function resets on the CNXN -> re-enumeration -> EIO).
+const A_VERSION: u32 = 0x0100_0001;
+const MAXDATA: usize = 256 * 1024;
 const TOKEN_LEN: usize = 20;
 /// ADB read chunk timeout (overridable via config)
 // const DEFAULT_READ_CHUNK_SECS: u64 = 2;
