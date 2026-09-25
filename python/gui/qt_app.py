@@ -11150,6 +11150,9 @@ class FlashPilotWindow(QMainWindow):
             if mtk_fallback and mtk_fallback.lower() == "adb":
                 mtk_fallback = None
             self._update_device_info(True, pid, mode, fallback_model=mtk_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif apple_devs:
             d = apple_devs[0]
             pid = d.get("pid")

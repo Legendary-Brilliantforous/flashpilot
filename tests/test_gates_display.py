@@ -246,3 +246,32 @@ def test_pick_device_cancel_never_retried(win, monkeypatch):
     monkeypatch.setattr(win, "_choose_device", fake_choose)
     assert win._pick_device("Battery report", "ADB") == "__cancelled__"
     assert calls["n"] == 1
+
+
+def _mtk_composite_state():
+    """MediaTek 0e8d:201c with an ADB interface, server-authorized — the
+    user's exact device shape."""
+    usb_dev = {
+        "vid": 0x0E8D, "pid": 0x201C, "bus": 2, "address": 50,
+        "product": "TECNO SPARK 8", "manufacturer": "TECNO MOBILE LIMITED",
+        "serial": "06977371AD102074", "is_samsung": False,
+        "interfaces": [{"class": 255, "subclass": 66, "protocol": 1,
+                        "endpoints": []}],
+    }
+    adb_dev = {"serial": "06977371AD102074", "state": "device", "extra": "transport:usb"}
+    return {
+        "samsung": [], "mtk": [usb_dev], "hid": [], "adb": [adb_dev],
+        "fastboot": [], "edl": [], "qcom": [], "spd": [],
+        "apple": [], "other_android": [],
+        "mode": "ADB ENABLED (debug composite) - normal boot",
+    }
+
+
+def test_mtk_corner_shows_adb_overlay(win):
+    """Regression: the mtk_devs corner branch never called _adb_overlay —
+    a Tecno with authorized ADB showed only 'MediaTek low-level' in the
+    top-right corner while ADB Status showed connected."""
+    win._on_device_state(_mtk_composite_state())
+    text = win.conn_state.text()
+    assert "0e8d:201c" in text
+    assert "ADB" in text and "06977371AD102074" in text, f"corner missing ADB line: {text!r}"
