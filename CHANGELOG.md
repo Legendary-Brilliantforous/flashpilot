@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.3 (pick resilience)
+
+- Device pick with settle-retry: every tool runner retries once after
+  2.5 s when a scan transiently misses a re-enumerating device, instead
+  of refusing with "no device" while the GUI shows it connected.
+  User-cancelled choosers are never retried.
+
 ## 1.2.2 (modem-safe ADB + display fixes)
 
 ### ADB transport (fixed)
