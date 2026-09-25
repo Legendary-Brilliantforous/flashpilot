@@ -428,6 +428,14 @@ New module: `python/core/jobs.py` (`FlashJob`, `JobManager`, failure classifier)
 
 ---
 
+## Remediation log — Phase 10, pick resilience (1.2.3, landed on `transport`)
+
+**Incident (from the 1.2.2 installed app log):** model/build/Android all resolve, ADB transport shows `[device]`, yet a tool clicked seconds later refuses "No authorized ADB device" — the device was mid re-enumeration window (addr climbing) and the *pick* had no retry (only validation did).
+
+**Fix:** `_pick_device(label, modes)` wraps every `_choose_device` call site (`_adb_begin`, `_chip_begin`, `_native_flash_clicked`, both generic runners): one 2.5 s settle-retry when a scan transiently misses; user-cancelled choosers never retried. Verified: 287 pytest + 166 cargo green, 3 new offscreen tests (retry-then-found, give-up-after-two, cancel-no-retry). Shipped in 1.2.3 (same .deb pipeline, smoke-tested).
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
