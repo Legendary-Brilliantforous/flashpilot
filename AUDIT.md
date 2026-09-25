@@ -436,6 +436,23 @@ New module: `python/core/jobs.py` (`FlashJob`, `JobManager`, failure classifier)
 
 ---
 
+## Remediation log — Phase 11, full ADB audit: AUTH wall found + fixed (1.2.4, on `transport`)
+
+Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) after "ADB connected but actions fail no adb" persisted through 1.2.3.
+
+**Root cause (protocol, found + fixed):** the AUTH ladder's hash alternation was one-way — `use_sha256 = false` at round 2, never restored. A modern (SHA-256) adbd whose round-1 signature was lost to transport noise (the flapping link) re-tokened into rounds 2–6 signing SHA-1 it always rejects → `Unauthorized` after ~5.5 s of backoff **while the device was authorized all along** (the server held our key). Exactly the reported symptom: monitor shows connected (server rows), actions fail "no adb" (native AUTH wall).
+
+**Audited clean:** ambient serial propagation (device_scope → ContextVar → unscoped in-flow calls resolve pinned); `_wait_fastboot` (cancel-scoped, serial-scoped, transient-tolerant); `compute_transports` for the 0e8d:201c composite (ADB transport correct); `shell_collect` timeouts (socket == deadline, no premature cut); string-descriptor reads (rusb-internal timeout, ENODEV fails fast); `_spd_brom_watch` (VID-filtered, cannot touch other devices); loops cadence (monitor 3s + load-test sampling + TTL caches — hardened in earlier phases).
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | AUTH alternation: odd signature rounds SHA-256, even SHA-1 (both hashes stay in play) | `src/adb.rs` | `auth_hash_alternation_keeps_sha256_in_play` (r1==r3, r1!=r2, EM carries SHA-256 digest) |
+| 2 | `_wait_for_adb` transient-scan tolerance | `python/core/core.py` | full suite green |
+
+**Shipped:** 1.2.4 (committed `8f8db94`/`ea2359a`, .deb built from the fixed tree — release-codegen alternation test green). Verification: 287 pytest + 166 cargo.
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
