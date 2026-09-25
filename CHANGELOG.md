@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.5 (MTK corner ADB overlay)
+
+- The mtk_devs corner branch now shows the ADB overlay like sibling
+  branches: a Tecno/MTK device with authorized ADB names the transport
+  in the top-right corner (previously showed only 'MediaTek low-level'
+  while ADB Status showed connected).
+
 ## 1.2.4 (ADB AUTH fix)
 
 - AUTH hash alternation corrected: SHA-256 stays in play across token
