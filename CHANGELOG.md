@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.2 (modem-safe ADB + display fixes)
+
+### ADB transport (fixed)
+- Poll/monitor/display paths are zero-touch (`adb-devices --no-probe`,
+  `adb_presence`): no open/claim/handshake from loops. Fixes USB modems
+  re-enumerating every cycle (verified live: 114 quiet poll cycles on an
+  MSM8916 modem after ~1 Hz storms).
+- Delegate ladder on claim fights: native -> Rust server transport
+  (`adb-shell-server`, explicit serial only) -> host binary -> rescue
+  kill (last resort). ADB ops now succeed with the system server holding
+  the interface instead of evicting it.
+- USB-ADB merge fix: row strings are parsed (struct deserialization had
+  silently yielded zero ADB entries, so rows never carried ADB state).
+- QCOM corner now shows the ADB overlay like sibling branches.
+
+### Robustness (fixed)
+- Single settle-retry on transient gate refusals (re-enumeration windows)
+  with accurate messages; `rescue=False` + serial pinning across all
+  diagnostic/tool shells; Firehose FAIL detection; CLI input panics;
+  allocation clamps; tar traversal guards; strict XML numerics.
+
 ## 1.2.1 (Stable Release)
 
 ### Multi-device support (new)
