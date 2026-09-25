@@ -5578,12 +5578,37 @@ class FlashPilotWindow(QMainWindow):
                 return None, None, None
             device_key = picked
         if not device_key:
-            self._ui.line.emit(
-                "[warn] No authorized ADB device found right now — enable USB "
-                "debugging and tap Allow. If the GUI shows the device as "
-                "connected, it may be re-enumerating: wait a moment and retry.")
-            self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
-            return None, None, None
+            # The merged pick scans USB descriptors, which flap; the ADB
+            # daemon's rows are independent (TCP, zero USB) and stay
+            # authoritative for ADB presence while the bus cycle drops the
+            # descriptors. When exactly one authorized device exists, use
+            # it instead of refusing — this is the "shows connected but
+            # actions say no adb" gap. Multiple → ambiguous (refuse with
+            # guidance); zero → genuine absence.
+            try:
+                auth = [d for d in bridge.adb_status()
+                        if d.get("state") == "device"]
+            except Exception:
+                auth = []
+            if len(auth) == 1:
+                device_key = f"adb:{auth[0].get('serial', '')}"
+                self._ui.line.emit(
+                    f"[info] {label}: USB scan missed the device (re-"
+                    f"enumerating) — using the ADB daemon row ({device_key})")
+            elif len(auth) > 1:
+                self._ui.line.emit(
+                    "[warn] Multiple authorized ADB devices — pick one in "
+                    "the device list and retry.")
+                self._ui.toast.emit("warn", "Pick a device",
+                                    "Several ADB devices are connected")
+                return None, None, None
+            else:
+                self._ui.line.emit(
+                    "[warn] No authorized ADB device found right now — enable USB "
+                    "debugging and tap Allow. If the GUI shows the device as "
+                    "connected, it may be re-enumerating: wait a moment and retry.")
+                self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
+                return None, None, None
         serial = self._adb_serial_for_key(device_key)
         if not serial:
             self._ui.line.emit(

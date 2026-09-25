@@ -275,3 +275,67 @@ def test_mtk_corner_shows_adb_overlay(win):
     text = win.conn_state.text()
     assert "0e8d:201c" in text
     assert "ADB" in text and "06977371AD102074" in text, f"corner missing ADB line: {text!r}"
+
+
+def test_adb_begin_server_row_fallback(win, monkeypatch):
+    """The exact 'shows connected but actions say no adb' gap: the merged
+    pick misses (USB descriptor flap) while the ADB daemon still reports
+    the device — the daemon row must be used instead of refusing."""
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.core import jobs as _jobs
+    from python.gui.qt_app import _flow_end
+
+    # Both scans miss (flap): candidates empty twice.
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
+    # But the daemon reports exactly one authorized device.
+    monkeypatch.setattr(_bridge, "adb_status",
+                        lambda: [{"serial": "R9XFLAP1", "state": "device",
+                                  "extra": ""}])
+
+    def fake_validate(key, aid):
+        assert (key, aid) == ("adb:R9XFLAP1", "adb_shell")
+        return {"allowed": True}
+
+    monkeypatch.setattr(_bridge, "validate_action", fake_validate)
+    try:
+        serial, key, flux = win._adb_begin("Battery report", "battery_report")
+        assert (serial, key) == ("R9XFLAP1", "adb:R9XFLAP1")
+        assert flux is not None
+        _jobs.finish_job(flux.job_id, "CANCELLED", "test", "TEST")
+    finally:
+        _flow_end(key="adb:R9XFLAP1")
+
+
+def test_adb_begin_server_fallback_multiple_refuses(win, monkeypatch):
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.gui.qt_app import _flow_end
+
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
+    monkeypatch.setattr(_bridge, "adb_status",
+                        lambda: [{"serial": "A1", "state": "device", "extra": ""},
+                                 {"serial": "B1", "state": "device", "extra": ""}])
+
+    def boom(key, aid):  # pragma: no cover
+        raise AssertionError("must not validate ambiguous")
+
+    monkeypatch.setattr(_bridge, "validate_action", boom)
+    try:
+        assert win._adb_begin("Battery report", "battery_report") == (None, None, None)
+    finally:
+        _flow_end(key=None)
+
+
+def test_adb_begin_server_fallback_zero_warns(win, monkeypatch):
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.gui.qt_app import _flow_end
+
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
+    monkeypatch.setattr(_bridge, "adb_status", lambda: [])
+
+    try:
+        assert win._adb_begin("Battery report", "battery_report") == (None, None, None)
+    finally:
+        _flow_end(key=None)
