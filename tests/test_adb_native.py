@@ -201,15 +201,22 @@ def test_adb_status_never_kills_server_on_busy(monkeypatch):
     assert calls["n"] >= 1
 
 
-def test_adb_shell_busy_rescue_gated(monkeypatch):
+def test_adb_shell_busy_rescue_gated(monkeypatch, tmp_path):
     """rescue=False (passive poll timers): busy is deterministic while the
-    system adb server holds the interface - must fail fast (one attempt,
-    no kill, no retry churn)."""
-    calls = {"n": 0}
+    system adb server holds the interface - must fail fast (no kill, no
+    retry churn). The busy-delegate ladder (server-TCP, then binary) is
+    attempted once first; both unavailable here, so the original busy
+    error propagates."""
+    import os as _os
+
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    bridge._host_adb_cache.update(checked=False, path=None)
+    calls = []
 
     def fake_run(args, timeout=15):
-        assert args[0] == "adb-shell", "only the shell op should run"
-        calls["n"] += 1
+        calls.append(args[0])
         raise bridge.BridgeError("claim_interface: Resource busy - held")
 
     monkeypatch.setattr(bridge, "_run", fake_run)
@@ -228,21 +235,28 @@ def test_adb_shell_busy_rescue_gated(monkeypatch):
         assert "busy" in str(e).lower()
     else:
         raise AssertionError("expected BridgeError")
-    assert calls["n"] == 1
+    assert calls == ["adb-shell", "adb-shell-server"]
 
 
-def test_adb_shell_busy_rescue_kills_once_when_enabled(monkeypatch):
-    """rescue=True (user-initiated operations): the busy-holder kill runs
-    exactly once, then the retry succeeds over the native transport."""
+def test_adb_shell_busy_rescue_kills_once_when_enabled(monkeypatch, tmp_path):
+    """rescue=True (user-initiated operations): the busy-delegate ladder
+    runs first (server-TCP refused here, no binary on PATH), then the
+    busy-holder kill runs exactly once, then the retry succeeds natively."""
+    import os as _os
     import time as _t
 
-    calls = {"n": 0}
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    bridge._host_adb_cache.update(checked=False, path=None)
+    calls = []
     kills = {"n": 0}
 
     def fake_run(args, timeout=15):
-        assert args[0] == "adb-shell", "only the shell op should run"
-        calls["n"] += 1
-        if calls["n"] == 1:
+        calls.append(args[0])
+        if args[0] == "adb-shell-server":
+            raise bridge.BridgeError("adb server: connection refused")
+        if len([c for c in calls if c == "adb-shell"]) == 1:
             raise bridge.BridgeError("claim_interface: Resource busy - held")
         return "ok"
 
@@ -261,7 +275,7 @@ def test_adb_shell_busy_rescue_kills_once_when_enabled(monkeypatch):
     monkeypatch.setattr(_t, "sleep", lambda s: None)
     assert bridge.adb_shell("getprop ro.product.model", timeout=8) == "ok"
     assert kills["n"] == 1
-    assert calls["n"] == 2
+    assert calls == ["adb-shell", "adb-shell-server", "adb-shell"]
 
 
 def test_monitor_backs_off_after_dry_native_probes(monkeypatch):
@@ -401,33 +415,48 @@ echo "error: unknown invocation" >&2; exit 1
 """
 
 
+def _fake_bin(tmp_path, monkeypatch):
+    """Install the fake platform-tools adb on PATH (shared helper)."""
+    import os as _os
+
+    p = tmp_path / "adb"
+    p.write_text(_FAKE_ADB)
+    _os.chmod(p, 0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{_os.pathsep}{_os.environ.get('PATH', '')}")
+    bridge._host_adb_cache.update(checked=False, path=None)
+    return p
+
+
 class TestHostTransportFallback:
     """Server transport: route through host adb when it owns the device."""
-
-    def _fake_bin(self, tmp_path, monkeypatch):
-        import os as _os
-
-        p = tmp_path / "adb"
-        p.write_text(_FAKE_ADB)
-        _os.chmod(p, 0o755)
-        monkeypatch.setenv("PATH", f"{tmp_path}{_os.pathsep}{_os.environ.get('PATH', '')}")
-        bridge._host_adb_cache.update(checked=False, path=None)
-        return p
 
     def test_shell_delegates_to_host_on_busy(self, tmp_path, monkeypatch):
         from python.core.bridge import USBError
 
-        self._fake_bin(tmp_path, monkeypatch)
-        calls = {"n": 0}
+        _fake_bin(tmp_path, monkeypatch)
+        calls = []
 
-        def busy_once(args, timeout=15):
-            calls["n"] += 1
-            raise USBError("USB error: Transfer failed: claim_interface: Resource busy")
+        def ladder_run(args, timeout=15):
+            # Native goes busy; server-TCP is refused (no daemon in tests);
+            # the host binary then serves KNOWNSER.
+            calls.append(args[0])
+            if args[0] == "adb-shell":
+                raise USBError("USB error: Transfer failed: claim_interface: Resource busy")
+            if args[0] == "adb-shell-server":
+                raise bridge.BridgeError("adb server 127.0.0.1:5037: Connection refused")
+            raise AssertionError(f"unexpected: {args}")
 
-        monkeypatch.setattr(bridge, "_run", busy_once)
+        # _server_shell_for goes through _run for the CLI; stub it refused
+        # here and let the fake binary serve KNOWNSER.
+        def fake_server(serial, cmd, timeout):
+            assert serial == "KNOWNSER"
+            raise bridge.BridgeError("adb server: connection refused")
+
+        monkeypatch.setattr(bridge, "_server_shell_for", fake_server)
+        monkeypatch.setattr(bridge, "_run", ladder_run)
         out = bridge.adb_shell("getprop foo", serial="KNOWNSER")
         assert out == "fake-out:getprop foo\n"
-        assert calls["n"] == 1
+        assert calls == ["adb-shell"]
 
     def test_shell_native_success_never_touches_host(self, tmp_path, monkeypatch):
         import os as _os
@@ -445,7 +474,7 @@ class TestHostTransportFallback:
         assert bridge.adb_shell("getprop foo", serial="KNOWNSER") == "native-ok"
 
     def test_shell_falls_through_when_server_disclaims(self, tmp_path, monkeypatch):
-        self._fake_bin(tmp_path, monkeypatch)
+        _fake_bin(tmp_path, monkeypatch)
 
         seen = {}
 
@@ -497,7 +526,7 @@ class TestHostTransportFallback:
         assert seen["args"][:2] == ["adb-shell", "KNOWNSER"]
 
     def test_host_skipped_for_unpinned_dash(self, tmp_path, monkeypatch):
-        self._fake_bin(tmp_path, monkeypatch)
+        _fake_bin(tmp_path, monkeypatch)
         monkeypatch.setattr(bridge, "adb_status", lambda: [])
 
         seen = {}
@@ -513,7 +542,7 @@ class TestHostTransportFallback:
     def test_pull_push_handled_and_fallback(self, tmp_path, monkeypatch):
         from python.core.bridge import USBError
 
-        self._fake_bin(tmp_path, monkeypatch)
+        _fake_bin(tmp_path, monkeypatch)
 
         def busy_native(args, timeout=15):
             raise USBError("USB error: Transfer failed: claim_interface: Resource busy")
@@ -532,3 +561,59 @@ class TestHostTransportFallback:
         # (no silent success, no kill-server from here).
         with pytest.raises(USBError, match="[Bb]usy"):
             bridge.adb_pull("KNOWNSER", "/r", "/tmp/x_l")
+
+
+class TestServerTransportDelegate:
+    """Rust server transport in the busy-delegate ladder (no USB, no binary)."""
+
+    def test_server_tcp_preferred_over_binary(self, tmp_path, monkeypatch):
+        from python.core.bridge import USBError
+
+        _fake_bin(tmp_path, monkeypatch)
+        calls = []
+
+        def fake_run(args, timeout=15):
+            calls.append(args[0])
+            if args[0] == "adb-shell":
+                raise USBError("USB error: Transfer failed: claim_interface: Resource busy")
+            if args[0] == "adb-shell-server":
+                assert args[1] == "KNOWNSER", "server transport must pin the serial"
+                return "srv-out"
+            raise AssertionError(f"binary must not run when server-TCP handles: {args}")
+
+        monkeypatch.setattr(bridge, "_run", fake_run)
+        assert bridge.adb_shell("getprop foo", serial="KNOWNSER") == "srv-out"
+        assert calls == ["adb-shell", "adb-shell-server"]
+
+    def test_server_tcp_falls_through_to_binary(self, tmp_path, monkeypatch):
+        from python.core.bridge import BridgeError
+
+        _fake_bin(tmp_path, monkeypatch)
+
+        def fake_run(args, timeout=15):
+            if args[0] == "adb-shell":
+                raise USBError("busy")
+            if args[0] == "adb-shell-server":
+                raise BridgeError("adb server: device offline")
+            raise AssertionError(f"unexpected: {args}")
+
+        # Binary path needs the real USBError name; import for raise above.
+        from python.core.bridge import USBError  # noqa: F811
+
+        monkeypatch.setattr(bridge, "_run", fake_run)
+        out = bridge.adb_shell("getprop foo", serial="KNOWNSER")
+        assert out == "fake-out:getprop foo\n"
+
+    def test_server_tcp_skipped_for_dash(self, tmp_path, monkeypatch):
+        _fake_bin(tmp_path, monkeypatch)
+        monkeypatch.setattr(bridge, "adb_status", lambda: [])
+
+        seen = {}
+
+        def fake_run(args, timeout=15):
+            seen.setdefault("cmds", []).append(args[0])
+            return "native-ok"
+
+        monkeypatch.setattr(bridge, "_run", fake_run)
+        assert bridge.adb_shell("getprop foo") == "native-ok"
+        assert "adb-shell-server" not in seen["cmds"]

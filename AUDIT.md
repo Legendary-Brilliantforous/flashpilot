@@ -392,6 +392,67 @@ New module: `python/core/jobs.py` (`FlashJob`, `JobManager`, failure classifier)
 
 ---
 
+## Remediation log — Phase 8, transient-refusal retry + kill-server purge (landed in working tree)
+
+**Incident:** with the Tecno on a marginal link (proven -32/-71 electrical errors), the battery test refused with "no adb" while the monitor showed it connected; worse, one diagnostic helper call stormed the dongle 034→057 and hung its worker 120 s.
+
+**Root causes:**
+1. Refusal messages are categorical ("no adb") for transient states (USB serial unreadable for a moment mid re-enumeration while the daemon still reports the device). Proven live: merged row with `serial None` one moment, validation passing the next.
+2. Default `rescue=True` on every diagnostic shell (triage/report/repair/load/network/modem/fus/info): any busy claim killed the server from poll-adjacent code — the exact storm vector Phase 6 removed from polls, still present in tools. A single `get_live_identity` call killed the daemon and stormed 23 re-enumerations; its worker then hung in 4× retry loops against the vanishing device.
+3. No settle-retry anywhere: first transient failure = final refusal.
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | `is_transient_refusal(err)` pure classifier (transient vs settled/ambiguous/permission) | `python/core/actions.py` | 2 new |
+| 2 | `_adb_begin` + `_chip_begin` (validate and target-resolve): one 2.5 s settle + retry on transient refusals only; refusal/toast texts name re-enumeration explicitly | `python/gui/qt_app.py` | 2 new offscreen (`_adb_begin` retries transient once; settled refusal fails fast <2 s) |
+| 3 | `rescue=False` on all ~30 diagnostic/tool shells (triage, battery ×4, network ×4, qc_adb, fus_detect, model-refresh burst, unauthorized burst, net-live); serial pinning completed alongside; flows keep default rescue (explicit mutating ops) | `python/gui/qt_app.py`, `python/core/device_info.py` | full suite green |
+| 4 | Absent-retry taxonomy deliberately kept (reboot tolerance; absent retries are scan-only, USB-quiet — the killer was kill-server, now gated) | — | documented |
+
+**Verification:** `pytest` 284 passed / 4 skipped; `cargo test` 164; warnings at baseline. **Live re-verify pending:** phone absent from bus at session end — re-run battery report on reattach (expect COMPLETED or an accurate transient message, never a storm).
+
+---
+
+## Remediation log — Phase 9, silent merge death + hardware flap diagnosis (landed in working tree)
+
+**Incident:** "ADB Status shows connected but the device doesn't show connected" — plus a live flap storm with the app not even running.
+
+**Root causes found:**
+1. **Silent merge death (fixed):** `devices_json` emits an array of row *strings*, but both merge paths deserialized it as `Vec<AdbDevice>` (structs) — always failing into `unwrap_or_default()`. The USB↔ADB merge therefore never saw ADB entries: row `adb_state` permanently `None`, standalone ADB rows never created. Row-driven display (connection bar, tiles, chooser serials) showed no ADB while monitor-driven ADB Status showed connected. Fixed with `parse_adb_line`/`parse_adb_rows` in `usb::filtering`, used by both `devices.rs` and `filtering::detect_merged`; verified live (row now carries `adb_state: device`). The qcom-corner ADB overlay gap from the previous session was the same family (fixed + offscreen-tested).
+2. **Hardware flap, not software (diagnosed, not fixable in code):** with no FlashPilot process running, the Tecno re-enumerates every ~30–150 s with `error -32`/`-71` descriptor failures and skipped device numbers — classic failing cable/port/PHY. Zero-touch polls were proven clean (114 quiet cycles on the modem); this phone errors even enumerating at idle plug-in. Recommendation given: different cable/port, check phone port; app-side identity/revalidation absorbs the rest (key stable across 010→012→068→071).
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | `parse_adb_line`/`parse_adb_rows` + both merge paths switched | `src/usb/filtering.rs`, `src/devices.rs` | 2 new (line contract, string-array parsing incl. non-uptake regression) |
+
+**Verification:** `pytest` 284 passed; `cargo test` 166 passed; warnings at baseline; live merged row carries ADB state.
+
+---
+
+## Remediation log — transport branch: Rust server transport (landed in working tree)
+
+**Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
+
+**Fix — delegate ladder:** native → Rust server transport → host binary → rescue kill (last). `ServerConn` (TCP 5037, `host:transport` + service framing, shared amessage codec, lenient shell collect with A_EXIT/A_OPEN handling, per-op deadlines) + `adb-shell-server` CLI (explicit serial only — never first-device). Python tries server-TCP then binary on busy only; native success never consults PATH (hermetic tests); daemon FAILs fall through so native auth stays authoritative.
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | `ServerConn`, `server_round` (OKAY/FAIL framing), `shell_collect`, `server_shell_cli`, `A_EXIT` | `src/adb.rs`, `src/main.rs` | 8 new (mock-TCP-daemon transcript, FAIL surfacing ×2, EXIT end, bad-ack, absent-daemon no-hang, unpinned rejection) |
+| 2 | `_server_shell_for` + ladder order native → server-TCP → binary → rescue; pre-existing busy tests re-pointed at the ladder with PATH emptied | `python/core/bridge.py`, `tests/test_adb_native.py` | 3 new (preferred, fall-through, dash-skip) |
+
+**Verification:** `cargo test` 164 passed; `pytest` 280 passed / 4 skipped; `cargo check` warnings at baseline. **Live verification pending:** dongle unplugged mid-session — reattach + run any ADB op (server up) to confirm server-TCP output with zero USB touch.
+
+---
+
+## Live verification — transport branch on Tecno KG6 (landed observations)
+
+Hardware: Tecno Spark 8 / KG6, MTK 0e8d:201c, single ADB iface 255/66/1, Android 11 (API 30), `ro.adb.secure=1`, server-authorized. Corrects the design on real wire behavior: v1 `shell:` over daemon TCP carries **raw stdout bytes then close** (verified byte-level against platform-tools 35) — not amessages; `shell_collect` rewritten accordingly (mock tests reworked to raw semantics).
+
+Results: `adb-shell-server` returns output, exit 0; Python ladder returns output with the server left running (no kill) and no storm; native-only still fails `Resource busy` as expected (proving the delegate did the work). Identity survived a mid-session address change (010→012): key `adb:06977371AD102074` stable, `validate-action adb_shell` allowed.
+
+Caveat found live: this phone's link shows electrical errors (`device descriptor read/64 error -32` at idle plug-in; `not accepting address, error -71` on re-enumeration) — marginal cable/port/power, distinct from the dongle's clean software resets. Zero-touch polls: 0 bumps/114 cycles on the dongle, 1 bump/20 cycles here against that electrical background; 5-min idle watch clean. Recommendation carried to the user: reseat cable/port; app-side identity/revalidation absorbs the rest.
+
+---
+
 ## Remediation log — Phase 7, server transport for ADB ops (landed in working tree)
 
 **Incident:** on the MSM8916 modem (authorized in the system server as `3588b020 device`), every explicit ADB operation failed: native open hits `claim_interface: Resource busy` (server holds the iface), and the `rescue=True` kill-server eviction resets the dongle's USB function — "adb never works", and each attempt risks another flap storm.

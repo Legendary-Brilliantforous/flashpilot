@@ -51,6 +51,48 @@ pub struct AdbDevice {
     pub extra: String,
 }
 
+/// Parse one `SERIAL\tstate extras` row (the `adb-devices` line contract)
+/// into an `AdbDevice`. Returns None for blank/malformed rows.
+///
+/// NOTE: `devices_json` emits a JSON array of these STRINGS, not objects —
+/// deserializing that array as `Vec<AdbDevice>` fails and silently yields
+/// an empty vec (killing the USB↔ADB merge, row `adb_state`, and standalone
+/// ADB rows). Always parse through here.
+pub fn parse_adb_line(line: &str) -> Option<AdbDevice> {
+    let mut parts = line.split_whitespace();
+    let serial = parts.next()?;
+    let state = parts.next()?;
+    if serial.is_empty() || state.is_empty() {
+        return None;
+    }
+    let extra: Vec<&str> = parts.collect();
+    Some(AdbDevice {
+        serial: serial.to_string(),
+        state: state.to_string(),
+        extra: extra.join(" "),
+    })
+}
+
+/// Parse a JSON array of `adb-devices` row strings (tolerates a JSON array
+/// of objects too, for forward compatibility).
+pub fn parse_adb_rows(json: &str) -> Vec<AdbDevice> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                serde_json::Value::String(s) => parse_adb_line(s),
+                serde_json::Value::Object(_) => serde_json::from_value(item.clone()).ok(),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Merged USB + ADB device entry with stable key and transports
 #[derive(Debug, Clone, Serialize)]
 pub struct MergedDeviceInfo {
@@ -375,7 +417,7 @@ pub fn detect_merged(criteria: Option<&FilterCriteria>) -> Result<String> {
     let phones = filter_phones(&usb_devices);
 
     let adb_json = crate::adb::devices_json_no_probe().unwrap_or_else(|_| "[]".to_string());
-    let adb_devices: Vec<AdbDevice> = serde_json::from_str(&adb_json).unwrap_or_default();
+    let adb_devices: Vec<AdbDevice> = parse_adb_rows(&adb_json);
 
     let rows = merge_devices(&phones, &adb_devices);
 
@@ -453,5 +495,31 @@ mod tests {
         assert_eq!(merged[0].key, "adb:R9X");
         assert!(merged[0].usb.is_some());
         assert!(merged[0].adb.is_some());
+    }
+}
+#[cfg(test)]
+mod presence_parse_tests {
+    use super::{parse_adb_line, parse_adb_rows};
+
+    #[test]
+    fn line_contract_parses() {
+        let d = parse_adb_line("06977371AD102074\tdevice 2-1.2 product:KG6").unwrap();
+        assert_eq!(d.serial, "06977371AD102074");
+        assert_eq!(d.state, "device");
+        assert!(d.extra.contains("product:KG6"));
+        assert!(parse_adb_line("").is_none());
+        assert!(parse_adb_line("onlyserial").is_none());
+    }
+
+    #[test]
+    fn string_arrays_parse_objects_too() {
+        // devices_json emits an array of STRINGS: this must not silently
+        // become an empty vec (that killed the USB-ADB merge outright).
+        let rows = parse_adb_rows("[\"AAA\\tdevice x\", \"BBB\\tunknown transport:usb\"]");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].serial, "AAA");
+        assert_eq!(rows[1].state, "unknown");
+        assert!(parse_adb_rows("not json").is_empty());
+        assert!(parse_adb_rows("{}").is_empty());
     }
 }

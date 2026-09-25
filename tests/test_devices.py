@@ -587,3 +587,21 @@ class TestZeroTouchPresence:
                             lambda: [{"serial": "R9XTEST2", "state": "device", "extra": ""}])
         _di.get_live_identity()
         assert calls["shell"] > first_burst
+
+
+class TestTransientRefusal:
+    def test_transient(self):
+        from python.core import actions as _a
+
+        for msg in ["USB error: Device not found", "no device on bus",
+                    "disconnected", "timed out", "Resource busy",
+                    "pipe stall", "device gone", "cannot determine serial"]:
+            assert _a.is_transient_refusal(RuntimeError(msg)) is True, msg
+
+    def test_settled(self):
+        from python.core import actions as _a
+
+        for msg in ["ACTION_NOT_SUPPORTED", "unknown action: xyz",
+                    "Ambiguous target: 2 devices", "no permissions",
+                    "Permission denied", ""]:
+            assert _a.is_transient_refusal(RuntimeError(msg)) is False, msg

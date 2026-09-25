@@ -4370,7 +4370,7 @@ class FlashPilotWindow(QMainWindow):
             su = ""
             try:
                 emit(f"[step] ADB triage on {serial}")
-                sh = lambda c: bridge.adb_shell(c, timeout=10, serial=serial).strip()
+                sh = lambda c: bridge.adb_shell(c, timeout=10, serial=serial, rescue=False).strip()
                 lines.append("=" * 60)
                 lines.append("ADB DEVICE TRIAGE")
                 lines.append("=" * 60)
@@ -4398,7 +4398,7 @@ class FlashPilotWindow(QMainWindow):
                 # lock enforcement - Quality 0 means no security enforced
                 enforced = False
                 try:
-                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10, serial=serial)
+                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10, serial=serial, rescue=False)
                     quality = None
                     ctype = None
                     for ln in lock_dump.splitlines():
@@ -4418,7 +4418,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     outp = bridge.adb_shell(
                         "dd if=/dev/block/by-name/misc bs=512 count=1 2>/dev/null | wc -c",
-                        timeout=10, serial=serial).strip()
+                        timeout=10, serial=serial, rescue=False).strip()
                     can_dd = outp not in ("0", "")
                 except Exception:
                     pass
@@ -4790,12 +4790,12 @@ class FlashPilotWindow(QMainWindow):
                     serial = None
         except Exception:
             serial = None
-        model = bridge.adb_shell("getprop ro.product.model", timeout=5, serial=serial).strip()
+        model = bridge.adb_shell("getprop ro.product.model", timeout=5, serial=serial, rescue=False).strip()
         csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5, serial=serial).strip()
         if not csc:
             csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5, serial=serial).strip()
         if not csc:
-            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5, serial=serial).strip()
+            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5, serial=serial, rescue=False).strip()
         if not model:
             model = "SM-S918B"
         if not csc:
@@ -5481,13 +5481,21 @@ class FlashPilotWindow(QMainWindow):
             return None, None, None
         action_ids = _actions_mod.actions_for_command(cmd)
         ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
+        if not ok and action_ids and _actions_mod.is_transient_refusal(last):
+            import time as _t
+            self._ui.line.emit(
+                f"[info] {label}: device temporarily unreadable "
+                "(re-enumerating?) — settling 2.5s and retrying ...")
+            _t.sleep(2.5)
+            ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
         if not ok:
             self._ui.line.emit(
                 f"[refused] {label} is not valid for this device right now "
                 f"({device_key}): {last}")
             self._ui.toast.emit("warn", "Unsupported for this device",
                                 f"{label} cannot run on the selected device "
-                                "in its current state.")
+                                "in its current state. If the GUI shows it "
+                                "connected, wait a moment and retry.")
             return None, None, None
         if not _flow_start(label, destructive=destructive, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
@@ -5502,10 +5510,23 @@ class FlashPilotWindow(QMainWindow):
         flux.set_state("VALIDATED")
         tgt = _devices.resolve_usb_target(device_key)
         if not tgt:
+            # Same transient window as validation (serial unreadable for a
+            # moment while re-enumerating): settle and retry once before
+            # refusing. The lock is held, so this briefly blocks sibling
+            # ops on the same device only — acceptable on a failure path.
+            import time as _t
+            self._ui.line.emit(
+                f"[info] {label}: transport unreadable "
+                "(re-enumerating?) — settling 2.5s and retrying ...")
+            _t.sleep(2.5)
+            tgt = _devices.resolve_usb_target(device_key)
+        if not tgt:
             self._ui.line.emit(
                 f"[refused] {label}: {device_key} left USB before start.")
             self._ui.toast.emit("warn", "Device gone",
-                                "The device disconnected before the operation started.")
+                                "The device disconnected before the operation started. "
+                                "If the GUI still shows it connected, wait a moment "
+                                "and retry.")
             _flow_end(key=device_key)
             return None, None, None
         args = list(args)
@@ -5558,7 +5579,9 @@ class FlashPilotWindow(QMainWindow):
             device_key = picked
         if not device_key:
             self._ui.line.emit(
-                "[warn] No authorized ADB device — enable USB debugging and tap Allow")
+                "[warn] No authorized ADB device found right now — enable USB "
+                "debugging and tap Allow. If the GUI shows the device as "
+                "connected, it may be re-enumerating: wait a moment and retry.")
             self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
             return None, None, None
         serial = self._adb_serial_for_key(device_key)
@@ -5568,7 +5591,16 @@ class FlashPilotWindow(QMainWindow):
             self._ui.toast.emit("warn", "Cannot target device",
                                 "The selected device has no usable ADB serial.")
             return None, None, None
+        # One retry on transient resolution failures: USB serials can be
+        # unreadable for a moment while a device re-enumerates (marginal
+        # links/cables), while the ADB daemon still reports it connected.
+        # Retrying once after a short settle covers that window; a real
+        # absence fails again with a clear message.
         ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
+        if not ok and _actions_mod.is_transient_refusal(last):
+            import time as _t
+            _t.sleep(2.5)
+            ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
         if not ok:
             self._ui.line.emit(
                 f"[refused] {label} is not valid for this device right now "
@@ -6610,7 +6642,7 @@ class FlashPilotWindow(QMainWindow):
                     "svc usb setFunctions adb",
                 ):
                     try:
-                        out = bridge.adb_shell(cmd, timeout=10, serial=serial)
+                        out = bridge.adb_shell(cmd, timeout=10, serial=serial, rescue=False)
                         if out:
                             emit(f"  {cmd} -> {out[:120]}")
                         else:
@@ -12056,7 +12088,7 @@ class FlashPilotWindow(QMainWindow):
 
         def _sysfs(path):
             try:
-                return bridge.adb_shell(f"cat {path}", timeout=8, serial=serial).strip()
+                return bridge.adb_shell(f"cat {path}", timeout=8, serial=serial, rescue=False).strip()
             except bridge.BridgeError:
                 return None
             except Exception:  # noqa: BLE001
@@ -12161,7 +12193,7 @@ class FlashPilotWindow(QMainWindow):
 
                 # -- dumpsys battery --
                 try:
-                    raw = bridge.adb_shell("dumpsys battery", timeout=15, serial=serial)
+                    raw = bridge.adb_shell("dumpsys battery", timeout=15, serial=serial, rescue=False)
                     lines.append("--- dumpsys battery ---")
                     for line in raw.splitlines():
                         s = line.strip()
@@ -12201,7 +12233,7 @@ class FlashPilotWindow(QMainWindow):
                 # -- dumpsys batteryproperties --
                 try:
                     raw = bridge.adb_shell(
-                        "dumpsys batteryproperties", timeout=15, serial=serial
+                        "dumpsys batteryproperties", timeout=15, serial=serial, rescue=False
                     )
                     lines.append("--- dumpsys batteryproperties ---")
                     for line in raw.splitlines():
@@ -12230,7 +12262,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     raw = bridge.adb_shell(
                         "dumpsys batterystats | grep -A2 'Estimated power use\\|Power use by\\|Uid u0a'",
-                        timeout=30, serial=serial,
+                        timeout=30, serial=serial, rescue=False
                     )
                     if raw.strip():
                         lines.append("--- top consumers ---")
@@ -12330,7 +12362,7 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=90, serial=serial)
+                        bridge.adb_shell(cmd, timeout=90, serial=serial, rescue=False)
                         emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
                         emit(f"   [skip] {label}: {e}")
@@ -12342,14 +12374,14 @@ class FlashPilotWindow(QMainWindow):
                           "ble_scan_always_enabled", "wifi_scan_always_enabled"):
                     try:
                         v = bridge.adb_shell(
-                            f"settings get global {k}", timeout=12, serial=serial
+                            f"settings get global {k}", timeout=12, serial=serial, rescue=False
                         ).strip()
                         lines.append(f"   {k} = {v}")
                     except bridge.BridgeError:
                         lines.append(f"   {k} = (unreadable)")
                 try:
                     v = bridge.adb_shell(
-                        "settings get system screen_off_timeout", timeout=12, serial=serial
+                        "settings get system screen_off_timeout", timeout=12, serial=serial, rescue=False
                     ).strip()
                     lines.append(f"   screen_off_timeout = {v}")
                 except bridge.BridgeError:
@@ -12422,7 +12454,7 @@ class FlashPilotWindow(QMainWindow):
                     try:
                         v = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/voltage_now",
-                            timeout=8, serial=serial,
+                            timeout=8, serial=serial, rescue=False
                         ).strip()
                         return int(v) / 1000.0 if v else None
                     except (bridge.BridgeError, ValueError):
@@ -12432,7 +12464,7 @@ class FlashPilotWindow(QMainWindow):
                     try:
                         t = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/temp",
-                            timeout=8, serial=serial,
+                            timeout=8, serial=serial, rescue=False
                         ).strip()
                         return int(t) / 10.0 if t else None
                     except (bridge.BridgeError, ValueError):
@@ -12454,7 +12486,7 @@ class FlashPilotWindow(QMainWindow):
                     "input keyevent KEYCODE_WAKEUP",
                 ):
                     try:
-                        bridge.adb_shell(cmd, timeout=10, serial=serial)
+                        bridge.adb_shell(cmd, timeout=10, serial=serial, rescue=False)
                     except bridge.BridgeError:
                         pass
                 restored = False  # phone is now maxed - must restore below
@@ -12462,7 +12494,7 @@ class FlashPilotWindow(QMainWindow):
                 # CPU burn in background
                 bridge.adb_shell(
                     "nohup sh -c 'i=0; while [ $i -lt 10000000 ]; do i=$((i+1)); done' >/dev/null 2>&1 &",
-                    timeout=8, serial=serial,
+                    timeout=8, serial=serial, rescue=False
                 )
 
                 import time as _time
@@ -12542,7 +12574,7 @@ class FlashPilotWindow(QMainWindow):
                     try:
                         bridge.adb_shell(
                             "settings put system screen_brightness_mode 1", timeout=8,
-                            serial=serial,
+                            serial=serial, rescue=False
                         )
                     except bridge.BridgeError:
                         pass
@@ -12699,7 +12731,7 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in probes:
                     try:
-                        v = bridge.adb_shell(cmd, timeout=12, serial=serial).strip()
+                        v = bridge.adb_shell(cmd, timeout=12, serial=serial, rescue=False).strip()
                         if v:
                             lines.append(f"   {label:16}: {v}")
                     except (bridge.BridgeError, ValueError):
@@ -12707,7 +12739,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     w = bridge.adb_shell(
                         "dumpsys wifi 2>/dev/null | grep -i 'Wi-Fi is' | head -1",
-                        timeout=15, serial=serial,
+                        timeout=15, serial=serial, rescue=False
                     ).strip()
                     if w:
                         lines.append(f"   {'Wi-Fi status':16}: {w}")
@@ -12717,7 +12749,7 @@ class FlashPilotWindow(QMainWindow):
                     c = bridge.adb_shell(
                         "dumpsys connectivity 2>/dev/null | grep -i "
                         "'Active default network' | head -1",
-                        timeout=15, serial=serial,
+                        timeout=15, serial=serial, rescue=False
                     ).strip()
                     if c:
                         lines.append(f"   {'Active net':16}: {c}")
@@ -12807,7 +12839,7 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30, serial=serial)
+                        bridge.adb_shell(cmd, timeout=30, serial=serial, rescue=False)
                         emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
                         emit(f"   [skip] {label}: {e}")
@@ -12885,7 +12917,7 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30, serial=serial)
+                        bridge.adb_shell(cmd, timeout=30, serial=serial, rescue=False)
                         emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
                         emit(f"   [skip] {label}: {e}")
@@ -12894,7 +12926,7 @@ class FlashPilotWindow(QMainWindow):
 
                 try:
                     v = bridge.adb_shell(
-                        "getprop gsm.sim.state", timeout=12, serial=serial
+                        "getprop gsm.sim.state", timeout=12, serial=serial, rescue=False
                     ).strip()
                     emit(f"\nSIM state after reset: {v or '(unknown)'}")
                 except bridge.BridgeError:

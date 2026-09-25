@@ -977,10 +977,32 @@ def _host_owned_error(stderr):
     return any(k in low for k in _HOST_DEVICE_ERRORS)
 
 
+def _server_shell_for(serial, cmd, timeout):
+    """Try one shell via the Rust server transport (zero USB, no binary).
+
+    Returns (True, stdout) on success — verbatim, even on remote nonzero
+    exit (native parity). Returns (False, None) when native must decide:
+    unpinned serial, daemon down/refused, or any bridge error (including
+    the daemon disclaiming the device — our key may differ from the
+    server's, so native auth stays authoritative). Timeout/cancel
+    propagate.
+    """
+    if not serial or serial == "-":
+        return False, None
+    try:
+        out = _run(["adb-shell-server", serial, str(int(timeout * 1000)), cmd],
+                   timeout=timeout + 10)
+    except (BridgeTimeout, BridgeCancelled):
+        raise
+    except BridgeError:
+        return False, None
+    return True, out
+
+
 def _host_shell_for(serial, cmd, timeout):
     """Try one shell command via the system server transport.
 
-    Returns (True, stdout) when the host adb handled it — stdout verbatim,
+    Returns (True, stdout) when the host adb handled it - stdout verbatim,
     even on remote nonzero exit (native-compatible: remote failure text is
     data, not an exception). Returns (False, None) when the caller should
     proceed natively: no binary, unpinned serial, transport failure, or the
@@ -1057,21 +1079,23 @@ def adb_shell(cmd, timeout=20, serial=None, rescue=True):
             ))
             if not transient:
                 raise
-            # Busy = an exclusive-claim fight. Delegate to the server
-            # transport once (zero USB touch) instead of evicting
-            # whoever holds the interface — killing the server resets
-            # fragile hardware (USB modems re-enumerate every cycle).
-            # Host failure falls through to the logic below unchanged.
+            # Busy = an exclusive-claim fight. Delegate once, least-touch
+            # first: Rust server transport (daemon, no binary, zero USB),
+            # then the host binary (starts the daemon if needed). Evicting
+            # the holder (kill-server) resets fragile hardware (USB modems
+            # re-enumerate every cycle), so it stays last resort below.
+            # Delegate failure falls through to the logic below unchanged.
             if not host_tried and "busy" in err_l and ser != "-":
                 host_tried = True
-                try:
-                    handled, out = _host_shell_for(ser, cmd, timeout)
-                    if handled:
-                        return out
-                except (BridgeTimeout, BridgeCancelled):
-                    raise
-                except BridgeError:
-                    pass
+                for _delegate in (_server_shell_for, _host_shell_for):
+                    try:
+                        handled, out = _delegate(ser, cmd, timeout)
+                        if handled:
+                            return out
+                    except (BridgeTimeout, BridgeCancelled):
+                        raise
+                    except BridgeError:
+                        pass
             # Busy while another holder owns the interface is deterministic
             # for this attempt - without a kill (rescue=False) retrying is
             # pointless churn; fail fast so the caller can fall back.

@@ -140,3 +140,67 @@ def test_qcom_corner_shows_adb_overlay(win):
     assert "05c6:90b4" in text
     assert "ADB" in text and "3588b020" in text, f"corner missing ADB line: {text!r}"
     assert "MTP" not in text
+
+
+def test_adb_begin_retries_transient_validation_once(win, monkeypatch):
+    """_adb_begin: a transient backend refusal (device mid re-enumeration)
+    retries once after settling instead of telling the user 'no adb'
+    while the monitor shows the device connected."""
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.core import jobs as _jobs
+    from python.gui.qt_app import _flow_end
+
+    row = {"key": "adb:FAKE1234", "label": "Fake", "transports": ["ADB"],
+           "serial": "FAKE1234",
+           "usb": {"vid": 0x18D1, "serial": "FAKE1234"},
+           "adb": {"serial": "FAKE1234", "state": "device", "extra": ""}}
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [row])
+    calls = {"n": 0}
+
+    def fake_validate(key, aid):
+        calls["n"] += 1
+        assert (key, aid) == ("adb:FAKE1234", "adb_shell")
+        if calls["n"] == 1:
+            raise _bridge.BridgeError("USB error: Device not found")
+        return {"allowed": True}
+
+    monkeypatch.setattr(_bridge, "validate_action", fake_validate)
+    try:
+        serial, key, flux = win._adb_begin("Battery report", "battery_report")
+        assert (serial, key) == ("FAKE1234", "adb:FAKE1234")
+        assert flux is not None and flux.state == "VALIDATED"
+        assert calls["n"] == 2
+        _jobs.finish_job(flux.job_id, "CANCELLED", "test", "TEST")
+    finally:
+        _flow_end(key="adb:FAKE1234")
+
+
+def test_adb_begin_no_retry_on_settled_refusal(win, monkeypatch):
+    """Unsupported-action refusals fail fast (no pointless settle wait)."""
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.gui.qt_app import _flow_end
+
+    row = {"key": "adb:FAKE1234", "label": "Fake", "transports": ["ADB"],
+           "serial": "FAKE1234",
+           "usb": {"vid": 0x18D1, "serial": "FAKE1234"},
+           "adb": {"serial": "FAKE1234", "state": "device", "extra": ""}}
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [row])
+    calls = {"n": 0}
+
+    def fake_validate(key, aid):
+        calls["n"] += 1
+        raise _bridge.BridgeError("action not supported",
+                                  code="ACTION_NOT_SUPPORTED")
+
+    monkeypatch.setattr(_bridge, "validate_action", fake_validate)
+    import time as _t
+
+    start = _t.monotonic()
+    try:
+        assert win._adb_begin("Battery report", "battery_report") == (None, None, None)
+    finally:
+        _flow_end(key="adb:FAKE1234")
+    assert calls["n"] == 1
+    assert _t.monotonic() - start < 2.0, "settled refusal must not sleep"

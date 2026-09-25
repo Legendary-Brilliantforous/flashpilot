@@ -812,6 +812,20 @@ fn main() {
             };
             adb::shell_cli(&args[2], timeout_ms, &args[4..])
         }
+        "adb-shell-server" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge adb-shell-server <serial> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::server_shell_cli(&args[2], timeout_ms, &args[4..])
+        }
         "adb-pull" => {
             if args.len() != 6 {
                 eprintln!("usage: flashpilot-bridge adb-pull <serial|-> <timeout_ms> <remote> <local>");

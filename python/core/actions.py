@@ -117,6 +117,27 @@ def actions_for_command(cmd):
     return CHIP_COMMAND_ACTIONS.get(cmd)
 
 
+def is_transient_refusal(err):
+    """True when a gate refusal smells like a re-enumeration window (worth
+    one retry after a short settle) rather than a settled verdict.
+
+    Transient: device gone/moved/unreadable mid-scan, timeouts, busy port.
+    Settled (no retry): unsupported action, unknown action, ambiguous
+    target (needs a human choice), permission denial.
+    """
+    low = str(err or "").lower()
+    if any(k in low for k in (
+        "not supported", "action_not_supported", "unknown action",
+        "ambiguous", "no permissions", "permission denied",
+    )):
+        return False
+    return any(k in low for k in (
+        "not found", "no device", "disconnected", "timed out", "timeout",
+        "busy", "pipe", "stall", "reset", "unreadable", "gone",
+        "transport", "no serial", "cannot determine",
+    ))
+
+
 def button_allowed(job=None, mode=None, command=None, allowed_ids=()):
     """Display-gating decision for one button: True = enabled.
 

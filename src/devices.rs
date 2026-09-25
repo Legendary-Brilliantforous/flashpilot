@@ -4,7 +4,7 @@
 use crate::error::Result;
 use crate::usb::filtering::{
     compute_transports, device_key, device_label, normalize_serial,
-    AdbDevice,
+    parse_adb_rows, AdbDevice,
 };
 use serde::Serialize;
 
@@ -44,7 +44,7 @@ pub fn list_devices_filtered_vid(vid_filter: Option<u16>) -> Result<String> {
     let phones = crate::usb::filtering::filter_phones(&usb_devices);
 
     let adb_json = crate::adb::devices_json_no_probe().unwrap_or_else(|_| "[]".to_string());
-    let adb_devices: Vec<AdbDevice> = serde_json::from_str(&adb_json).unwrap_or_default();
+    let adb_devices: Vec<AdbDevice> = parse_adb_rows(&adb_json);
 
     let adb_serials: std::collections::HashSet<String> = adb_devices
         .iter()

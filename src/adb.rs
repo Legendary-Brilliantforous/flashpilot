@@ -945,6 +945,155 @@ pub fn server_state_for_serial(serial: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// System-server transport (zero USB).
+// ---------------------------------------------------------------------------
+//
+// Same daemon as `system_server_rows`, but instead of only READING state,
+// route an operation through it: `host:transport:<serial>` selects the
+// device, then the service string (e.g. `shell:<cmd>`) runs server-side.
+// After both OKAYs the stream speaks the same amessage framing as USB bulk,
+// so `encode_msg`/`decode_header` are reused verbatim.
+//
+// Why: when the server exclusively holds the ADB interface, our native
+// open fails "Resource busy" — and evicting the holder (kill-server)
+// resets fragile hardware (USB modems re-enumerate every cycle and never
+// stabilize). Delegating to the holder costs zero USB touch: no open, no
+// detach, no claim, no CNXN. Daemon-side FAIL texts (offline,
+// unauthorized, unknown) are authoritative and surface verbatim.
+
+/// Default daemon address (override per-call for tests).
+pub const ADB_SERVER_ADDR: &str = "127.0.0.1:5037";
+
+/// Framed request/response round: 4-hex length + payload out, then OKAY
+/// (done) or FAIL + 4-hex length + message (Err with the daemon's text).
+fn server_round(stream: &mut std::net::TcpStream, payload: &str) -> Result<()> {
+    use std::io::{Read, Write};
+    let mut framed = format!("{:04x}", payload.len()).into_bytes();
+    framed.extend_from_slice(payload.as_bytes());
+    stream
+        .write_all(&framed)
+        .map_err(|e| BridgeError::Io(format!("adb server write: {e}")))?;
+    let mut ack = [0u8; 4];
+    stream
+        .read_exact(&mut ack)
+        .map_err(|e| BridgeError::Io(format!("adb server reply: {e}")))?;
+    if &ack == b"OKAY" {
+        return Ok(());
+    }
+    if &ack != b"FAIL" {
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::UnexpectedResponse(format!(
+                "adb server bad ack {:02x?}",
+                &ack
+            )),
+        ));
+    }
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact(&mut len_buf)
+        .map_err(|e| BridgeError::Io(format!("adb server fail length: {e}")))?;
+    let fail_text = String::from_utf8_lossy(&len_buf).to_string();
+    let len = usize::from_str_radix(fail_text.trim(), 16).unwrap_or(0);
+    let mut msg = vec![0u8; len.min(4096)];
+    if !msg.is_empty() {
+        stream.read_exact(&mut msg).ok();
+    }
+    Err(BridgeError::Io(format!(
+        "adb server: {}",
+        String::from_utf8_lossy(&msg)
+    )))
+}
+
+#[derive(Debug)]
+pub struct ServerConn {
+    stream: std::net::TcpStream,
+    deadline: Instant,
+}
+
+impl ServerConn {
+    /// Open a service on a device via the daemon at `addr`
+    /// (test seam; production uses [`ADB_SERVER_ADDR`]).
+    pub fn connect_at(addr: &str, serial: &str, service: &str, timeout: Duration) -> Result<Self> {
+        let stream = std::net::TcpStream::connect(addr)
+            .map_err(|e| BridgeError::Io(format!("adb server {addr}: {e}")))?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|e| BridgeError::Io(format!("adb server timeout setup: {e}")))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| BridgeError::Io(format!("adb server timeout setup: {e}")))?;
+        let mut conn = ServerConn { stream, deadline: Instant::now() + timeout };
+        server_round(&mut conn.stream, &format!("host:transport:{serial}"))?;
+        server_round(&mut conn.stream, service)?;
+        Ok(conn)
+    }
+
+    pub fn connect(serial: &str, service: &str, timeout: Duration) -> Result<Self> {
+        Self::connect_at(ADB_SERVER_ADDR, serial, service, timeout)
+    }
+
+    fn check_deadline(&self) -> Result<()> {
+        if Instant::now() > self.deadline {
+            return Err(BridgeError::Usb(UsbError::Timeout));
+        }
+        Ok(())
+    }
+
+    /// Run `shell:CMD` (service pre-selected at connect): collect raw
+    /// stdout bytes until the daemon closes the stream.
+    ///
+    /// NOTE: v1 `shell:` over the daemon TCP transport is NOT amessage-
+    /// framed — the daemon proxies the shell's stdout bytes directly
+    /// (verified live against platform-tools 35: service OKAY is followed
+    /// by raw output, then close). The packet protocol lives only
+    /// daemon<->device. Remote nonzero exit is data, not an error
+    /// (native parity).
+    pub fn shell_collect(&mut self) -> Result<String> {
+        use std::io::Read;
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            self.check_deadline()?;
+            match self.stream.read(&mut buf) {
+                Ok(0) => break, // EOF: shell exited, daemon closed.
+                Ok(n) => out.extend_from_slice(&buf[..n]),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    // Socket timeout fired: the operation is out of time.
+                    return Err(BridgeError::Usb(UsbError::Timeout));
+                }
+                Err(e) => {
+                    return Err(BridgeError::Io(format!("adb server read: {e}")));
+                }
+            }
+        }
+        Ok(String::from_utf8_lossy(&out).to_string())
+    }
+}
+
+/// `adb-shell-server <serial> <timeout_ms> <cmd...>` — shell via the system
+/// server transport (zero USB). The serial must be explicit: server routing
+/// without a pinned target would be first-device behaviour by another name.
+pub fn server_shell_cli(serial: &str, timeout_ms: u64, cmd: &[String]) -> Result<String> {
+    if cmd.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "usage: adb-shell-server <serial> <timeout_ms> <cmd...>".to_string(),
+        ));
+    }
+    if serial.is_empty() || serial == "-" {
+        return Err(BridgeError::InvalidArgument(
+            "adb-shell-server needs an explicit serial (never first-device)".to_string(),
+        ));
+    }
+    let timeout = Duration::from_millis(timeout_ms.max(1000));
+    let service = format!("shell:{}", cmd.join(" "));
+    let mut conn = ServerConn::connect(serial, &service, timeout)?;
+    conn.shell_collect()
+}
+
+// ---------------------------------------------------------------------------
 // Device open + scan.
 // ---------------------------------------------------------------------------
 
@@ -1248,6 +1397,138 @@ mod tests {
 
     fn target(serial: &str) -> AdbTarget {
         AdbTarget { vid: 0x05C6, pid: 0x90B4, bus: 1, address: 5, serial: serial.to_string() }
+    }
+
+    // -- system-server transport (mock daemon) ---------------------------
+
+    use std::net::TcpListener;
+
+    /// Read one 4-hex-framed request from the client under test.
+    fn mock_read_framed(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).unwrap();
+        let len = usize::from_str_radix(std::str::from_utf8(&len_buf).unwrap(), 16).unwrap();
+        let mut payload = vec![0u8; len];
+        stream.read_exact(&mut payload).unwrap();
+        String::from_utf8_lossy(&payload).to_string()
+    }
+
+    fn mock_send_okay(stream: &mut std::net::TcpStream) {
+        use std::io::Write;
+        stream.write_all(b"OKAY").unwrap();
+    }
+
+    fn mock_send_fail(stream: &mut std::net::TcpStream, msg: &str) {
+        use std::io::Write;
+        stream.write_all(b"FAIL").unwrap();
+        stream
+            .write_all(format!("{:04x}", msg.len()).as_bytes())
+            .unwrap();
+        stream.write_all(msg.as_bytes()).unwrap();
+    }
+
+    /// Spawn a scripted fake daemon; returns its addr. The script runs on a
+    /// thread and ends when the client disconnects or the script finishes.
+    fn mock_daemon(script: impl FnOnce(&mut std::net::TcpStream) + Send + 'static) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            script(&mut stream);
+        });
+        addr
+    }
+
+    #[test]
+    fn server_shell_transcript_success() {
+        // v1 shell: raw stdout bytes after service OKAY, then EOF.
+        // No amessage framing on the daemon<->client stream.
+        let addr = mock_daemon(|stream| {
+            use std::io::Write;
+            assert_eq!(mock_read_framed(stream), "host:transport:SER1");
+            mock_send_okay(stream);
+            assert_eq!(mock_read_framed(stream), "shell:echo hi");
+            mock_send_okay(stream);
+            stream.write_all(b"hi\n").unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let mut conn = ServerConn::connect_at(&addr, "SER1", "shell:echo hi", Duration::from_secs(5)).unwrap();
+        assert_eq!(conn.shell_collect().unwrap(), "hi\n");
+    }
+
+    #[test]
+    fn server_transport_fail_surfaces_daemon_text() {
+        let addr = mock_daemon(|stream| {
+            assert_eq!(mock_read_framed(stream), "host:transport:GHOST");
+            mock_send_fail(stream, "device offline");
+        });
+        let err = ServerConn::connect_at(&addr, "GHOST", "shell:id", Duration::from_secs(5))
+            .unwrap_err();
+        assert!(err.to_string().contains("offline"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn server_service_fail_surfaces_daemon_text() {
+        let addr = mock_daemon(|stream| {
+            assert_eq!(mock_read_framed(stream), "host:transport:SER1");
+            mock_send_okay(stream);
+            assert_eq!(mock_read_framed(stream), "shell:id");
+            mock_send_fail(stream, "unauthorized");
+        });
+        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
+            .unwrap_err();
+        assert!(err.to_string().contains("unauthorized"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn server_shell_collects_chunks_until_eof() {
+        let addr = mock_daemon(|stream| {
+            use std::io::Write;
+            assert_eq!(mock_read_framed(stream), "host:transport:SER1");
+            mock_send_okay(stream);
+            assert_eq!(mock_read_framed(stream), "shell:exit 3");
+            mock_send_okay(stream);
+            // Remote nonzero exit: text still collected, close ends it.
+            stream.write_all(b"partial").unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+        });
+        let mut conn = ServerConn::connect_at(&addr, "SER1", "shell:exit 3", Duration::from_secs(5)).unwrap();
+        assert_eq!(conn.shell_collect().unwrap(), "partial");
+    }
+
+    #[test]
+    fn server_bad_ack_is_protocol_error() {
+        let addr = mock_daemon(|stream| {
+            use std::io::Write;
+            let _ = mock_read_framed(stream);
+            stream.write_all(b"NOPE").unwrap();
+        });
+        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
+            .unwrap_err();
+        assert!(err.to_string().contains("bad ack"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn server_absent_daemon_is_io_error_not_hang() {
+        // Bind-then-drop yields a port nothing listens on.
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap().to_string();
+        drop(probe);
+        let start = Instant::now();
+        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
+            .unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(5), "connect hung");
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn server_shell_cli_rejects_unpinned_serial() {
+        assert!(server_shell_cli("", 1000, &["id".to_string()]).is_err());
+        assert!(server_shell_cli("-", 1000, &["id".to_string()]).is_err());
+        assert!(server_shell_cli("SER1", 1000, &[]).is_err());
     }
 
     #[test]
