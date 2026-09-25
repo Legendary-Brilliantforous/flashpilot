@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.6 (daemon-row fallback)
+
+- ADB tools fall back to the ADB daemon row when the USB-scan pick
+  misses on a flapping bus (the daemon is TCP-based and stays
+  authoritative for presence). Fixes 'shows connected but actions say
+  no adb'.
+
 ## 1.2.5 (MTK corner ADB overlay)
 
 - The mtk_devs corner branch now shows the ADB overlay like sibling
