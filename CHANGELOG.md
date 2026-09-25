@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.4 (ADB AUTH fix)
+
+- AUTH hash alternation corrected: SHA-256 stays in play across token
+  rounds (odd rounds SHA-256, even SHA-1). Previously a lost round-1
+  signature on a noisy link re-tokened into a wall of SHA-1 -> false
+  'not authorized' while the device was authorized.
+- _wait_for_adb tolerates transient scan failures mid-wait.
+
 ## 1.2.3 (pick resilience)
 
 - Device pick with settle-retry: every tool runner retries once after
