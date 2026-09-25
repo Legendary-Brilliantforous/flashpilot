@@ -52,7 +52,14 @@ def _wait_for_adb(ctx, log, timeout=60, key=None):
     while time.time() < deadline:
         if cancel_requested():
             raise FlowCancelled("cancelled while waiting for adb device")
-        devs = bridge.adb_status()
+        try:
+            devs = bridge.adb_status()
+        except Exception:
+            # Transient scan failure (device blipped mid-wait, our own
+            # probes contending): keep waiting — the device returning 3 s
+            # later must not kill the flow. Only the deadline ends this.
+            time.sleep(2)
+            continue
         good = [d for d in devs if d["state"] == "device"]
         if want_serial:
             good = [d for d in good if d["serial"] == want_serial]

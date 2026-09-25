@@ -543,7 +543,6 @@ impl Session {
         let key = load_or_create_key()?;
         let mut pubkey_sent = false;
         let mut token_rounds = 0u32;
-        let mut use_sha256 = true;
         loop {
             self.check_deadline()?;
             eprintln!("[adb] connect: reading reply ...");
@@ -582,12 +581,18 @@ impl Session {
                             token_rounds,
                         )));
                     }
-                    // Alternate hashes across rounds: new adbd wants
-                    // SHA-256, old (pre-10-era) wants SHA-1.
-                    if token_rounds == 2 {
-                        use_sha256 = false;
-                    }
-                    let sig = key.sign(&m.payload[..TOKEN_LEN.min(m.payload.len())], use_sha256);
+                    // Alternate hashes across rounds — and keep BOTH in
+                    // play: setting SHA-1 at round 2 and never going back
+                    // meant a modern (SHA-256) adbd whose round-1
+                    // signature was lost to transport noise (flapping
+                    // links) re-tokened into a wall of SHA-1 signatures it
+                    // always rejects -> Unauthorized after 6 rounds while
+                    // the device was authorized all along. Odd signature
+                    // rounds sign SHA-256, even rounds SHA-1.
+                    let sig = key.sign(
+                        &m.payload[..TOKEN_LEN.min(m.payload.len())],
+                        token_rounds % 2 == 1,
+                    );
                     self.write_msg(A_AUTH, AUTH_SIGNATURE, 0, &sig)?;
                 }
                 _ => {
@@ -1720,6 +1725,32 @@ mod tests {
         assert_eq!(auth_backoff_ms(5), 2000);
         assert_eq!(auth_backoff_ms(6), 2000);
         assert_eq!(auth_backoff_ms(100), 2000);
+    }
+
+    #[test]
+    fn auth_hash_alternation_keeps_sha256_in_play() {
+        // Regression: use_sha256 was flipped to false at round 2 and never
+        // back — a modern (SHA-256) adbd whose round-1 signature was lost
+        // to transport noise re-tokened into a wall of SHA-1 signatures it
+        // always rejects -> Unauthorized while the device was authorized
+        // all along. Odd signature rounds must sign SHA-256, even SHA-1.
+        let key = load_or_create_key().unwrap();
+        let token = [7u8; 20];
+        let r1 = key.sign(&token, 1 % 2 == 1);
+        let r2 = key.sign(&token, 2 % 2 == 1);
+        let r3 = key.sign(&token, 3 % 2 == 1);
+        // Round 1 and 3 are the same SHA-256 signature; round 2 differs.
+        assert_eq!(r1, r3);
+        assert_ne!(r1, r2);
+        // And the SHA-256 signature still verifies (native parity pin):
+        // modpow recovers the PKCS#1 EM, which carries the SHA-256 digest.
+        let want_digest = {
+            use sha2::{Digest, Sha256};
+            Sha256::digest(token).to_vec()
+        };
+        let msg = BigUint::from_bytes_be(&r1);
+        let em = msg.modpow(&key.e, &key.n).to_bytes_be();
+        assert!(em.windows(want_digest.len()).any(|w| w == want_digest));
     }
 
     #[test]
