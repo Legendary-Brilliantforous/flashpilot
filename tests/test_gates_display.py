@@ -204,3 +204,45 @@ def test_adb_begin_no_retry_on_settled_refusal(win, monkeypatch):
         _flow_end(key="adb:FAKE1234")
     assert calls["n"] == 1
     assert _t.monotonic() - start < 2.0, "settled refusal must not sleep"
+
+
+def test_pick_device_retries_empty_once(win, monkeypatch):
+    """A scan that misses a re-enumerating device retries once and picks
+    it up — tools stop refusing with 'no device' mid-flap."""
+    calls = {"n": 0}
+
+    def fake_choose(label, modes):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else "adb:X"
+
+    monkeypatch.setattr(win, "_choose_device", fake_choose)
+    assert win._pick_device("Battery report", "ADB") == "adb:X"
+    assert calls["n"] == 2
+
+
+def test_pick_device_empty_twice_gives_up(win, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_choose(label, modes):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(win, "_choose_device", fake_choose)
+    import time as _t
+
+    start = _t.monotonic()
+    assert win._pick_device("Battery report", "ADB") is None
+    assert calls["n"] == 2
+    assert _t.monotonic() - start >= 2.4
+
+
+def test_pick_device_cancel_never_retried(win, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_choose(label, modes):
+        calls["n"] += 1
+        return "__cancelled__"
+
+    monkeypatch.setattr(win, "_choose_device", fake_choose)
+    assert win._pick_device("Battery report", "ADB") == "__cancelled__"
+    assert calls["n"] == 1

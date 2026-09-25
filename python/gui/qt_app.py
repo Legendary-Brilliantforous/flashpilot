@@ -4184,7 +4184,7 @@ class FlashPilotWindow(QMainWindow):
         # Pin to one explicitly-picked Download-mode device: the core smart
         # flash resolves its target through the ambient scope, so without a
         # pinned key it would take the first Download-mode phone.
-        picked = self._choose_device("Flash Firmware", "Download mode")
+        picked = self._pick_device("Flash Firmware", "Download mode")
         if picked == "__cancelled__":
             return
         if not picked:
@@ -5469,7 +5469,7 @@ class FlashPilotWindow(QMainWindow):
                                     "The selected target is no longer connected.")
                 return None, None, None
         if device_key is None:
-            picked = self._choose_device(label, modes)
+            picked = self._pick_device(label, modes)
             if picked == "__cancelled__":
                 self._ui.line.emit("[info] device choice cancelled.")
                 return None, None, None
@@ -5572,7 +5572,7 @@ class FlashPilotWindow(QMainWindow):
         from ..core import actions as _actions_mod
 
         if device_key is None:
-            picked = self._choose_device(label, "ADB")
+            picked = self._pick_device(label, "ADB")
             if picked == "__cancelled__":
                 self._ui.line.emit("[info] device choice cancelled.")
                 return None, None, None
@@ -13082,6 +13082,28 @@ class FlashPilotWindow(QMainWindow):
             return "__cancelled__"
         return checked.property("device_key") or "__cancelled__"
 
+    def _pick_device(self, label, modes):
+        """Pick a device key, with one settle-retry on transient emptiness.
+
+        Returns the key, None (nothing detected twice), or "__cancelled__"
+        (user dismissed the chooser — never retried, the dismissal stands).
+        A re-enumerating device is invisible to a scan for 1-3 s while the
+        daemon still reports it connected; without the retry, tools refuse
+        with "no device" mid-flap while the GUI shows it connected.
+        """
+        picked = self._choose_device(label, modes)
+        if picked is None:
+            import time as _t
+            try:
+                self._ui.line.emit(
+                    f"[info] {label}: no matching device this scan "
+                    "(re-enumerating?) — settling 2.5s and retrying ...")
+            except Exception:
+                pass
+            _t.sleep(2.5)
+            picked = self._choose_device(label, modes)
+        return picked
+
     def _gate_job_action(self, job, mode, device_key):
         """Ask the backend whether this job may run on this device now.
 
@@ -13194,7 +13216,7 @@ class FlashPilotWindow(QMainWindow):
         through the ownership overlay; only a matching per-run token sets
         ctx['experimental_ack'] (no cross-feature bleed, no stale auth)."""
         if device_key is None:
-            picked = self._choose_device(job, mode)
+            picked = self._pick_device(job, mode)
             if picked == "__cancelled__":
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
@@ -13498,7 +13520,7 @@ class FlashPilotWindow(QMainWindow):
         method pickers; this lets the dedicated chip pages run them too.
         ``device_key`` pins the run to one phone (None = ambient/legacy)."""
         if device_key is None:
-            picked = self._choose_device(job, mode)
+            picked = self._pick_device(job, mode)
             if picked == "__cancelled__":
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
