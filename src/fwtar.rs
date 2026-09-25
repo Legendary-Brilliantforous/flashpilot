@@ -168,6 +168,21 @@ pub fn extract_tar(path: &str, out_dir: &Path) -> Result<Vec<PathBuf>> {
         if name.ends_with('/') {
             continue;
         }
+        // Path traversal guard: a malicious firmware tarball must not escape
+        // the staging directory via `..` components or absolute members
+        // (Path::join does not sanitize either). Reject the whole archive.
+        let member = std::path::Path::new(&name);
+        if member.is_absolute()
+            || member
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(BridgeError::Firmware(
+                crate::error::FirmwareError::ArchiveError(format!(
+                    "tar member escapes staging dir: {name}"
+                )),
+            ));
+        }
         let dest = out_dir.join(&name);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| BridgeError::Io(e.to_string()))?;
@@ -284,6 +299,7 @@ pub fn prepare_archive(tar_path: &str, out_dir: &Path) -> Result<Vec<(String, Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::FirmwareError;
 
     /// Build a real tar member and append a valid 66-byte `.tar.md5` trailer.
     fn make_tar_md5(tmp: &tempfile::TempDir) -> (String, String) {
@@ -370,5 +386,67 @@ mod tests {
         let path = tmp.path().join("fw.tar");
         fs::write(&path, &body).unwrap();
         assert!(!has_md5_trailer(&path.to_string_lossy()));
+    }
+
+    /// Build a tar with an arbitrary (possibly hostile) member name by
+    /// hand-crafting the ustar header: the `tar` crate's safe builder
+    /// refuses `..`/absolute paths, but real malicious archives are raw
+    /// bytes — which is exactly what extract_tar must reject.
+    fn make_raw_tar(tmp: &tempfile::TempDir, member: &str, filename: &str) -> String {
+        let body = b"evil";
+        let mut hdr = [0u8; 512];
+        let name = member.as_bytes();
+        assert!(name.len() < 100, "member name too long for ustar");
+        hdr[..name.len()].copy_from_slice(name);
+        hdr[100..108].copy_from_slice(b"0000644\0");
+        let size = format!("{:011o}\0", body.len());
+        hdr[124..136].copy_from_slice(size.as_bytes());
+        hdr[156] = b'0';
+        hdr[257..263].copy_from_slice(b"ustar\0");
+        hdr[148..156].copy_from_slice(b"        ");
+        let sum: u32 = hdr.iter().map(|b| *b as u32).sum();
+        let cks = format!("{sum:06o}\0 ");
+        hdr[148..156].copy_from_slice(cks.as_bytes());
+        let mut tar_bytes = hdr.to_vec();
+        let mut content = [0u8; 512];
+        content[..body.len()].copy_from_slice(body);
+        tar_bytes.extend_from_slice(&content);
+        tar_bytes.extend_from_slice(&[0u8; 1024]); // end-of-archive
+        let path = tmp.path().join(filename);
+        fs::write(&path, &tar_bytes).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn traversal_member_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stage = tmp.path().join("stage");
+        for (i, evil) in ["../escape.img", "../../escape.img", "sub/../../escape.img"]
+            .iter()
+            .enumerate()
+        {
+            let p = make_raw_tar(&tmp, evil, &format!("evil{i}.tar"));
+            let err = extract_tar(&p, &stage).unwrap_err();
+            assert!(
+                matches!(err, BridgeError::Firmware(FirmwareError::ArchiveError(_))),
+                "member {evil}: unexpected {err}"
+            );
+        }
+        assert!(
+            !tmp.path().join("escape.img").exists(),
+            "traversal member escaped the staging dir"
+        );
+    }
+
+    #[test]
+    fn absolute_member_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stage = tmp.path().join("stage");
+        let p = make_raw_tar(&tmp, "/tmp/absolute.img", "abs.tar");
+        let err = extract_tar(&p, &stage).unwrap_err();
+        assert!(
+            matches!(err, BridgeError::Firmware(FirmwareError::ArchiveError(_))),
+            "unexpected {err}"
+        );
     }
 }

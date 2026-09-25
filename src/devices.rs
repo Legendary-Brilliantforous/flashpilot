@@ -33,11 +33,17 @@ pub fn list_devices_filtered() -> Result<String> {
 }
 
 /// Merge USB + ADB into GUI rows, optionally restricted to a vendor ID.
+///
+/// Uses the zero-touch presence listing (`devices_json_no_probe`): row
+/// rebuilds fire on change-detection — i.e. precisely during USB
+/// re-enumeration — which is the worst moment to claim interfaces and
+/// handshake. States come from the system server when it runs; otherwise
+/// rows report presence with `unknown` state (honest, never guessed).
 pub fn list_devices_filtered_vid(vid_filter: Option<u16>) -> Result<String> {
     let usb_devices = crate::usb::collect_devices(vid_filter)?;
     let phones = crate::usb::filtering::filter_phones(&usb_devices);
 
-    let adb_json = crate::adb::devices_json().unwrap_or_else(|_| "[]".to_string());
+    let adb_json = crate::adb::devices_json_no_probe().unwrap_or_else(|_| "[]".to_string());
     let adb_devices: Vec<AdbDevice> = serde_json::from_str(&adb_json).unwrap_or_default();
 
     let adb_serials: std::collections::HashSet<String> = adb_devices

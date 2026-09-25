@@ -64,8 +64,13 @@ pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
     let loc: Vec<&str> = wanted[1].split(':').collect();
-    let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
-    let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
+    let (bus, addr): (u8, u8) = match (loc.first(), loc.get(1)) {
+        (Some(b), Some(a)) => (
+            b.parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?,
+            a.parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?,
+        ),
+        _ => return Err(BridgeError::InvalidArgument("target must be vid:pid@bus:addr".into())),
+    };
 
     let target_dev = devices
         .iter()
@@ -187,8 +192,13 @@ pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
     let loc: Vec<&str> = wanted[1].split(':').collect();
-    let bus: u8 = loc[0].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?;
-    let addr: u8 = loc[1].parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?;
+    let (bus, addr): (u8, u8) = match (loc.first(), loc.get(1)) {
+        (Some(b), Some(a)) => (
+            b.parse().map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?,
+            a.parse().map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?,
+        ),
+        _ => return Err(BridgeError::InvalidArgument("target must be vid:pid@bus:addr".into())),
+    };
 
     let target_dev = devices
         .iter()
@@ -255,4 +265,35 @@ pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
         "{{\"sent\": \"{}\", \"len\": {}, \"reply\": \"{}\"}}",
         sent_hex, n, hex_out
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colonless_bus_addr_is_error_not_panic() {
+        // Regression: wanted[1] without ':' used to index loc[1] and panic.
+        // collect_devices() runs first and succeeds headless (empty list),
+        // so a malformed target must surface as InvalidArgument.
+        let err = bulk_send("04e8:685d@2", "aa", 64).unwrap_err();
+        assert!(
+            matches!(err, BridgeError::InvalidArgument(_)),
+            "unexpected: {err}"
+        );
+        let err = bulk_session("04e8:685d@2", &[]).unwrap_err();
+        assert!(
+            matches!(err, BridgeError::InvalidArgument(_)),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_at_separator_is_error_not_panic() {
+        let err = bulk_send("04e8:685d", "aa", 64).unwrap_err();
+        assert!(
+            matches!(err, BridgeError::InvalidArgument(_)),
+            "unexpected: {err}"
+        );
+    }
 }

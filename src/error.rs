@@ -67,6 +67,9 @@ pub enum FirmwareError {
     ScatterParseError(String),
     MismatchedVbmeta,
     VerificationFailed,
+    /// Firmware container itself is hostile (path traversal, absolute
+    /// members, tampered metadata) — rejected before extraction/flash.
+    ArchiveError(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +91,10 @@ pub enum DeviceStateError {
     NotInPreloaderMode,
     DeviceBusy,
     RebootRequired,
+    /// Unscoped target ("auto"/first-device) with several candidates: the
+    /// caller must pin an explicit serial/transport instead of letting the
+    /// backend guess. `count` is the number of matching devices.
+    AmbiguousTarget { count: usize },
 }
 
 impl fmt::Display for BridgeError {
@@ -156,6 +163,7 @@ impl fmt::Display for FirmwareError {
             FirmwareError::ScatterParseError(s) => write!(f, "Scatter parse error: {}", s),
             FirmwareError::MismatchedVbmeta => write!(f, "Mismatched vbmeta"),
             FirmwareError::VerificationFailed => write!(f, "Verification failed"),
+            FirmwareError::ArchiveError(s) => write!(f, "Firmware archive rejected: {}", s),
         }
     }
 }
@@ -182,6 +190,10 @@ impl fmt::Display for DeviceStateError {
             DeviceStateError::NotInPreloaderMode => write!(f, "Not in preloader mode"),
             DeviceStateError::DeviceBusy => write!(f, "Device busy"),
             DeviceStateError::RebootRequired => write!(f, "Reboot required"),
+            DeviceStateError::AmbiguousTarget { count } => write!(
+                f,
+                "Ambiguous target: {count} devices match — specify an explicit serial/transport"
+            ),
         }
     }
 }

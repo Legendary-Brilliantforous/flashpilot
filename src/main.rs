@@ -3,12 +3,14 @@ mod apple;
 mod at;
 mod bulk;
 mod config;
+mod device;
 mod devices;
 mod error;
 mod hid;
 mod mtk;
 mod mtk_da;
 mod mtk_exploit;
+mod mtk_daloader;
 mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
@@ -139,6 +141,13 @@ fn main() {
         // `detect`'s caller's choice (bridge.find_samsung filters in Python).
         "detect" => usb::detect(None),
         "detect-all" => usb::detect(None),
+        "claim-test" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge claim-test <bus:address>");
+                exit(2);
+            }
+            usb::claim_test(&args[2])
+        }
         "hid-list" => hid::list_samsung_hid(),
         "hid-open" => {
             if args.len() < 4 {
@@ -229,8 +238,16 @@ fn main() {
             if args.len() < 5 {
                 eprintln!("usage: flashpilot-bridge mtk-flash-samsung <target> <da_file> <firmware_dir>");
                 exit(2);
+            }            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
+        }
+        "mtk-frp-brom" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge mtk-frp-brom <target> <da_dir>");
+                eprintln!("  FRP bypass for ANY MediaTek device via BROM with the bundled");
+                eprintln!("  mtkclient DA containers (V5/V6) - no user-supplied DA needed.");
+                exit(2);
             }
-            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
+            mtk_da::mtk_frp_brom_auto(&args[2], &args[3])
         }
         "mtk-read-part" => {
             if args.len() < 6 {
@@ -467,9 +484,12 @@ fn main() {
                 exit(2);
             }
             let loc: Vec<&str> = args[2].split(':').collect();
-            let (bus, addr) = match (loc[0].parse::<u8>(), loc[1].parse::<u8>()) {
-                (Ok(b), Ok(a)) => (b, a),
-                _ => { eprintln!("error: bad bus:addr"); exit(2); }
+            let (bus, addr) = match (loc.first(), loc.get(1)) {
+                (Some(b), Some(a)) => match (b.parse::<u8>(), a.parse::<u8>()) {
+                    (Ok(b), Ok(a)) => (b, a),
+                    _ => { eprintln!("error: bad bus:addr"); exit(2); }
+                },
+                _ => { eprintln!("error: target must be 'bus:addr'"); exit(2); }
             };
             mtk_exploit::preloader_crash_to_brom(bus, addr)
         }
@@ -765,7 +785,19 @@ fn main() {
             }
             spd::spd_flash_cli(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries)
         }
-        "adb-devices" => adb::devices_json(),
+        "adb-devices" => {
+            // --no-probe: zero-touch presence listing (server rows +
+            // descriptor-triple rows, never open/claim/handshake). Poll,
+            // monitor and display paths MUST use this: native probing from
+            // a poll loop re-enumerates fragile hardware (USB modems)
+            // every cycle. Verified listing (default) stays for flows and
+            // explicit operations, which verify per-command anyway.
+            if args.iter().any(|a| a == "--no-probe") {
+                adb::devices_json_no_probe()
+            } else {
+                adb::devices_json()
+            }
+        }
         "adb-shell" => {
             if args.len() < 5 {
                 eprintln!("usage: flashpilot-bridge adb-shell <serial|-> <timeout_ms> <cmd...>");
@@ -1089,6 +1121,30 @@ fn main() {
             }
             sam_download::odin_agent(&args[2])
         }
+        "actions-for" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge actions-for <device-key>");
+                eprintln!("  device-key: adb:<serial> | usb:<port-path> | usb:<vid>:<pid>@<bus>:<addr>");
+                exit(2);
+            }
+            device::actions_for_key(&args[2])
+        }
+        "validate-action" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge validate-action <device-key> <action-id>");
+                exit(2);
+            }
+            (|| -> crate::error::Result<String> {
+                let profile = device::profile_for_key(&args[2])?;
+                let def = device::validate_action(&profile, &args[3])?;
+                Ok(serde_json::json!({
+                    "allowed": true,
+                    "key": profile.key,
+                    "action": {"id": def.id, "display_name": def.display_name},
+                })
+                .to_string())
+            })()
+        }
         "odin-flash-multi" => {
             if args.len() < 6 {
                 eprintln!("usage: flashpilot-bridge odin-flash-multi <target> <pit_file> <reboot:0|1> <part=file> [part=file ...]");
@@ -1120,7 +1176,15 @@ fn main() {
     match result {
         Ok(out) => println!("{out}"),
         Err(e) => {
-            eprintln!("error: {e}");
+            // Device identity context: every error line names the device
+            // reference it ran against, so concurrent-device logs answer
+            // "which device did this fail on". Explicit allowlist — file
+            // paths must never be sniffed as device targets.
+            if let Some(dev) = device_arg(args.get(1).map(|s| s.as_str()).unwrap_or(""), args.get(2)) {
+                eprintln!("error: {e} [device {dev}]");
+            } else {
+                eprintln!("error: {e}");
+            }
             // Actionable explanation: convert raw protocol/USB errors into
             // (why, fix) pairs so users know what to do next.
             let hint = sam_errors::render(&e.to_string());
@@ -1129,5 +1193,88 @@ fn main() {
             }
             exit(1);
         }
+    }
+}
+
+/// `args[2]` is a device reference for these commands (target, serial or
+/// key). Returns it for error-line context. Keep in sync with the dispatch
+/// above; commands not listed get no context (safe default).
+fn device_arg(cmd: &str, arg2: Option<&String>) -> Option<String> {
+    let takes_device = matches!(
+        cmd,
+        "claim-test"
+            | "bulk-send"
+            | "bulk-session"
+            | "mtk-da-upload"
+            | "mtk-flash"
+            | "mtk-backup"
+            | "mtk-gpt"
+            | "mtk-flash-part"
+            | "mtk-flash-samsung"
+            | "mtk-read-part"
+            | "mtk-verify-part"
+            | "mtk-frp"
+            | "mtk-frp-gpt"
+            | "mtk-frp-brom"
+            | "mtk-adb-enable"
+            | "mtk-reboot"
+            | "mtk-factory"
+            | "mtk-emergency"
+            | "mtk-bypass"
+            | "mtk-dealer"
+            | "mtk-emergency-mode"
+            | "mtk-exploit"
+            | "mtk-crash-brom"
+            | "mtk-brom-exploit"
+            | "mtk-mem-probe"
+            | "mtk-reset"
+            | "qcom-sahara"
+            | "qcom-firehose"
+            | "qcom-flash"
+            | "qcom-flash-one"
+            | "qcom-verify-part"
+            | "qcom-backup"
+            | "qcom-partitions"
+            | "qcom-reboot"
+            | "qcom-info"
+            | "qcom-frp-reset"
+            | "spd-info"
+            | "spd-format"
+            | "spd-frp"
+            | "spd-backup"
+            | "spd-partitions"
+            | "spd-reset"
+            | "spd-readback"
+            | "spd-boot"
+            | "spd-flash"
+            | "adb-shell"
+            | "adb-pull"
+            | "adb-push"
+            | "fastboot-cmd"
+            | "usb-config"
+            | "usb-detach-kernel"
+            | "usb-reset"
+            | "usb-claim-test"
+            | "at-send"
+            | "at-kg-unlock"
+            | "at-mdm-disable"
+            | "at-carrier-unlock"
+            | "odin-connect"
+            | "odin-pit"
+            | "odin-pit-mtk"
+            | "odin-info"
+            | "odin-model"
+            | "odin-flash-tar"
+            | "odin-flash"
+            | "odin-send-pit"
+            | "odin-agent"
+            | "odin-flash-multi"
+            | "actions-for"
+            | "validate-action"
+    );
+    if takes_device {
+        arg2.cloned()
+    } else {
+        None
     }
 }

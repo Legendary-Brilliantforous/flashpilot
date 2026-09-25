@@ -14,6 +14,11 @@ use crate::error::{Result, BridgeError};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
+
+/// Per-operation socket deadline: a hung usbmuxd or half-open lockdown
+/// relay must fail, never block the bridge (and its Python caller) forever.
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
 const USBMUXD_SOCKET: &str = "/var/run/usbmuxd";
 const LOCKDOWN_PORT: u16 = 62078;
@@ -129,8 +134,15 @@ fn read_mux_message(stream: &mut UnixStream) -> Result<(u32, String)> {
 }
 
 fn usbmuxd_socket() -> Result<UnixStream> {
-    UnixStream::connect(USBMUXD_SOCKET)
-        .map_err(|e| BridgeError::Io(format!("connect {USBMUXD_SOCKET}: {e} (is usbmuxd running?)")))
+    let stream = UnixStream::connect(USBMUXD_SOCKET)
+        .map_err(|e| BridgeError::Io(format!("connect {USBMUXD_SOCKET}: {e} (is usbmuxd running?)")))?;
+    stream
+        .set_read_timeout(Some(SOCKET_TIMEOUT))
+        .map_err(|e| BridgeError::Io(format!("usbmuxd read-timeout setup: {e}")))?;
+    stream
+        .set_write_timeout(Some(SOCKET_TIMEOUT))
+        .map_err(|e| BridgeError::Io(format!("usbmuxd write-timeout setup: {e}")))?;
+    Ok(stream)
 }
 
 /// List devices attached to usbmuxd (native Listen round).

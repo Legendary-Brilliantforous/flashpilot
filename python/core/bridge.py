@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -136,33 +137,21 @@ def _classify_bridge_error(stderr: str, args: list) -> BridgeError:
     return BridgeError(stderr.strip())
 
 
-# ---- cooperative cancel (mirrors flow.py) --------------------------------
+# ---- cooperative cancel (single registry: core/cancel.py) ----------------
 # Per-device scopes plus a broadcast bus: request_cancel() with no key stops
 # everything (global STOP); request_cancel(key) stops one device. Checks
-# consult the scope event OR the broadcast bus.
-_cancel = threading.Event()
-_cancels = {}
-_cancels_lock = threading.Lock()
+# consult the scope event OR the broadcast bus. flow.py delegates to the
+# same registry, so a GUI Stop trips flow-level checks AND the _run poll
+# loop together (previously two desynchronized event sets).
+from . import cancel as _cancel_registry
 
 
 def _cancel_scope_key(key):
-    if key is not None:
-        return key
-    try:
-        from . import devices as _dev
-
-        return _dev.current_key()
-    except (ImportError, AttributeError):
-        return None
+    return _cancel_registry._scope_key(key)
 
 
 def _cancel_event(key):
-    with _cancels_lock:
-        ev = _cancels.get(key)
-        if ev is None:
-            ev = threading.Event()
-            _cancels[key] = ev
-        return ev
+    return _cancel_registry._event(key)
 
 # Optional live-log callback: the GUI wires this to its console so Rust
 # eprintln! progress lines reach the screen in real time.
@@ -190,24 +179,15 @@ def _forward_log(line):
 
 
 def request_cancel(key=None):
-    if key is None:
-        _cancel.set()
-        with _cancels_lock:
-            for ev in _cancels.values():
-                ev.set()
-    else:
-        _cancel_event(key).set()
+    return _cancel_registry.request_cancel(key)
 
 
 def clear_cancel(key=None):
-    _cancel_event(_cancel_scope_key(key)).clear()
-    _cancel.clear()
+    return _cancel_registry.clear_cancel(key)
 
 
 def cancel_requested(key=None):
-    if _cancel.is_set():
-        return True
-    return _cancel_event(_cancel_scope_key(key)).is_set()
+    return _cancel_registry.cancel_requested(key)
 
 
 def _graceful_terminate(proc, timeout=3.0):
@@ -422,6 +402,67 @@ def list_merged(vid_filter=None, timeout=30):
     if vid_filter is not None:
         args.append(f"--vid={vid_filter:04x}")
     return json.loads(_run(args, timeout=timeout))
+
+
+def actions_for(device_key, timeout=30):
+    """Backend-authoritative valid action set for one device right now.
+
+    Resolves ``device_key`` (adb:<serial> | usb:<ports> |
+    usb:<vid>:<pid>@<bus>:<addr>) to its current transport, builds the
+    device profile, runs capability detection and returns
+    ``{key, profile, actions}`` where ``actions`` is [{id, display_name,
+    description}]. The GUI must offer exactly this set — never decide
+    compatibility itself. Raises BridgeError when the device is gone or
+    the key is ambiguous.
+    """
+    if not device_key or not isinstance(device_key, str):
+        raise BridgeError("actions_for needs a device key", code="BAD_DEVICE_KEY")
+    out = _run(["actions-for", device_key], timeout=timeout)
+    try:
+        return json.loads(out)
+    except ValueError:
+        raise BridgeError(f"actions-for returned non-JSON: {out[:200]}")
+
+
+def validate_action(device_key, action_id, timeout=30):
+    """Backend enforcement: is ``action_id`` valid for ``device_key`` now?
+
+    Returns the ``{"allowed": true, ...}`` dict when valid; raises
+    BridgeError(code="ACTION_NOT_SUPPORTED") when the backend rejects the
+    action — even when the caller is a hand-driven GUI path. Identity
+    failures (device gone, ambiguous, bad key) propagate with their own
+    codes: those are resolution problems, not capability rejections.
+    Runners must call this before executing any destructive flow.
+    """
+    if not device_key or not isinstance(device_key, str):
+        raise BridgeError("validate_action needs a device key", code="BAD_DEVICE_KEY")
+    if not action_id or not isinstance(action_id, str):
+        raise BridgeError("validate_action needs an action id", code="BAD_ACTION_ID")
+    try:
+        out = _run(["validate-action", device_key, action_id], timeout=timeout)
+    except BridgeError as e:
+        low = str(e).lower()
+        if any(k in low for k in (
+            "not found", "no device", "disconnected", "unparseable",
+            "ambiguous target",
+        )):
+            raise
+        raise BridgeError(
+            str(e),
+            code="ACTION_NOT_SUPPORTED",
+            details={"device_key": device_key, "action": action_id},
+        )
+    try:
+        data = json.loads(out)
+    except ValueError:
+        raise BridgeError(f"validate-action returned non-JSON: {out[:200]}")
+    if not isinstance(data, dict) or not data.get("allowed"):
+        raise BridgeError(
+            f"action {action_id!r} not supported for device {device_key}",
+            code="ACTION_NOT_SUPPORTED",
+            details={"device_key": device_key, "action": action_id},
+        )
+    return data
 
 
 def detect_mtk():
@@ -712,7 +753,13 @@ def _free_adb_interface(err_str: str) -> bool:
     server (or another process) is holding the phone's interface - our
     native bridge cannot coexist with an exclusive claim. Kill the system
     adb server (a HOST-side op, not device I/O) so the native transport can
-    claim it. Returns True when a kill was attempted."""
+    claim it. Returns True when a kill was attempted.
+
+    Callers must be deliberate user-initiated operations ONLY. This must
+    never run from the passive GUI poll: the dying adb server makes the
+    phone's adbd reset its USB function (re-enumeration at a new address)
+    every time, which is the exact address-churn + "never shows connected"
+    flap users report."""
     import subprocess as _sp
     low = (err_str or "").lower()
     if "busy" not in low:
@@ -736,39 +783,33 @@ def _free_adb_interface(err_str: str) -> bool:
 
 
 def adb_devices():
-    """Native `adb-devices` row list, with the busy-holder rescue.
+    """Native `adb-devices` row list (the busy-holder rescue lives on the
+    Rust side and in `adb_shell` for user-initiated operations only).
 
-    The busy state is returned as an honest state LINE (not an error), so
-    the rescue triggers on it here: when the system adb server holds the
-    interface, kill it (host-side op) and retry once over the native
-    transport."""
-    import time as _t
-    lines = json.loads(_run(["adb-devices"]))
-    if any("busy" in (l or "") for l in lines):
-        if _free_adb_interface("busy"):
-            _t.sleep(0.5)
-            lines = json.loads(_run(["adb-devices"]))
-    return lines
+    The busy state is returned as an honest state LINE (not an error) so
+    the GUI surfaces it. NO kill-server here: this runs on every GUI poll,
+    and killing the system adb server made phones re-enumerate at a new
+    address on every cycle."""
+    return json.loads(_run(["adb-devices"]))
 
 
-def adb_status():
-    """Parsed `adb devices -l`: list of {serial, state, extra}.
-    state is 'device' (authorized), 'unauthorized', 'offline', 'recovery', ..."""
-    import time as _t
+def adb_presence():
+    """Zero-touch ADB presence for poll/monitor/display paths.
+
+    Same row contract as `adb_devices` but the Rust side never opens,
+    claims or handshakes USB (`adb-devices --no-probe`): system-server rows
+    plus `unknown`-state rows for descriptor-triple devices. Native
+    claim/CNXN cycles from a poll loop reset fragile hardware (USB modems
+    re-enumerate every cycle and never stabilize) — presence must not
+    touch. Flows and explicit operations keep verified `adb_status()` and
+    per-command native verification.
+    """
+    return json.loads(_run(["adb-devices", "--no-probe"]))
+
+
+def _parse_adb_lines(lines):
+    """Parse `SERIAL state extras` rows into {serial, state, extra} dicts."""
     devs = []
-    lines = None
-    for attempt in range(3):
-        try:
-            lines = adb_devices()
-            break
-        except BridgeError as e:
-            if attempt == 2:
-                if _free_adb_interface(str(e)):
-                    lines = adb_devices()
-                else:
-                    raise
-            else:
-                _t.sleep(1.5)
     for line in (lines or []):
         parts = line.split(None, 2)
         if len(parts) < 2:
@@ -779,6 +820,40 @@ def adb_status():
             "extra": parts[2] if len(parts) > 2 else "",
         })
     return devs
+
+
+def adb_status():
+    """Parsed `adb devices -l`: list of {serial, state, extra}.
+    state is 'device' (authorized), 'unauthorized', 'offline', 'recovery', ...
+
+    Verified listing (native probe for server-unknown serials): for flows
+    and explicit operations. Poll/monitor/display paths must use
+    `adb_presence_status()` instead — verification claims interfaces and
+    handshakes, which re-enumerates fragile hardware every cycle."""
+    import time as _t
+    devs = []
+    lines = None
+    last = None
+    for attempt in range(3):
+        try:
+            lines = adb_devices()
+            break
+        except BridgeError as e:
+            last = e
+            _t.sleep(1.5)
+    if lines is None:
+        if last is not None:
+            raise last
+        return devs
+    return _parse_adb_lines(lines)
+
+
+def adb_presence_status():
+    """Parsed zero-touch presence: list of {serial, state, extra} where
+    state may be 'unknown' (triple present on USB, server has no row, never
+    probed natively). For poll/monitor/display paths ONLY — never for
+    authorization decisions or flow gating (use verified `adb_status`)."""
+    return _parse_adb_lines(adb_presence())
 
 
 def _ambient_adb_serial():
@@ -795,37 +870,180 @@ def _ambient_adb_serial():
 
 
 def _resolve_adb_serial(serial=None, need_authorized=False):
-    """Explicit serial > ambient scope > first authorized device.
+    """Explicit serial > ambient scope > single authorized device.
 
     Pull/push set need_authorized=True and raise BridgeError when no
     authorized device exists (fail before touching the filesystem). Shell
-    falls back to '-' (first device), matching legacy single-device
-    behaviour when no scope is set."""
+    falls back to '-' (first device) ONLY when exactly one authorized
+    device is present; with several authorized devices and no scope, the
+    target is ambiguous and this raises instead of silently commanding
+    the wrong phone."""
     if serial:
         return serial
     ambient = _ambient_adb_serial()
     if ambient:
         return ambient
     try:
-        for d in adb_status():
-            if d.get("state") == "device":
-                return d["serial"]
+        authorized = [d for d in adb_status() if d.get("state") == "device"]
     except BridgeError:
-        pass
+        authorized = []
+    if len(authorized) > 1:
+        serials = ", ".join(d.get("serial", "?") for d in authorized)
+        raise BridgeError(
+            f"multiple authorized ADB devices ({serials}): specify a serial",
+            code="ADB_AMBIGUOUS_TARGET",
+        )
+    if authorized:
+        return authorized[0]["serial"]
     if need_authorized:
         raise BridgeError("no authorized ADB device", code="ADB_NO_DEVICE")
     return "-"
 
 
-def adb_shell(cmd, timeout=20, serial=None):
+_host_adb_cache = {"checked": False, "path": None}
+
+# Server-side device states the native backend must judge
+# authoritatively (auth/offline/presence): fall through to native so the
+# backend — not a stderr sniff — reports them.
+_HOST_DEVICE_ERRORS = (
+    "not found", "offline", "unauthorized", "no device", "device empty",
+    "no emulator", "no devices", "device still connecting",
+)
+
+
+def _host_adb_binary():
+    """platform-tools `adb` when present (fallback transport only).
+
+    The native Rust transport stays primary (no platform-tools dependency);
+    the host binary is used only to route through the system server when it
+    already owns the device's interface.
+    """
+    if not _host_adb_cache["checked"]:
+        _host_adb_cache.update(checked=True, path=shutil.which("adb"))
+    return _host_adb_cache["path"]
+
+
+def _run_host_adb_raw(args, timeout):
+    """Run platform-tools adb, polling for cooperative cancel.
+
+    Returns (returncode, stdout, stderr). Raises BridgeTimeout on expiry
+    and BridgeCancelled on user stop; spawn failures raise BridgeError
+    (caller falls through to native). Remote command failure is NOT an
+    exception here — the caller decides by returncode/stderr.
+    """
+    adb_bin = _host_adb_binary()
+    try:
+        proc = subprocess.Popen(
+            [adb_bin, *args],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (OSError, ValueError) as e:
+        raise BridgeError(f"host adb spawn failed: {e}")
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            if cancel_requested():
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                raise BridgeCancelled()
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                return proc.returncode, out or "", err or ""
+            if time.monotonic() > deadline:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                raise BridgeTimeout(
+                    f"host adb {' '.join(args)} timed out after {timeout}s",
+                    timeout=int(timeout),
+                )
+            time.sleep(0.05)
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def _host_owned_error(stderr):
+    """True when the server disclaims the device (native must decide)."""
+    low = (stderr or "").lower()
+    return any(k in low for k in _HOST_DEVICE_ERRORS)
+
+
+def _host_shell_for(serial, cmd, timeout):
+    """Try one shell command via the system server transport.
+
+    Returns (True, stdout) when the host adb handled it — stdout verbatim,
+    even on remote nonzero exit (native-compatible: remote failure text is
+    data, not an exception). Returns (False, None) when the caller should
+    proceed natively: no binary, unpinned serial, transport failure, or the
+    server disclaiming the device.
+    """
+    if not serial or serial == "-" or _host_adb_binary() is None:
+        return False, None
+    try:
+        rc, out, err = _run_host_adb_raw(["-s", serial, "shell", cmd], timeout)
+    except (BridgeTimeout, BridgeCancelled):
+        raise
+    except BridgeError:
+        return False, None
+    if rc != 0 and _host_owned_error(err):
+        return False, None
+    return True, out
+
+
+def _host_transfer_for(serial, direction, local, remote, timeout):
+    """Try one pull/push via the system server transport.
+
+    Returns (True, stdout) only on rc == 0; any nonzero exit (missing
+    file, disclaimed device, ...) falls through to native so the backend
+    reports authoritatively.
+    """
+    if direction not in ("pull", "push"):
+        return False, None
+    if not serial or serial == "-" or _host_adb_binary() is None:
+        return False, None
+    argv = (["-s", serial, "pull", remote, local] if direction == "pull"
+            else ["-s", serial, "push", local, remote])
+    try:
+        rc, out, err = _run_host_adb_raw(argv, timeout)
+    except (BridgeTimeout, BridgeCancelled):
+        raise
+    except BridgeError:
+        return False, None
+    if rc != 0:
+        return False, None
+    return True, out
+
+
+def adb_shell(cmd, timeout=20, serial=None, rescue=True):
     """Run `adb shell <cmd>` over the native Rust transport.
 
     Serial pinning (explicit > ambient scope > first authorized) makes
     multi-device ADB safe; previously the system binary picked (or
-    errored on) whatever was plugged in."""
+    errored on) whatever was plugged in.
+
+    Transport order for an explicitly-pinned serial: native Rust transport
+    first; on an exclusive-claim fight ("Resource busy" — the system adb
+    server or a sibling process holds the interface), delegate to the
+    server transport instead of evicting it. Killing the server to force a
+    claim resets fragile hardware (USB modems re-enumerate every cycle),
+    so the kill only remains as a last resort for deliberate operations.
+    ``rescue`` gates that busy-holder kill: leave it True for deliberate
+    user-initiated operations; passive GUI polls must pass rescue=False —
+    killing the server from the poll loop made phones re-enumerate at a
+    new address every cycle."""
     ser = _resolve_adb_serial(serial)
     last = None
     rescued = False
+    host_tried = False
     for attempt in range(4):
         try:
             return _run(["adb-shell", ser, str(int(timeout * 1000)), cmd],
@@ -838,6 +1056,26 @@ def adb_shell(cmd, timeout=20, serial=None):
                 "io error", "no device", "device not found", "pipe", "stall",
             ))
             if not transient:
+                raise
+            # Busy = an exclusive-claim fight. Delegate to the server
+            # transport once (zero USB touch) instead of evicting
+            # whoever holds the interface — killing the server resets
+            # fragile hardware (USB modems re-enumerate every cycle).
+            # Host failure falls through to the logic below unchanged.
+            if not host_tried and "busy" in err_l and ser != "-":
+                host_tried = True
+                try:
+                    handled, out = _host_shell_for(ser, cmd, timeout)
+                    if handled:
+                        return out
+                except (BridgeTimeout, BridgeCancelled):
+                    raise
+                except BridgeError:
+                    pass
+            # Busy while another holder owns the interface is deterministic
+            # for this attempt - without a kill (rescue=False) retrying is
+            # pointless churn; fail fast so the caller can fall back.
+            if not rescue and "busy" in err_l:
                 raise
             # Rescue 1 (once): "Resource busy" = the system adb server holds
             # the interface - kill it (host-side) so the native transport
@@ -857,17 +1095,78 @@ def adb_shell(cmd, timeout=20, serial=None):
 
 
 def adb_pull(serial, remote, local, timeout=300):
-    """Native `adb pull` via the sync service (serial-pinned)."""
+    """Native `adb pull` via the sync service (serial-pinned).
+
+    On an exclusive-claim fight, delegates once to the server transport
+    (see `adb_shell`); anything else propagates natively."""
     ser = _resolve_adb_serial(serial, need_authorized=True)
-    return _run(["adb-pull", ser, str(int(timeout * 1000)), remote, local],
-                timeout=timeout + 15)
+    try:
+        return _run(["adb-pull", ser, str(int(timeout * 1000)), remote, local],
+                    timeout=timeout + 15)
+    except BridgeError as e:
+        if "busy" not in str(e).lower() or ser == "-":
+            raise
+        try:
+            handled, out = _host_transfer_for(ser, "pull", local, remote, timeout)
+            if handled:
+                return out
+        except (BridgeTimeout, BridgeCancelled):
+            raise
+        except BridgeError:
+            pass
+        raise
 
 
 def adb_push(serial, local, remote, timeout=300):
-    """Native `adb push` via the sync service (serial-pinned)."""
+    """Native `adb push` via the sync service (serial-pinned).
+
+    On an exclusive-claim fight, delegates once to the server transport
+    (see `adb_shell`); anything else propagates natively."""
     ser = _resolve_adb_serial(serial, need_authorized=True)
-    return _run(["adb-push", ser, str(int(timeout * 1000)), local, remote],
-                timeout=timeout + 15)
+    try:
+        return _run(["adb-push", ser, str(int(timeout * 1000)), local, remote],
+                    timeout=timeout + 15)
+    except BridgeError as e:
+        if "busy" not in str(e).lower() or ser == "-":
+            raise
+        try:
+            handled, out = _host_transfer_for(ser, "push", local, remote, timeout)
+            if handled:
+                return out
+        except (BridgeTimeout, BridgeCancelled):
+            raise
+        except BridgeError:
+            pass
+        raise
+
+
+def bundled_mtk_da_dir():
+    """The bundled mtkclient DA containers (V5/V6): repo root/tools/mtk (dev
+    tree) or /usr/share/flashpilot/root/tools/mtk (.deb install). Returns ''
+    when neither exists."""
+    here = Path(__file__).resolve().parent.parent.parent
+    for p in (here / "root" / "tools" / "mtk",
+              Path("/usr/share/flashpilot/root/tools/mtk")):
+        try:
+            if (p / "MTK_DA_V5.bin").exists() or (p / "MTK_DA_V6.bin").exists():
+                return str(p)
+        except OSError:
+            continue
+    return ""
+
+
+def mtk_frp_brom(target="auto", timeout=900):
+    """FRP bypass for ANY MediaTek device via BROM with NO user-supplied DA:
+    the bundled mtkclient DA containers are parsed natively (per-chip DA
+    picked by dacode), uploaded (kamakiri2 first on SBC/SLA/DAA-protected
+    BROMs) and the lock partitions are erased from the device GPT."""
+    da_dir = bundled_mtk_da_dir()
+    if not da_dir:
+        raise BridgeError(
+            "bundled MTK DA containers missing (root/tools/mtk/MTK_DA_V5.bin)",
+            code="MTK_NO_BUNDLED_DA",
+        )
+    return _run(["mtk-frp-brom", target, da_dir], timeout=timeout)
 
 
 def odin_connect(target, timeout=30):

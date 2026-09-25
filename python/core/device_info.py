@@ -58,14 +58,76 @@ def _is_fake_serial(s: str) -> bool:
     return False
 
 
-def _adb_getprop(name: str, timeout=6) -> str:
+def _adb_getprop(name: str, timeout=6, serial=None) -> str:
+    # rescue=False ALWAYS here: this helper serves poll/display paths
+    # (live identity). A busy claim must fail fast — kill-server from a
+    # poll helper re-enumerates fragile hardware (USB modems) every cycle.
     try:
         from . import bridge
 
-        out = bridge.adb_shell(f"getprop {name}", timeout=timeout)
+        out = bridge.adb_shell(f"getprop {name}", timeout=timeout,
+                               serial=serial, rescue=False)
         return (out or "").strip()
     except Exception:
         return ""
+
+
+# Live-identity cache: the ADB getprop burst below is ~10 native sessions
+# (open + claim + CNXN each). Re-running it on every 3s poll re-enumerates
+# fragile hardware — USB cellular modems reset their USB function on our
+# session and never stabilize. Refresh on authorized-set change, else TTL.
+_LIVE_TTL = 60.0
+_LIVE_CACHE = {"serials": None, "at": 0.0, "result": None}
+
+
+def _probe_android_identity(pinned_serial):
+    """One bounded ADB identity probe for an authorized serial.
+
+    Called only on authorized-set change or TTL expiry (see
+    `get_live_identity`). Returns the identity dict, or None when nothing
+    real was learned (caller falls through to MTP/USB fallbacks).
+    """
+    out = {"serial": "", "android_ver": "", "build": "", "model": "",
+           "mfr": "", "brand": "", "sdk": ""}
+    serial_prop = (_adb_getprop("ro.serialno", serial=pinned_serial)
+                   or _adb_getprop("ro.boot.serialno", serial=pinned_serial)
+                   or _adb_getprop("sys.serialnumber", serial=pinned_serial)
+                   or "")
+    if _is_fake_serial(serial_prop):
+        serial_prop = ""
+    adb_serial = _adb_devices_serial()
+    serial = serial_prop or adb_serial
+    if serial and not _is_fake_serial(serial):
+        out["serial"] = serial
+
+    # Model / brand
+    model = _adb_getprop("ro.product.model", serial=pinned_serial)
+    mfr = _adb_getprop("ro.product.manufacturer", serial=pinned_serial)
+    brand = _adb_getprop("ro.product.brand", serial=pinned_serial)
+    if model and model.lower() != "adb":
+        out["model"] = model
+    if mfr and mfr.lower() != "adb":
+        out["mfr"] = mfr
+    if brand and brand.lower() != "adb":
+        out["brand"] = brand
+
+    # Android ver + sdk
+    rel = _adb_getprop("ro.build.version.release", serial=pinned_serial)
+    sdk = _adb_getprop("ro.build.version.sdk", serial=pinned_serial)
+    if rel:
+        out["android_ver"] = f"{rel} (API {sdk})" if sdk else rel
+        out["sdk"] = sdk
+    # Build
+    bld = (_adb_getprop("ro.build.display.id", serial=pinned_serial)
+           or _adb_getprop("ro.build.version.incremental", serial=pinned_serial)
+           or _adb_getprop("ro.build.version.security_patch", serial=pinned_serial)
+           or "")
+    if bld and bld.lower() not in ("adb", "unknown"):
+        out["build"] = bld
+    # Never leak fake — None when nothing real was learned.
+    if any([out["serial"], out["model"], out["build"], out["android_ver"]]):
+        return out
+    return None
 
 
 def _adb_devices_serial() -> str:
@@ -180,49 +242,35 @@ def get_live_identity() -> dict:
     except Exception:
         pass
 
-    # Android path — ADB getprop is truth, not USB descriptor
-    has_adb_device = False
+    # Android path — ADB getprop is truth, not USB descriptor.
+    # Presence only (zero-touch): native verification from a poll helper
+    # re-enumerates fragile hardware every cycle (USB modems). The getprop
+    # burst below runs on authorized-set change, else at most every
+    # _LIVE_TTL seconds — model/build info does not change second to second.
     try:
         from . import bridge
 
-        devs = bridge.adb_status()
-        has_adb_device = any(d.get("state") == "device" for d in devs)
+        devs = bridge.adb_presence_status()
+        auth_serials = tuple(sorted(
+            d.get("serial", "") for d in devs if d.get("state") == "device"))
     except Exception:
-        pass
+        auth_serials = ()
 
-    if has_adb_device:
-        serial_prop = _adb_getprop("ro.serialno") or _adb_getprop("ro.boot.serialno") or _adb_getprop("sys.serialnumber") or ""
-        if _is_fake_serial(serial_prop):
-            serial_prop = ""
-        adb_serial = _adb_devices_serial()
-        serial = serial_prop or adb_serial
-        if serial and not _is_fake_serial(serial):
-            out["serial"] = serial
+    if auth_serials:
+        import time as _t
 
-        # Model / brand
-        model = _adb_getprop("ro.product.model")
-        mfr = _adb_getprop("ro.product.manufacturer")
-        brand = _adb_getprop("ro.product.brand")
-        if model and model.lower() != "adb":
-            out["model"] = model
-        if mfr and mfr.lower() != "adb":
-            out["mfr"] = mfr
-        if brand and brand.lower() != "adb":
-            out["brand"] = brand
-
-        # Android ver + sdk
-        rel = _adb_getprop("ro.build.version.release")
-        sdk = _adb_getprop("ro.build.version.sdk")
-        if rel:
-            out["android_ver"] = f"{rel} (API {sdk})" if sdk else rel
-            out["sdk"] = sdk
-        # Build
-        bld = _adb_getprop("ro.build.display.id") or _adb_getprop("ro.build.version.incremental") or _adb_getprop("ro.build.version.security_patch") or ""
-        if bld and bld.lower() not in ("adb", "unknown"):
-            out["build"] = bld
-        # Never leak fake — if we got real serial/model/build, return
-        if any([out["serial"], out["model"], out["build"], out["android_ver"]]):
-            return out
+        now = _t.monotonic()
+        cached = _LIVE_CACHE["result"]
+        if (auth_serials != _LIVE_CACHE["serials"]
+                or now - _LIVE_CACHE["at"] > _LIVE_TTL
+                or not cached):
+            probed = _probe_android_identity(auth_serials[0])
+            if probed:
+                _LIVE_CACHE.update(
+                    {"serials": auth_serials, "at": now, "result": probed})
+                return probed
+        elif cached:
+            return dict(cached)
 
     # Fallback without ADB: MTP serial/build
     ser_mtp, bld_mtp = _mtp_serial_and_build()

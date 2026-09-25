@@ -319,8 +319,15 @@ impl SaharaSession {
         
         // Read DONE_RESP
         let mut buf = vec![0u8; 8];
-        self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
-        
+        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        // Short reads leave trailing zeros that parse as Success: require
+        // the full 8-byte response before trusting the status word.
+        if n < 8 {
+            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                format!("short DONE_RESP: {n} bytes"),
+            )));
+        }
+
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
@@ -341,8 +348,15 @@ impl SaharaSession {
         
         // Read response
         let mut buf = vec![0u8; 8];
-        self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
-        
+        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        // Short reads leave trailing zeros that parse as Success: require
+        // the full 8-byte response before trusting the status word.
+        if n < 8 {
+            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                format!("short switch-mode response: {n} bytes"),
+            )));
+        }
+
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
@@ -367,8 +381,15 @@ impl SaharaSession {
         
         // Read response header
         let mut buf = vec![0u8; 20];
-        self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
-        
+        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        // A short read leaves trailing zeros, which would parse as status 0
+        // (Success). Require the full header before trusting any field.
+        if n < 20 {
+            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                format!("short read_memory header: {n} bytes"),
+            )));
+        }
+
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
@@ -376,11 +397,20 @@ impl SaharaSession {
                 reason: format!("Read memory failed: {}", sahara_status_name(status)),
             }));
         }
-        
+
         let _resp_addr = u64::from_le_bytes([
             buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]
         ]);
         let resp_len = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
+
+        // Device-controlled length: never allocate (or read) more than the
+        // caller requested. A rogue 0xFFFF_FFFF here used to force a 4 GiB
+        // allocation (allocator abort).
+        if resp_len > length {
+            return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                format!("read_memory length {resp_len} exceeds requested {length}"),
+            )));
+        }
         
         // Read data
         let mut data = vec![0u8; resp_len as usize];

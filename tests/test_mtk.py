@@ -380,3 +380,58 @@ class TestMtkVerify:
         with pytest.raises(RuntimeError, match="VERIFY FAILED"):
             core._mtk_simlock_patch({"model": "SM-A065F"}, lambda m: None, "auto", "auto",
                                     [("nvdata", str(img))])
+
+
+class TestFirmwareTarTraversal:
+    """Malicious firmware archives must not escape the staging dir."""
+
+    def _evil_tar(self, tmp_path, arcname):
+        import tarfile
+
+        src = tmp_path / "payload.img"
+        src.write_bytes(b"evil")
+        tar_path = tmp_path / "fw.tar"
+        with tarfile.open(tar_path, "w") as tf:
+            tf.add(str(src), arcname=arcname)
+        return str(tar_path)
+
+    def test_safe_extractall_rejects_traversal(self, tmp_path):
+        import tarfile
+        from python.core.flashing import _safe_extractall
+
+        tar_path = self._evil_tar(tmp_path, "../escape.img")
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        with tarfile.open(tar_path, "r") as tf:
+            with pytest.raises(RuntimeError, match="escapes staging dir"):
+                _safe_extractall(tf, str(stage))
+        assert not (tmp_path / "escape.img").exists()
+
+    def test_safe_extractall_rejects_absolute(self, tmp_path):
+        import io
+        import tarfile
+        from python.core.flashing import _safe_extractall
+
+        # tarfile.add() strips leading slashes itself; a hostile archive
+        # carries the absolute name verbatim — forge it with addfile.
+        tar_path = tmp_path / "fw.tar"
+        with tarfile.open(tar_path, "w") as tf:
+            ti = tarfile.TarInfo("/tmp/absolute.img")
+            ti.size = 4
+            tf.addfile(ti, io.BytesIO(b"evil"))
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        with tarfile.open(str(tar_path), "r") as tf:
+            with pytest.raises(RuntimeError, match="escapes staging dir"):
+                _safe_extractall(tf, str(stage))
+
+    def test_safe_extractall_accepts_benign(self, tmp_path):
+        import tarfile
+        from python.core.flashing import _safe_extractall
+
+        tar_path = self._evil_tar(tmp_path, "sub/dir/fw.img")
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        with tarfile.open(tar_path, "r") as tf:
+            _safe_extractall(tf, str(stage))
+        assert (stage / "sub" / "dir" / "fw.img").read_bytes() == b"evil"

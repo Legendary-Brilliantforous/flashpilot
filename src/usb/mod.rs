@@ -242,6 +242,16 @@ impl UsbDevice {
         Ok(())
     }
 
+    /// Clear a HALTED endpoint (CLEAR_HALT). A usbfs process that exits
+    /// mid-session can leave the device's endpoint stalled; the halt sticks
+    /// until explicitly cleared and wedges the next session on this device.
+    pub fn clear_halt(&mut self, endpoint: u8) -> Result<()> {
+        self.handle
+            .clear_halt(endpoint)
+            .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(format!("clear_halt: {e}"))))?;
+        Ok(())
+    }
+
     /// Bulk write - chunk by EndpointConfig.max_packet_size for stability
     pub fn write_bulk(&self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
         if let Some(cfg) = self.endpoints.get(&endpoint) {

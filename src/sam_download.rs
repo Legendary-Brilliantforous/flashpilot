@@ -1150,7 +1150,11 @@ fn reset_flash_count(dev: &Device) -> OdinResult<()> {
 ///   request       {"cmd":"end"}            -> {"bye":true} then exits
 /// EOF also ends the session cleanly.
 /// Session PIT cache for the agent's flash command (set by pit-dump).
-static AGENT_PIT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+/// A Mutex<Option<..>>, NOT a OnceLock: a re-dump (reconnect,
+/// re-enumeration, second probe) must REPLACE the table. OnceLock's
+/// first-write-wins silently kept serving the stale first PIT to later
+/// flash commands.
+static AGENT_PIT: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 pub fn odin_agent(target: &str) -> Result<String> {
     use std::io::{BufRead, Write};
@@ -1193,8 +1197,11 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     let ok = dev
                         .dump_pit()
                         .map(|data| {
-                            // Cache for the session's flash commands.
-                            let _ = AGENT_PIT.set(data.clone());
+                            // Cache for the session's flash commands:
+                            // always overwrite (see AGENT_PIT docs).
+                            if let Ok(mut cache) = AGENT_PIT.lock() {
+                                *cache = Some(data.clone());
+                            }
                             let mut resp = json!({"size": data.len()});
                             if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
                                 if !o.is_empty() {
@@ -1266,7 +1273,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     let _ = out.flush();
                     continue;
                 }
-                let pit_cache: &Vec<u8> = match AGENT_PIT.get() {
+                let pit_cache: Vec<u8> = match AGENT_PIT.lock().ok().and_then(|c| c.clone()) {
                     Some(p) => p,
                     None => {
                         let _ = writeln!(
@@ -1291,7 +1298,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 }
                 match flash_one_partition_ext(
                     &dev,
-                    pit_cache,
+                    &pit_cache,
                     part,
                     file,
                     packet_size,
@@ -1323,7 +1330,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 // {"cmd":"flash-batch","files":[["part","/path"],...],
                 //  "reboot":true}
                 // Emits one JSON line per finished partition.
-                let pit_cache = match AGENT_PIT.get() {
+                let pit_cache: Vec<u8> = match AGENT_PIT.lock().ok().and_then(|c| c.clone()) {
                     Some(p) => p,
                     None => {
                         let _ = writeln!(
@@ -1410,7 +1417,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     // live where immediate failure was deterministic.
                     let mut result = flash_one_partition_ext(
                         &dev,
-                        pit_cache,
+                        &pit_cache,
                         part,
                         path,
                         packet_size,
@@ -1425,7 +1432,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         std::thread::sleep(Duration::from_millis(1000));
                         result = flash_one_partition_ext(
                             &dev,
-                            pit_cache,
+                            &pit_cache,
                             part,
                             path,
                             packet_size,

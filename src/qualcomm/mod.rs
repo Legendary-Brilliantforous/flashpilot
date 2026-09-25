@@ -12,14 +12,21 @@ use crate::qualcomm::firehose::{FirehoseSession, FirehosePacket, FirehoseRespons
 use std::path::Path;
 use std::time::Duration;
 
-/// Resolve a CLI target ("auto", or "bus:address") to the first matching
-/// Qualcomm EDL device. "auto" picks the first EDL device on the bus.
+/// Resolve a CLI target ("auto", or "bus:address") to a Qualcomm EDL
+/// device. "auto" requires exactly one EDL device on the bus: with several
+/// attached it is ambiguous and rejected instead of silently opening a
+/// session against the wrong phone.
 fn resolve_qcom_device<'a>(devices: &'a [crate::config::DeviceInfo],
                            target: &str) -> Result<&'a crate::config::DeviceInfo> {
     let edl: Vec<&crate::config::DeviceInfo> = devices.iter()
         .filter(|d| d.vid == QCOM_VID && QCOM_EDL_PIDS.contains(&d.pid))
         .collect();
     if target == "auto" {
+        if edl.len() > 1 {
+            return Err(BridgeError::DeviceState(
+                crate::error::DeviceStateError::AmbiguousTarget { count: edl.len() },
+            ));
+        }
         edl.first()
             .copied()
             .ok_or_else(|| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
@@ -349,6 +356,18 @@ struct PartitionOp {
     sparse: bool,
 }
 
+/// Strict sector-attribute parse: a present-but-non-numeric value is an
+/// error, never a silent 0 (a corrupt rawprogram.xml flashing at sector 0
+/// is a brick vector). Absent attributes keep their default 0 — plenty of
+/// legitimate rawprogram files omit physical_partition_number.
+fn parse_sector_attr(key: &str, value: &str) -> Result<u64> {
+    value.parse::<u64>().map_err(|_| {
+        BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+            "rawprogram.xml: non-numeric {key}={value:?}"
+        )))
+    })
+}
+
 fn parse_rawprogram_xml(xml: &str) -> Result<Vec<PartitionOp>> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -379,9 +398,11 @@ fn parse_rawprogram_xml(xml: &str) -> Result<Vec<PartitionOp>> {
                         match key.as_str() {
                             "label" => op.partition_name = value,
                             "filename" => op.filename = value,
-                            "start_sector" => op.start_sector = value.parse().unwrap_or(0),
-                            "num_partition_sectors" => op.num_sectors = value.parse().unwrap_or(0),
-                            "physical_partition_number" => op.physical_partition_number = value.parse().unwrap_or(0),
+                            "start_sector" => op.start_sector = parse_sector_attr("start_sector", &value)?,
+                            "num_partition_sectors" => op.num_sectors = parse_sector_attr("num_partition_sectors", &value)?,
+                            "physical_partition_number" => op.physical_partition_number = value.parse::<u32>().map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                                "rawprogram.xml: non-numeric physical_partition_number={value:?}"
+                            ))))?,
                             "sparse" => op.sparse = value == "true",
                             _ => {}
                         }
@@ -547,4 +568,79 @@ pub fn qcom_frp_reset(target: &str) -> Result<String> {
         "sectors": frp.num_sectors,
         "size": frp.size_bytes(),
     }).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edl_dev(bus: u8, address: u8) -> crate::config::DeviceInfo {
+        crate::config::DeviceInfo {
+            vid: QCOM_VID,
+            pid: 0x9008,
+            bus,
+            address,
+            product: None,
+            manufacturer: None,
+            serial: None,
+            interfaces: vec![],
+            is_samsung: false,
+            configs: 1,
+            active_config: 0,
+            device_class: 0,
+            bcd_usb: 0x0200,
+            bcd_device: 0x0100,
+            device_speed: 3,
+            port_numbers: String::new(),
+            max_packet_size0: 64,
+            mode: "qualcomm-edl".to_string(),
+        }
+    }
+
+    #[test]
+    fn auto_with_two_edl_devices_is_ambiguous() {
+        let devs = vec![edl_dev(1, 2), edl_dev(1, 3)];
+        let err = resolve_qcom_device(&devs, "auto").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                BridgeError::DeviceState(
+                    crate::error::DeviceStateError::AmbiguousTarget { count: 2 }
+                )
+            ),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_with_one_edl_device_resolves() {
+        let devs = vec![edl_dev(1, 2)];
+        let dev = resolve_qcom_device(&devs, "auto").unwrap();
+        assert_eq!((dev.bus, dev.address), (1, 2));
+    }
+
+    #[test]
+    fn explicit_bus_addr_still_resolves_with_two_present() {
+        let devs = vec![edl_dev(1, 2), edl_dev(1, 3)];
+        let dev = resolve_qcom_device(&devs, "1:3").unwrap();
+        assert_eq!((dev.bus, dev.address), (1, 3));
+    }
+
+    #[test]
+    fn corrupt_start_sector_is_error_not_sector_zero() {
+        let xml = r#"<?xml version="1.0"?><data><program label="frp" filename="frp.img" start_sector="oops" num_partition_sectors="8"/></data>"#;
+        let err = parse_rawprogram_xml(xml).unwrap_err();
+        assert!(err.to_string().contains("start_sector"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn absent_optional_attrs_keep_defaults() {
+        let xml = r#"<?xml version="1.0"?><data><program label="frp" filename="frp.img" start_sector="100" num_partition_sectors="8"/></data>"#;
+        let ops = parse_rawprogram_xml(xml).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(
+            (ops[0].partition_name.as_str(), ops[0].start_sector, ops[0].num_sectors),
+            ("frp", 100, 8)
+        );
+    }
 }

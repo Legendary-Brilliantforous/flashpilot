@@ -3,6 +3,7 @@ import time as _time
 import math
 import os
 import subprocess
+import weakref
 
 from PyQt6.QtCore import (
     QRectF,
@@ -80,7 +81,7 @@ from PyQt6.QtWidgets import (
     QLayout,
 )
 
-from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, experimental
+from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, experimental, jobs
 from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
@@ -562,9 +563,24 @@ class DeviceMonitor(QObject):
                 self._poll_count += 1
                 if self._poll_count % 5 == 0:
                     should_probe_adb = True
+                # Backoff gate: when the native handshake keeps coming up dry
+                # while the USB bus still sees ADB-capable hardware, every
+                # re-probe is another CNXN - and on devices whose adbd resets
+                # its USB function on our CNXN, each retry causes another
+                # re-enumeration at a new address (the storm makes the phone
+                # drop off the bus entirely). Stop probing until it expires.
+                if _time.monotonic() < getattr(self, "_adb_probe_backoff_until", 0.0):
+                    should_probe_adb = False
+                probed = False
                 if should_probe_adb:
+                    probed = True
                     try:
-                        adb_devs = bridge.adb_status()
+                        # Presence, never verified listing: a native probe
+                        # from this 3s loop claims interfaces and handshakes,
+                        # re-enumerating fragile hardware (USB modems) every
+                        # cycle. States come from the system server when it
+                        # runs; otherwise rows report presence as `unknown`.
+                        adb_devs = bridge.adb_presence_status()
                     except Exception:
                         # Retain last-known ADB devices on a transient failure:
                         # resetting to [] flips the mode display off/on every
@@ -575,6 +591,20 @@ class DeviceMonitor(QObject):
                             adb_devs = self._last_adb_devs
                         else:
                             adb_devs = []
+                    # Dry-probe counting: the probe produced no rows while
+                    # the USB bus still sees ADB-capable hardware. After two
+                    # consecutive dry probes, stop probing for 45s - each
+                    # re-probe is another CNXN and on devices whose adbd
+                    # resets its USB function on our CNXN, each retry causes
+                    # another re-enumeration at a new address (the storm
+                    # makes the phone drop off the bus entirely). Resets as
+                    # soon as real rows come back.
+                    if adb_devs:
+                        self._adb_dry_streak = 0
+                    elif probed and has_usb_adb:
+                        self._adb_dry_streak = getattr(self, "_adb_dry_streak", 0) + 1
+                        if self._adb_dry_streak >= 2:
+                            self._adb_probe_backoff_until = _time.monotonic() + 45.0
                 else:
                     adb_devs = self._last_adb_devs if usb else []
                 self._last_adb_devs = adb_devs
@@ -809,6 +839,23 @@ def _has_adb_iface(d):
     if isinstance(d, (list, tuple)):
         return _match_ifaces(d)
     return False
+
+
+def _adb_overlay(adb_devs, dev):
+    """'\\nADB · connected (serial)' suffix when `dev` exposes the ADB
+    interface and `adb_devs` lists it authorized, else None.
+
+    The first-match display order in `_on_device_state` starves the
+    adb_devs branch for every phone that is on the USB bus (samsung /
+    other_android / spd all match earlier), so an authorized ADB transport
+    never surfaced in the connection label — the exact 'connected and auth
+    but GUI does not show connected' report."""
+    if dev is None or not _has_adb_iface(dev):
+        return None
+    auth = [a for a in (adb_devs or []) if a.get("state") == "device"]
+    if not auth:
+        return None
+    return f"\nADB · connected ({auth[0].get('serial', 'unknown')})"
 
 
 def _has_mtp_iface(d):
@@ -2032,6 +2079,16 @@ class FlashPilotWindow(QMainWindow):
         self._maximized = False
         self._log_buffer = []
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
+        # stop button -> active FlashJob id for per-device STOP (chip pages).
+        # A page stop cancels exactly its own job's device scope; entries are
+        # replaced on each run and cleared when the worker finishes.
+        self._stop_job = {}
+        # Capability-gated buttons: (weakref, job, mode, command, base tip).
+        # _refresh_gates() enables/disables them from bridge.actions_for()
+        # for the displayed device. Display-only and fail-open; enforcement
+        # stays in the pre-execution gate.
+        self._gated_buttons = []
+        self._gate_cache = {}
         self._combo_styled = False
         self._anim_enabled = True
         self.settings = QSettings("FlashPilot", "FlashingTool")
@@ -2863,6 +2920,7 @@ class FlashPilotWindow(QMainWindow):
             "partition access, FRP markers - tells you which flow to use next."
         )
         triage_btn.clicked.connect(self._adb_triage)
+        self._gate_button(triage_btn, command="adb_shell")
         xos_row.addWidget(triage_btn)
         xos_row.addStretch(1)
         hv.addLayout(xos_row)
@@ -2954,6 +3012,7 @@ class FlashPilotWindow(QMainWindow):
         self._nf_flash_btn.setStyleSheet(_btn_primary())
         self._nf_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._nf_flash_btn.clicked.connect(self._native_flash_clicked)
+        self._gate_button(self._nf_flash_btn, job="Flash Firmware", mode="Download mode")
         nf_btn_row.addWidget(self._nf_flash_btn)
         nf_btn_row.addStretch(1)
         hv.addLayout(nf_btn_row)
@@ -3128,6 +3187,10 @@ class FlashPilotWindow(QMainWindow):
                             )
                         )
                 flow.addWidget(b)
+                # Capability display-gating: this button may only run when
+                # the backend offers one of the job's actions for the
+                # displayed device. Applied by _refresh_gates().
+                self._gate_button(b, job=job, mode=mode)
             parent_layout.addLayout(flow)
 
     def _build_ops_flow_page(self, jobs, modes=None, run_cb=None):
@@ -3292,6 +3355,7 @@ class FlashPilotWindow(QMainWindow):
             "Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)"
         )
         self.flash_btn.clicked.connect(self._on_flash_slots)
+        self._gate_button(self.flash_btn, job="Flash Firmware", mode="Download mode")
         run_row.addWidget(self.flash_btn)
         self.check_tar_btn = QPushButton("Check archive")
         self.check_tar_btn.setStyleSheet(_btn_ghost())
@@ -3790,6 +3854,7 @@ class FlashPilotWindow(QMainWindow):
 
     # ----------------------------- section switching ----------------------
     def _on_section(self, key):
+        self._current_section = key
         idx = getattr(self, "_section_index", {}).get(key, 0)
         self._stack.setCurrentIndex(idx)
         if hasattr(self, "oem_bar"):
@@ -3827,14 +3892,38 @@ class FlashPilotWindow(QMainWindow):
             return
 
         if act == "kg_unlock":
-            # Samsung AT KnoxGuard chain through the bridge
+            # Samsung AT KnoxGuard chain through the bridge. Pinned to one
+            # explicitly-picked Samsung device (never first-match): with
+            # several Samsungs attached this refuses instead of unlocking
+            # the wrong phone.
             try:
                 from python.core import mtp as _mtp
+                sams = [r for r in _devices.list_devices()
+                        if isinstance(r, dict) and (r.get("usb") or {}).get("vid") == 0x04E8
+                        and r.get("key")]
+                skeys = [r["key"] for r in sams]
+                if not skeys:
+                    raise RuntimeError("no Samsung device on USB")
+                if len(skeys) > 1:
+                    raise RuntimeError(
+                        f"{len(skeys)} Samsung devices connected — KG unlock "
+                        "needs exactly one target (unplug the others)")
+                key = skeys[0]
                 d = _mtp.find_samsung()
                 if not d:
                     raise RuntimeError("no Samsung device on USB")
-                tgt = _mtp.target(d)
-                out = bridge._run(["at-kg-unlock", tgt, "4000"], timeout=30)
+                # Fresh target for the picked key (never a stale cached one).
+                tgt = _devices.resolve_usb_target(key) or _mtp.target(d)
+                flux = jobs.start_job(key, "KG unlock", "AT", "kg_unlock", ())
+                flux.set_state("VALIDATED")
+                flux.set_state("RUNNING")
+                try:
+                    with _devices.device_scope(key):
+                        out = bridge._run(["at-kg-unlock", tgt, "4000"], timeout=30)
+                except Exception:
+                    jobs.finish_job(flux.job_id, "FAILED", "at-kg-unlock failed", "FAILED")
+                    raise
+                jobs.finish_job(flux.job_id, "COMPLETED")
                 self.log_line(f"[kg] {out}")
                 self._toasts.show_ok("KG unlock", f"{label}: chain sent — check phone")
             except Exception as e:  # noqa: BLE001
@@ -4092,33 +4181,72 @@ class FlashPilotWindow(QMainWindow):
         if not tar_path or not os.path.isfile(tar_path):
             self._toasts.show_warn("Native flash", "Pick a .tar archive first")
             return
-        if not core._download_mode_device():
+        # Pin to one explicitly-picked Download-mode device: the core smart
+        # flash resolves its target through the ambient scope, so without a
+        # pinned key it would take the first Download-mode phone.
+        picked = self._choose_device("Flash Firmware", "Download mode")
+        if picked == "__cancelled__":
+            return
+        if not picked:
             self._toasts.show_warn(
                 "Native flash", "Put the phone in Download mode first "
                 "(Vol Down + Power, then Vol Up)."
             )
             return
+        device_key = picked
+        from ..core import actions as _actions_mod
+        ok, last = _actions_mod.check_actions(
+            device_key, ["samsung_odin_flash"], bridge.validate_action)
+        if not ok:
+            self.log_line(f"[refused] Flash Firmware is not valid for {device_key}: {last}")
+            self._toasts.show_warn("Unsupported for this device",
+                                   "Flash cannot run on the selected device "
+                                   "in its current state.")
+            return
+        # Per-device run guard: a concurrent ops flow on the SAME phone must
+        # block this (the old _nf_busy flag alone could not see it).
+        if not _flow_start("Native flash", destructive=True, key=device_key):
+            self._toasts.show_warn("Operation already running",
+                                   _flow_busy_msg(key=device_key))
+            return
         patch = self._nf_patch_cb.isChecked()
 
         def do_flash():
-            self.log_line(f"[smart-flash] {os.path.basename(tar_path)} "
-                          f"(vbmeta patch={'on' if patch else 'off'})")
+            flux = jobs.start_job(device_key, "Flash Firmware", "Download mode",
+                                  "smart_flash", ["samsung_odin_flash"])
+            flux.set_state("VALIDATED")
+            flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    flux.append_log(str(line))
+                except Exception:
+                    pass
+                self.log_line(line)
+
+            emit(f"[smart-flash] {os.path.basename(tar_path)} "
+                 f"(vbmeta patch={'on' if patch else 'off'})")
             try:
-                result = core.flash_archive_smart(
-                    tar_path, log=self.log_line, patch_vbmeta=patch,
-                )
+                with _devices.device_scope(device_key):
+                    result = core.flash_archive_smart(
+                        tar_path, log=emit, patch_vbmeta=patch,
+                    )
                 ok = True
                 summary = (f"flashed {len(result['flashed'])} partitions, "
                            f"skipped {len(result['skipped'])}, "
                            f"reboot={result['rebooted']}")
+                jobs.finish_job(flux.job_id, "COMPLETED")
             except Exception as e:
                 ok = False
                 summary = str(e)
-                self.log_line(f"[smart-flash] ERROR: {e}")
+                emit(f"[smart-flash] ERROR: {e}")
+                state, code = jobs.classify_failure(e, device_key)
+                jobs.finish_job(flux.job_id, state, str(e), code)
 
             def done():
                 self._nf_busy = False
                 self._nf_flash_btn.setEnabled(True)
+                _flow_end(key=device_key)
                 if ok:
                     self._toasts.show_ok(
                         "Flash complete", summary)
@@ -4217,34 +4345,32 @@ class FlashPilotWindow(QMainWindow):
         lay.addLayout(bl)
         dlg.exec()
 
-    def _adb_triage(self):
+    def _adb_triage(self, device_key=None):
         """Probe connected ADB device: lock state, root, partition access."""
-        if not _flow_start("ADB triage", destructive=False):
-            try:
-                self.show_toast(_flow_busy_msg(), "warning")
-            except Exception:
-                pass
+        prep = self._adb_begin("ADB triage", "adb_triage", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
             lines = []
-            emit = lambda m: self._ui.line.emit(m) if hasattr(self, "_ui") else None
+            base_emit = lambda m: self._ui.line.emit(m) if hasattr(self, "_ui") else None
+
+            def emit(m):
+                try:
+                    if flux:
+                        flux.append_log(str(m))
+                except Exception:
+                    pass
+                return base_emit(m)
+
+            if flux:
+                flux.set_state("RUNNING")
             enforced = False
             su = ""
             try:
-                try:
-                    devs = bridge.adb_status()
-                except Exception as e:
-                    self._ui.ui.emit(lambda _e=str(e): self.show_toast("ADB unavailable", _e, "error"))
-                    return
-                devs = [d for d in devs if d.get("state") == "device"]
-                if not devs:
-                    self._ui.ui.emit(lambda: self.show_toast(
-                        "No authorized ADB device", "Enable ADB first", "warning"))
-                    emit("[warn] ADB triage: no authorized device — enable USB debugging and tap Allow")
-                    return
-                serial = devs[0].get("serial", "?")
-                sh = lambda c: bridge.adb_shell(c, timeout=10).strip()
+                emit(f"[step] ADB triage on {serial}")
+                sh = lambda c: bridge.adb_shell(c, timeout=10, serial=serial).strip()
                 lines.append("=" * 60)
                 lines.append("ADB DEVICE TRIAGE")
                 lines.append("=" * 60)
@@ -4272,7 +4398,7 @@ class FlashPilotWindow(QMainWindow):
                 # lock enforcement - Quality 0 means no security enforced
                 enforced = False
                 try:
-                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10)
+                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10, serial=serial)
                     quality = None
                     ctype = None
                     for ln in lock_dump.splitlines():
@@ -4292,7 +4418,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     outp = bridge.adb_shell(
                         "dd if=/dev/block/by-name/misc bs=512 count=1 2>/dev/null | wc -c",
-                        timeout=10).strip()
+                        timeout=10, serial=serial).strip()
                     can_dd = outp not in ("0", "")
                 except Exception:
                     pass
@@ -4326,6 +4452,12 @@ class FlashPilotWindow(QMainWindow):
                     except Exception:
                         pass
                 self._ui.ui.emit(_update_view)
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] ADB triage stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:
                 err = str(e)
                 try:
@@ -4333,9 +4465,12 @@ class FlashPilotWindow(QMainWindow):
                     emit(f"[error] Triage failed: {err}")
                 except Exception:
                     pass
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 try:
-                    _flow_end()
+                    _flow_end(key=device_key)
                 except Exception:
                     pass
 
@@ -4639,13 +4774,28 @@ class FlashPilotWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _fus_detect_via_adb(self):
-        """Return (model, csc) from an ADB-connected phone. Raises on failure."""
-        model = bridge.adb_shell("getprop ro.product.model", timeout=5).strip()
-        csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5).strip()
+        """Return (model, csc) from an ADB-connected phone. Raises on failure.
+
+        Pinned to the displayed device when it is ADB-authorized (a model/CSC
+        read from the wrong phone offers the wrong firmware for download).
+        Explicit FUS Detect context: default rescue applies.
+        """
+        serial = None
+        try:
+            serial = self._adb_serial_for_key(getattr(self, "_display_key", None))
+            if serial:
+                auth = [d.get("serial") for d in bridge.adb_status()
+                        if d.get("state") == "device"]
+                if serial not in auth:
+                    serial = None
+        except Exception:
+            serial = None
+        model = bridge.adb_shell("getprop ro.product.model", timeout=5, serial=serial).strip()
+        csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5, serial=serial).strip()
         if not csc:
-            csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5).strip()
+            csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5, serial=serial).strip()
         if not csc:
-            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5).strip()
+            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5, serial=serial).strip()
         if not model:
             model = "SM-S918B"
         if not csc:
@@ -5091,6 +5241,7 @@ class FlashPilotWindow(QMainWindow):
             "Flash ALL partitions from the firmware directory using the scatter file"
         )
         self.mtk_flash_combo_btn.clicked.connect(self._mtk_flash)
+        self._gate_button(self.mtk_flash_combo_btn, command="mtk-flash")
         flash_row.addWidget(self.mtk_flash_combo_btn)
         self.mtk_check_combo_btn = QPushButton("Check Scatter")
         self.mtk_check_combo_btn.setStyleSheet(_btn_ghost())
@@ -5099,6 +5250,7 @@ class FlashPilotWindow(QMainWindow):
             "Validate the scatter file and firmware directory without flashing"
         )
         self.mtk_check_combo_btn.clicked.connect(self._mtk_check_scatter)
+        self._gate_button(self.mtk_check_combo_btn, command="mtk-check-scatter")
         flash_row.addWidget(self.mtk_check_combo_btn)
         flash_row.addStretch(1)
         combo_lay.addLayout(flash_row)
@@ -5202,6 +5354,7 @@ class FlashPilotWindow(QMainWindow):
             "the device GPT. No scatter file required."
         )
         self.mtk_flash_part_btn.clicked.connect(self._mtk_flash_part)
+        self._gate_button(self.mtk_flash_part_btn, command="mtk-flash-part")
         acts_row3.addWidget(self.mtk_flash_part_btn)
         frp_gpt_btn = QPushButton("FRP Bypass (No Scatter)")
         frp_gpt_btn.setStyleSheet(_btn_ghost())
@@ -5211,6 +5364,7 @@ class FlashPilotWindow(QMainWindow):
             "No scatter file required."
         )
         frp_gpt_btn.clicked.connect(self._mtk_frp_gpt)
+        self._gate_button(frp_gpt_btn, command="mtk-frp-gpt")
         acts_row3.addWidget(frp_gpt_btn)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
@@ -5270,33 +5424,223 @@ class FlashPilotWindow(QMainWindow):
         if d:
             self.mtk_fw_dir.setText(d)
 
-    def _mtk_run(self, args, timeout=600):
-        if not _flow_start(f"MTK {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _key_for_bus_addr(self, tgt):
+        """Device key for a `bus:addr` target via fresh scan, or None when
+        that transport is not on USB now. Used when callers pass explicit
+        targets (no picking dialog needed — the target IS the choice)."""
+        if not tgt or not isinstance(tgt, str):
+            return None
+        try:
+            devs = bridge.detect_all() or []
+        except Exception:
+            return None
+        for d in devs:
+            if not isinstance(d, dict):
+                continue
+            try:
+                if f"{d['bus']}:{d['address']}" == tgt:
+                    return _devices.device_key(d) or None
+            except (KeyError, TypeError):
+                continue
+        return None
+
+    def _chip_begin(self, tag, cmd, modes, args, device_key=None,
+                    stop_btn=None, target_idx=1, destructive=True):
+        """Shared prologue for chip-page direct runners (MTK/QC/SPD).
+
+        Picks a device (dialog only when >1 candidate; an explicit
+        non-"auto" target derives its key from a fresh scan instead),
+        validates against the backend registry, takes the per-device lock,
+        clears scoped cancels, starts the FlashJob (VALIDATED), and splices
+        a fresh explicit bus:addr target over "auto".
+
+        Returns (device_key, flux, args) or (None, None, None) when the run
+        must not start (refusal/busy/gone — already logged + toasted).
+        """
+        from ..core import actions as _actions_mod
+
+        label = f"{tag} {cmd}" if cmd else tag
+        if device_key is None and len(args) > target_idx and args[target_idx] != "auto":
+            device_key = self._key_for_bus_addr(args[target_idx])
+            if not device_key:
+                self._ui.line.emit(
+                    f"[refused] {label}: target {args[target_idx]} is not on USB now.")
+                self._ui.toast.emit("warn", "Device gone",
+                                    "The selected target is no longer connected.")
+                return None, None, None
+        if device_key is None:
+            picked = self._choose_device(label, modes)
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return None, None, None
+            device_key = picked
+        if not device_key:
+            self._ui.line.emit(f"[refused] {label}: no matching device detected.")
+            self._ui.toast.emit("warn", "No device",
+                                f"No {tag} device detected for this operation.")
+            return None, None, None
+        action_ids = _actions_mod.actions_for_command(cmd)
+        ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
+        if not ok:
+            self._ui.line.emit(
+                f"[refused] {label} is not valid for this device right now "
+                f"({device_key}): {last}")
+            self._ui.toast.emit("warn", "Unsupported for this device",
+                                f"{label} cannot run on the selected device "
+                                "in its current state.")
+            return None, None, None
+        if not _flow_start(label, destructive=destructive, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running",
+                                _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return None, None, None
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        mode_txt = ", ".join(sorted(set(modes) if isinstance(modes, (set, list, tuple)) else [modes])) if modes else ""
+        flux = jobs.start_job(device_key, label, mode_txt, cmd or "", action_ids or ())
+        flux.set_state("VALIDATED")
+        tgt = _devices.resolve_usb_target(device_key)
+        if not tgt:
+            self._ui.line.emit(
+                f"[refused] {label}: {device_key} left USB before start.")
+            self._ui.toast.emit("warn", "Device gone",
+                                "The device disconnected before the operation started.")
+            _flow_end(key=device_key)
+            return None, None, None
+        args = list(args)
+        if len(args) > target_idx and args[target_idx] == "auto":
+            args[target_idx] = tgt.split("@")[-1]
+        if stop_btn is not None:
+            try:
+                self._stop_job[stop_btn] = flux.job_id
+            except Exception:
+                pass
+        return device_key, flux, args
+
+    def _adb_serial_for_key(self, device_key):
+        """ADB serial for a device key, or None when it cannot be determined.
+
+        `adb:` keys carry it directly; other keys resolve through the merged
+        device rows (ADB leg first, then the row serial). None means the
+        device cannot be safely targeted — callers must refuse, never fall
+        back to first-authorized.
+        """
+        if isinstance(device_key, str) and device_key.startswith("adb:"):
+            return device_key[4:] or None
+        try:
+            rows = _devices.candidates_for_modes({"ADB"})
+        except Exception:
+            return None
+        for r in rows or []:
+            if isinstance(r, dict) and r.get("key") == device_key:
+                adb = r.get("adb") or {}
+                return adb.get("serial") or r.get("serial") or None
+        return None
+
+    def _adb_begin(self, label, method, device_key=None):
+        """Shared prologue for ADB-mechanism tools (triage/battery/network).
+
+        Picks an authorized device (dialog only when >1 candidate),
+        resolves its ADB serial once, validates `adb_shell` against the
+        backend, takes the per-device lock, clears scoped cancels and starts
+        the FlashJob (VALIDATED). Workers must pass `serial=` to every
+        `adb_shell` call so multi-step loops cannot hop phones mid-run.
+        Returns (serial, device_key, flux) or (None, None, None).
+        """
+        from ..core import actions as _actions_mod
+
+        if device_key is None:
+            picked = self._choose_device(label, "ADB")
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return None, None, None
+            device_key = picked
+        if not device_key:
+            self._ui.line.emit(
+                "[warn] No authorized ADB device — enable USB debugging and tap Allow")
+            self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
+            return None, None, None
+        serial = self._adb_serial_for_key(device_key)
+        if not serial:
+            self._ui.line.emit(
+                f"[refused] {label}: cannot determine the ADB serial for {device_key}.")
+            self._ui.toast.emit("warn", "Cannot target device",
+                                "The selected device has no usable ADB serial.")
+            return None, None, None
+        ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
+        if not ok:
+            self._ui.line.emit(
+                f"[refused] {label} is not valid for this device right now "
+                f"({device_key}): {last}")
+            self._ui.toast.emit("warn", "Unsupported for this device",
+                                f"{label} cannot run on the selected device "
+                                "in its current state.")
+            return None, None, None
+        if not _flow_start(label, destructive=False, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running",
+                                _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return None, None, None
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        flux = jobs.start_job(device_key, label, "ADB", method, ["adb_shell"])
+        flux.set_state("VALIDATED")
+        return serial, device_key, flux
+
+    def _mtk_run(self, args, timeout=600, device_key=None):
+        prep = self._chip_begin("MTK", args[0] if args else "",
+                                {"MTK BROM", "MTK"}, args,
+                                device_key=device_key,
+                                stop_btn=self.mtk_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"MTK: {args[0]} done")
                 self._ui.toast.emit("ok", f"MTK {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] MTK operation stopped by user")
+                emit("[cancelled] MTK operation stopped by user")
                 self._ui.status.emit("MTK: operation cancelled")
                 self._ui.toast.emit("warn", "MTK operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] MTK {args[0]}: {e}")
+                emit(f"[error] MTK {args[0]}: {e}")
                 self._ui.status.emit(f"MTK: {args[0]} failed")
                 self._ui.toast.emit("error", f"MTK {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.mtk_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.mtk_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._mtk_reset_ui)
 
-        bridge.clear_cancel()
         self.mtk_stop_btn.setEnabled(True)
         self.mtk_progress.setVisible(True)
         self.mtk_progress.setValue(150)
@@ -5307,7 +5651,36 @@ class FlashPilotWindow(QMainWindow):
         self.mtk_progress.setValue(1000)
         QTimer.singleShot(400, lambda: self.mtk_progress.setVisible(False))
 
+    def _stop_active_job(self, stop_btn, tag):
+        """Per-device STOP for a chip page's stop button.
+
+        When the button is mapped to a live FlashJob (started from that
+        page), cancel exactly that job's device — other devices keep
+        running. Returns True when a job was stopped. Returns False (caller
+        falls back to legacy broadcast) when no live job is mapped.
+        """
+        try:
+            job_id = self._stop_job.get(stop_btn)
+        except Exception:
+            job_id = None
+        if job_id:
+            job = jobs.get_job(job_id)
+            if job is not None and job.is_active:
+                jobs.cancel_job(job_id)
+                self._ui.status.emit(f"{tag}: stopping {job.device_key} ...")
+                self._ui.line.emit(
+                    f"[warn] {tag}: stop requested for {job.device_key} "
+                    f"(job {job_id}) — other devices keep running ...")
+                return True
+            try:
+                self._stop_job.pop(stop_btn, None)
+            except Exception:
+                pass
+        return False
+
     def _mtk_stop(self):
+        if self._stop_active_job(self.mtk_stop_btn, "MTK"):
+            return
         bridge.request_cancel()
         core.request_cancel()
         self._ui.status.emit("MTK: stopping ...")
@@ -5770,8 +6143,30 @@ class FlashPilotWindow(QMainWindow):
     def _mtk_frp_gpt(self):
         da = self.mtk_da_edit.text().strip()
         if not da:
-            self._ui.line.emit("[warn] MTK: DA binary is required")
-            self._toasts.show_warn("MTK files missing", "Select a DA binary")
+            # Bundled-DA path: FRP removal for ANY MediaTek device via BROM
+            # with no user-supplied DA (the mtkclient V5/V6 containers are
+            # parsed natively and the per-chip DA is picked by dacode).
+            da_dir = bridge.bundled_mtk_da_dir()
+            if not da_dir:
+                self._ui.line.emit("[warn] MTK: no DA selected and no bundled DA containers found")
+                self._toasts.show_warn(
+                    "MTK files missing",
+                    "Select a DA binary (no bundled containers in root/tools/mtk)")
+                return
+            self._ui.line.emit("[step] MTK FRP bypass (BROM, bundled DA — any MTK device)")
+            self._confirm_overlay(
+                "FRP Bypass (Bundled DA — any MTK)",
+                "Boot the bundled mtkclient DA over BROM and clear lock / FRP\n"
+                "partitions by NAME from the device GPT — no DA file needed.\n\n"
+                "Picks the per-chip DA automatically. On SBC/SLA/DAA-protected\n"
+                "BROMs the kamakiri2 exploit runs first.\n"
+                "This formats or zero-fills frp, nvdata, metadata, persistent,\n"
+                "protect1/2, and keystore partitions where present.\n"
+                "User data may be erased. Continue?",
+                confirm_label="Clear FRP",
+                on_confirm=lambda: self._mtk_run(
+                    ["mtk-frp-brom", "auto", da_dir], timeout=1800),
+            )
             return
         self._ui.line.emit("[step] MTK FRP bypass (GPT mode, no scatter): da={}".format(da))
         self._confirm_overlay(
@@ -5920,6 +6315,11 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Flash via Firehose": "qcom-flash",
+                "Backup Partitions": "qcom-backup",
+                "Get Device Info": "qcom-info",
+            }.get(label))
             acts_row1.addWidget(b)
         acts_row1.addStretch(1)
         acts.addLayout(acts_row1)
@@ -5933,6 +6333,10 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "FRP Reset": "qcom-frp-reset",
+                "Enable ADB": "adb_shell",
+            }.get(label))
             acts_row2.addWidget(b)
         acts_row2.addStretch(1)
         self.qc_stop_btn = QPushButton("Stop")
@@ -6106,33 +6510,58 @@ class FlashPilotWindow(QMainWindow):
         if d:
             self.qc_fw_dir.setText(d)
 
-    def _qc_run(self, args, timeout=600):
-        if not _flow_start(f"Qualcomm {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _qc_run(self, args, timeout=600, device_key=None):
+        prep = self._chip_begin("Qualcomm", args[0] if args else "",
+                                {"EDL"}, args,
+                                device_key=device_key,
+                                stop_btn=self.qc_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"Qualcomm: {args[0]} done")
                 self._ui.toast.emit("ok", f"Qualcomm {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] Qualcomm operation stopped by user")
+                emit("[cancelled] Qualcomm operation stopped by user")
                 self._ui.status.emit("Qualcomm: operation cancelled")
                 self._ui.toast.emit("warn", "Qualcomm operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] Qualcomm {args[0]}: {e}")
+                emit(f"[error] Qualcomm {args[0]}: {e}")
                 self._ui.status.emit(f"Qualcomm: {args[0]} failed")
                 self._ui.toast.emit("error", f"Qualcomm {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.qc_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.qc_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._qc_reset_ui)
 
-        bridge.clear_cancel()
         self.qc_stop_btn.setEnabled(True)
         self.qc_progress.setVisible(True)
         self.qc_progress.setValue(150)
@@ -6144,47 +6573,65 @@ class FlashPilotWindow(QMainWindow):
         QTimer.singleShot(400, lambda: self.qc_progress.setVisible(False))
 
     def _qc_stop(self):
+        if self._stop_active_job(self.qc_stop_btn, "Qualcomm"):
+            return
         bridge.request_cancel()
         core.request_cancel()
         self._ui.status.emit("Qualcomm: stopping ...")
         self._ui.line.emit("[warn] Qualcomm: stop requested, killing bridge ...")
 
-    def _qc_adb(self):
+    def _qc_adb(self, device_key=None):
         """Best-effort ADB enable for a Qualcomm device that is booted to
         Android (or recovery) and reachable over adb. EDL-mode devices can't
         enable ADB directly - tell the user so."""
+        prep = self._adb_begin("Enable ADB", "qc_adb_enable", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def work():
-            try:
-                devs = bridge.adb_status()
-            except bridge.BridgeError:
-                devs = []
-            if not any(d["state"] == "device" for d in devs):
-                self._ui.line.emit(
-                    "[warn] No authorized ADB device found. Boot the phone to "
-                    "Android/recovery with USB debugging on, then retry."
-                )
-                self._ui.toast.emit(
-                    "warn", "Enable ADB", "No authorized ADB device detected"
-                )
-                return
-            serial = next(d["serial"] for d in devs if d["state"] == "device")
-            self._ui.line.emit(f"[step] Enabling ADB on {serial} ...")
-            for cmd in (
-                "setprop persist.sys.usb.config adb",
-                "setprop sys.usb.config adb",
-                "settings put global adb_enabled 1",
-                "svc usb setFunctions adb",
-            ):
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
                 try:
-                    out = bridge.adb_shell(cmd, timeout=10)
-                    if out:
-                        self._ui.line.emit(f"  {cmd} -> {out[:120]}")
-                    else:
-                        self._ui.line.emit(f"  {cmd} -> ok")
-                except bridge.BridgeError as e:
-                    self._ui.line.emit(f"[warn] {cmd}: {e}")
-            self._ui.line.emit("[ok] ADB enable commands sent")
-            self._ui.toast.emit("ok", "Enable ADB", "Commands sent to device")
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            try:
+                emit(f"[step] Enabling ADB on {serial} ...")
+                for cmd in (
+                    "setprop persist.sys.usb.config adb",
+                    "setprop sys.usb.config adb",
+                    "settings put global adb_enabled 1",
+                    "svc usb setFunctions adb",
+                ):
+                    try:
+                        out = bridge.adb_shell(cmd, timeout=10, serial=serial)
+                        if out:
+                            emit(f"  {cmd} -> {out[:120]}")
+                        else:
+                            emit(f"  {cmd} -> ok")
+                    except bridge.BridgeError as e:
+                        emit(f"[warn] {cmd}: {e}")
+                emit("[ok] ADB enable commands sent")
+                self._ui.toast.emit("ok", "Enable ADB", "Commands sent to device")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] Enable ADB stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
+            except Exception as e:  # noqa: BLE001
+                emit(f"[error] Enable ADB: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6226,46 +6673,78 @@ class FlashPilotWindow(QMainWindow):
             return
         self._qc_run(["qcom-backup", "auto", prog, "/tmp/qcom_backup"], timeout=1800)
 
-    def _qc_info(self):
+    def _qc_info(self, device_key=None):
+        prep = self._chip_begin("Qualcomm", "qcom-info", {"EDL"},
+                                ["qcom-info", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.qc_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, resolved = prep
+        tgt = resolved[1]
         self.qc_progress.setVisible(True)
         self.qc_progress.setValue(150)
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             lines = []
             try:
-                all_devs = bridge.detect_all()
-                qcom = [d for d in all_devs if d.get("vid") == 0x05C6]
-                if qcom:
-                    lines.append("=== Qualcomm USB Device(s) ===")
-                    for d in qcom:
-                        lines.extend(_fmt_usb_full(d))
-                        pid = d.get("pid", 0)
-                        if pid in (0x9008, 0x900E):
-                            lines.append("  -> EDL mode (Sahara/firehose capable)")
-                        else:
-                            lines.append("  -> normal/modem mode (not in EDL)")
+                with _devices.device_scope(device_key):
+                    all_devs = bridge.detect_all()
+                    qcom = [d for d in all_devs if d.get("vid") == 0x05C6]
+                    if qcom:
+                        lines.append("=== Qualcomm USB Device(s) ===")
+                        for d in qcom:
+                            lines.extend(_fmt_usb_full(d))
+                            pid = d.get("pid", 0)
+                            if pid in (0x9008, 0x900E):
+                                lines.append("  -> EDL mode (Sahara/firehose capable)")
+                            else:
+                                lines.append("  -> normal/modem mode (not in EDL)")
+                            lines.append("")
+                    else:
+                        lines.append("No Qualcomm USB device (VID 05c6) found over USB")
                         lines.append("")
-                else:
-                    lines.append("No Qualcomm USB device (VID 05c6) found over USB")
-                    lines.append("")
 
-                out = bridge._run(["qcom-info", "auto"], timeout=120)
+                    out = bridge._run(["qcom-info", tgt], timeout=120)
                 lines.append("--- Sahara device info ---")
                 lines.append(out or "(Sahara handshake not available - device not in EDL)")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.status.emit("Qualcomm: device info complete")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] Qualcomm info stopped by user")
+                emit("[cancelled] Qualcomm info stopped by user")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
                 lines.append("--- Sahara device info ---")
                 lines.append(f"(Sahara handshake failed: {e})")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.status.emit("Qualcomm: info partial")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.qc_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.qc_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._qc_reset_ui)
 
-        bridge.clear_cancel()
         self.qc_stop_btn.setEnabled(True)
         threading.Thread(target=work, daemon=True).start()
 
@@ -7258,6 +7737,11 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Get Device Info": "spd-info",
+                "Flash Firmware": "spd-flash",
+                "Backup Partitions": "spd-backup",
+            }.get(label))
             acts_row1.addWidget(b)
         acts_row1.addStretch(1)
         acts.addLayout(acts_row1)
@@ -7271,6 +7755,10 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Format / Unlock": "spd-format",
+                "FRP Reset": "spd-frp",
+            }.get(label))
             acts_row2.addWidget(b)
         acts_row2.addStretch(1)
         self.spd_stop_btn = QPushButton("Stop")
@@ -7302,6 +7790,7 @@ class FlashPilotWindow(QMainWindow):
                 + ("Needs FDL1+FDL2." if mode != "normal" else "")
             )
             b.clicked.connect(lambda _=False, m=mode: self._spd_boot(m))
+            self._gate_button(b, command="spd-boot")
             acts_row3.addWidget(b)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
@@ -7571,33 +8060,58 @@ class FlashPilotWindow(QMainWindow):
         """Best-effort current SPD download target from the poll state."""
         return getattr(self, "_last_spd_target", None)
 
-    def _spd_run(self, args, timeout=900):
-        if not _flow_start(f"SPD {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _spd_run(self, args, timeout=900, device_key=None):
+        prep = self._chip_begin("SPD", args[0] if args else "",
+                                {"SPD"}, args,
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"SPD: {args[0]} done")
                 self._ui.toast.emit("ok", f"SPD {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] SPD operation stopped by user")
+                emit("[cancelled] SPD operation stopped by user")
                 self._ui.status.emit("SPD: operation cancelled")
                 self._ui.toast.emit("warn", "SPD operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD {args[0]}: {e}")
+                emit(f"[error] SPD {args[0]}: {e}")
                 self._ui.status.emit(f"SPD: {args[0]} failed")
                 self._ui.toast.emit("error", f"SPD {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
@@ -7609,6 +8123,8 @@ class FlashPilotWindow(QMainWindow):
         QTimer.singleShot(400, lambda: self.spd_progress.setVisible(False))
 
     def _spd_stop(self):
+        if self._stop_active_job(self.spd_stop_btn, "SPD"):
+            return
         bridge.request_cancel()
         core.request_cancel()
         self._ui.status.emit("SPD: stopping ...")
@@ -7823,24 +8339,55 @@ class FlashPilotWindow(QMainWindow):
             self._ui.line.emit("[warn] SPD: invalid FDL base address")
             return None
 
-    def _spd_info(self):
+    def _spd_info(self, device_key=None):
+        prep = self._chip_begin("SPD", "spd-info", {"SPD"},
+                                ["spd-info", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, resolved = prep
+        tgt = resolved[1]
         self.spd_status.setText("Reading device info...")
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[info] spd-info: no SPD device in download mode")
-                    self._ui.ui.emit(lambda: self.spd_status.setText(
-                        "No SPD device detected"))
-                    return
-                out = bridge._run(["spd-info", tgt], timeout=60)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(["spd-info", tgt], timeout=60)
+                emit(out or "(no output)")
                 self._ui.ui.emit(lambda: self.spd_status.setText("Info above"))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] SPD info stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD device info: {e}")
+                emit(f"[error] SPD device info: {e}")
                 self._ui.ui.emit(lambda err=e: self.spd_status.setText(
                     f"Read error: {err}"))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -8163,97 +8710,147 @@ class FlashPilotWindow(QMainWindow):
                 entries.append((name, img))
         return entries
 
-    def _spd_flash_run(self, fdl1, a1, fdl2, entries):
-        if not _flow_start("SPD flash", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _spd_flash_run(self, fdl1, a1, fdl2, entries, device_key=None):
+        prep = self._chip_begin("SPD", "spd-flash", {"SPD"},
+                                ["spd-flash", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, _resolved = prep
+        # The helper resolved + validated the device and replaced "auto"
+        # with the fresh bus:addr target: argv[1] of the placeholder.
+        tgt = _resolved[1]
 
         def work():
-            try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[error] SPD: no download device")
-                    self._ui.ui.emit(self._spd_reset_ui)
-                    return
-                # Safety net: back up boot-critical partitions before writing.
-                try:
-                    from python.core.safety import preflash_backup
-                    a2v = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
-                    preflash_backup("spd", bridge, lambda m: self._ui.line.emit(m),
-                                    target=tgt, fdl1=fdl1, a1=a1,
-                                    fdl2=fdl2 or "", a2=a2v)
-                except Exception as e:  # noqa: BLE001
-                    self._ui.line.emit(f"[safety] backup skipped: {e}")
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
 
-                args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
-                if fdl2:
-                    a2 = self._spd_addr(self.spd_fdl2_addr) or 0
-                    args += [fdl2, f"0x{a2:x}"]
-                for part, file in entries:
-                    args.append(f"{part}={file}")
-                out = bridge._run(args, timeout=1800)
-                self._ui.line.emit(out or "(no output)")
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            try:
+                with _devices.device_scope(device_key):
+                    # Safety net: back up boot-critical partitions before writing.
+                    try:
+                        from python.core.safety import preflash_backup
+                        a2v = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
+                        preflash_backup("spd", bridge, emit,
+                                        target=tgt, fdl1=fdl1, a1=a1,
+                                        fdl2=fdl2 or "", a2=a2v)
+                    except Exception as e:  # noqa: BLE001
+                        emit(f"[safety] backup skipped: {e}")
+
+                    args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
+                    if fdl2:
+                        a2 = self._spd_addr(self.spd_fdl2_addr) or 0
+                        args += [fdl2, f"0x{a2:x}"]
+                    for part, file in entries:
+                        args.append(f"{part}={file}")
+                    out = bridge._run(args, timeout=1800)
+                emit(out or "(no output)")
                 self._ui.status.emit("SPD: flash complete")
                 self._ui.toast.emit("ok", "SPD flash", "Completed")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled:
+                emit("[cancelled] SPD flash stopped by user")
+                self._ui.toast.emit("warn", "SPD flash", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD flash: {e}")
+                emit(f"[error] SPD flash: {e}")
                 self._ui.toast.emit("error", "SPD flash", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
         threading.Thread(target=work, daemon=True).start()
 
-    def _spd_backup(self):
+    def _spd_backup(self, device_key=None):
         fdl1 = self._spd_require_files()
         if not fdl1:
             return
-        if not _flow_start("SPD backup", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
-            return
         a1 = self._spd_addr(self.spd_fdl1_addr)
         if a1 is None:
-            _flow_end()
             return
         fdl2 = self.spd_files["fdl2"].text().strip()
         fw = self.spd_fw_dir.text().strip()
         out_dir = fw or "/tmp/spd_backup"
         self._ui.line.emit(f"[step] SPD backup: fdl1={fdl1} fdl2={fdl2} out={out_dir}")
         self._toasts.show_ok("SPD backup queued", "Reading partition table...")
+        prep = self._chip_begin("SPD", "spd-backup", {"SPD"},
+                                ["spd-backup", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, _resolved = prep
+        tgt = _resolved[1]
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[error] SPD: no download device")
-                    self._ui.ui.emit(self._spd_reset_ui)
-                    return
-                out = bridge._run(
-                    ["spd-backup", tgt, fdl1, f"0x{a1:x}",
-                     fdl2 or "none", "0", out_dir],
-                    timeout=900,
-                )
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(
+                        ["spd-backup", tgt, fdl1, f"0x{a1:x}",
+                         fdl2 or "none", "0", out_dir],
+                        timeout=900,
+                    )
+                emit(out or "(no output)")
                 self._ui.status.emit("SPD: backup complete")
                 self._ui.toast.emit("ok", "SPD backup", "Partition table dumped")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled:
+                emit("[cancelled] SPD backup stopped by user")
+                self._ui.toast.emit("warn", "SPD backup", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD backup: {e}")
+                emit(f"[error] SPD backup: {e}")
                 self._ui.toast.emit("error", "SPD backup", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
@@ -8311,6 +8908,15 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            # ADB-mechanism cards gate on adb_shell availability.
+            self._gate_button(b, command={
+                "_battery_report": "adb_shell",
+                "_battery_repair": "adb_shell",
+                "_battery_load_test": "adb_shell",
+                "_network_report": "adb_shell",
+                "_network_repair": "adb_shell",
+                "_network_modem_reset": "adb_shell",
+            }.get(getattr(slot, "__name__", "")))
             cv.addWidget(b)
             return c
 
@@ -8445,6 +9051,15 @@ class FlashPilotWindow(QMainWindow):
             b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            # ADB-mechanism cards gate on adb_shell availability.
+            self._gate_button(b, command={
+                "_battery_report": "adb_shell",
+                "_battery_repair": "adb_shell",
+                "_battery_load_test": "adb_shell",
+                "_network_report": "adb_shell",
+                "_network_repair": "adb_shell",
+                "_network_modem_reset": "adb_shell",
+            }.get(getattr(slot, "__name__", "")))
             cv.addWidget(b)
             return c
 
@@ -10388,6 +11003,9 @@ class FlashPilotWindow(QMainWindow):
                 sam_fallback = None
             # Prefer cached model, otherwise product string as immediate placeholder (better than "--")
             self._update_device_info(True, first["pid"], mode, fallback_model=sam_fallback)
+            ov = _adb_overlay(adb_devs, first)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif "RECOVERY" in mode.upper():
             rec = [d for d in adb_devs if d["state"] in ("recovery", "sideload")]
             serial = rec[0]["serial"] if rec else "unknown"
@@ -10434,6 +11052,9 @@ class FlashPilotWindow(QMainWindow):
             if qcom_fallback and qcom_fallback.lower() == "adb":
                 qcom_fallback = None
             self._update_device_info(True, pid, mode, fallback_model=qcom_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif spd_devs:
             d = spd_devs[0]
             pid = d.get("pid")
@@ -10452,6 +11073,9 @@ class FlashPilotWindow(QMainWindow):
             if spd_fallback and spd_fallback.lower() == "adb":
                 spd_fallback = None
             self._update_device_info(True, pid, mode, fallback_model=spd_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif mtk_devs:
             d = mtk_devs[0]
             pid = d.get("pid")
@@ -10533,6 +11157,9 @@ class FlashPilotWindow(QMainWindow):
             if android_fallback is None and self._cached_model:
                 android_fallback = self._cached_model
             self._update_device_info(True, pid, mode, fallback_model=android_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif adb_devs:
             auth_adb = [d for d in adb_devs if d["state"] == "device"]
             d = auth_adb[0] if auth_adb else adb_devs[0]
@@ -10648,12 +11275,18 @@ class FlashPilotWindow(QMainWindow):
         # are attached (that display is first-match and ambiguous then).
         if self._display_key and len(rows) > 1:
             self._show_device_row(self._display_key)
+        # Capability display-gating follows the list rebuild (fail-open).
+        try:
+            self._refresh_gates()
+        except Exception:
+            pass
 
     def _on_device_picked(self, item):
         """Connection-bar click: inspect that device in the tiles/scene."""
         try:
             self._display_key = item.data(Qt.ItemDataRole.UserRole)
             self._show_device_row(self._display_key)
+            self._refresh_gates()
         except Exception:
             pass
 
@@ -10784,11 +11417,24 @@ class FlashPilotWindow(QMainWindow):
             adb_status = "Not connected"
             adb_devs = []
             if probe_adb_flag:
-                try:
-                    adb_devs = bridge.adb_status()
-                except bridge.BridgeError:
-                    adb_devs = []
-                    adb_status = "Error"
+                # Reuse the DeviceMonitor's fresh state instead of another
+                # native probe: this ran on the 3s timer and every extra
+                # adb_status was another CNXN session per tick (on devices
+                # whose adbd resets its USB function on our CNXN that
+                # re-enumerates the phone every cycle). The monitor state is
+                # <=3s old and costs zero extra USB I/O.
+                mon = getattr(self, "_monitor", None)
+                mon_state = getattr(mon, "_last_state", None) if mon else None
+                if mon_state is not None:
+                    adb_devs = list(mon_state.get("adb") or [])
+                else:
+                    try:
+                        # Presence (see DeviceMonitor): this display path
+                        # must not natively probe.
+                        adb_devs = bridge.adb_presence_status()
+                    except bridge.BridgeError:
+                        adb_devs = []
+                        adb_status = "Error"
             else:
                 # Lightweight poll: keep adb_status as Not connected without spawning adb server
                 # Still try to refresh model via non-ADB paths (MTP/USB/AT) below
@@ -10800,41 +11446,56 @@ class FlashPilotWindow(QMainWindow):
                     serial = authorized[0]["serial"]
                     extra = authorized[0].get("extra", "")
                     adb_status = f"Connected ({serial})"
-                    try:
-                        model = bridge.adb_shell(
-                            "getprop ro.product.model", timeout=8
-                        ).strip()
-                        mfr = bridge.adb_shell(
-                            "getprop ro.product.manufacturer", timeout=8
-                        ).strip()
-                        brand = bridge.adb_shell(
-                            "getprop ro.product.brand", timeout=8
-                        ).strip()
-                        # Extended device info: build, android, serial
-                        build_id = bridge.adb_shell(
-                            "getprop ro.build.display.id", timeout=8
-                        ).strip() or bridge.adb_shell(
-                            "getprop ro.build.version.incremental", timeout=8
-                        ).strip()
-                        android_ver = bridge.adb_shell(
-                            "getprop ro.build.version.release", timeout=8
-                        ).strip()
-                        sdk_ver = bridge.adb_shell(
-                            "getprop ro.build.version.sdk", timeout=8
-                        ).strip()
-                        # Prefer ro.serialno, fallback to adb serial
-                        serial_prop = bridge.adb_shell(
-                            "getprop ro.serialno", timeout=8
-                        ).strip() or serial
-                        if android_ver and sdk_ver:
-                            android_ver = f"{android_ver} (API {sdk_ver})"
-                    except bridge.BridgeError:
-                        model = ""
-                        mfr = ""
-                        brand = ""
-                        build_id = ""
-                        android_ver = ""
-                        serial_prop = serial
+                    # Device info (model/build/android) never changes every
+                    # 3s - fetch it only when the authorized serial changes
+                    # or on first resolution. Each getprop poll was 6 native
+                    # ADB sessions per timer tick; on devices whose adbd
+                    # resets its USB function on our CNXN that re-enumerates
+                    # the phone 6x per cycle (the address storm).
+                    if serial != getattr(self, "_last_props_serial", None) or not self._cached_model:
+                        self._last_props_serial = serial
+                        try:
+                            # Pin the whole burst to this serial: per-call
+                            # re-resolution could otherwise hop phones
+                            # mid-burst when several are authorized.
+                            # rescue=False: this is the passive poll timer - a
+                            # busy claim (system adb server holds the interface)
+                            # must fail fast into the fallbacks below, never
+                            # kill-server (the phone re-enumerates every time).
+                            model = bridge.adb_shell(
+                                "getprop ro.product.model", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            mfr = bridge.adb_shell(
+                                "getprop ro.product.manufacturer", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            brand = bridge.adb_shell(
+                                "getprop ro.product.brand", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            # Extended device info: build, android, serial
+                            build_id = bridge.adb_shell(
+                                "getprop ro.build.display.id", timeout=8, rescue=False, serial=serial
+                            ).strip() or bridge.adb_shell(
+                                "getprop ro.build.version.incremental", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            android_ver = bridge.adb_shell(
+                                "getprop ro.build.version.release", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            sdk_ver = bridge.adb_shell(
+                                "getprop ro.build.version.sdk", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            # Prefer ro.serialno, fallback to adb serial
+                            serial_prop = bridge.adb_shell(
+                                "getprop ro.serialno", timeout=8, rescue=False, serial=serial
+                            ).strip() or serial
+                            if android_ver and sdk_ver:
+                                android_ver = f"{android_ver} (API {sdk_ver})"
+                        except bridge.BridgeError:
+                            model = ""
+                            mfr = ""
+                            brand = ""
+                            build_id = ""
+                            android_ver = ""
+                            serial_prop = serial
                     # Cache extended info for metrics
                     if 'build_id' not in locals():
                         build_id = ""
@@ -10889,20 +11550,32 @@ class FlashPilotWindow(QMainWindow):
                         self._ui.line.emit(
                             "ADB: device present but NOT authorized - tap Allow on the phone"
                         )
-                    # Still fetch build/android via ADB getprop even when unauthorized (some props still readable)
-                    if not build_id or not android_ver:
+                    # Heavy probes (getprop / MTP) run ONCE per serial: every
+                    # 3s retry was more device I/O per tick (native sessions
+                    # on the poll timer) and never succeeded while busy -
+                    # the per-serial flag stops the churn. Re-armed when the
+                    # user taps Allow (the authorized branch fetches props).
+                    _unauth_serial = next(
+                        (d["serial"] for d in adb_devs if d["state"] == "unauthorized"), "")
+                    _props_tried = getattr(self, "_unauth_props_tried_serial", None)
+                    if (not build_id or not android_ver) and _props_tried != _unauth_serial:
+                        self._unauth_props_tried_serial = _unauth_serial
                         try:
                             # Try ADB getprop even when unauthorized — sometimes ro.build still answers
-                            cand_build = bridge.adb_shell("getprop ro.build.display.id", timeout=5).strip()
+                            # (rescue=False: passive poll timer - busy must fail fast, never kill-server.
+                            # Pinned to the unauthorized serial: unscoped calls could otherwise
+                            # hop phones mid-burst when several are attached.)
+                            _userial = _unauth_serial or None
+                            cand_build = bridge.adb_shell("getprop ro.build.display.id", timeout=5, rescue=False, serial=_userial).strip()
                             if not cand_build:
-                                cand_build = bridge.adb_shell("getprop ro.build.version.incremental", timeout=5).strip()
+                                cand_build = bridge.adb_shell("getprop ro.build.version.incremental", timeout=5, rescue=False, serial=_userial).strip()
                             if cand_build and cand_build.lower() != "adb":
                                 build_id = cand_build
-                            cand_and = bridge.adb_shell("getprop ro.build.version.release", timeout=5).strip()
+                            cand_and = bridge.adb_shell("getprop ro.build.version.release", timeout=5, rescue=False, serial=_userial).strip()
                             if cand_and:
                                 # Also try sdk for API level
                                 try:
-                                    cand_sdk = bridge.adb_shell("getprop ro.build.version.sdk", timeout=5).strip()
+                                    cand_sdk = bridge.adb_shell("getprop ro.build.version.sdk", timeout=5, rescue=False, serial=_userial).strip()
                                     if cand_sdk:
                                         cand_and = f"{cand_and} (API {cand_sdk})"
                                 except Exception:
@@ -10910,8 +11583,11 @@ class FlashPilotWindow(QMainWindow):
                                 android_ver = cand_and
                         except Exception:
                             pass
-                    # Still fetch model via USB/MTP/AT even when ADB is unauthorized
-                    if not model or not build_id or not serial_prop:
+                    # Still fetch model via USB/MTP/AT even when ADB is
+                    # unauthorized - once per serial (same cycle as the
+                    # gated getprop attempt above; every-3s MTP sessions
+                    # claimed the phone's MTP interface per tick).
+                    if _props_tried == _unauth_serial and (not model or not build_id or not serial_prop):
                         try:
                             # Try MTP model (generic, not just Samsung) — also captures build/serial
                             _sam_mtp_u = _find_mtp_device() or mtp.find_samsung() or {}
@@ -11369,13 +12045,18 @@ class FlashPilotWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- battery repair --------------------------
-    def _battery_report(self):
+    def _battery_report(self, device_key=None):
         """ADB battery diagnostics with accurate health estimation: reads the
         fuel-gauge sysfs (charge_full / charge_full_design -> health %), plus
         dumpsys battery / batteryproperties and top consumers."""
+        prep = self._adb_begin("Battery report", "battery_report", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def _sysfs(path):
             try:
-                return bridge.adb_shell(f"cat {path}", timeout=8).strip()
+                return bridge.adb_shell(f"cat {path}", timeout=8, serial=serial).strip()
             except bridge.BridgeError:
                 return None
             except Exception:  # noqa: BLE001
@@ -11395,18 +12076,19 @@ class FlashPilotWindow(QMainWindow):
             return "Critical - replace the battery"
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Battery report needs an authorized ADB device - "
-                        "enable USB debugging and tap Allow"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
+                emit(f"[step] Battery report on {serial}")
                 lines = ["=== Battery Report ==="]
 
                 # -- fuel gauge (accurate health) --
@@ -11479,7 +12161,7 @@ class FlashPilotWindow(QMainWindow):
 
                 # -- dumpsys battery --
                 try:
-                    raw = bridge.adb_shell("dumpsys battery", timeout=15)
+                    raw = bridge.adb_shell("dumpsys battery", timeout=15, serial=serial)
                     lines.append("--- dumpsys battery ---")
                     for line in raw.splitlines():
                         s = line.strip()
@@ -11519,7 +12201,7 @@ class FlashPilotWindow(QMainWindow):
                 # -- dumpsys batteryproperties --
                 try:
                     raw = bridge.adb_shell(
-                        "dumpsys batteryproperties", timeout=15
+                        "dumpsys batteryproperties", timeout=15, serial=serial
                     )
                     lines.append("--- dumpsys batteryproperties ---")
                     for line in raw.splitlines():
@@ -11548,7 +12230,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     raw = bridge.adb_shell(
                         "dumpsys batterystats | grep -A2 'Estimated power use\\|Power use by\\|Uid u0a'",
-                        timeout=30,
+                        timeout=30, serial=serial,
                     )
                     if raw.strip():
                         lines.append("--- top consumers ---")
@@ -11559,9 +12241,20 @@ class FlashPilotWindow(QMainWindow):
                 lines.append("")
                 lines.append("Health below 80% means noticeable runtime loss; below 60%")
                 lines.append("the battery should be replaced.")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery report stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery report: {e}")
+                emit(f"[error] battery report: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -11584,28 +12277,26 @@ class FlashPilotWindow(QMainWindow):
             self._battery_repair_run,
         )
 
-    def _battery_repair_run(self):
-        if not _flow_start("Battery repair", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _battery_repair_run(self, device_key=None):
+        prep = self._adb_begin("Battery repair", "battery_repair", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Battery repair needs an authorized ADB device - "
-                        "enable USB debugging and tap Allow"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
-                serial = auth[0]["serial"]
-                self._ui.line.emit(f"[step] Battery repair on {serial}")
+                emit(f"[step] Battery repair on {serial}")
 
                 steps = [
                     ("reset battery statistics (cmd batterystats reset)",
@@ -11639,43 +12330,52 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=90)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=90, serial=serial)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
                 lines = ["", "--- verification ---"]
                 for k in ("low_power", "low_power_sticky",
                           "ble_scan_always_enabled", "wifi_scan_always_enabled"):
                     try:
                         v = bridge.adb_shell(
-                            f"settings get global {k}", timeout=12
+                            f"settings get global {k}", timeout=12, serial=serial
                         ).strip()
                         lines.append(f"   {k} = {v}")
                     except bridge.BridgeError:
                         lines.append(f"   {k} = (unreadable)")
                 try:
                     v = bridge.adb_shell(
-                        "settings get system screen_off_timeout", timeout=12
+                        "settings get system screen_off_timeout", timeout=12, serial=serial
                     ).strip()
                     lines.append(f"   screen_off_timeout = {v}")
                 except bridge.BridgeError:
                     pass
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
 
-                self._ui.line.emit(
+                emit(
                     "\nBattery repair done. Tip: discharge to ~10% then charge "
                     "to 100% without interruption to finish re-calibration."
                 )
                 self._ui.toast.emit(
                     "ok", "Battery repair", "Fixes applied - re-calibration tip shown"
                 )
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery repair stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery repair: {e}")
+                emit(f"[error] battery repair: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -11695,34 +12395,34 @@ class FlashPilotWindow(QMainWindow):
             self._battery_load_test_run,
         )
 
-    def _battery_load_test_run(self):
-        if not _flow_start("Battery load test", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _battery_load_test_run(self, device_key=None):
+        prep = self._adb_begin("Battery load test", "battery_load_test", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             restored = False
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Load test needs an authorized ADB device"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
-                self._ui.line.emit("[step] Battery load test started")
+                emit("[step] Battery load test started")
                 self._ui.status.emit("Battery load test: stressing...")
 
                 def read():
                     try:
                         v = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/voltage_now",
-                            timeout=8,
+                            timeout=8, serial=serial,
                         ).strip()
                         return int(v) / 1000.0 if v else None
                     except (bridge.BridgeError, ValueError):
@@ -11732,7 +12432,7 @@ class FlashPilotWindow(QMainWindow):
                     try:
                         t = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/temp",
-                            timeout=8,
+                            timeout=8, serial=serial,
                         ).strip()
                         return int(t) / 10.0 if t else None
                     except (bridge.BridgeError, ValueError):
@@ -11740,7 +12440,7 @@ class FlashPilotWindow(QMainWindow):
 
                 idle_v = read()
                 idle_t = read_temp()
-                self._ui.line.emit(
+                emit(
                     f"   idle voltage : {idle_v:.3f} V  "
                     f"temp {idle_t:.1f} C" if idle_v else "   idle voltage : n/a"
                 )
@@ -11754,7 +12454,7 @@ class FlashPilotWindow(QMainWindow):
                     "input keyevent KEYCODE_WAKEUP",
                 ):
                     try:
-                        bridge.adb_shell(cmd, timeout=10)
+                        bridge.adb_shell(cmd, timeout=10, serial=serial)
                     except bridge.BridgeError:
                         pass
                 restored = False  # phone is now maxed - must restore below
@@ -11762,15 +12462,21 @@ class FlashPilotWindow(QMainWindow):
                 # CPU burn in background
                 bridge.adb_shell(
                     "nohup sh -c 'i=0; while [ $i -lt 10000000 ]; do i=$((i+1)); done' >/dev/null 2>&1 &",
-                    timeout=8,
+                    timeout=8, serial=serial,
                 )
 
                 import time as _time
                 samples = []
                 t0 = _time.time()
                 while _time.time() - t0 < 14:
-                    if core.cancel_requested():
-                        self._ui.line.emit("[cancelled] load test stopped by user")
+                    # Per-device cancel: this phone's scope, not the
+                    # broadcast bus, so stopping another phone's job does
+                    # not abort this sampling loop.
+                    if core.cancel_requested(key=device_key):
+                        emit("[cancelled] load test stopped by user")
+                        if flux:
+                            jobs.finish_job(flux.job_id, "CANCELLED",
+                                            "cancelled by user", "CANCELLED")
                         return
                     v = read()
                     if v:
@@ -11780,83 +12486,85 @@ class FlashPilotWindow(QMainWindow):
                 restored = True  # handled by finally below
 
                 if not samples:
-                    self._ui.line.emit("[error] load test: no voltage samples read")
+                    emit("[error] load test: no voltage samples read")
+                    if flux:
+                        jobs.finish_job(flux.job_id, "FAILED", "no voltage samples", "NO_SAMPLES")
                     return
                 load_v = min(samples)
                 load_t = read_temp()
                 sag = (idle_v - load_v) if idle_v else None
-                self._ui.line.emit("   --- load test result ---")
-                self._ui.line.emit(
+                emit("   --- load test result ---")
+                emit(
                     f"   idle voltage : {idle_v:.3f} V" if idle_v else "   idle voltage : n/a"
                 )
-                self._ui.line.emit(
+                emit(
                     f"   min voltage under load: {load_v:.3f} V  "
                     f"temp {load_t:.1f} C" if load_t else
                     f"   min voltage under load: {load_v:.3f} V"
                 )
                 if sag is not None:
-                    self._ui.line.emit(f"   voltage sag   : {sag*1000:.0f} mV")
+                    emit(f"   voltage sag   : {sag*1000:.0f} mV")
                     if sag * 1000 > 250:
-                        self._ui.line.emit(
+                        emit(
                             "   >>> HIGH sag (>250mV): high internal resistance - "
                             "cell is weak, replace the battery"
                         )
                     elif sag * 1000 > 150:
-                        self._ui.line.emit(
+                        emit(
                             "   >>> Moderate sag (150-250mV): degraded cell, "
                             "watch for shutdowns under load"
                         )
                     else:
-                        self._ui.line.emit(
+                        emit(
                             "   Sag within normal range (<150mV): cell looks healthy"
                         )
-                self._ui.line.emit(
+                emit(
                     "   If the phone shut off during the test, that confirms a "
                     "weak cell (voltage dropped below cutoff)."
                 )
                 self._ui.status.emit("Battery load test complete")
                 self._ui.toast.emit("ok", "Load test", "Result printed to console")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery load test stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery load test: {e}")
+                emit(f"[error] battery load test: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 # Restore brightness even if the burn/read path raised or was
                 # cancelled - otherwise the phone is left at 100% brightness.
                 if not restored:
                     try:
                         bridge.adb_shell(
-                            "settings put system screen_brightness_mode 1", timeout=8
+                            "settings put system screen_brightness_mode 1", timeout=8,
+                            serial=serial,
                         )
                     except bridge.BridgeError:
                         pass
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- network repair -------------------------
-    def _get_authorized_adb(self):
-        try:
-            devs = bridge.adb_status()
-            auth = [d for d in devs if d["state"] == "device"]
-            return auth[0]["serial"] if auth else None
-        except bridge.BridgeError:
-            return None
-
-    def _require_adb(self):
-        serial = self._get_authorized_adb()
-        if not serial:
-            self._ui.line.emit(
-                "[warn] Network tools need an authorized ADB device - enable "
-                "USB debugging and tap Allow"
-            )
-            self._ui.toast.emit(
-                "warn", "No ADB device", "Connect + authorize the phone"
-            )
-        return serial
-
+    # NOTE: _get_authorized_adb/_require_adb (first-authorized-device) were
+    # removed: every ADB tool now picks via _adb_begin (dialog when >1) and
+    # pins serial=. Do not reintroduce first-match ADB resolution.
     def _poll_net_live(self):
         """Live network readout on the Network page. Runs from the 3s ADB
         timer; updates the metric cards while an authorized ADB device is
-        connected, so diagnostics appear without clicking anything."""
+        connected, so diagnostics appear without clicking anything.
+
+        Gated on the Network page being VISIBLE: every tick ran adb_status
+        + 8 native ADB sessions regardless of the page, and on devices
+        whose adbd resets its USB function on our CNXN that re-enumerates
+        the phone 8x per cycle while the user is on another page."""
+        if getattr(self, "_current_section", "") != "network":
+            return
         if not hasattr(self, "net_cards"):
             return
         if self._update_net_in_progress:
@@ -11865,21 +12573,45 @@ class FlashPilotWindow(QMainWindow):
 
         def work():
             try:
-                try:
-                    adb_devs = bridge.adb_status()
-                except bridge.BridgeError:
-                    adb_devs = []
+                # Reuse the DeviceMonitor's fresh state (<=3s old, zero extra
+                # USB I/O) instead of another native probe per tick.
+                mon = getattr(self, "_monitor", None)
+                mon_state = getattr(mon, "_last_state", None) if mon else None
+                if mon_state is not None:
+                    adb_devs = list(mon_state.get("adb") or [])
+                else:
+                    try:
+                        # Presence (see DeviceMonitor): this 3s display tick
+                        # must not natively probe.
+                        adb_devs = bridge.adb_presence_status()
+                    except bridge.BridgeError:
+                        adb_devs = []
+                # Pin the whole tick to one phone: the displayed device when
+                # authorized, else the first authorized (legacy). Per-call
+                # re-resolution could otherwise hop phones mid-tick.
                 authorized = [d for d in adb_devs if d["state"] == "device"]
                 if not authorized:
                     self._ui.ui.emit(self._net_set_offline)
                     return
                 serial = authorized[0]["serial"]
                 try:
+                    pinned = self._adb_serial_for_key(
+                        getattr(self, "_display_key", None))
+                    if pinned and any(d["serial"] == pinned for d in authorized):
+                        serial = pinned
+                except Exception:
+                    pass
+                try:
+                    # rescue=False: passive 3s poll timer - busy (system adb
+                    # server holds the interface) must fail fast, never
+                    # kill-server (the phone re-enumerates every time).
                     get = lambda prop: bridge.adb_shell(
-                        f"getprop {prop}", timeout=8
+                        f"getprop {prop}", timeout=8, rescue=False,
+                        serial=serial,
                     ).strip()
                     settings_get = lambda key: bridge.adb_shell(
-                        f"settings get global {key}", timeout=8
+                        f"settings get global {key}", timeout=8, rescue=False,
+                        serial=serial,
                     ).strip()
                     sim = get("gsm.sim.state")
                     net = get("gsm.network.type")
@@ -11905,6 +12637,8 @@ class FlashPilotWindow(QMainWindow):
                         "dumpsys telephony.registry 2>/dev/null | grep -m1 "
                         "'mSignalStrength' | awk -F'=' '{print $2}'",
                         timeout=8,
+                        rescue=False,
+                        serial=serial,
                     ).strip()
                     vals["signal"] = sig or "unknown"
                 except bridge.BridgeError:
@@ -11931,12 +12665,25 @@ class FlashPilotWindow(QMainWindow):
             "No authorized ADB device - connect + authorize to see live diagnostics"
         )
 
-    def _network_report(self):
+    def _network_report(self, device_key=None):
+        prep = self._adb_begin("Network report", "network_report", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
                 lines = [f"=== Network Report ({serial}) ==="]
                 probes = [
                     ("SIM state", "getprop gsm.sim.state"),
@@ -11952,7 +12699,7 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in probes:
                     try:
-                        v = bridge.adb_shell(cmd, timeout=12).strip()
+                        v = bridge.adb_shell(cmd, timeout=12, serial=serial).strip()
                         if v:
                             lines.append(f"   {label:16}: {v}")
                     except (bridge.BridgeError, ValueError):
@@ -11960,7 +12707,7 @@ class FlashPilotWindow(QMainWindow):
                 try:
                     w = bridge.adb_shell(
                         "dumpsys wifi 2>/dev/null | grep -i 'Wi-Fi is' | head -1",
-                        timeout=15,
+                        timeout=15, serial=serial,
                     ).strip()
                     if w:
                         lines.append(f"   {'Wi-Fi status':16}: {w}")
@@ -11970,17 +12717,30 @@ class FlashPilotWindow(QMainWindow):
                     c = bridge.adb_shell(
                         "dumpsys connectivity 2>/dev/null | grep -i "
                         "'Active default network' | head -1",
-                        timeout=15,
+                        timeout=15, serial=serial,
                     ).strip()
                     if c:
                         lines.append(f"   {'Active net':16}: {c}")
                 except bridge.BridgeError:
                     pass
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.ui.emit(lambda: self.net_status.setText(
                     "Report printed to console"))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] network report stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] network report: {e}")
+                emit(f"[error] network report: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                # The pre-scope version of this worker never released its
+                # run-guard lock at all; release the keyed one here.
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -11999,19 +12759,26 @@ class FlashPilotWindow(QMainWindow):
             self._network_repair_run,
         )
 
-    def _network_repair_run(self):
-        if not _flow_start("Network repair", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _network_repair_run(self, device_key=None):
+        prep = self._adb_begin("Network repair", "network_repair", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
-                self._ui.line.emit(f"[step] Network repair on {serial}")
+                emit(f"[step] Network repair on {serial}")
                 self._ui.status.emit("Network repair: resetting radios...")
 
                 steps = [
@@ -12040,21 +12807,30 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=30, serial=serial)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
-                self._ui.line.emit("")
-                self._ui.line.emit("Network repair done. Re-open Settings -> "
-                                   "Connections if the phone needs a moment.")
+                emit("")
+                emit("Network repair done. Re-open Settings -> "
+                     "Connections if the phone needs a moment.")
                 self._ui.toast.emit("ok", "Network repair", "Radios reset + caches flushed")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] network repair stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] network repair: {e}")
+                emit(f"[error] network repair: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -12071,19 +12847,26 @@ class FlashPilotWindow(QMainWindow):
             self._network_modem_reset_run,
         )
 
-    def _network_modem_reset_run(self):
-        if not _flow_start("Modem reset", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _network_modem_reset_run(self, device_key=None):
+        prep = self._adb_begin("Modem reset", "modem_reset", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
-                self._ui.line.emit(f"[step] Modem reset on {serial}")
+                emit(f"[step] Modem reset on {serial}")
                 self._ui.status.emit("Modem reset: re-registering...")
 
                 steps = [
@@ -12102,25 +12885,34 @@ class FlashPilotWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=30, serial=serial)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
                 try:
                     v = bridge.adb_shell(
-                        "getprop gsm.sim.state", timeout=12
+                        "getprop gsm.sim.state", timeout=12, serial=serial
                     ).strip()
-                    self._ui.line.emit(f"\nSIM state after reset: {v or '(unknown)'}")
+                    emit(f"\nSIM state after reset: {v or '(unknown)'}")
                 except bridge.BridgeError:
                     pass
                 self._ui.toast.emit("ok", "Modem reset", "Modem re-registering")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] modem reset stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] modem reset: {e}")
+                emit(f"[error] modem reset: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -12215,20 +13007,24 @@ class FlashPilotWindow(QMainWindow):
     def _choose_device(self, job, mode):
         """Per-operation device picker. Returns a device key, None for
         silent/legacy passthrough (0-1 candidates, or detection failure),
-        or "__cancelled__" when the user dismisses the chooser."""
+        or "__cancelled__" when the user dismisses the chooser.
+        ``mode`` may be one transport name or a set of them (chip pages
+        cover several related transports)."""
         try:
-            rows = _devices.candidates_for_modes({mode})
+            modes = {mode} if isinstance(mode, str) else set(mode or [])
+            rows = _devices.candidates_for_modes(modes)
         except Exception:
             return None
         rows = [r for r in rows if r.get("key")]
         if len(rows) <= 1:
             return rows[0]["key"] if rows else None
         # Multiple candidates: explicit choice (None would be ambiguous).
+        mode_txt = ", ".join(sorted(modes)) if modes else str(mode)
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Choose device — {job} / {mode}")
+        dlg.setWindowTitle(f"Choose device — {job} / {mode_txt}")
         dlg.setMinimumWidth(420)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel(f"Multiple devices match <b>{mode}</b> for <b>{job}</b>.<br>Which phone should this run on?"))
+        lay.addWidget(QLabel(f"Multiple devices match <b>{mode_txt}</b> for <b>{job}</b>.<br>Which phone should this run on?"))
         group = QButtonGroup(dlg)
         radios = []
         for i, r in enumerate(rows):
@@ -12254,6 +13050,108 @@ class FlashPilotWindow(QMainWindow):
             return "__cancelled__"
         return checked.property("device_key") or "__cancelled__"
 
+    def _gate_job_action(self, job, mode, device_key):
+        """Ask the backend whether this job may run on this device now.
+
+        Returns True to proceed. On backend rejection returns False after
+        logging + toast — the runner must NOT lock, spawn, or execute.
+        Unmapped jobs and key-less legacy runs skip the gate (True). A
+        missing bridge binary also skips (the flow itself will report it;
+        refusing with "unsupported" would mislead)."""
+        from ..core import actions as _actions
+
+        ok, last = _actions.check_job_allowed(
+            job, mode, device_key, bridge.validate_action)
+        if ok:
+            return True
+        try:
+            self._ui.line.emit(
+                f"[refused] {job} [{mode}] is not valid for this device "
+                f"right now ({device_key}): {last}"
+            )
+            self._ui.toast.emit(
+                "warn", "Unsupported for this device",
+                f"{job} cannot run on the selected device in its current state.")
+        except Exception:
+            pass
+        return False
+
+    def _gate_button(self, btn, job=None, mode=None, command=None):
+        """Register a button for capability display-gating.
+
+        ``command`` (bridge argv[0] / tool mechanism id) wins when given,
+        else the (job, mode) mapping. Registration only records metadata;
+        `_refresh_gates()` applies enablement. Safe to call during page
+        construction (no bridge I/O here).
+        """
+        try:
+            self._gated_buttons.append(
+                (weakref.ref(btn), job, mode, command, btn.toolTip()))
+        except Exception:
+            pass
+
+    def _refresh_gates(self):
+        """Enable/disable gated buttons for the displayed device.
+
+        Display-only and fail-open: resolves `bridge.actions_for()` for
+        `self._display_key` (cached per key + device-list signature) and
+        disables buttons whose backend actions are all unavailable. Any
+        failure — no key, bridge error, empty registry — leaves every
+        button enabled. Enforcement stays in the pre-execution gate.
+        """
+        try:
+            from ..core import actions as _actions_mod
+            gated = list(getattr(self, "_gated_buttons", None) or [])
+            if not gated:
+                return
+            key = getattr(self, "_display_key", None)
+            sig = getattr(self, "_last_device_list_sig", None)
+            allowed = None
+            if key:
+                cache = getattr(self, "_gate_cache", None) or {}
+                hit = cache.get(key)
+                if hit is not None and hit[0] == sig:
+                    allowed = hit[1]
+                else:
+                    try:
+                        payload = bridge.actions_for(key)
+                        allowed = [a.get("id") for a in
+                                   payload.get("actions", []) if a.get("id")]
+                    except Exception:
+                        allowed = None
+                    try:
+                        self._gate_cache = {key: (sig, allowed)}
+                    except Exception:
+                        pass
+            alive = []
+            for ref, job, mode, command, base in gated:
+                try:
+                    btn = ref()
+                except Exception:
+                    continue
+                if btn is None:
+                    continue
+                alive.append((ref, job, mode, command, base))
+                try:
+                    if allowed is None:
+                        btn.setEnabled(True)
+                    else:
+                        ok = _actions_mod.button_allowed(
+                            job=job, mode=mode, command=command,
+                            allowed_ids=allowed)
+                        btn.setEnabled(ok)
+                        btn.setToolTip(
+                            base if ok else base + "\n[BACKEND] Not available "
+                            "for the selected device in its current state.")
+                except Exception:
+                    pass
+            try:
+                self._gated_buttons = alive
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _run_ops_flow(self, job, mode, method, label, device_key=None,
                       feature=None):
         """Run a Samsung Operations flow directly from its button - no
@@ -12269,6 +13167,8 @@ class FlashPilotWindow(QMainWindow):
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
             device_key = picked
+        if not self._gate_job_action(job, mode, device_key):
+            return
         if not _flow_start(label, destructive=True, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
             self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
@@ -12276,6 +13176,13 @@ class FlashPilotWindow(QMainWindow):
             return
         core.clear_cancel(key=device_key)
         bridge.clear_cancel(key=device_key)
+        # Isolated FlashJob: created once the gate passed and the per-device
+        # lock is held; the worker below drives it to a terminal state.
+        from ..core import actions as _actions_mod
+        flux = jobs.start_job(
+            device_key, job, mode, method,
+            _actions_mod.actions_for_job(job, mode) or ())
+        flux.set_state("VALIDATED")
         self._toasts.show_progress("Operation started", label)
         if job == "Flash Firmware":
             os.environ["ODIN4_ALLOW_UNKNOWN"] = "1" if self.allow_unknown_cb.isChecked() else "0"
@@ -12368,6 +13275,7 @@ class FlashPilotWindow(QMainWindow):
         def work():
             ctx = {}
             dev_tag = f"[{device_key}] " if device_key else ""
+            job_tag = f"[{flux.job_id}] " if flux else ""
             if device_key:
                 ctx["device_key"] = device_key
                 try:
@@ -12376,6 +13284,18 @@ class FlashPilotWindow(QMainWindow):
                         ctx["target"] = tgt
                 except Exception:
                     pass
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                # Per-job log isolation (job owns its lines) + shared console.
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             # Same feature-bound consumption as _run_job_flow: only a fresh
             # token for this flow's feature sets the per-run ack.
             try:
@@ -12388,20 +13308,27 @@ class FlashPilotWindow(QMainWindow):
             try:
                 with _devices.device_scope(device_key):
                     flow = core.flow_for(job, mode, method)
-                    flow.run(ctx, self._ui.line.emit)
+                    flow.run(ctx, emit)
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
-                self._ui.line.emit(f"{dev_tag}Flow completed successfully")
+                emit(f"{dev_tag}Flow completed successfully")
                 self._ui.toast.emit("ok", "Operation completed", label)
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except core.FlowCancelled as e:
-                self._ui.line.emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
+                emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 _flow_end(key=device_key)
                 self._ui.ui.emit(self._toasts.dismiss_progress)
@@ -12544,6 +13471,8 @@ class FlashPilotWindow(QMainWindow):
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
             device_key = picked
+        if not self._gate_job_action(job, mode, device_key):
+            return
         if not _flow_start(label, destructive=True, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
             self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
@@ -12551,16 +13480,39 @@ class FlashPilotWindow(QMainWindow):
             return
         core.clear_cancel(key=device_key)
         bridge.clear_cancel(key=device_key)
+        from ..core import actions as _actions_mod
+        flux = jobs.start_job(
+            device_key, job, mode, method,
+            _actions_mod.actions_for_job(job, mode) or ())
+        flux.set_state("VALIDATED")
         self._toasts.show_progress("Operation started", label)
         self._ui.line.emit(f"\n>>> started: {label}")
         self._ui.status.emit(f"Running: {label}")
         stop_btn.setEnabled(True)
         progress.setVisible(True)
         progress.setValue(150)
+        # Per-device STOP: this page's stop button cancels exactly this job's
+        # device scope (not a broadcast). Replaced on the next run; cleared
+        # in the worker's finally.
+        try:
+            self._stop_job[stop_btn] = flux.job_id
+        except Exception:
+            pass
 
         def work():
             ctx = {}
             dev_tag = f"[{device_key}] " if device_key else ""
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             if device_key:
                 ctx["device_key"] = device_key
                 try:
@@ -12583,22 +13535,34 @@ class FlashPilotWindow(QMainWindow):
             try:
                 with _devices.device_scope(device_key):
                     flow = core.flow_for(job, mode, method)
-                    flow.run(ctx, self._ui.line.emit)
+                    flow.run(ctx, emit)
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
-                self._ui.line.emit(f"{dev_tag}Flow completed successfully")
+                emit(f"{dev_tag}Flow completed successfully")
                 self._ui.toast.emit("ok", "Operation completed", label)
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except core.FlowCancelled as e:
-                self._ui.line.emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
+                emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(stop_btn) == flux.job_id:
+                        self._stop_job.pop(stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.ui.emit(reset_ui)
                 self._ui.finished.emit()

@@ -848,6 +848,103 @@ fn parse_banner(payload: &[u8], out: &mut HashMap<String, String>) {
 }
 
 // ---------------------------------------------------------------------------
+// System adb server coexistence.
+// ---------------------------------------------------------------------------
+
+/// Query the system adb server (127.0.0.1:5037) for its device rows via
+/// `host:devices-l`. ZERO device I/O — plain TCP to the local daemon.
+///
+/// When the server is running it holds the phone's ADB interface
+/// exclusively, so our native USB probe would fail "Resource busy" — and
+/// fighting it with kill-server made the phone's adbd reset its USB
+/// function (re-enumeration at a new address) on every poll. The server's
+/// rows ARE the authoritative `adb devices` state for that case; reusing
+/// `~/.android/adbkey` means an authorized key benefits this app too.
+/// Returns None when no server is listening (pure-native flow).
+fn system_server_rows() -> Option<Vec<String>> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect("127.0.0.1:5037").ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(750)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(750)))
+        .ok()?;
+    // Wire protocol: 4-hex-digit length-prefixed request, then the same
+    // framing on the response.
+    let req = b"host:devices-l";
+    let mut framed = format!("{:04x}", req.len()).into_bytes();
+    framed.extend_from_slice(req);
+    stream.write_all(&framed).ok()?;
+    // The server acks the request with a literal "OKAY" BEFORE the
+    // length-prefixed payload — reading it as the length silently killed
+    // the whole server-first path (probe fell through to native USB I/O).
+    let mut ack = [0u8; 4];
+    stream.read_exact(&mut ack).ok()?;
+    if &ack != b"OKAY" {
+        return None;
+    }
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).ok()?;
+    let len = usize::from_str_radix(
+        std::str::from_utf8(&len_buf).ok()?.trim(),
+        16,
+    )
+    .ok()?;
+    if len == 0 || len > 1024 * 1024 {
+        return None;
+    }
+    let mut payload = vec![0u8; len];
+    stream.read_exact(&mut payload).ok()?;
+    Some(parse_server_rows(&String::from_utf8_lossy(&payload)))
+}
+
+/// Normalize `host:devices-l` payload lines into the same
+/// `SERIAL\tstate extras` contract the native probe emits (Python parsing
+/// unchanged; GUI reads model:/product: from the extras either way).
+fn parse_server_rows(payload: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    for line in payload.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.contains("List of devices") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let serial = match parts.next() {
+            Some(s) => s,
+            None => continue,
+        };
+        let state = match parts.next() {
+            Some(s) => s,
+            None => continue,
+        };
+        let extras: Vec<&str> = parts.collect();
+        let row = if extras.is_empty() {
+            format!("{serial}\t{state}")
+        } else {
+            format!("{serial}\t{state} {}", extras.join(" "))
+        };
+        rows.push(row);
+    }
+    rows
+}
+
+/// Fast ADB state lookup for one serial via the system server ONLY (no
+/// native USB probe): used by capability queries where a multi-second
+/// native probe per device is unacceptable. Returns None when no server
+/// row exists for the serial (unknown — not "absent").
+pub fn server_state_for_serial(serial: &str) -> Option<String> {
+    let rows = system_server_rows()?;
+    for line in rows {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some(serial) {
+            return parts.next().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Device open + scan.
 // ---------------------------------------------------------------------------
 
@@ -914,6 +1011,18 @@ fn open_session(t: &AdbTarget, deadline: Instant) -> Result<Session> {
         }
         other => other,
     })?;
+    // CLEAR_HALT both endpoints BEFORE the first CNXN (the system adb
+    // server does exactly this - strace: CLEAR_HALT x2 after claim). A
+    // usbfs process that exits mid-session can leave an endpoint HALTED;
+    // this phone's adbd then resets its USB function on the next CNXN
+    // (re-enumeration at a new address -> the read dies EIO -> the probe
+    // skips -> "never shows connected"). Clearing the halt unwedges it and
+    // is a no-op when the endpoints are clean.
+    for ep in dev.find_bulk_endpoints(iface).map(|(i, o)| [i, o]).unwrap_or_default() {
+        if let Err(e) = dev.clear_halt(ep) {
+            eprintln!("[adb] clear_halt 0x{ep:02x}: {e}");
+        }
+    }
     let (ep_in, ep_out) = dev.find_bulk_endpoints(iface).ok_or_else(|| {
         BridgeError::InvalidArgument("no bulk endpoints on ADB iface".to_string())
     })?;
@@ -934,12 +1043,101 @@ fn extras(banner: &HashMap<String, String>) -> String {
     parts.join(" ")
 }
 
+/// System-server rows keyed by serial (zero device I/O). Shared by the
+/// verified listing and the zero-touch presence listing below.
+fn server_rows_by_serial() -> HashMap<String, String> {
+    system_server_rows()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| {
+            let serial = row.split('\t').next()?.to_string();
+            Some((serial, row))
+        })
+        .collect()
+}
+
+/// Zero-touch ADB presence listing: system-server rows plus one
+/// `unknown`-state row per USB device exposing the ADB triple — WITHOUT
+/// opening, claiming, detaching or handshaking anything.
+///
+/// Rationale: opening a native session (detach kernel driver + claim +
+/// CLEAR_HALT + CNXN) resets the USB function on fragile hardware (USB
+/// cellular modems, some phones): each poll cycle re-enumerates the
+/// device, drops its other functions (RNDIS/MBIM), and never stabilizes.
+/// Poll/monitor/display paths must use this; the verified `devices_json`
+/// (native probe) stays for explicit operations and flows, which verify
+/// per-command anyway.
+pub fn devices_json_no_probe() -> Result<String> {
+    let targets = collect_adb()?;
+    let server_by_serial = server_rows_by_serial();
+    let lines = presence_lines(&targets, &server_by_serial);
+    serde_json::to_string(&lines).map_err(|e| BridgeError::Io(e.to_string()))
+}
+
+/// Pure merge for presence listing (unit-testable without USB): server
+/// rows win by serial; unknown-to-server targets report `unknown` state;
+/// unreadable ("unknown") serials are dropped (no identity to key on);
+/// standalone server rows (no USB leg) pass through.
+fn presence_lines(
+    targets: &[AdbTarget],
+    server_by_serial: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for t in targets {
+        if let Some(row) = server_by_serial.get(&t.serial) {
+            if seen.insert(t.serial.clone()) {
+                lines.push(row.clone());
+            }
+            continue;
+        }
+        if normalize_serial_for_presence(&t.serial).is_empty() {
+            continue;
+        }
+        if seen.insert(t.serial.clone()) {
+            lines.push(format!("{}\tunknown transport:usb", t.serial));
+        }
+    }
+    for (serial, row) in server_by_serial {
+        if seen.insert(serial.clone()) {
+            lines.push(row.clone());
+        }
+    }
+    lines
+}
+
+/// Normalization matching `usb::filtering::normalize_serial` without
+/// importing the filtering module (keeps adb.rs dependency-light).
+fn normalize_serial_for_presence(s: &str) -> String {
+    let s = s.trim();
+    if s.is_empty()
+        || matches!(s.to_lowercase().as_str(), "null" | "none" | "unknown" | "?")
+    {
+        return String::new();
+    }
+    s.to_string()
+}
 /// `adb-devices` — JSON list of `SERIAL\tstate extras` strings (same line
 /// contract as `adb devices -l`, so Python parsing is unchanged).
+/// Native probes run only for serials the system server does not know
+/// (pure-native flow, no platform-tools). POLL PATHS MUST NOT USE THIS —
+/// use `devices_json_no_probe` — because each native probe claims the
+/// interface and handshakes, which re-enumerates fragile hardware.
 pub fn devices_json() -> Result<String> {
     let targets = collect_adb()?;
+    // System adb server first (zero device I/O): when it is running it is
+    // the exclusive holder of the ADB interface, so probing natively would
+    // fail "Resource busy" — and killing it to force a claim made phones
+    // re-enumerate at a new address on every poll. Its rows are the
+    // authoritative state; native probes run only for serials the server
+    // does not know (pure-native flow, no platform-tools).
+    let server_by_serial = server_rows_by_serial();
     let mut lines = Vec::new();
     for t in &targets {
+        if let Some(row) = server_by_serial.get(&t.serial) {
+            lines.push(row.clone());
+            continue;
+        }
         let deadline = Instant::now() + Duration::from_secs(6);
         let probe = (|| -> Result<HashMap<String, String>> {
             let sess = open_session(t, deadline)?;
@@ -987,7 +1185,14 @@ fn pick_target(serial: &str) -> Result<AdbTarget> {
         return Err(BridgeError::Usb(UsbError::DeviceNotFound));
     }
     if serial.is_empty() || serial == "-" {
-        // First device, legacy single-device behaviour.
+        // Legacy single-device behaviour is only safe with exactly one
+        // candidate: with several phones attached, silently commanding
+        // "the first" is a wrong-device operation. Fail loudly instead.
+        if targets.len() > 1 {
+            return Err(BridgeError::DeviceState(
+                crate::error::DeviceStateError::AmbiguousTarget { count: targets.len() },
+            ));
+        }
         return Ok(targets.remove(0));
     }
     if let Some(i) = targets.iter().position(|t| t.serial == serial) {
@@ -1040,6 +1245,33 @@ pub fn push_cli(serial: &str, timeout_ms: u64, local: &str, remote: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn target(serial: &str) -> AdbTarget {
+        AdbTarget { vid: 0x05C6, pid: 0x90B4, bus: 1, address: 5, serial: serial.to_string() }
+    }
+
+    #[test]
+    fn presence_prefers_server_rows_and_marks_unknown() {
+        let targets = vec![target("AAA"), target("BBB"), target("unknown")];
+        let mut server = HashMap::new();
+        server.insert("AAA".to_string(), "AAA\tdevice product:x".to_string());
+        server.insert("TCP1".to_string(), "TCP1\tdevice transport:tcp".to_string());
+        let lines = presence_lines(&targets, &server);
+        // Server row verbatim; unknown-to-server serial reported, never probed;
+        // unreadable serial dropped; standalone server row passes through.
+        assert!(lines.contains(&"AAA\tdevice product:x".to_string()));
+        assert!(lines.contains(&"BBB\tunknown transport:usb".to_string()));
+        assert!(lines.contains(&"TCP1\tdevice transport:tcp".to_string()));
+        assert!(!lines.iter().any(|l| l.starts_with("unknown\t")));
+    }
+
+    #[test]
+    fn presence_dedupes_repeated_serials() {
+        let targets = vec![target("AAA"), target("AAA")];
+        let server = HashMap::new();
+        let lines = presence_lines(&targets, &server);
+        assert_eq!(lines, vec!["AAA\tunknown transport:usb".to_string()]);
+    }
 
     #[test]
     fn msg_roundtrip_and_checksum() {
@@ -1207,6 +1439,25 @@ mod tests {
         assert_eq!(auth_backoff_ms(5), 2000);
         assert_eq!(auth_backoff_ms(6), 2000);
         assert_eq!(auth_backoff_ms(100), 2000);
+    }
+
+    #[test]
+    fn server_rows_normalize_devices_l_payload() {
+        // host:devices-l payload: rows only (no header), whitespace-separated
+        // serial/state, then " key:value" extras. Must normalize to the same
+        // `SERIAL\tstate extras` contract the native probe emits.
+        let payload = "R58N123\tdevice usb:1-2 product:ali_n model:Moto_G_6 device:ali transport_id:1\n\
+                       R58N999      unauthorized usb:1-3 transport_id:2\n\n\
+                       List of devices attached\n";
+        let rows = parse_server_rows(payload);
+        assert_eq!(rows.len(), 2);
+        let (serial, rest) = rows[0].split_once('\t').unwrap();
+        assert_eq!(serial, "R58N123");
+        assert!(rest.starts_with("device "));
+        assert!(rest.contains("model:Moto_G_6"));
+        let (serial2, rest2) = rows[1].split_once('\t').unwrap();
+        assert_eq!(serial2, "R58N999");
+        assert_eq!(rest2, "unauthorized usb:1-3 transport_id:2");
     }
 
     #[test]

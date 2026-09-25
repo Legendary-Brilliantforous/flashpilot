@@ -443,6 +443,13 @@ impl BromSession {
                 return Err(format!("SLA send auth status 0x{status:04x}"));
             }
             let challenge_length = self.rdword()?;
+            // Device-controlled length: a malfunctioning/malicious BROM
+            // answering 0xFFFF_FFFF would force a 4 GiB allocation
+            // (allocator abort). Real SLA challenges are a few hundred
+            // bytes; reject anything implausible before allocating.
+            if challenge_length > 4096 {
+                return Err(format!("SLA challenge length implausible: {challenge_length}"));
+            }
             let challenge = self.read_exact(challenge_length as usize, Duration::from_secs(5))?;
             let response = crate::mtk_sla::generate_brom_sla_challenge(&challenge, key);
             let resplen = response.len();
@@ -516,6 +523,13 @@ impl BromSession {
             return Err(format!("brom_register_access status 0x{status:04x}"));
         }
         if mode == 0 || mode == 2 {
+            // `length` is caller-supplied but this primitive is public: cap
+            // it so a huge value can never turn into a giant allocation
+            // inside read_exact. Legitimate register reads are bytes;
+            // preloader dumps already bound themselves to 0x400000.
+            if length > 16 * 1024 * 1024 {
+                return Err(format!("brom_register_access length implausible: {length}"));
+            }
             let out = self.read_exact(length as usize, Duration::from_secs(30))?;
             if check_status {
                 let status2 = self.read_exact(2, Duration::from_secs(1))?;

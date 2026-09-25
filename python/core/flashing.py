@@ -51,6 +51,29 @@ __all__ = [
 # Rust does the actual writes (mtk-flash-samsung); Python extracts tar.md5 +
 # decompresses lz4 first, then calls bridge.mtk_flash_samsung.
 # ---------------------------------------------------------------------------
+def _safe_extractall(tf, path):
+    """Traversal-safe tar extraction for interpreters without
+    ``extractall(filter=...)`` (Python < 3.12).
+
+    Mirrors the ``data`` filter's path rules: refuse absolute members and
+    any member whose normalized path escapes ``path``; skip non-regular
+    files (devices, fifos, links) rather than materializing them.
+    """
+    import os as _os
+
+    base = _os.path.realpath(path)
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        name = member.name
+        if _os.path.isabs(name):
+            raise RuntimeError(f"tar member escapes staging dir: {name!r}")
+        dest = _os.path.realpath(_os.path.join(base, name))
+        if dest != base and not dest.startswith(base + _os.sep):
+            raise RuntimeError(f"tar member escapes staging dir: {name!r}")
+    tf.extractall(path)
+
+
 def flow_mtk_samsung_gpt():
     """Flash Samsung MTK firmware (A145P/A05/A06) via MTK DA + GPT.
 
@@ -83,7 +106,13 @@ def flow_mtk_samsung_gpt():
             log(f"Extracting {os.path.basename(tar)}...")
             try:
                 with tarfile.open(tar, "r") as tf:
-                    tf.extractall(work)
+                    # filter="data": refuse absolute members, .. traversal,
+                    # and device nodes from untrusted firmware archives
+                    # (py3.12+; guarded for older interpreters below).
+                    try:
+                        tf.extractall(work, filter="data")
+                    except TypeError:
+                        _safe_extractall(tf, work)
             except Exception as e:
                 log(f"  warn: extract {tar}: {e}")
 

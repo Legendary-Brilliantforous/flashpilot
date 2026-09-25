@@ -31,8 +31,11 @@ def _native_target() -> str:
     """Resolve a native fastboot target (``vid:pid@bus:addr``).
 
     Prefers the ambient device scope (GUI device picker); otherwise the
-    first device exposing a fastboot interface. Returns '' when none —
-    callers raise with the native-mode instructions."""
+    device exposing a fastboot interface — but ONLY when exactly one is
+    present. With several fastboot devices and no scope the target is
+    ambiguous: return '' so callers raise instead of flashing the wrong
+    phone. Returns '' when none — callers raise with the native-mode
+    instructions."""
     try:
         from . import devices as _dev
 
@@ -44,7 +47,7 @@ def _native_target() -> str:
             for d in devs:
                 if (d.get("serial") or "") == want:
                     return _target_str(d)
-        if devs:
+        if len(devs) == 1:
             return _target_str(devs[0])
     except Exception:
         pass
@@ -68,9 +71,10 @@ def _run_fastboot(args, timeout=120, log=None):
     target = _native_target()
     if not target:
         raise RuntimeError(
-            "No fastboot device detected by the native transport. "
-            "Boot the device to fastboot mode (VID 18d1 PID 4ee0), "
-            "replug, and retry."
+            "No fastboot device detected by the native transport, or several "
+            "are attached without a device selection. Boot the device to "
+            "fastboot mode (VID 18d1 PID 4ee0), replug, and retry — with "
+            "several phones attached, pick one in the GUI device list first."
         )
     if log:
         log(f"$ fastboot {' '.join(args)}  [native → {target}]")

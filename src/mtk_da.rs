@@ -896,15 +896,25 @@ impl DaSession {
 // Public API functions for CLI
 
 /// Resolve a target string to an MTK USB device. Accepts `bus:addr` or the
-/// special value `"auto"` (first MTK device in download mode).
+/// special value `"auto"` (the MTK device — exactly one must be present;
+/// with several attached, "auto" is ambiguous and rejected instead of
+/// silently opening a session against the wrong phone).
 pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
     let devices = usb::collect_devices(None)?;
     if target == "auto" {
-        return devices
-            .iter()
-            .find(|d| d.vid == MTK_VID)
+        let mut mtk = devices.iter().filter(|d| d.vid == MTK_VID);
+        let first = mtk
+            .next()
             .cloned()
-            .ok_or_else(|| BridgeError::InvalidArgument("no MTK device found".to_string()));
+            .ok_or_else(|| BridgeError::InvalidArgument("no MTK device found".to_string()))?;
+        if mtk.next().is_some() {
+            return Err(BridgeError::DeviceState(
+                crate::error::DeviceStateError::AmbiguousTarget {
+                    count: devices.iter().filter(|d| d.vid == MTK_VID).count(),
+                },
+            ));
+        }
+        return Ok(first);
     }
     devices
         .iter()
@@ -1294,6 +1304,144 @@ pub fn mtk_frp_bypass_gpt(target: &str, da_path: &str) -> Result<String> {
     da.frp_bypass(None, true)
         .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     out.push("Lock partitions cleared.".to_string());
+    let _ = da.reboot(0);
+    out.push("Device rebooted to normal mode.".to_string());
+    Ok(out.join("\n"))
+}
+
+/// `mtk-frp-brom <target> <da_dir>` — FRP bypass for ANY MediaTek device via
+/// BROM with NO user-supplied DA: parses the bundled mtkclient DA containers
+/// (V5/V6, GPLv3, attributed in mtk_daloader.rs), picks the entry for the
+/// chip's dacode, uploads it (kamakiri2 first when the BROM is
+/// SBC/SLA/DAA-protected so the unsigned DA isn't blocked), then erases the
+/// lock partitions from the device GPT and reboots.
+///
+/// The mtkclient `upload_da1` flow: region[1] -> SEND_DA at m_start_addr ->
+/// JUMP_DA -> 0xC0 loader sync on the SAME connection (no re-enumeration),
+/// after which the DA speaks the LEGACY echo protocol this DaSession drives.
+pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader (power off, hold Vol- or Vol+ while plugging USB)",
+            stage
+        )));
+    }
+    let load = |name: &str| -> Result<Option<Vec<u8>>> {
+        let p = std::path::Path::new(da_dir).join(name);
+        if !p.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(
+            std::fs::read(&p).map_err(|e| BridgeError::Io(format!("read {name}: {e}")))?,
+        ))
+    };
+    // V5 (LEGACY protocol) first; V6 (XML) is only a fallback for chips
+    // with no V5 entry — this engine cannot drive XML-mode DAs.
+    let v5 = load("MTK_DA_V5.bin")?;
+    let v6 = load("MTK_DA_V6.bin")?;
+    if v5.is_none() && v6.is_none() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "no bundled DA containers in {da_dir} (need MTK_DA_V5.bin / MTK_DA_V6.bin)"
+        )));
+    }
+    let parse = |data: &Option<Vec<u8>>| -> Option<crate::mtk_daloader::DaContainer> {
+        data.as_ref()
+            .and_then(|d| crate::mtk_daloader::parse_container(d).ok())
+    };
+    let v5c = parse(&v5);
+    let v6c = parse(&v6);
+
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep)
+        .map_err(|e| e.to_string())?;
+    let chip = crate::mtk_exploit::read_chip(&session);
+    let hw = chip.hw_code;
+
+    let v5_pick = v5c.as_ref().and_then(|c| c.pick(hw));
+    let v6_pick = v6c.as_ref().and_then(|c| c.pick(hw));
+    let (entry, container, container_data) = match (&v5_pick, &v6_pick, &v5, &v6) {
+        (Some(e), _, Some(d), _) => (e, v5c.as_ref().unwrap(), d),
+        (None, Some(e), _, Some(d)) => (e, v6c.as_ref().unwrap(), d),
+        _ => {
+            let mkt = crate::mtk_daloader::marketing_dacode(hw)
+                .map(|m| format!(" (dacode {m:#06x})"))
+                .unwrap_or_default();
+            return Err(BridgeError::InvalidArgument(format!(
+                "no DA entry for hw {hw:#06x}{mkt} in the bundled containers"
+            )));
+        }
+    };
+    let (da1, da1_addr, sig_len) = container.stage1(entry, container_data)?;
+    let mut out = Vec::new();
+    out.push(format!(
+        "Bundled DA ({} container): entry hw 0x{:04x} — stage1 {} bytes @ 0x{:x}",
+        if entry.v6 { "V6/XML" } else { "V5/legacy" },
+        entry.hw_code,
+        da1.len(),
+        da1_addr
+    ));
+
+    // Protected BROM (SBC/SLA/DAA): kamakiri2 first so the unsigned bundled
+    // DA isn't blocked by the auth check (the exploit's send-pointer
+    // redirect jumps straight to the payload, bypassing verification).
+    let protected = chip
+        .target_config
+        .as_ref()
+        .map(|tc| tc.sbc || tc.sla || tc.daa)
+        .unwrap_or(false);
+    if protected {
+        let cfg = crate::mtk_exploit::chip_config(hw).ok_or_else(|| {
+            BridgeError::InvalidArgument(format!(
+                "BROM protected (SBC/SLA/DAA) and hw {hw:#06x} is not in the exploit table — cannot run kamakiri2"
+            ))
+        })?;
+        let mut k2 = crate::mtk_exploit::Kamakiri2::new(&session, cfg);
+        k2.prime();
+        k2.exploit(da1, da1_addr)
+            .map_err(crate::error::BridgeError::InvalidArgument)?;
+        out.push("BROM protected (SBC/SLA/DAA) — kamakiri2 exploit applied".to_string());
+    }
+
+    session
+        .send_da(da1_addr, da1.len(), sig_len, da1)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("SEND_DA (bundled DA stage1): {e}"),
+        }))?;
+    session.jump_da(da1_addr).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("JUMP_DA: {e}"),
+        })
+    })?;
+    // Loader sync: 0xC0 arrives on the SAME connection (no re-enum).
+    let sync = session
+        .read_exact(1, Duration::from_secs(5))
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                "loader sync: {e}"
+            )))
+        })?;
+    if sync.first() == Some(&0xC0) {
+        out.push("Loader sync (0xC0) OK — DA is live".to_string());
+    } else {
+        out.push(format!(
+            "warn: loader sync byte 0x{:02x} (expected 0xc0) — continuing",
+            sync.first().copied().unwrap_or(0)
+        ));
+    }
+
+    let mut da = DaSession::new(session);
+    out.push("Resolving lock partitions from the device GPT...".to_string());
+    da.frp_bypass(None, true)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    out.push(
+        "Lock partitions cleared (frp/nvdata/metadata/persistent/protect/keystore).".to_string(),
+    );
     let _ = da.reboot(0);
     out.push("Device rebooted to normal mode.".to_string());
     Ok(out.join("\n"))

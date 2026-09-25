@@ -374,7 +374,7 @@ pub fn detect_merged(criteria: Option<&FilterCriteria>) -> Result<String> {
     let usb_devices = crate::usb::collect_devices(vid_filter)?;
     let phones = filter_phones(&usb_devices);
 
-    let adb_json = crate::adb::devices_json()?;
+    let adb_json = crate::adb::devices_json_no_probe().unwrap_or_else(|_| "[]".to_string());
     let adb_devices: Vec<AdbDevice> = serde_json::from_str(&adb_json).unwrap_or_default();
 
     let rows = merge_devices(&phones, &adb_devices);
