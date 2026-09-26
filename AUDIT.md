@@ -459,6 +459,7 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 |---|---|---|
 | 1 | `kg_unlock` worker thread: validation on the GUI thread, bridge call in a worker with per-device run guard + FlashJob + scoped failure classification (the 30s chain froze the whole window) | `fe8b3de` |
 | 2 | Device-aware STOP: one active job → cancel that device; jobs on several devices → picker (stop one / Stop ALL / Continue-all dismiss); zero → legacy broadcast. Previously STOP was always a broadcast | `c127bd2` |
+| 3 | Remaining device-operating buttons tagged for display gating: gen_btn (mtk-gpt), pit-fetch (backup/read — `odin-pit`/`pit-fetch` added to the command map), FUS Detect (adb_shell), SPD factory/magic-flash/ADB-enable (spd-format/spd-flash) | `7364e58` |
 
 ---
 
