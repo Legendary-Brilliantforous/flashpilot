@@ -1104,6 +1104,16 @@ fn main() {
             }
             usb::claim_test(&args[2])
         }
+        "verify-target" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge verify-target <vid:pid@bus:addr|bus:addr> <serial|->");
+                eprintln!("  Zero-touch identity check: the stored target must still");
+                eprintln!("  belong to the same device (serial match). A different");
+                eprintln!("  serial at the address = device replaced — never follow.");
+                exit(2);
+            }
+            usb::verify_target_identity(&args[2], &args[3])
+        }
         "usb-reset" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge usb-reset <vid:pid@bus:addr>");

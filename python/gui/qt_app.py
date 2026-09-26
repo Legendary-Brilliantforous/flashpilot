@@ -5549,6 +5549,39 @@ class FlashPilotWindow(QMainWindow):
                                 "and retry.")
             _flow_end(key=device_key)
             return None, None, None
+        # Target↔identity binding: the frozen target must still belong to
+        # the SAME device (Section-32: a replacement phone can occupy the
+        # same bus:addr; open matches vid/pid/bus/addr, not the serial).
+        # Zero-touch serial compare — a mismatch refuses with the exact
+        # coaching; absence passes through (the worker's open reports it).
+        serial_for_check = (device_key[4:]
+                            if isinstance(device_key, str)
+                            and device_key.startswith("adb:") else "")
+        if serial_for_check:
+            try:
+                cur = bridge.verify_target(tgt, serial_for_check)
+                if cur and cur != serial_for_check:
+                    self._ui.line.emit(
+                        f"[refused] {label}: device identity changed at "
+                        f"{tgt} — it is now serial '{cur}', not "
+                        f"'{serial_for_check}'. Replug the intended device "
+                        "and retry.")
+                    self._ui.toast.emit(
+                        "warn", "Device replaced",
+                        "The phone at that port is not the one the "
+                        "operation was validated for.")
+                    _flow_end(key=device_key)
+                    return None, None, None
+            except bridge.BridgeError as e:
+                if "identity changed" in str(e).lower():
+                    self._ui.line.emit(f"[refused] {label}: {e}")
+                    self._ui.toast.emit(
+                        "warn", "Device replaced",
+                        "The phone at that port is not the one the "
+                        "operation was validated for.")
+                    _flow_end(key=device_key)
+                    return None, None, None
+                # Absent/other: the worker's open reports it; not fatal here.
         args = list(args)
         if len(args) > target_idx and args[target_idx] == "auto":
             args[target_idx] = tgt.split("@")[-1]

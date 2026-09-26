@@ -604,6 +604,68 @@ fn parse_target(target: &str) -> Result<(u8, u8)> {
     }
 }
 
+/// Verify a stored target still belongs to the SAME device identity
+/// (zero-touch: descriptor scan only, no open/claim).
+///
+/// The Section-32 scenario: Phone A disconnects, Phone B connects, USB may
+/// reuse the address. `UsbDevice::open` matches vid+pid+bus+addr but NOT
+/// the serial — two identical phones at the same address would be confused.
+/// Call this right before opening a session with a stored/frozen target:
+/// * serials match (or the device exposes none) → Ok
+/// * different serial at the address → DeviceIdentityChanged (never follow)
+/// * nothing at the address → DeviceNotFound (re-enumeration window)
+pub fn verify_target_identity(target: &str, want_serial: &str) -> Result<String> {
+    let (bus, address) = parse_target(target)?;
+    let (want_vid, want_pid) = match target.split_once('@') {
+        Some((vidpid, _)) => {
+            let (v, p) = vidpid.split_once(':').ok_or_else(|| {
+                crate::error::BridgeError::InvalidArgument(format!("bad target vid:pid: {target}"))
+            })?;
+            (
+                u16::from_str_radix(v.trim(), 16)
+                    .map_err(|_| crate::error::BridgeError::InvalidArgument(format!("bad vid: {v}")))?,
+                u16::from_str_radix(p.trim(), 16)
+                    .map_err(|_| crate::error::BridgeError::InvalidArgument(format!("bad pid: {p}")))?,
+            )
+        }
+        None => (0, 0),
+    };
+    let devices = collect_devices(None)?;
+    let d = devices
+        .iter()
+        .find(|d| {
+            (want_vid == 0 || d.vid == want_vid)
+                && (want_pid == 0 || d.pid == want_pid)
+                && d.bus == bus
+                && d.address == address
+        })
+        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+    let current = d.serial.clone().unwrap_or_default();
+    check_serial_identity(d.vid, d.pid, bus, address, want_serial, &current)
+}
+
+/// Pure identity compare (unit-testable without USB): serials match (or the
+/// device exposes none) → Ok(current); different serial → DeviceIdentityChanged.
+fn check_serial_identity(
+    vid: u16,
+    pid: u16,
+    bus: u8,
+    address: u8,
+    want: &str,
+    current: &str,
+) -> Result<String> {
+    let want = want.trim();
+    if !want.is_empty() && !current.is_empty() && current != want {
+        return Err(crate::error::BridgeError::DeviceState(
+            crate::error::DeviceStateError::DeviceIdentityChanged {
+                key: format!("{vid:04x}:{pid:04x}@{bus}:{address}"),
+                current_serial: current.to_string(),
+            },
+        ));
+    }
+    Ok(current.to_string())
+}
+
 /// Set USB configuration on a device
 pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
     let (bus, address) = parse_target(target)?;
@@ -807,6 +869,35 @@ mod tests {
         // Non-Samsung ADB/MTP
         assert_eq!(mode_hint(0x18d1, 0x4ee7, &[adb_iface(255)]), "android-adb");
         assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
+    }
+    #[test]
+    fn identity_changed_at_same_address_is_error() {
+        // Section-32: Phone B at Phone A's old address — never follow.
+        let err =
+            check_serial_identity(0x0E8D, 0x201C, 2, 50, "AAAA1111", "BBBB2222").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::error::BridgeError::DeviceState(
+                    crate::error::DeviceStateError::DeviceIdentityChanged { .. }
+                )
+            ),
+            "unexpected: {err}"
+        );
+        assert!(err.to_string().contains("identity changed"));
+    }
+
+    #[test]
+    fn identity_match_and_serialless_pass() {
+        assert_eq!(
+            check_serial_identity(0x0E8D, 0x201C, 2, 50, "AAAA1111", "AAAA1111").unwrap(),
+            "AAAA1111"
+        );
+        // Device exposes no serial (BROM/EDL class): cannot compare — pass.
+        assert_eq!(
+            check_serial_identity(0x0E8D, 0x201C, 2, 50, "AAAA1111", "").unwrap(),
+            ""
+        );
     }
 }
 

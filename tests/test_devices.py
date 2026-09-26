@@ -605,3 +605,53 @@ class TestTransientRefusal:
                     "Ambiguous target: 2 devices", "no permissions",
                     "Permission denied", ""]:
             assert _a.is_transient_refusal(RuntimeError(msg)) is False, msg
+
+
+class TestVerifyTarget:
+    """Zero-touch target↔identity binding (Section-32 replacement)."""
+
+    def test_parses_and_pins(self, monkeypatch):
+        from python.core import bridge as _bridge
+
+        seen = {}
+
+        def fake_run(args, timeout=15):
+            seen["args"] = args
+            return "AAAA1111"
+
+        monkeypatch.setattr(_bridge, "_run", fake_run)
+        cur = _bridge.verify_target("04e8:685d@2:50", "AAAA1111")
+        assert seen["args"] == ["verify-target", "04e8:685d@2:50", "AAAA1111"]
+        assert cur == "AAAA1111"
+
+    def test_identity_changed_raises_with_code(self, monkeypatch):
+        from python.core import bridge as _bridge
+
+        def fake_run(args, timeout=15):
+            raise _bridge.BridgeError(
+                "Device state error: Device identity changed at the stored "
+                "transport ... is now serial 'BBBB2222'",
+                code="DEVICE_IDENTITY_CHANGED",
+            )
+
+        monkeypatch.setattr(_bridge, "_run", fake_run)
+        try:
+            _bridge.verify_target("04e8:685d@2:50", "AAAA1111")
+        except _bridge.BridgeError as e:
+            assert getattr(e, "code", "") == "DEVICE_IDENTITY_CHANGED"
+        else:  # pragma: no cover
+            raise AssertionError("expected DEVICE_IDENTITY_CHANGED")
+
+    def test_absent_keeps_usb_code(self, monkeypatch):
+        from python.core import bridge as _bridge
+
+        def fake_run(args, timeout=15):
+            raise _bridge.USBError("USB error: Device not found")
+
+        monkeypatch.setattr(_bridge, "_run", fake_run)
+        try:
+            _bridge.verify_target("04e8:685d@2:50", "AAAA1111")
+        except _bridge.BridgeError as e:
+            assert getattr(e, "code", "") != "DEVICE_IDENTITY_CHANGED"
+        else:  # pragma: no cover
+            raise AssertionError("expected USB_ERROR")

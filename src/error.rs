@@ -95,6 +95,10 @@ pub enum DeviceStateError {
     /// caller must pin an explicit serial/transport instead of letting the
     /// backend guess. `count` is the number of matching devices.
     AmbiguousTarget { count: usize },
+    /// A DIFFERENT device now occupies the target's bus:addr (device
+    /// replaced / re-enumerated onto a reused address). The stored
+    /// transport may not be followed — the identity must be revalidated.
+    DeviceIdentityChanged { key: String, current_serial: String },
 }
 
 impl fmt::Display for BridgeError {
@@ -193,6 +197,10 @@ impl fmt::Display for DeviceStateError {
             DeviceStateError::AmbiguousTarget { count } => write!(
                 f,
                 "Ambiguous target: {count} devices match — specify an explicit serial/transport"
+            ),
+            DeviceStateError::DeviceIdentityChanged { key, current_serial } => write!(
+                f,
+                "Device identity changed at the stored transport (device replaced or re-enumerated onto a reused address): {key} is now serial '{current_serial}' — revalidate before operating"
             ),
         }
     }

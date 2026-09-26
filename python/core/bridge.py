@@ -782,6 +782,30 @@ def _free_adb_interface(err_str: str) -> bool:
         return False
 
 
+def verify_target(target, serial, timeout=15):
+    """Zero-touch target↔identity binding check (Rust `verify-target`).
+
+    The stored/frozen target must still belong to the SAME device: the Rust
+    side re-scans descriptors (no open/claim) and compares the serial at
+    the address. Returns the current serial. Raises BridgeError on:
+    * ``DEVICE_IDENTITY_CHANGED`` — a different serial now occupies the
+      address (device replaced / re-enumerated onto a reused address):
+      the transport must never be followed; revalidate first.
+    * ``USB_ERROR`` (DeviceNotFound) — nothing at the address
+      (re-enumeration window); callers may settle-retry.
+    """
+    if not target or not isinstance(target, str):
+        raise BridgeError("verify_target needs a target", code="BAD_TARGET")
+    out = _run(["verify-target", target, serial or "-"], timeout=timeout)
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return (out or "").strip()
+    if isinstance(data, dict):
+        return data.get("serial") or ""
+    return (out or "").strip()
+
+
 def adb_devices():
     """Native `adb-devices` row list (the busy-holder rescue lives on the
     Rust side and in `adb_shell` for user-initiated operations only).
