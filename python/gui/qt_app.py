@@ -13064,6 +13064,32 @@ class FlashPilotWindow(QMainWindow):
         if now - self._last_stop[0] < 0.5:
             return
         self._last_stop[0] = now
+        # Device-aware STOP: one active job -> cancel that device; jobs on
+        # several devices -> picker (stop one, or all). Zero active jobs ->
+        # legacy broadcast (harmless). Previously STOP was always a
+        # broadcast: stopping one phone's flash cancelled every phone's.
+        devices_running = sorted({
+            j.device_key for j in jobs.active_jobs() if j.device_key
+        })
+        if len(devices_running) > 1:
+            target = self._pick_stop_target(devices_running)
+            if target == "__cancelled__":
+                return
+            if target == "__all__":
+                core.request_cancel()
+                bridge.request_cancel()
+                self._ui.line.emit("[cancel] Stop ALL requested — every device ...")
+            else:
+                jobs.cancel_device(target)
+                self._ui.line.emit(
+                    f"[cancel] Stop requested for {target} — other devices keep running ...")
+            return
+        if len(devices_running) == 1:
+            jobs.cancel_device(devices_running[0])
+            self._ui.line.emit(
+                f"[cancel] Stop requested for {devices_running[0]} — finishing the current USB packet ...")
+            self._ui.status.emit("Stopping …")
+            return
         core.request_cancel()
         bridge.request_cancel()
         self._ui.status.emit("Stopping …")
@@ -13080,6 +13106,45 @@ class FlashPilotWindow(QMainWindow):
             if w is not None:
                 w.setEnabled(False)
         self._ui.line.emit("[cancel] Stop requested — finishing the current USB packet ...")
+
+    def _pick_stop_target(self, device_keys):
+        """Which running job(s) should STOP cancel? Returns a device key,
+        "__all__", or "__cancelled__" (dismissal stands — no stop)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Stop which device?")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Several devices are running operations.<br>Which one should stop?"))
+        group = QButtonGroup(dlg)
+        radios = []
+        for i, k in enumerate(device_keys):
+            jobs_on = [j for j in jobs.active_jobs(k)]
+            what = ", ".join(j.job for j in jobs_on[:2]) or "operation"
+            rb = QRadioButton(f"{k}  — {what}")
+            rb.setProperty("device_key", k)
+            group.addButton(rb, i)
+            lay.addWidget(rb)
+            radios.append(rb)
+        rb_all = QRadioButton("Stop ALL devices")
+        rb_all.setProperty("device_key", "__all__")
+        group.addButton(rb_all, len(device_keys))
+        lay.addWidget(rb_all)
+        radios[0].setChecked(True)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("Stop")
+        cancel = QPushButton("Continue all")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return "__cancelled__"
+        checked = group.checkedButton()
+        if checked is None:
+            return "__cancelled__"
+        return checked.property("device_key") or "__cancelled__"
 
     def _choose_device(self, job, mode):
         """Per-operation device picker. Returns a device key, None for
