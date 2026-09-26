@@ -463,6 +463,22 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 
 ---
 
+## Remediation log — rust-core branch: target-identity binding (1.2.7)
+
+**Section-32 closed:** `UsbDevice::open` matches vid/pid/bus/addr but not the serial — a replacement phone occupying a reused address would inherit the previous device's operation.
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | `verify_target_identity` (zero-touch serial compare at the target) + pure `check_serial_identity` seam + `DeviceStateError::DeviceIdentityChanged` + `verify-target` CLI | `src/usb/mod.rs`, `src/error.rs`, `src/main.rs` | 2 new (identity-changed at same address; match/serialless pass) |
+| 2 | `bridge.verify_target` (identity failures keep codes; absence stays USB_ERROR for settle-retry) | `python/core/bridge.py` | 3 new (`TestVerifyTarget`) |
+| 3 | `_chip_begin` verifies the frozen target's serial before executing: mismatch → "Device replaced" coaching, never follows; absence passes to the worker's open | `python/gui/qt_app.py` | — (Qt wiring) |
+
+**Shipped:** 1.2.7 (committed `287e333`/`9031912`, .deb built + verify-target CLI smoke-tested in-package). Verification: 294 pytest + 169 cargo; warnings at baseline.
+
+**Remaining:** per-job session type in Rust (the binding check runs at execution; a true `FlashJob` session object would carry the frozen transport through the whole lifecycle); HIL hardware matrices; phone-link hardware (the user's -71 cable cycle is physical).
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
