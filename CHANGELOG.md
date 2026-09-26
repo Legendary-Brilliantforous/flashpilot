@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.7 (target-identity binding)
+
+- A replaced device occupying a reused bus:addr is refused (zero-touch
+  serial check at the target; open matches vid/pid/bus/addr, not the
+  serial). Closes the device-replacement scenario: the transport is
+  never followed to a different device.
+
 ## 1.2.6 (daemon-row fallback)
 
 - ADB tools fall back to the ADB daemon row when the USB-scan pick
