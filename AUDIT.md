@@ -453,6 +453,15 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 
 ---
 
+## Remediation log — gui branch (post-1.2.6, on `gui`)
+
+| # | Change | Commit |
+|---|---|---|
+| 1 | `kg_unlock` worker thread: validation on the GUI thread, bridge call in a worker with per-device run guard + FlashJob + scoped failure classification (the 30s chain froze the whole window) | `fe8b3de` |
+| 2 | Device-aware STOP: one active job → cancel that device; jobs on several devices → picker (stop one / Stop ALL / Continue-all dismiss); zero → legacy broadcast. Previously STOP was always a broadcast | `c127bd2` |
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
