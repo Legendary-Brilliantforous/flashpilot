@@ -11604,9 +11604,41 @@ class FlashPilotWindow(QMainWindow):
                 adb_status = "Not connected"
             try:
                 authorized = [d for d in adb_devs if d["state"] == "device"]
-                if authorized:
+                # Displayed-device preference + absence detection: when the
+                # inspected device is off the bus (re-enumerating?), keep
+                # its row's static tiles — never render another device's
+                # identity under the selected row (the "switch falls back
+                # to the first phone" report).
+                disp = getattr(self, "_display_key", None)
+                disp_serial = (disp[4:] if isinstance(disp, str)
+                               and disp.startswith("adb:") else None)
+                displayed_absent = bool(
+                    disp_serial and not any(
+                        d.get("serial") == disp_serial for d in authorized))
+                if authorized and not displayed_absent:
                     serial = authorized[0]["serial"]
-                    extra = authorized[0].get("extra", "")
+                    # Prefer the DISPLAYED device: this 3s refresh must
+                    # render the device the user is inspecting, not the
+                    # first authorized (clicking the modem then fell back
+                    # to the first phone's identity every cycle).
+                    try:
+                        if disp_serial and any(
+                                d["serial"] == disp_serial for d in authorized):
+                            serial = disp_serial
+                    except Exception:
+                        pass
+                    # The displayed device's extra (fallback model source):
+                    # authorized[0]'s extra belongs to the first phone and
+                    # reverted the tiles when the displayed getprops were
+                    # empty.
+                    try:
+                        want = serial
+                        extra = next(
+                            (d.get("extra", "") for d in authorized
+                             if d.get("serial") == want),
+                            authorized[0].get("extra", ""))
+                    except Exception:
+                        extra = authorized[0].get("extra", "")
                     adb_status = f"Connected ({serial})"
                     # Device info (model/build/android) never changes every
                     # 3s - fetch it only when the authorized serial changes
@@ -11705,6 +11737,14 @@ class FlashPilotWindow(QMainWindow):
                     if self._cached_adb_status != adb_status:
                         self._cached_adb_status = adb_status
                         self._ui.line.emit(f"ADB: {serial}")
+                elif displayed_absent:
+                    # The inspected device is off the bus (re-enumerating?):
+                    # keep its row's static tiles — never render another
+                    # device's identity under the selected row.
+                    adb_status = f"Not connected ({disp_serial})"
+                    self._cached_adb_status = adb_status
+                    self._ui.metric.emit("ADB Status", adb_status)
+                    return
                 elif any(d["state"] == "unauthorized" for d in adb_devs):
                     adb_status = "Unauthorized - tap Allow"
                     # Throttle console spam: only log once per state change
@@ -11900,7 +11940,11 @@ class FlashPilotWindow(QMainWindow):
                 self._cached_adb_status = adb_status
                 # --- Live resolver override: real serial / android / build (no fake 01234...) ---
                 try:
-                    live = device_info.get_live_identity()
+                    # Pass the display-fixed serial: the live resolver must
+                    # probe the device the user is inspecting, or its cached
+                    # first-device identity overrides the selection (the
+                    # "click modem, details fall back to kg6" bug).
+                    live = device_info.get_live_identity(serial or None)
                     # live serial is already filtered fake; prefer it over cached/usb placeholder
                     if live.get("serial") and not device_info._is_fake_serial(live["serial"]):
                         # Only override if we don't have a trusted ADB serial, or live is more complete

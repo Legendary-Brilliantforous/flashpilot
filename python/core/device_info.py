@@ -77,7 +77,7 @@ def _adb_getprop(name: str, timeout=6, serial=None) -> str:
 # fragile hardware — USB cellular modems reset their USB function on our
 # session and never stabilize. Refresh on authorized-set change, else TTL.
 _LIVE_TTL = 60.0
-_LIVE_CACHE = {"serials": None, "at": 0.0, "result": None}
+_LIVE_CACHE = {"probed": None, "at": 0.0, "result": None}
 
 
 def _probe_android_identity(pinned_serial):
@@ -209,10 +209,17 @@ def _apple_lockdown_info() -> dict:
     return out
 
 
-def get_live_identity() -> dict:
+def get_live_identity(pinned_serial=None) -> dict:
     """Return real {serial, android_ver, build, model, mfr, brand} or empty strings if unavailable.
 
     Never returns fake 01234... placeholders — caller should show "--" instead.
+
+    ``pinned_serial``: probe THIS authorized device instead of the first
+    (display paths pass the displayed device's serial — otherwise the
+    cached first-device identity overrides whatever the user selected,
+    and switching falls back to the first phone's details every cycle).
+    The cache is keyed by the probed serial, so pinned and ambient probes
+    coexist without cross-device bleed.
     """
     out = {"serial": "", "android_ver": "", "build": "", "model": "", "mfr": "", "brand": "", "sdk": ""}
     # Detect Apple first (05ac) — treat separately
@@ -259,15 +266,19 @@ def get_live_identity() -> dict:
     if auth_serials:
         import time as _t
 
+        # Pinned (displayed) device wins when it is actually authorized;
+        # otherwise the first authorized (legacy single-device behaviour).
+        probe_target = (pinned_serial if pinned_serial in auth_serials
+                        else auth_serials[0])
         now = _t.monotonic()
         cached = _LIVE_CACHE["result"]
-        if (auth_serials != _LIVE_CACHE["serials"]
+        if (probe_target != _LIVE_CACHE["probed"]
                 or now - _LIVE_CACHE["at"] > _LIVE_TTL
                 or not cached):
-            probed = _probe_android_identity(auth_serials[0])
+            probed = _probe_android_identity(probe_target)
             if probed:
                 _LIVE_CACHE.update(
-                    {"serials": auth_serials, "at": now, "result": probed})
+                    {"probed": probe_target, "at": now, "result": probed})
                 return probed
         elif cached:
             return dict(cached)
