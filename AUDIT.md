@@ -494,6 +494,26 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 
 ---
 
+## Remediation log — gui branch: displayed-device identity (the "click modem, details fall back to kg6" fix)
+
+**Incident:** switching in the GUI updates the corner, but the detail tiles (serial/model/Android version) stayed on the first phone; clicking the modem rendered KG6 details. **Reproduced live with both devices on the bus:** click modem → tiles correct → after 2 timer cycles → all tiles reverted to TECNO while display_key stayed on the modem.
+
+**Root causes (three cooperating):**
+1. `_refresh_model_and_adb` keyed the serial to `authorized[0]` (first authorized) — the 3s timer overwrote the clicked device's tiles every cycle.
+2. `get_live_identity()` (60s TTL cache, first-authorized burst) unconditionally overrode `serial_prop` with the cached first-device identity.
+3. The `extra`/USB fallbacks used `authorized[0]`/first-match — reverted the tiles when the displayed getprops were empty.
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | Refresh prefers `_display_key`'s serial (display-prefixed when authorized) | `python/gui/qt_app.py` | live both-directions test |
+| 2 | `get_live_identity(pinned_serial)` — cache keyed by the probed serial | `python/core/device_info.py` | existing TTL tests updated+green |
+| 3 | `extra` resolved from the displayed device's authorized row | `python/gui/qt_app.py` | — |
+| 4 | Absence path: inspected device off the bus → keep its row's static tiles + "Not connected (serial)", never another device's identity | `python/gui/qt_app.py` | 296 pytest green |
+
+**Shipped:** version label 1.2.1 (committed `e40a2e8`/`e8c627a`, .deb built + verified). Verified live: click modem → tiles stay modem through timer cycles. The user's MTP sighting was the older installed build (USB Mode shows ADB for both devices in current code).
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
