@@ -3895,9 +3895,10 @@ class FlashPilotWindow(QMainWindow):
             # Samsung AT KnoxGuard chain through the bridge. Pinned to one
             # explicitly-picked Samsung device (never first-match): with
             # several Samsungs attached this refuses instead of unlocking
-            # the wrong phone.
+            # the wrong phone. Validation (scans) stays on the GUI thread;
+            # the bridge call runs in a worker (previously synchronous —
+            # the 30s chain froze the whole window).
             try:
-                from python.core import mtp as _mtp
                 sams = [r for r in _devices.list_devices()
                         if isinstance(r, dict) and (r.get("usb") or {}).get("vid") == 0x04E8
                         and r.get("key")]
@@ -3909,23 +3910,39 @@ class FlashPilotWindow(QMainWindow):
                         f"{len(skeys)} Samsung devices connected — KG unlock "
                         "needs exactly one target (unplug the others)")
                 key = skeys[0]
-                d = _mtp.find_samsung()
-                if not d:
-                    raise RuntimeError("no Samsung device on USB")
+                # Per-device run guard: a concurrent op on the SAME phone
+                # blocks this.
+                if not _flow_start("KG unlock", destructive=True, key=key):
+                    self._toasts.show_warn("Operation already running",
+                                           _flow_busy_msg(key=key))
+                    return
                 # Fresh target for the picked key (never a stale cached one).
-                tgt = _devices.resolve_usb_target(key) or _mtp.target(d)
-                flux = jobs.start_job(key, "KG unlock", "AT", "kg_unlock", ())
-                flux.set_state("VALIDATED")
-                flux.set_state("RUNNING")
-                try:
-                    with _devices.device_scope(key):
-                        out = bridge._run(["at-kg-unlock", tgt, "4000"], timeout=30)
-                except Exception:
-                    jobs.finish_job(flux.job_id, "FAILED", "at-kg-unlock failed", "FAILED")
-                    raise
-                jobs.finish_job(flux.job_id, "COMPLETED")
-                self.log_line(f"[kg] {out}")
-                self._toasts.show_ok("KG unlock", f"{label}: chain sent — check phone")
+                tgt = _devices.resolve_usb_target(key)
+                if not tgt:
+                    _flow_end(key=key)
+                    raise RuntimeError("Samsung device left USB — replug and retry")
+
+                def work():
+                    flux = jobs.start_job(key, "KG unlock", "AT", "kg_unlock", ())
+                    flux.set_state("VALIDATED")
+                    flux.set_state("RUNNING")
+                    try:
+                        with _devices.device_scope(key):
+                            out = bridge._run(["at-kg-unlock", tgt, "4000"],
+                                              timeout=30)
+                        jobs.finish_job(flux.job_id, "COMPLETED")
+                        self.log_line(f"[kg] {out}")
+                        self._toasts.show_ok("KG unlock",
+                                             f"{label}: chain sent — check phone")
+                    except Exception as e:  # noqa: BLE001
+                        state, code = jobs.classify_failure(e, key)
+                        jobs.finish_job(flux.job_id, state, str(e), code)
+                        self.log_line(f"[kg] failed: {e}")
+                        self._toasts.show_error("KG unlock failed", str(e))
+                    finally:
+                        _flow_end(key=key)
+
+                threading.Thread(target=work, daemon=True).start()
             except Exception as e:  # noqa: BLE001
                 self._toasts.show_error("KG unlock failed", str(e))
             return
