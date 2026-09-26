@@ -104,6 +104,9 @@ CHIP_COMMAND_ACTIONS = {
     "spd-partitions": ["read_device_info"],
     "spd-boot": ["reboot_device"],
     "spd-reset": ["reboot_device"],
+    # Samsung Download-mode PIT fetch (odin-pit: read-only backup class)
+    "odin-pit": ["backup_partitions", "read_device_info"],
+    "pit-fetch": ["backup_partitions", "read_device_info"],
     # ADB-mechanism tools (triage, battery, network pages)
     "adb_shell": ["adb_shell"],
 }

@@ -2946,6 +2946,7 @@ class FlashPilotWindow(QMainWindow):
             "show the storage map"
         )
         self._pit_fetch_btn.clicked.connect(self._pit_fetch_clicked)
+        self._gate_button(self._pit_fetch_btn, command="pit-fetch")
         pit_btn_row.addWidget(self._pit_fetch_btn)
         self._pit_cache_lbl = QLabel("")
         self._pit_cache_lbl.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
@@ -4589,6 +4590,7 @@ class FlashPilotWindow(QMainWindow):
         self.fus_detect_btn.setStyleSheet(_btn_ghost())
         self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_detect_btn.clicked.connect(self._fus_detect_device)
+        self._gate_button(self.fus_detect_btn, command="adb_shell")
         r1.addWidget(self.fus_detect_btn)
         
         lbl_reg = QLabel("Region:")
@@ -5307,6 +5309,7 @@ class FlashPilotWindow(QMainWindow):
             "marked non-downloadable. Needs the DA binary + BROM/preloader."
         )
         gen_btn.clicked.connect(self._mtk_gen_scatter)
+        self._gate_button(gen_btn, command="mtk-gpt")
         gen_row.addWidget(gen_btn)
         dump_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
         dump_btn.setStyleSheet(_btn_ghost())
@@ -7735,6 +7738,7 @@ class FlashPilotWindow(QMainWindow):
             "for full wipe. Do this FIRST before any flash. If FDLs are set they must match chipset."
         )
         self.spd_brom_factory_btn.clicked.connect(self._spd_brom_factory_reset)
+        self._gate_button(self.spd_brom_factory_btn, command="spd-format")
         brom_btn_row.addWidget(self.spd_brom_factory_btn)
         self.spd_brom_auto_check = QCheckBox("Auto-run when BROM caught")
         self.spd_brom_auto_check.setChecked(False)
@@ -7993,6 +7997,7 @@ class FlashPilotWindow(QMainWindow):
             "packed file exists and ends with _magic.img (safety marker)."
         )
         self.spd_magic_flash_btn.clicked.connect(self._spd_magic_flash)
+        self._gate_button(self.spd_magic_flash_btn, command="spd-flash")
         mpb_row.addWidget(self.spd_magic_flash_btn)
         mpb_row.addStretch(1)
         adv_lay.addLayout(mpb_row)
@@ -8041,6 +8046,7 @@ class FlashPilotWindow(QMainWindow):
         self.spd_adb_btn.setStyleSheet(_btn_primary())
         self.spd_adb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.spd_adb_btn.clicked.connect(self._spd_enable_adb)
+        self._gate_button(self.spd_adb_btn, command="spd-flash")
         adb_row.addWidget(self.spd_adb_btn)
         adb_lay.addLayout(adb_row)
         adb_lay.addWidget(_risk_banner(
