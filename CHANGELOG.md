@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.8 (device-list switching fix)
+
+- The connection-bar rebuild retries when its second scan drops a
+  device the monitor just saw (re-enumeration window): both devices
+  render and switching works on flapping links.
+
 ## 1.2.7 (target-identity binding)
 
 - A replaced device occupying a reused bus:addr is refused (zero-touch
