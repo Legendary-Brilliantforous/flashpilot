@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.9 (displayed-device identity)
+
+- Switching devices no longer falls back to the first phone: the 3s
+  refresh, the live-identity resolver and all fallbacks key on the
+  displayed device; the absence path keeps the row's static tiles.
+
 ## 1.2.8 (device-list switching fix)
 
 - The connection-bar rebuild retries when its second scan drops a
