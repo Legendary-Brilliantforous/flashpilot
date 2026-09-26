@@ -479,6 +479,21 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 
 ---
 
+## Remediation log — gui branch: device-list switching fix (on `gui`)
+
+**Incident:** two devices connected, "the app is not allowing switching between devices". Reproduced offscreen with a synthetic two-device monitor state: both phones in the state, but only ONE row rendered.
+
+**Root cause:** the connection-bar rebuild fires on the monitor's change-detection (right after the monitor SAW the device set) but then does a **second live scan** (`list_devices()` → detect-merged). A re-enumeration window in that scan drops a device the monitor just saw — the row vanishes and switching is impossible until the next stable rebuild.
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | Rebuild retry: distinct-key count vs monitor state; clear shortfall → settle 2.5 s + retry once; persistent absence renders honestly | `python/gui/qt_app.py` | 2 new (two-device switching display; flaky-scan retry fires + both rows render) |
+| 2 | Test fixture stops the live monitor (it raced synthetic states — flaky full-suite ordering; two runs clean) | `tests/test_gates_display.py` | 296 pytest ×2 green |
+
+**Shipped:** version label 1.2.1 (committed `d0548a0`/`3454a0d`, .deb built). Suites: 296 pytest + 169 cargo.
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
