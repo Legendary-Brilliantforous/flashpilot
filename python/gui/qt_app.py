@@ -11363,12 +11363,58 @@ class FlashPilotWindow(QMainWindow):
                 pass
 
     def _refresh_device_list(self):
-        """Rebuild the connection-bar device list from devices.list_devices()."""
+        """Rebuild the connection-bar device list from devices.list_devices().
+
+        The rebuild fires on the monitor's change-detection — i.e. right
+        after the monitor SAW a device set. But this second live scan can
+        hit a re-enumeration window and drop a device the monitor just
+        saw (the exact "not allowing switching between devices" report:
+        both phones were in the monitor state, one row rendered). Retry
+        once when the scan returns fewer devices than the monitor state;
+        a persistent absence renders honestly."""
         rows = []
         try:
             rows = _devices.list_devices()
         except Exception:
             rows = []
+        # Monitor-state distinct-device count (what the rebuild was
+        # triggered by). Merged USB rows and adb rows describe the SAME
+        # phone, so count distinct serials across categories; serialless
+        # devices count individually.
+        try:
+            mon = getattr(self, "_monitor", None)
+            mon_state = getattr(mon, "_last_state", None) if mon else None
+            mon_keys = set()
+            if mon_state:
+                for k in ("samsung", "mtk", "fastboot", "edl", "qcom",
+                          "spd", "apple", "other_android"):
+                    for d in (mon_state.get(k) or []):
+                        if not isinstance(d, dict):
+                            continue
+                        s = (d.get("serial") or "").strip()
+                        if s:
+                            mon_keys.add(f"adb:{s}")
+                        else:
+                            # serialless: key on vid:pid@bus:addr snapshot
+                            mon_keys.add(
+                                f"usb:{d.get('vid', 0):04x}:{d.get('pid', 0):04x}"
+                                f"@{d.get('bus')}:{d.get('address')}")
+                for a in (mon_state.get("adb") or []):
+                    if isinstance(a, dict) and a.get("serial"):
+                        mon_keys.add(f"adb:{a['serial']}")
+            if mon_keys and len({r.get("key") for r in rows if r.get("key")}) < len(mon_keys):
+                import time as _t
+                self._ui.line.emit(
+                    f"[info] device list: scan saw {len(rows)} of "
+                    f"{len(mon_keys)} devices (re-enumerating?) — "
+                    "settling 2.5s and retrying ...")
+                _t.sleep(2.5)
+                try:
+                    rows = _devices.list_devices()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         keys = {r.get("key") for r in rows if r.get("key")}
         if self._display_key not in keys:
             self._display_key = rows[0]["key"] if rows else None

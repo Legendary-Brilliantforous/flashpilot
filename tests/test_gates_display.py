@@ -25,6 +25,10 @@ def win():
 
     w = _qt.FlashPilotWindow()
     assert len(w._gated_buttons) > 100, "gated registry unexpectedly small"
+    # Tests drive _on_device_state with synthetic states directly: the live
+    # monitor thread would race them (its next poll emits over the corner
+    # mid-assertion — flaky full-suite ordering).
+    w._monitor.stop()
     return w
 
 
@@ -339,3 +343,106 @@ def test_adb_begin_server_fallback_zero_warns(win, monkeypatch):
         assert win._adb_begin("Battery report", "battery_report") == (None, None, None)
     finally:
         _flow_end(key=None)
+
+
+def _two_device_state():
+    """Tecno (MTK+ADB) + dongle (QCOM+ADB), both server-authorized."""
+    tecno = {
+        "vid": 0x0E8D, "pid": 0x201C, "bus": 2, "address": 50,
+        "product": "TECNO SPARK 8", "manufacturer": "TECNO MOBILE LIMITED",
+        "serial": "06977371AD102074", "is_samsung": False,
+        "interfaces": [{"class": 255, "subclass": 66, "protocol": 1,
+                        "endpoints": []}],
+    }
+    dongle = {
+        "vid": 0x05C6, "pid": 0x90B4, "bus": 1, "address": 57,
+        "product": "Android", "manufacturer": "Android",
+        "serial": "3588b020", "is_samsung": False,
+        "interfaces": [{"class": 255, "subclass": 66, "protocol": 1,
+                        "endpoints": []}],
+    }
+    adb = [
+        {"serial": "06977371AD102074", "state": "device", "extra": ""},
+        {"serial": "3588b020", "state": "device", "extra": ""},
+    ]
+    return {
+        "samsung": [], "mtk": [tecno], "hid": [], "adb": adb,
+        "fastboot": [], "edl": [], "qcom": [dongle], "spd": [],
+        "apple": [], "other_android": [],
+        "mode": "ADB ENABLED (debug composite) - normal boot",
+    }
+
+
+def test_two_device_switching_display(win, monkeypatch):
+    """Both phones render distinct rows; clicking switches the display."""
+    from python.core import devices as _dev
+    from python.core import bridge as _bridge
+
+    # Hermetic: the rebuild's list_devices must see BOTH devices (the
+    # real bridge only sees what is physically on the bus).
+    def fake_list():
+        st = _two_device_state()
+        rows = []
+        for d in st["mtk"] + st["qcom"]:
+            key = f"adb:{d['serial']}"
+            rows.append({
+                "key": key,
+                "label": f"{d['product']} · {d['serial']} · "
+                         f"{d['vid']:04x}:{d['pid']:04x}",
+                "transports": ["ADB"],
+                "serial": d["serial"],
+                "usb": d,
+                "adb": {"serial": d["serial"], "state": "device", "extra": ""},
+            })
+        return rows
+
+    monkeypatch.setattr(_dev, "list_devices", fake_list)
+    monkeypatch.setattr(_bridge, "list_merged", fake_list)
+    win._on_device_state(_two_device_state())
+    # Both rows present with the ADB overlay on each.
+    rows = [win.device_list.item(i) for i in range(win.device_list.count())]
+    texts = [r.text() for r in rows]
+    assert len(texts) == 2, f"expected 2 rows, got {texts}"
+    assert any("TECNO" in t for t in texts), texts
+    assert any("3588b020" in t for t in texts), texts
+    # Click row 0 → display key switches to its key; click row 1 → other.
+    for i in (0, 1):
+        win._on_device_picked(rows[i])
+        key = win._display_key
+        assert key, "no display key after pick"
+        # The corner reflects the picked device.
+        text = win.conn_state.text()
+        assert (key in text) or ("TECNO" in text) or ("3588b020" in text), \
+            f"row {i} pick did not switch display: {text!r}"
+
+
+def test_refresh_retries_when_scan_drops_a_device(win, monkeypatch):
+    """The rebuild's second live scan can hit a flap window and drop a
+    device the monitor just saw: settle-retry once, then render."""
+    from python.core import devices as _dev
+
+    calls = {"n": 0}
+
+    def flaky_list():
+        calls["n"] += 1
+        rows = fake_two_rows()
+        # First scan drops the Tecno (mid re-enumeration); second sees both.
+        return rows if calls["n"] >= 2 else rows[:1]
+
+    def fake_two_rows():
+        st = _two_device_state()
+        return [
+            {"key": f"adb:{d['serial']}",
+             "label": f"{d['product']} · {d['serial']}",
+             "transports": ["ADB"], "serial": d["serial"], "usb": d,
+             "adb": {"serial": d["serial"], "state": "device", "extra": ""}}
+            for d in st["mtk"] + st["qcom"]
+        ]
+
+    monkeypatch.setattr(_dev, "list_devices", flaky_list)
+    win._monitor._last_state = _two_device_state()
+    win._refresh_device_list()
+    assert calls["n"] >= 2, "retry should have fired"
+    texts = [win.device_list.item(i).text()
+             for i in range(win.device_list.count())]
+    assert len(texts) == 2, f"both rows must render after retry: {texts}"
