@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 (device classification + picker)
+
+- Unmatched devices (vendor-specific/diag composites) report 'USB'
+  instead of the wrong 'MTP' label.
+- When the USB pick misses on a flap, ADB tools show the daemon-row
+  picker instead of refusing: choose which device the op targets.
+
 ## 1.2.9 (displayed-device identity)
 
 - Switching devices no longer falls back to the first phone: the 3s
