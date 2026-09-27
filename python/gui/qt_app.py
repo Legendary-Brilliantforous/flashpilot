@@ -5649,12 +5649,19 @@ class FlashPilotWindow(QMainWindow):
                     f"[info] {label}: USB scan missed the device (re-"
                     f"enumerating) — using the ADB daemon row ({device_key})")
             elif len(auth) > 1:
+                # Several authorized daemon rows: show the picker over them
+                # instead of refusing — the user should choose which device
+                # the operation targets (the USB pick missed on a flap;
+                # the daemon rows are the real devices).
+                picked = self._pick_stop_target(
+                    sorted(f"adb:{d.get('serial', '')}" for d in auth))
+                if picked == "__cancelled__":
+                    self._ui.line.emit("[info] device choice cancelled.")
+                    return None, None, None
+                device_key = picked
                 self._ui.line.emit(
-                    "[warn] Multiple authorized ADB devices — pick one in "
-                    "the device list and retry.")
-                self._ui.toast.emit("warn", "Pick a device",
-                                    "Several ADB devices are connected")
-                return None, None, None
+                    f"[info] {label}: USB scan missed (re-enumerating) — "
+                    f"picked from the ADB daemon rows ({device_key})")
             else:
                 self._ui.line.emit(
                     "[warn] No authorized ADB device found right now — enable USB "

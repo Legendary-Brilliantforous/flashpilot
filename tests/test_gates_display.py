@@ -135,10 +135,19 @@ def _dongle_state():
     }
 
 
-def test_qcom_corner_shows_adb_overlay(win):
+def test_qcom_corner_shows_adb_overlay(win, monkeypatch):
     """Regression: the top-right corner for a non-EDL Qualcomm device with
     authorized ADB must name the ADB transport (it previously showed only
     the VID:PID line, and stale builds showed MTP)."""
+    from python.core import devices as _dev
+    from python.core import bridge as _bridge
+
+    # Hermetic: the rebuild's live scan must see exactly this device set
+    # (the real bus may hold other hardware whose rows overwrite the
+    # synthetic corner).
+    _LAST_TEST_STATE["state"] = _dongle_state()
+    monkeypatch.setattr(_dev, "list_devices", _fake_list_for_state)
+    monkeypatch.setattr(_bridge, "list_merged", _fake_list_for_state)
     win._on_device_state(_dongle_state())
     text = win.conn_state.text()
     assert "05c6:90b4" in text
@@ -271,10 +280,16 @@ def _mtk_composite_state():
     }
 
 
-def test_mtk_corner_shows_adb_overlay(win):
+def test_mtk_corner_shows_adb_overlay(win, monkeypatch):
     """Regression: the mtk_devs corner branch never called _adb_overlay —
     a Tecno with authorized ADB showed only 'MediaTek low-level' in the
     top-right corner while ADB Status showed connected."""
+    from python.core import devices as _dev
+    from python.core import bridge as _bridge
+
+    _LAST_TEST_STATE["state"] = _mtk_composite_state()
+    monkeypatch.setattr(_dev, "list_devices", _fake_list_for_state)
+    monkeypatch.setattr(_bridge, "list_merged", _fake_list_for_state)
     win._on_device_state(_mtk_composite_state())
     text = win.conn_state.text()
     assert "0e8d:201c" in text
@@ -311,18 +326,23 @@ def test_adb_begin_server_row_fallback(win, monkeypatch):
         _flow_end(key="adb:R9XFLAP1")
 
 
-def test_adb_begin_server_fallback_multiple_refuses(win, monkeypatch):
+def test_adb_begin_server_fallback_multiple_picks(win, monkeypatch):
+    """Pick misses + several authorized daemon rows: the daemon-row picker
+    appears (never a bare refuse), and dismissing it stops nothing."""
     from python.core import bridge as _bridge
     from python.core import devices as _dev
+    from python.core import jobs as _jobs
     from python.gui.qt_app import _flow_end
 
     monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
     monkeypatch.setattr(_bridge, "adb_status",
                         lambda: [{"serial": "A1", "state": "device", "extra": ""},
                                  {"serial": "B1", "state": "device", "extra": ""}])
+    monkeypatch.setattr(win, "_pick_stop_target",
+                        lambda keys: "__cancelled__")
 
     def boom(key, aid):  # pragma: no cover
-        raise AssertionError("must not validate ambiguous")
+        raise AssertionError("must not validate after dismissal")
 
     monkeypatch.setattr(_bridge, "validate_action", boom)
     try:
@@ -343,6 +363,43 @@ def test_adb_begin_server_fallback_zero_warns(win, monkeypatch):
         assert win._adb_begin("Battery report", "battery_report") == (None, None, None)
     finally:
         _flow_end(key=None)
+
+
+def _fake_list_for_state(_unused=None):
+    """Merged rows for whatever synthetic state the test drives: the
+    monitor's per-category devices become rows (hermetic list_devices /
+    list_merged stand-in — the real bridge sees only the physical bus)."""
+    try:
+        st = _LAST_TEST_STATE["state"]
+    except (NameError, KeyError):
+        return []
+    rows = []
+    seen = set()
+    for cat in ("samsung", "mtk", "qcom", "spd", "apple", "other_android"):
+        for d in (st.get(cat) or []):
+            if not isinstance(d, dict):
+                continue
+            key = f"adb:{d['serial']}" if d.get("serial") else (
+                f"usb:{d.get('vid', 0):04x}:{d.get('pid', 0):04x}"
+                f"@{d.get('bus')}:{d.get('address')}")
+            if key in seen:
+                continue
+            seen.add(key)
+            adb = next((a for a in (st.get("adb") or [])
+                        if isinstance(a, dict) and a.get("serial") == d.get("serial")), None)
+            rows.append({
+                "key": key,
+                "label": f"{d.get('product', 'USB')} · {d.get('serial', '')} · "
+                         f"{d.get('vid', 0):04x}:{d.get('pid', 0):04x}",
+                "transports": ["ADB"] if adb else ["USB"],
+                "serial": d.get("serial"),
+                "usb": d,
+                "adb": adb,
+            })
+    return rows
+
+
+_LAST_TEST_STATE = {"state": {}}
 
 
 def _two_device_state():
@@ -446,3 +503,37 @@ def test_refresh_retries_when_scan_drops_a_device(win, monkeypatch):
     texts = [win.device_list.item(i).text()
              for i in range(win.device_list.count())]
     assert len(texts) == 2, f"both rows must render after retry: {texts}"
+
+
+def test_adb_begin_multi_daemon_shows_picker(win, monkeypatch):
+    """Pick misses + several authorized daemon rows: the picker appears
+    over the daemon rows instead of refusing ('Pick a device' toast)."""
+    from python.core import bridge as _bridge
+    from python.core import devices as _dev
+    from python.core import jobs as _jobs
+    from python.gui.qt_app import _flow_end
+
+    monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
+    monkeypatch.setattr(_bridge, "adb_status",
+                        lambda: [{"serial": "A1", "state": "device", "extra": ""},
+                                 {"serial": "B1", "state": "device", "extra": ""}])
+    picked = {}
+
+    def fake_pick_stop(keys):
+        picked["keys"] = keys
+        return "adb:B1"
+
+    monkeypatch.setattr(win, "_pick_stop_target", fake_pick_stop)
+
+    def fake_validate(key, aid):
+        assert (key, aid) == ("adb:B1", "adb_shell")
+        return {"allowed": True}
+
+    monkeypatch.setattr(_bridge, "validate_action", fake_validate)
+    try:
+        serial, key, flux = win._adb_begin("Battery report", "battery_report")
+        assert picked["keys"] == ["adb:A1", "adb:B1"]
+        assert (serial, key) == ("B1", "adb:B1")
+        _jobs.finish_job(flux.job_id, "CANCELLED", "test", "TEST")
+    finally:
+        _flow_end(key="adb:B1")

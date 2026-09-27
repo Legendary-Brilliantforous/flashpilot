@@ -229,7 +229,12 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
     }
 
     if transports.is_empty() {
-        transports.push("MTP".to_string());
+        // Unmatched non-Samsung device (vendor-specific/diag composites,
+        // mass-storage, readers): "USB" — NOT "MTP". The MTP label made
+        // every unmatched device look like a media-transfer phone, and
+        // MTP-mode pickers then offered ops against hardware that has no
+        // MTP interface at all.
+        transports.push("USB".to_string());
     }
 
     let mut seen = HashSet::new();
