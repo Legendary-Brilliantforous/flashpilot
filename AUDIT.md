@@ -514,6 +514,25 @@ Comprehensive ADB audit (protocols, USB detection, flows, jobs, every loop) afte
 
 ---
 
+## Remediation log — gui/rust-core: device classification + daemon-row picker (1.3.0 content, 1.2.1 label)
+
+**Incident:** the user's "modem" is a **Moto G6 at 05c6:9026** (vendor-specific/diag composite: 255/255/255 + Mass Storage, serial ZY322PSBZ2, NO ADB, NO MTP) — plus the Tecno (0e8d:201c, ADB, authorized). Symptom: the Moto shows MTP; ADB flows refuse "Pick a device / Several ADB devices are connected".
+
+**Root causes:**
+1. `compute_transports`' final fallback labeled every unmatched non-Samsung device "MTP" — the Moto (no ADB iface, not 9008) got `['MTP']` and MTP-mode pickers offered ops against hardware with no MTP interface.
+2. `_adb_begin`'s multi-daemon branch refused ("Pick a device") instead of showing the picker — the user could choose from the daemon rows but the code wouldn't let them.
+3. (Clarified: the user runs `python main.py` from the tree — NOT the installed app. All fixes reach them on app restart; the tree has everything committed.)
+
+| # | Change | Files | Tests |
+|---|---|---|---|
+| 1 | Unmatched → `USB` transport (not MTP) | `src/usb/filtering.rs` | 169 cargo green; live: Moto `['USB']`, Tecno `['ADB']` |
+| 2 | Multi-daemon branch shows the daemon-row picker (`_pick_stop_target` over daemon rows); dismissal cancels the choice, stops nothing | `python/gui/qt_app.py` | 2 new (picker appears + picked row used; cancelled-no-stop) |
+| 3 | Corner tests hermeticized; multi-refuses test updated (the real dialog blocked offscreen → process death) | `tests/test_gates_display.py` | 297 ×2 clean |
+
+**Shipped:** 1.3.0 content under the 1.2.1 label (committed `97f289f`/`5332534`, .deb built + its own bridge verified: Moto `['USB']`).
+
+---
+
 ## Remediation log — transport branch: Rust server transport (landed in working tree)
 
 **Incident:** on the MSM8916 modem (server-authorized), explicit ADB ops could never succeed natively: open dies `Resource busy`, and the rescue eviction resets the dongle. Protocol/auth investigated and cleared (modern v1 CNXN accepted by the dongle's adbd via the server; `~/.android/adbkey` reused so identities match; SHA-1 fallback present) — the failure is purely the exclusivity fight.
