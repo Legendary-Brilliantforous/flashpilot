@@ -1267,6 +1267,11 @@ def _mode_chip(mode):
         return "FASTBOOT", C["warn_dim"], C["warn"], C["warn"]
     if "BOOTLOADER" in m:
         return "BOOTLOADER", C["warn_dim"], C["warn"], C["warn"]
+    if "QUALCOMM" in m:
+        # Whole-bus Qualcomm-normal mode: "QUALCOMM DEVICE (modem / normal
+        # mode)" — NOT MTP (the substring "normal" used to fall through to
+        # the MTP chip and mislabeled every Qualcomm-normal setup).
+        return "QUALCOMM", C["warn_dim"], C["warn"], C["warn"]
     if "TETHERING" in m or "RNDIS" in m:
         return "RNDIS", C["ok_dim"], C["ok"], C["ok"]
     if "STORAGE" in m:
@@ -11479,6 +11484,26 @@ class FlashPilotWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['ok']}; font-size:12px; font-weight:600; background:transparent;"
             )
+            # The ModeBadge (top bar, near Stop) follows the SELECTED
+            # device: it previously showed the whole-bus mode, so a
+            # Qualcomm-normal setup kept reading MTP even after switching
+            # to a phone in ADB mode.
+            badge_mode = {
+                "ADB": "ADB ENABLED (debug composite) - normal boot",
+                "FASTBOOT": "FASTBOOT MODE (bootloader unlocked / fastboot)",
+                "Download mode": "DOWNLOAD MODE (Samsung Odin / Download)",
+                "Samsung BROM": "SAMSUNG BROM",
+                "MTK BROM": "MTK BROM (bootrom)",
+                "MTK": "MTK (download agent)",
+                "EDL": "EDL MODE (Qualcomm Emergency Download)",
+                "SPD": "SPD DOWNLOAD (Unisoc download mode)",
+                "MTP": "MTP (media transfer)",
+                "USB": "USB DEVICE (vendor-specific / diag)",
+            }.get(transports[0], transports[0])
+            try:
+                self.badge.set_state(badge_mode)
+            except Exception:
+                pass
             usb = row.get("usb") or {}
             adb = row.get("adb") or {}
             serial = (usb.get("serial") or adb.get("serial") or "--").strip() or "--"

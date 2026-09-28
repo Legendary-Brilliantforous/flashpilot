@@ -537,3 +537,19 @@ def test_adb_begin_multi_daemon_shows_picker(win, monkeypatch):
         _jobs.finish_job(flux.job_id, "CANCELLED", "test", "TEST")
     finally:
         _flow_end(key="adb:B1")
+
+
+def test_mode_chip_qualcomm_normal_is_not_mtp():
+    """Regression: 'QUALCOMM DEVICE (modem / normal mode)' contains the
+    substring 'normal' and used to fall through to the MTP chip - the
+    badge showed MTP for a Qualcomm-normal setup."""
+    from python.gui.qt_app import _mode_chip
+
+    label, *_ = _mode_chip("QUALCOMM DEVICE (modem / normal mode)")
+    assert label == "QUALCOMM"
+    # Samsung's normal-boot string keeps its MTP chip.
+    label, *_ = _mode_chip("NORMAL BOOT / SETUP WIZARD (MTP)")
+    assert label == "MTP"
+    # ADB strings stay ADB.
+    label, *_ = _mode_chip("ADB ENABLED (debug composite) - normal boot")
+    assert label == "ADB"
