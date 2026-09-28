@@ -2395,6 +2395,20 @@ class FlashPilotWindow(QMainWindow):
         self._global_stop_timer = QTimer(self)
         self._global_stop_timer.timeout.connect(lambda: self.global_stop_btn.setEnabled(_flows_running() > 0))
         self._global_stop_timer.start(150)
+        # Per-row job-state chips: driven from the JobManager, no second
+        # scan. Terminal states hold briefly (their chip shows), then the
+        # row goes idle again.
+        self._row_widgets = {}
+        self._row_state_timer = QTimer(self)
+        self._row_state_timer.timeout.connect(self._refresh_row_states)
+        self._row_state_timer.start(600)
+        # Keyboard nav: Enter/double-click on the device list picks that
+        # device (arrows move the selection natively in QListWidget).
+        try:
+            self.device_list.itemActivated.connect(self._on_device_picked)
+            self.device_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        except Exception:
+            pass
 
         self.badge = ModeBadge()
         tb.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -11432,12 +11446,20 @@ class FlashPilotWindow(QMainWindow):
         try:
             self.device_list.blockSignals(True)
             self.device_list.clear()
+            self._row_widgets = {}
             for r in rows:
                 transports = ", ".join(r.get("transports", []))
+                key = r.get("key")
+                # Per-row job-state chip: text + foreground color driven by
+                # the JobManager (no setItemWidget — widget rows crash the
+                # offscreen compositor). The chip suffix shows RUNNING
+                # while a job is active on this device; the row colors
+                # follow the job state.
                 item = QListWidgetItem(f"{r.get('label', '?')}  [{transports}]")
-                item.setData(Qt.ItemDataRole.UserRole, r.get("key"))
+                item.setData(Qt.ItemDataRole.UserRole, key)
                 self.device_list.addItem(item)
-                if r.get("key") == self._display_key:
+                self._row_widgets[key] = (item, f"{r.get('label', '?')}  [{transports}]")
+                if key == self._display_key:
                     self.device_list.setCurrentItem(item)
         finally:
             try:
@@ -11451,6 +11473,34 @@ class FlashPilotWindow(QMainWindow):
         # Capability display-gating follows the list rebuild (fail-open).
         try:
             self._refresh_gates()
+        except Exception:
+            pass
+
+    def _refresh_row_states(self):
+        """Drive the per-row job chips from the JobManager (no scans).
+
+        Text + color, no setItemWidget (widget rows crash the offscreen
+        compositor): RUNNING colors the row accent with a ● suffix,
+        terminal states color the row, idle renders plain.
+        """
+        try:
+            widgets = getattr(self, "_row_widgets", None) or {}
+            if not widgets:
+                return
+            active = {j.device_key for j in jobs.active_jobs() if j.device_key}
+            from PyQt6.QtGui import QColor
+            for key, (item, base_text) in widgets.items():
+                try:
+                    if key in active:
+                        if "● RUNNING" not in item.text():
+                            item.setText(f"{base_text}  ● RUNNING")
+                        item.setForeground(QColor("#38bdf8"))
+                    else:
+                        item.setText(base_text)
+                        item.setForeground(QColor("#e2e8f0"))
+                except RuntimeError:
+                    # The row was removed by a rebuild between ticks.
+                    continue
         except Exception:
             pass
 
@@ -12168,6 +12218,13 @@ class FlashPilotWindow(QMainWindow):
                 pass
         self._monitor.stop()
         self._adb_timer.stop()
+        # Window memory: size/position/maximized restore on the next launch.
+        try:
+            self.settings.setValue("win_maximized", self.isMaximized())
+            if not self.isMaximized():
+                self.settings.setValue("win_geometry", self.saveGeometry())
+        except Exception:
+            pass
         super().closeEvent(event)
 
     def resizeEvent(self, event):
@@ -13961,7 +14018,19 @@ def main():
     def _boot():
         win = FrpWindow()
         win.setWindowIcon(_app_icon())
-        win.show()
+        # Window memory: restore size/position/maximized from the last
+        # session (saved in closeEvent).
+        try:
+            st = win.settings
+            if st.value("win_maximized", False, type=bool):
+                win.showMaximized()
+            else:
+                geo = st.value("win_geometry")
+                if geo is not None:
+                    win.restoreGeometry(geo)
+                win.show()
+        except Exception:
+            win.show()
 
     QTimer.singleShot(2500, _boot)
     app.exec()

@@ -177,6 +177,8 @@ class ToastHost(QWidget):
 
     _MARGIN = 16
     _GAP = 10
+    _MAX_STACK = 4  # oldest dismissed beyond this (a long session cannot
+                    # stack unbounded notifications)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -185,6 +187,11 @@ class ToastHost(QWidget):
         self._toasts = []
         self._progress = None
         self._progress_slot = None
+
+    def _cap_stack(self):
+        while len(self._toasts) > self._MAX_STACK:
+            oldest = self._toasts[0]
+            self.dismiss(oldest)
 
     def _relayout(self):
         parent = self.parentWidget()
@@ -212,6 +219,7 @@ class ToastHost(QWidget):
         self._relayout()
         toast = _SlideFrame(self, kind, title, detail, duration)
         self._toasts.append(toast)
+        self._cap_stack()
         self._relayout()
         return toast
 
