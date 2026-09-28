@@ -338,8 +338,8 @@ def test_adb_begin_server_fallback_multiple_picks(win, monkeypatch):
     monkeypatch.setattr(_bridge, "adb_status",
                         lambda: [{"serial": "A1", "state": "device", "extra": ""},
                                  {"serial": "B1", "state": "device", "extra": ""}])
-    monkeypatch.setattr(win, "_pick_stop_target",
-                        lambda keys: "__cancelled__")
+    monkeypatch.setattr(win, "_pick_from_keys",
+                        lambda label, keys: "__cancelled__")
 
     def boom(key, aid):  # pragma: no cover
         raise AssertionError("must not validate after dismissal")
@@ -519,11 +519,12 @@ def test_adb_begin_multi_daemon_shows_picker(win, monkeypatch):
                                  {"serial": "B1", "state": "device", "extra": ""}])
     picked = {}
 
-    def fake_pick_stop(keys):
+    def fake_pick(keys):
         picked["keys"] = keys
         return "adb:B1"
 
-    monkeypatch.setattr(win, "_pick_stop_target", fake_pick_stop)
+    monkeypatch.setattr(win, "_pick_from_keys",
+                        lambda label, keys: fake_pick(keys))
 
     def fake_validate(key, aid):
         assert (key, aid) == ("adb:B1", "adb_shell")

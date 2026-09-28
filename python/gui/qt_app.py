@@ -5654,12 +5654,11 @@ class FlashPilotWindow(QMainWindow):
                     f"[info] {label}: USB scan missed the device (re-"
                     f"enumerating) — using the ADB daemon row ({device_key})")
             elif len(auth) > 1:
-                # Several authorized daemon rows: show the picker over them
-                # instead of refusing — the user should choose which device
-                # the operation targets (the USB pick missed on a flap;
-                # the daemon rows are the real devices).
-                picked = self._pick_stop_target(
-                    sorted(f"adb:{d.get('serial', '')}" for d in auth))
+                # Several authorized daemon rows: show the RUN picker over
+                # them instead of refusing — run semantics ('Run on this
+                # device' / 'Cancel'), not stop semantics.
+                picked = self._pick_from_keys(
+                    label, sorted(f"adb:{d.get('serial', '')}" for d in auth))
                 if picked == "__cancelled__":
                     self._ui.line.emit("[info] device choice cancelled.")
                     return None, None, None
@@ -13267,6 +13266,40 @@ class FlashPilotWindow(QMainWindow):
             if w is not None:
                 w.setEnabled(False)
         self._ui.line.emit("[cancel] Stop requested — finishing the current USB packet ...")
+
+    def _pick_from_keys(self, label, device_keys):
+        """Run-picker over explicit device keys (daemon rows when the USB
+        pick missed): 'Run on this device' / 'Cancel' — run semantics, not
+        stop semantics. Returns a device key or '__cancelled__'."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Choose device — {label}")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f"The device list could not be scanned just now.<br>Which <b>ADB device</b> should <b>{label}</b> run on?"))
+        group = QButtonGroup(dlg)
+        radios = []
+        for i, k in enumerate(device_keys):
+            rb = QRadioButton(k)
+            rb.setProperty("device_key", k)
+            group.addButton(rb, i)
+            lay.addWidget(rb)
+            radios.append(rb)
+        radios[0].setChecked(True)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("Run on this device")
+        cancel = QPushButton("Cancel")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return "__cancelled__"
+        checked = group.checkedButton()
+        if checked is None:
+            return "__cancelled__"
+        return checked.property("device_key") or "__cancelled__"
 
     def _pick_stop_target(self, device_keys):
         """Which running job(s) should STOP cancel? Returns a device key,
