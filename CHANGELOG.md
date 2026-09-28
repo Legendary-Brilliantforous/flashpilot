@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1 (ModeBadge fix)
+
+- The device-mode badge (top bar, near Stop) follows the SELECTED
+  device and no longer reads MTP for Qualcomm-normal setups (the
+  substring 'normal' fell through to the MTP chip).
+
 ## 1.3.0 (device classification + picker)
 
 - Unmatched devices (vendor-specific/diag composites) report 'USB'
