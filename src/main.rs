@@ -232,7 +232,10 @@ fn main() {
                     exit(2);
                 }
             }
-            mtk_da::mtk_flash_part_cli(&target, &da, &entries)
+            // Verify-after-write is ON by default; --no-verify restores the
+            // legacy write+reboot behavior (no read-back compare).
+            let verify = !args.iter().skip(4).any(|a| a == "--no-verify");
+            mtk_da::mtk_flash_part_cli_v(&target, &da, &entries, verify)
         }
         "mtk-flash-samsung" => {
             if args.len() < 5 {
@@ -434,12 +437,17 @@ fn main() {
         }
         "qcom-flash-one" => {
             if args.len() < 7 {
-                eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors>");
+                eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors> [--no-verify]");
                 exit(2);
             }
-            let start: u64 = args[5].parse().unwrap_or(0);
-            let count: u64 = args[6].parse().unwrap_or(0);
-            qualcomm::qcom_flash_one(&args[2], &args[3], std::path::Path::new(&args[4]), start, count)
+            let start: u64 = args[5].parse().map_err(|_| { eprintln!("bad start_sector: {}", args[5]); exit(2); }).unwrap_or(0);
+            let count: u64 = args[6].parse().map_err(|_| { eprintln!("bad num_sectors: {}", args[6]); exit(2); }).unwrap_or(0);
+            // Verify-after-write ON by default; --no-verify restores the
+            // legacy write+reset behavior. Also: malformed sector numbers
+            // are errors, never silent zeros (a zero-sector write is a
+            // brick vector).
+            let verify = !args.iter().skip(7).any(|a| a == "--no-verify");
+            qualcomm::qcom_flash_one_v(&args[2], &args[3], std::path::Path::new(&args[4]), start, count, verify)
         }
         "qcom-verify-part" => {
             // qcom-verify-part <target> <partition=file>...
@@ -774,8 +782,15 @@ fn main() {
                     rest.remove(0);
                 }
             }
+            // Verify-after-write ON by default; --no-verify restores the
+            // legacy write+reset behavior. The flag is filtered out of the
+            // entries (it contains no '=' so it would die as a bad entry).
+            let verify = !args.iter().any(|a| a == "--no-verify");
             let mut entries: Vec<(String, String)> = Vec::new();
             for tok in &rest {
+                if tok == "--no-verify" {
+                    continue;
+                }
                 if let Some(eq) = tok.find('=') {
                     entries.push((tok[..eq].to_string(), tok[eq + 1..].to_string()));
                 } else {
@@ -783,7 +798,7 @@ fn main() {
                     exit(2);
                 }
             }
-            spd::spd_flash_cli(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries)
+            spd::spd_flash_cli_v(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries, verify)
         }
         "adb-devices" => {
             // --no-probe: zero-touch presence listing (server rows +

@@ -6183,6 +6183,31 @@ class FlashPilotWindow(QMainWindow):
             self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
             return
         self._ui.line.emit(f"[step] MTK flashing: scatter={scatter} da={da} fw={fw}")
+        # Firmware↔device model match (cautious gate): the firmware
+        # directory/file name usually carries the model (SM-A145F_...,
+        # KG6-...). When the displayed device's model is known (ADB
+        # getprops) and PROVABLY differs, block unless explicitly
+        # overridden — wrong-model firmware may not boot. Unverifiable
+        # (no model in the name / device) passes with a note.
+        try:
+            import glob as _g
+            fw_name = next((os.path.basename(p) for p in sorted(_g.glob(os.path.join(fw, "*.tar.md5")) + _g.glob(os.path.join(fw, "*.tar")) + _g.glob(os.path.join(fw, "*.img")))), "")
+            fw_model = core._model_from_firmware_name(fw_name) if fw_name else ""
+            dev_model = (self._cached_model or "").strip()
+            if fw_model and dev_model:
+                match = core._models_match(dev_model, fw_model)
+                if match is False and os.environ.get("MTK_FORCE_MODEL", "0") != "1":
+                    self._toasts.show_error(
+                        "Firmware model mismatch",
+                        f"Firmware is for '{fw_model}' but the device is "
+                        f"'{dev_model}'. Set MTK_FORCE_MODEL=1 to override.")
+                    self._ui.line.emit(
+                        f"[refused] MTK flash: firmware model '{fw_model}' "
+                        f"!= device model '{dev_model}' — refusing "
+                        "(MTK_FORCE_MODEL=1 overrides).")
+                    return
+        except Exception:
+            pass
         auth_bypass = self.mtk_auth_bypass_cb.isChecked()
         
         def run_flash():

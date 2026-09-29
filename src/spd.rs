@@ -1360,6 +1360,8 @@ pub fn spd_boot_cli(
 /// load FDLs, enable write, then write each `partition=image` entry.
 /// Raw flash regions can be targeted with a hex address instead of a name
 /// (e.g. `0x80000003=ps.bin`), and special raw-region aliases are resolved.
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
 pub fn spd_flash_cli(
     target: &str,
     fdl1: &str,
@@ -1367,6 +1369,19 @@ pub fn spd_flash_cli(
     fdl2: Option<&str>,
     fdl2_addr: Option<u32>,
     entries: &[(String, String)],
+) -> Result<String> {
+    spd_flash_cli_v(target, fdl1, fdl1_addr, fdl2, fdl2_addr, entries, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reset, no read-back).
+pub fn spd_flash_cli_v(
+    target: &str,
+    fdl1: &str,
+    fdl1_addr: u32,
+    fdl2: Option<&str>,
+    fdl2_addr: Option<u32>,
+    entries: &[(String, String)],
+    verify: bool,
 ) -> Result<String> {
     if entries.is_empty() {
         return Err(BridgeError::InvalidArgument(
@@ -1463,6 +1478,46 @@ pub fn spd_flash_cli(
             })?;
         }
         out.push(format!("  '{part}' written OK"));
+        // Verify-after-write for PARTITION writes (default ON; --no-verify
+        // skips): read back via a temp file and compare. Raw-address
+        // writes (0x… / feature-phone aliases) are skipped — read_partition
+        // is name-based and cannot address those regions.
+        if verify && !part.starts_with("0x")
+            && !raw_aliases.iter().any(|(n, _)| *n == part)
+        {
+            let size = s.read_partitions().ok()
+                .and_then(|parts| {
+                    parts.iter().find(|(n, _)| n == part).map(|(_, sz)| *sz)
+                })
+                .unwrap_or(0);
+            let len = if size > 0 { data.len().min(size as usize) as u64 } else { data.len() as u64 };
+            if len > 0 {
+                let tmp_out = std::env::temp_dir().join(format!(
+                    "fp_spd_verify_{}_{}.bin", std::process::id(), part));
+                match s.read_partition(part, 0, len, &tmp_out.to_string_lossy(), 4096) {
+                    Ok(_) => match fs::read(&tmp_out) {
+                        Ok(actual) => {
+                            let n = (data.len()).min(actual.len());
+                            if let Err(e) = crate::util::verify_bytes_match(&data[..n], &actual[..n]) {
+                                let _ = fs::remove_file(&tmp_out);
+                                return Err(BridgeError::Protocol(
+                                    crate::error::ProtocolError::CommandFailed {
+                                        cmd: 0, sub: 0,
+                                        reason: format!(
+                                            "VERIFY FAILED for '{part}': {e} — the write did not stick"
+                                        ),
+                                    },
+                                ));
+                            }
+                            out.push(format!("  '{part}' verified OK"));
+                        }
+                        Err(_) => out.push(format!("  '{part}': verify read-back unreadable — skipped")),
+                    },
+                    Err(_) => out.push(format!("  '{part}': verify read-back unsupported — skipped")),
+                }
+                let _ = fs::remove_file(&tmp_out);
+            }
+        }
     }
 
     let _ = s.reset();

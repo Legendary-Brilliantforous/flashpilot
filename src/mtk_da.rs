@@ -994,7 +994,23 @@ pub fn mtk_gpt_cli(target: &str, da_path: &str) -> Result<String> {
 /// `mtk-flash-part <target> <da> <partition=file>...` — upload DA and write
 /// each `partition=image` entry by NAME, resolving addresses from the device
 /// GPT. No scatter file required.
-pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, String)]) -> Result<String> {
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
+pub fn mtk_flash_part_cli(
+    target: &str,
+    da_path: &str,
+    entries: &[(String, String)],
+) -> Result<String> {
+    mtk_flash_part_cli_v(target, da_path, entries, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reboot, no read-back).
+pub fn mtk_flash_part_cli_v(
+    target: &str,
+    da_path: &str,
+    entries: &[(String, String)],
+    verify: bool,
+) -> Result<String> {
     if entries.is_empty() {
         return Err(BridgeError::InvalidArgument(
             "no partition=file entries provided".to_string(),
@@ -1014,6 +1030,7 @@ pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, Strin
     da.upload_da(da_path)?;
 
     let mut out = Vec::new();
+    let mut written: Vec<(String, String)> = Vec::new();
     for (name, file) in entries {
         out.push(format!("Writing '{name}' from {file}..."));
         da.write_partition_by_name(name, file).map_err(|e| {
@@ -1024,6 +1041,56 @@ pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, Strin
             })
         })?;
         out.push(format!("  '{name}' written OK"));
+        written.push((name.clone(), file.clone()));
+    }
+    // Verify-after-write (default ON; --no-verify skips): read back each
+    // written partition and SHA-256 compare against the source file. A
+    // corrupt write must never pass silently — on mismatch the error is
+    // fatal and the device stays in DA mode for a re-write attempt.
+    if verify {
+        out.push("Verifying (read-back + SHA-256 compare)...".to_string());
+        for (name, file) in &written {
+            let expected = match std::fs::read(file) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(BridgeError::Firmware(
+                        crate::error::FirmwareError::ImageCorrupt(format!(
+                            "verify '{name}': cannot read source file: {e}"
+                        )),
+                    ));
+                }
+            };
+            if expected.is_empty() {
+                out.push(format!("  '{name}': source empty — skipped compare"));
+                continue;
+            }
+            match da.read_partition_bytes(name, 0, expected.len() as u64) {
+                Ok(actual) => match crate::util::verify_bytes_match(&expected, &actual) {
+                    Ok(()) => out.push(format!("  '{name}' verified OK")),
+                    Err(e) => {
+                        return Err(BridgeError::Protocol(
+                            crate::error::ProtocolError::CommandFailed {
+                                cmd: 0, sub: 0,
+                                reason: format!(
+                                    "VERIFY FAILED for '{name}': {e} — the write did not stick; device left in DA mode for a re-write attempt"
+                                ),
+                            },
+                        ));
+                    }
+                },
+                Err(e) => {
+                    return Err(BridgeError::Protocol(
+                        crate::error::ProtocolError::CommandFailed {
+                            cmd: 0, sub: 0,
+                            reason: format!(
+                                "VERIFY FAILED for '{name}' (read-back): {e} — device left in DA mode"
+                            ),
+                        },
+                    ));
+                }
+            }
+        }
+        out.push("All partitions verified.".to_string());
     }
     let _ = da.reboot(0);
     out.push("Flash complete - device rebooted to normal mode.".to_string());

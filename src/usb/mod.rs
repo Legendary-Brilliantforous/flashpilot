@@ -668,6 +668,13 @@ fn check_serial_identity(
 
 /// Set USB configuration on a device
 pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
+    // USB configuration values are u8 (bConfigurationValue): a value above
+    // 255 used to silently TRUNCATE (300 -> 44 — a wrong config switch).
+    let config_u8 = u8::try_from(config_idx).map_err(|_| {
+        crate::error::BridgeError::InvalidArgument(format!(
+            "config index {config_idx} out of u8 range (USB configs are 0..255)"
+        ))
+    })?;
     let (bus, address) = parse_target(target)?;
     
     let devices = collect_devices(None)?;
@@ -688,7 +695,7 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
         .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
     
     let handle = device.open()?;
-    handle.set_active_configuration(config_idx as u8)
+    handle.set_active_configuration(config_u8)
         .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     
     Ok(serde_json::json!({"status": "configuration set", "config": config_idx}).to_string())
@@ -870,6 +877,13 @@ mod tests {
         assert_eq!(mode_hint(0x18d1, 0x4ee7, &[adb_iface(255)]), "android-adb");
         assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
     }
+    #[test]
+    fn config_index_above_u8_is_error() {
+        // set_config's u8::try_from guard: 300 used to truncate to 44.
+        let err = set_config("1:2", 300).unwrap_err();
+        assert!(err.to_string().contains("out of u8 range"), "unexpected: {err}");
+    }
+
     #[test]
     fn identity_changed_at_same_address_is_error() {
         // Section-32: Phone B at Phone A's old address — never follow.

@@ -69,8 +69,27 @@ pub fn parse_size(size_str: &str) -> Result<u64> {
     
     let num: f64 = num_str.trim().parse()
         .map_err(|_| crate::error::BridgeError::InvalidArgument("Invalid size".to_string()))?;
-    
-    Ok((num * unit as f64) as u64)
+
+    // Integer math, not f64-multiply-cast: f64 loses precision above 2^53
+    // and truncates (a "16GB" partition rounding down silently shifts
+    // every address after it). Parse the integer part exactly, apply the
+    // unit multiply with an overflow check.
+    let unit = unit as u64;
+    let int_part: u64 = if num.fract() == 0.0 {
+        u64::try_from(num as u128).map_err(|_| {
+            crate::error::BridgeError::InvalidArgument("Size out of range".to_string())
+        })?
+    } else {
+        // Fractional sizes (e.g. "1.5GB"): keep the f64 path but bound it.
+        let v = num * unit as f64;
+        if !(v.is_finite()) || v < 0.0 || v > u64::MAX as f64 {
+            return Err(crate::error::BridgeError::InvalidArgument("Size out of range".to_string()));
+        }
+        return Ok(v as u64);
+    };
+    Ok(int_part
+        .checked_mul(unit)
+        .ok_or_else(|| crate::error::BridgeError::InvalidArgument("Size overflows u64".to_string()))?)
 }
 
 /// Format size as human readable
@@ -281,5 +300,18 @@ mod tests {
         // Idempotent: second run skips its own outputs, same file set.
         let out2 = write_backup_manifest(&d).unwrap();
         assert!(out2.contains("1 file(s)"), "unexpected: {out2}");
+    }
+
+    #[test]
+    fn parse_size_integer_math_is_exact() {
+        // Regression: f64-multiply-cast lost precision above 2^53 and
+        // truncated (16GB rounding down shifts every address after it).
+        assert_eq!(parse_size("16GB").unwrap(), 16 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size("512KB").unwrap(), 512 * 1024);
+        assert_eq!(parse_size("4096").unwrap(), 4096);
+        // Fractional sizes keep the f64 path.
+        assert_eq!(parse_size("1.5GB").unwrap(), 1_610_612_736);
+        // Overflow is an error, never a wrap.
+        assert!(parse_size("18446744073709551616").is_err());
     }
 }

@@ -194,7 +194,14 @@ pub fn flash_one_partition(
     firehose.program_partition(partition_name, file_path, start_sector, num_sectors)
 }
 
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
 pub fn qcom_flash_one(target: &str, partition: &str, image: &Path, start_sector: u64, num_sectors: u64) -> Result<String> {
+    qcom_flash_one_v(target, partition, image, start_sector, num_sectors, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reset, no read-back).
+pub fn qcom_flash_one_v(target: &str, partition: &str, image: &Path, start_sector: u64, num_sectors: u64, verify: bool) -> Result<String> {
     let devices = usb::collect_devices(Some(crate::qualcomm::sahara::QCOM_VID))?;
     let dev = resolve_qcom_device(&devices, target)?;
     let mut sahara = SaharaSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
@@ -202,8 +209,63 @@ pub fn qcom_flash_one(target: &str, partition: &str, image: &Path, start_sector:
     let mut firehose = FirehoseSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
     firehose.configure("emmc", Some("emmc"))?;
     flash_one_partition(&mut firehose, partition, image, start_sector, num_sectors)?;
+
+    // Verify-after-write (default ON; --no-verify skips): read back the
+    // written sectors and compare against the source image. The Firehose
+    // session is still alive — the read must happen BEFORE reset. A corrupt
+    // write must never pass silently (the earlier is_success() gap made
+    // failed writes report success; this read-back is the second line of
+    // defense).
+    let mut status = "flashed".to_string();
+    if verify {
+        let expected = std::fs::read(image).map_err(|e| {
+            BridgeError::Firmware(crate::error::FirmwareError::ImageCorrupt(format!(
+                "verify '{partition}': cannot read source image: {e}"
+            )))
+        })?;
+        if expected.is_empty() {
+            status = "flashed (source empty — verify skipped)".to_string();
+        } else {
+            // read_partition streams to a path and rounds up to whole
+            // sectors: read back only what the source needs, compare the
+            // prefix, clean the temp file.
+            let sector_size = (firehose.sector_size as u64).max(512);
+            let sectors = expected.len().div_ceil(sector_size as usize) as u64;
+            let tmp_out = std::env::temp_dir().join(format!(
+                "fp_verify_{}_{}.bin", std::process::id(), partition));
+            firehose.read_partition(partition, &tmp_out, start_sector, sectors)?;
+            let read_result = (|| -> std::result::Result<Vec<u8>, BridgeError> {
+                std::fs::read(&tmp_out).map_err(|e| {
+                    BridgeError::Io(format!("verify read-back: {e}"))
+                })
+            })();
+            let _ = std::fs::remove_file(&tmp_out);
+            let actual = read_result?;
+            let n = expected.len().min(actual.len());
+            if n < expected.len() {
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::CommandFailed {
+                        cmd: 0, sub: 0,
+                        reason: format!(
+                            "VERIFY FAILED for '{partition}': read back {n} of {} bytes — the write did not stick",
+                            expected.len()
+                        ),
+                    },
+                ));
+            }
+            crate::util::verify_bytes_match(&expected, &actual[..n]).map_err(|e| {
+                BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                    cmd: 0, sub: 0,
+                    reason: format!(
+                        "VERIFY FAILED for '{partition}': {e} — the write did not stick"
+                    ),
+                })
+            })?;
+            status = "flashed + verified".to_string();
+        }
+    }
     firehose.reset()?; // wire FirehoseSession::reset as load-bearing
-    Ok(serde_json::json!({"status":"flashed","partition":partition,"file":image.display().to_string()}).to_string())
+    Ok(serde_json::json!({"status":status,"partition":partition,"file":image.display().to_string()}).to_string())
 }
 
 /// Verify-after-write for Firehose flashes: read back each partition and
