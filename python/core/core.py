@@ -40,6 +40,19 @@ _ADB_FRP_STEPS = [
     ("back to home", "am start -c android.intent.category.HOME -a android.intent.action.MAIN"),
 ]
 
+def _secure_temp_path(prefix):
+    """Symlink-proof temp path: mkstemp (O_CREAT|O_EXCL, 0600, random
+    name). A pre-created symlink at a predictable name (samsung_pit.bin)
+    used to redirect device-PIT writes — arbitrary file overwrite as the
+    invoking user. Returns the path; the caller opens/truncates it."""
+    import tempfile as _tf
+    import os as _os
+
+    fd, path = _tf.mkstemp(prefix=f"{prefix}_", suffix=".bin")
+    _os.close(fd)
+    return path
+
+
 
 def _wait_for_adb(ctx, log, timeout=60, key=None):
     if key is None:
@@ -312,7 +325,7 @@ def pit_contract(target=None, log=None, use_cache_on_failure=True, key=None):
 
     if raw:
         # Persist to the user-visible dump location AND the content-hash cache.
-        out = os.path.join(tempfile.gettempdir(), "samsung_pit.bin")
+        out = _secure_temp_path("samsung_pit")
         try:
             with open(out, "wb") as fh:
                 fh.write(raw)
@@ -1663,7 +1676,7 @@ def flow_download_mode_info():
         try:
             resp = json.loads(bridge.odin_pit(t))
             raw = bytes.fromhex(resp.get("hex", ""))
-            out = os.path.join(tempfile.gettempdir(), "samsung_pit.bin")
+            out = _secure_temp_path("samsung_pit")
             with open(out, "wb") as fh:
                 fh.write(raw)
             log(f"  PIT dump: {len(raw)} bytes -> {out}")
@@ -5972,7 +5985,7 @@ def flow_odin_flash_partition_gui():
             pit_path = os.environ.get("PIT_FILE") or ""
         if not pit_path or not os.path.isfile(pit_path):
             import tempfile
-            pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
+            pit_path = _secure_temp_path("samsung_dev_pit")
             try:
                 bridge.odin_pit(target, pit_path, timeout=120)
             except bridge.BridgeError as e:
@@ -6144,7 +6157,7 @@ def flow_odin_flash_multi():
 
         pit_path = ctx.get("device_pit_path")
         if not pit_path or not os.path.isfile(pit_path):
-            pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
+            pit_path = _secure_temp_path("samsung_dev_pit")
             try:
                 bridge.odin_pit(target, pit_path, timeout=120)
             except bridge.BridgeError as e:
@@ -7977,7 +7990,7 @@ def flow_screen_lock_csc():
         device_model = ctx.get("device_pit_model")
         if not device_model:
             import tempfile
-            pit_path = os.path.join(tempfile.gettempdir(), "samsung_dev.pit")
+            pit_path = _secure_temp_path("samsung_dev_pit")
             try:
                 bridge.odin_pit(target, pit_path, timeout=120)
                 device_model = pit.parse_model(open(pit_path, "rb").read())

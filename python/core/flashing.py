@@ -121,6 +121,12 @@ def flow_mtk_samsung_gpt():
         for ext, strip_len in [(".lz4", 4), (".zst", 4), (".zstd", 5)]:
             for comp in glob.glob(os.path.join(src_dir, f"*{ext}")):
                 out = comp[:-strip_len]
+                if os.path.islink(out):
+                    # A symlinked output would redirect the decompressed
+                    # firmware write (arbitrary file overwrite as the
+                    # invoking user). Skip with a loud note.
+                    log(f"  [security] skipping {os.path.basename(out)}: it is a symlink")
+                    continue
                 if os.path.exists(out):
                     continue
                 log(f"Decompressing {os.path.basename(comp)}...")

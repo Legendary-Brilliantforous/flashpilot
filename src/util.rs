@@ -3,6 +3,7 @@
 use crate::error::Result;
 use std::path::Path;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
 /// Read file to bytes
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
@@ -11,7 +12,12 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
 
 /// Write bytes to file
 pub fn write_file(path: &Path, data: &[u8]) -> Result<()> {
-    fs::write(path, data).map_err(|e| crate::error::BridgeError::Io(e.to_string()))
+    fs::write(path, data).map_err(|e| crate::error::BridgeError::Io(e.to_string()))?;
+    // Device data (EFS/NV/partition backups, manifests, staged firmware) is
+    // private by default: 0644/umask left world-readable backups readable
+    // by every local user. 0600 matches the sensitivity of the content.
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    Ok(())
 }
 
 /// Ensure directory exists
