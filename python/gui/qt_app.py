@@ -2,6 +2,8 @@ import threading
 import time as _time
 import math
 import os
+import subprocess
+import weakref
 
 from PyQt6.QtCore import (
     QRectF,
@@ -15,6 +17,9 @@ from PyQt6.QtCore import (
     QPointF,
     QEvent,
     QSettings,
+    QPropertyAnimation,
+    QEasingCurve,
+    pyqtProperty,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -51,11 +56,14 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QStackedWidget,
     QStyledItemDelegate,
@@ -73,45 +81,209 @@ from PyQt6.QtWidgets import (
     QLayout,
 )
 
-from ..core import bridge, frp, mtk, mtp, fus, pit, pitstore
+from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, experimental, jobs
+from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
+from .nav import NavRail, OemChipBar
+from .theme import (  # noqa: F401
+    C, ACCENT_THEMES, _BASE_QSS, _get_base_qss,
+    _btn_primary, _card_qss, _btn_ghost, _btn_danger, _console_qss,
+    _parse_version, _display_version, _is_beta_version,
+)
+from .animations import (  # noqa: F401
+    Motion, _draw_computer, _draw_phone, _draw_logo,
+    StatusOrb, ConnectionScene, AccentStrip, ShimmerBar,
+)
+from . import devices as device_pages
 from .nav import NavRail
 
 # ---------------------------------------------------------------------------
-# Flow run-guard: only ONE device operation may run at a time. Without this a
-# user can click "Flash" while a flash is in progress - launching a second
-# write to the same device - and the second clear_cancel() silently discards
-# the in-flight operation's cancel request. The lock is acquired on the GUI
-# thread when an operation starts and released from the worker's finally.
+# Beautiful standard toggle — eloquent, animated, for all animation/settings switches
 # ---------------------------------------------------------------------------
-_FLOW_LOCK = threading.Lock()
-_FLOW_LABEL = [None]
-_FLOW_IS_DESTRUCTIVE = [False]
+class BeautifulToggle(QCheckBox):
+    """Standard iOS-style animated toggle — 48×26, thumb slides with OutCubic."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._thumb_pos = 0.0
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(48, 26)
+        self.setChecked(False)
+        self._anim = None
+        self.toggled.connect(self._on_toggled)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+    def _on_toggled(self, checked: bool):
+        # If not yet visible (startup), snap without anim so toggle isn't stuck at 0
+        if not self.isVisible():
+            self._thumb_pos = 1.0 if checked else 0.0
+            self.update()
+            return
+        try:
+            if self._anim and self._anim.state() == QPropertyAnimation.State.Running:
+                self._anim.stop()
+        except Exception:
+            pass
+        self._anim = QPropertyAnimation(self, b"thumbPos")
+        self._anim.setDuration(220)
+        self._anim.setStartValue(self._thumb_pos)
+        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.start()
+
+    def getThumbPos(self):
+        return self._thumb_pos
+
+    def setThumbPos(self, v: float):
+        self._thumb_pos = float(v)
+        self.update()
+
+    thumbPos = pyqtProperty(float, getThumbPos, setThumbPos)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self.toggle()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # Prevent double-toggle from QCheckBox base
+        event.accept()
+
+    def hitButton(self, pos):
+        # Whole widget is hit area (not just indicator)
+        return self.rect().contains(pos)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        # Disabled → muted track, no glow
+        if not self.isEnabled():
+            p.setBrush(QColor("#1e293b"))
+            p.setPen(QPen(QColor("#334155"), 1.2))
+            p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), h / 2, h / 2)
+            thumb_d = h - 6
+            x0 = 3
+            x1 = w - thumb_d - 3
+            x = x0 + (x1 - x0) * self._thumb_pos
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 0, 0, 35))
+            p.drawEllipse(QRectF(x + 0.5, 3.5, thumb_d, thumb_d))
+            p.setBrush(QColor("#94a3b8"))
+            p.setPen(QPen(QColor(0, 0, 0, 25), 1))
+            p.drawEllipse(QRectF(x, 2, thumb_d, thumb_d))
+            p.end()
+            return
+        # Track
+        track = QRectF(1, 1, w - 2, h - 2)
+        if self.isChecked():
+            grad = QLinearGradient(0, 0, w, 0)
+            grad.setColorAt(0, QColor(C["grad_a"]))
+            grad.setColorAt(1, QColor(C["grad_b"]))
+            p.setBrush(grad)
+            p.setPen(QPen(QColor(C["accent_hi"]), 1.2))
+        else:
+            p.setBrush(QColor(C["border"]))
+            p.setPen(QPen(QColor(C["border_hi"]), 1.2))
+        p.drawRoundedRect(track, h / 2, h / 2)
+        # Thumb
+        thumb_d = h - 6
+        # Interpolate x from 3 → w - thumb_d - 3
+        x0 = 3
+        x1 = w - thumb_d - 3
+        x = x0 + (x1 - x0) * self._thumb_pos
+        # Shadow
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 45))
+        p.drawEllipse(QRectF(x + 0.5, 3.5, thumb_d, thumb_d))
+        # Thumb fill
+        p.setBrush(QColor("#ffffff"))
+        p.setPen(QPen(QColor(0, 0, 0, 30), 1))
+        p.drawEllipse(QRectF(x, 2, thumb_d, thumb_d))
+        # Inner dot when on (eloquent)
+        if self.isChecked():
+            p.setBrush(QColor(C["accent"]))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QRectF(x + thumb_d * 0.35, 2 + thumb_d * 0.35, thumb_d * 0.30, thumb_d * 0.30))
+        p.end()
+
+    def sizeHint(self):
+        return QSize(48, 26)
+
+# ---------------------------------------------------------------------------
+# Flow run-guard: ONE operation per device at a time (per-device locks keyed
+# by stable device key — see python/core/devices.py). Without this a user
+# can click "Flash" while a flash is in progress on the SAME phone -
+# launching a second write to it - and the second clear_cancel() silently
+# discards the in-flight operation's cancel request. Different phones may
+# run operations in parallel. The lock is acquired on the GUI thread when an
+# operation starts and released from the worker's finally. ``key=None``
+# means the shared/global bucket (legacy single-device callers).
+# ---------------------------------------------------------------------------
+_FLOW_LOCKS = {}
+_FLOW_LABELS = {}
+_FLOW_IS_DESTRUCTIVE = {}
+_FLOW_GUARD_LOCK = threading.Lock()
 
 
-def _flow_start(label, destructive):
+def _flow_key(key):
+    """Normalize the guard bucket: explicit key, else ambient thread scope,
+    else the shared global bucket."""
+    if key is not None:
+        return key
+    try:
+        from python.core import devices as _dev
+
+        return _dev.current_key() or "__global__"
+    except Exception:
+        return "__global__"
+
+
+def _flow_lock_for(key):
+    with _FLOW_GUARD_LOCK:
+        lock = _FLOW_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _FLOW_LOCKS[key] = lock
+        return lock
+
+
+def _flow_start(label, destructive, key=None):
     """Try to begin a device operation. Returns False (and the caller should
-    abort) if another operation is already running. Records whether this
-    operation can brick/wipe a device so Stop reflects the true severity."""
-    if not _FLOW_LOCK.acquire(blocking=False):
+    abort) if another operation is already running ON THE SAME DEVICE.
+    Records whether this operation can brick/wipe a device so Stop reflects
+    the true severity."""
+    bucket = _flow_key(key)
+    if not _flow_lock_for(bucket).acquire(blocking=False):
         return False
-    _FLOW_LABEL[0] = label
-    _FLOW_IS_DESTRUCTIVE[0] = bool(destructive)
+    _FLOW_LABELS[bucket] = label
+    _FLOW_IS_DESTRUCTIVE[bucket] = bool(destructive)
     return True
 
 
-def _flow_end():
-    _FLOW_LABEL[0] = None
-    _FLOW_IS_DESTRUCTIVE[0] = False
-    _FLOW_LOCK.release()
+def _flow_end(key=None):
+    bucket = _flow_key(key)
+    _FLOW_LABELS.pop(bucket, None)
+    _FLOW_IS_DESTRUCTIVE.pop(bucket, None)
+    try:
+        _flow_lock_for(bucket).release()
+    except RuntimeError:
+        pass  # already released (defensive: finally-blocks must not raise)
 
 
-def _flow_busy_msg():
-    other = _FLOW_LABEL[0]
+def _flow_busy_msg(key=None):
+    other = _FLOW_LABELS.get(_flow_key(key))
     if other:
-        return f"'{other}' is still running. Wait for it to finish before starting another operation."
-    return "Another operation is still running. Wait for it to finish."
+        return f"'{other}' is still running on this device. Wait for it to finish before starting another operation."
+    return "Another operation is still running on this device. Wait for it to finish."
+
+
+def _flows_running():
+    """Number of devices with an in-flight operation (for the global STOP)."""
+    with _FLOW_GUARD_LOCK:
+        return len(_FLOW_LABELS)
 
 
 # Flows that wipe device data / clear security state. These must always ask
@@ -196,182 +368,12 @@ _DESTRUCTIVE_CONFIRM = {
     ),
 }
 
+
+
+
 # ---------------------------------------------------------------------------
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
-C = {
-    "bg": "#04070c",            # window background (deep carbon)
-    "panel": "#0a111a",         # card panel
-    "card": "#0d1622",          # inner card
-    "card_hover": "#152032",    # card hover state
-    "inset": "#070d15",         # console / inputs
-    "border": "#16233a",
-    "border_hi": "#2c405e",
-    "glass": "rgba(13,22,34,0.78)",  # glassmorphism base
-    "glass_hi": "rgba(21,32,50,0.88)",
-    "glass_border": "rgba(255,255,255,0.08)",
-    "text": "#e7eef8",
-    "text_hi": "#f1f5f9",
-    "dim": "#a8bdd6",
-    "mute": "#6b7d94",
-    "accent": "#22d3ee",        # circuit-cyan signature
-    "accent_hi": "#7dd3fc",
-    "accent_glow": "rgba(34,211,238,0.28)",
-    "grad_a": "#0ea5e9",
-    "grad_b": "#22d3ee",
-    "ok": "#2dd4bf",
-    "ok_dim": "#0c332f",
-    "warn": "#fbbf24",
-    "warn_dim": "#3a3010",
-    "err": "#fb7185",
-    "err_dim": "#3d1721",
-    "chip_blue": "#0f2a41",
-    "chip_text": "#7dd3fc",
-    "accent_dim": "#0e3350",     # soft accent fill (dropdown selection, tiles)
-    "sheen": "#ffffff",          # highlight on painted glyphs
-}
-
-# Accent themes selectable in Settings -> Appearance. Each swaps the accent /
-# gradient tokens, mirroring how premium commercial tools ship colour packs.
-ACCENT_THEMES = {
-    "Neon Circuit": {
-        "accent": "#22d3ee", "accent_hi": "#7dd3fc",
-        "grad_a": "#0ea5e9", "grad_b": "#22d3ee", "accent_dim": "#0e3350",
-    },
-    "Cobalt Blue": {
-        "accent": "#3b82f6", "accent_hi": "#6ea8ff",
-        "grad_a": "#2563eb", "grad_b": "#06b6d4", "accent_dim": "#1d3a66",
-    },
-    "Violet": {
-        "accent": "#8b5cf6", "accent_hi": "#a78bfa",
-        "grad_a": "#7c3aed", "grad_b": "#06b6d4", "accent_dim": "#2b2350",
-    },
-    "Emerald": {
-        "accent": "#10b981", "accent_hi": "#34d399",
-        "grad_a": "#059669", "grad_b": "#2dd4bf", "accent_dim": "#0f3d31",
-    },
-    "Amber": {
-        "accent": "#f59e0b", "accent_hi": "#fbbf24",
-        "grad_a": "#d97706", "grad_b": "#f59e0b", "accent_dim": "#3d3413",
-    },
-    "Crimson": {
-        "accent": "#ef4444", "accent_hi": "#f87171",
-        "grad_a": "#dc2626", "grad_b": "#f97316", "accent_dim": "#3d1b1e",
-    },
-}
-
-_BASE_QSS = f"""
-* {{
-    font-family: "Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
-    font-size: 13px;
-}}
-QToolTip {{
-    background-color: {C['panel']}; color: {C['text_hi']};
-    border: 1px solid {C['border_hi']}; border-radius: 8px; padding: 8px 10px;
-    font-size: 12px;
-}}
-QLineEdit {{
-    background: {C['inset']};
-    border: 1px solid {C['border']};
-    border-radius: 10px;
-    padding: 8px 12px;
-    color: {C['text_hi']};
-    selection-background-color: {C['accent']};
-    selection-color: #ffffff;
-}}
-QLineEdit:hover {{ border: 1px solid {C['border_hi']}; background: {C['card']}; }}
-QLineEdit:focus {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
-QComboBox {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 {C['card_hover']}, stop:1 {C['card']});
-    border: 1px solid {C['glass_border']};
-    border-radius: 10px;
-    padding: 8px 34px 8px 12px;
-    color: {C['text_hi']};
-    min-height: 22px;
-    selection-background-color: {C['accent_dim']};
-    selection-color: {C['accent_hi']};
-}}
-QComboBox:hover {{ border: 1px solid {C['accent']}; background: {C['card_hover']}; }}
-QComboBox:focus {{ border: 1px solid {C['accent']}; }}
-QComboBox:disabled {{ color: {C['mute']}; }}
-QComboBox:on {{ border: 1px solid {C['accent']}; }}
-QComboBox::drop-down {{
-    border: none; width: 30px;
-    subcontrol-origin: padding; subcontrol-position: center right;
-    background: transparent;
-}}
-QComboBox::down-arrow {{
-    image: none; width: 0; height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 6px solid {C['dim']};
-}}
-QComboBox::down-arrow:on {{ border-top: 6px solid {C['accent']}; }}
-QComboBox QAbstractItemView {{
-    background-color: {C['panel']};
-    border: 1px solid {C['border_hi']};
-    border-radius: 12px;
-    color: {C['text']};
-    selection-background-color: {C['accent_dim']};
-    selection-color: {C['accent_hi']};
-    outline: 0;
-    padding: 6px;
-}}
-QScrollBar:vertical {{
-    background: transparent; width: 8px; border-radius: 4px; margin: 2px;
-}}
-QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 4px; min-height: 30px; }}
-QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-QScrollBar:horizontal {{ height: 0; }}
-QFrame#sbox {{
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(18,28,44,180), stop:1 rgba(9,15,27,200));
-    border: 1px solid {C['glass_border']}; border-radius: 14px;
-}}
-"""
-
-
-def _btn_primary():
-    return f"""
-    QPushButton {{
-        border: 1px solid {C['accent']};
-        border-radius: 8px;
-        padding: 7px 16px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.3px;
-        color: #04121a;
-        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                    stop:0 {C['grad_a']}, stop:1 {C['grad_b']});
-    }}
-    QPushButton:hover {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                    stop:0 {C['accent']}, stop:1 #67e8f9);
-                         border: 1px solid {C['accent_hi']}; }}
-    QPushButton:pressed {{ background: {C['grad_a']};
-                          border: 1px solid {C['accent_hi']}; }}
-    QPushButton:disabled {{ background: {C['border']}; color: {C['mute']};
-                           border: 1px solid {C['border']}; }}
-    """
-
-
-def _card_qss():
-    """Premium glassmorphism card: translucent frosted glass with soft blur,
-    14px radius, inner highlight and accent left edge."""
-    return (
-        f"QFrame#card {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(18, 28, 44, 210), stop:1 rgba(9, 15, 27, 230));"
-        f" border: 1px solid {C['glass_border']}; border-left: 2.5px solid {C['accent']};"
-        f" border-top: 1px solid rgba(255,255,255,0.10);"
-        f" border-radius: 14px; }}"
-        f"QFrame#sbox {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 rgba(18, 28, 44, 180), stop:1 rgba(9, 15, 27, 200));"
-        f" border: 1px solid {C['glass_border']}; border-top: 1px solid rgba(255,255,255,0.08);"
-        f" border-radius: 14px; }}"
-    )
-
-
 def _glass_blur(widget, radius=18):
     """Apply soft backdrop blur to a widget for true glassmorphism."""
     try:
@@ -382,25 +384,6 @@ def _glass_blur(widget, radius=18):
         widget.setGraphicsEffect(blur)
     except Exception:
         pass
-
-
-def _btn_ghost():
-    return f"""
-    QPushButton {{
-        border: 1px solid {C['border']};
-        border-radius: 8px;
-        padding: 6px 12px;
-        font-size: 12px;
-        font-weight: 600;
-        color: {C['text']};
-        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                    stop:0 {C['card']}, stop:1 {C['inset']});
-    }}
-    QPushButton:hover {{ border: 1px solid {C['accent']}; color: {C['accent_hi']};
-                        background: {C['card_hover']}; }}
-    QPushButton:pressed {{ background: {C['accent_dim']}; color: #fff; }}
-    QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; background: {C['card']}; }}
-    """
 
 
 def _risk_banner(text):
@@ -428,78 +411,57 @@ def _risk_banner(text):
     return w
 
 
-def _btn_danger():
-    return f"""
-    QPushButton {{
-        border: 1px solid {C['err']};
-        border-radius: 6px;
-        padding: 6px 12px;
-        font-size: 12px;
-        font-weight: 700;
-        color: #ffa3b2;
-        background: {C['card']};
-    }}
-    QPushButton:hover {{ background: {C['err']}; color: #ffffff; }}
-    QPushButton:pressed {{ background: #b91c1c; border-color: #b91c1c; }}
-    QPushButton:disabled {{ color: {C['mute']}; border: 1px solid {C['border']}; }}
-    """
+# ---------------------------------------------------------------------------
+# Experimental feature mapping — Knox / QCN / IMEI / eMMC ship as EXPERIMENTAL
+# behind a per-run ownership ack (Q2-B gate). Maps a flow key to an
+# ``experimental.EXPERIMENTAL_FEATURES`` feature id so the GUI knows to show
+# the amber pill + mandatory checkbox before running.
+# ---------------------------------------------------------------------------
+_EXPERIMENTAL_FLOW_MAP = {
+    "knox_check": "knox_warranty",
+    "knox_bypass": "knox_bypass",
+    "qcn_backup": "qcn_backup",
+    "qcn_restore": "qcn_imei_repair",
+    "qcn_imei_repair": "qcn_imei_repair",
+    "imei_repair_mtk": "imei_repair_mtk",
+    "imei_change_mtk": "imei_change_mtk",
+    "imei_repair_spd": "imei_repair_spd",
+    "imei_change_spd": "imei_change_spd",
+    "emmc_health": "emmc_ufs_raw",
+    "emmc_raw": "emmc_ufs_raw",
+}
+
+# Keys that require the stronger "type to confirm" gate in addition to the
+# every-run checkbox. Only the highest-risk operations (IMEI change) use it.
+_EXPERIMENTAL_TYPE_CONFIRM = {
+    "imei_change_mtk": "I UNDERSTAND",
+    "imei_change_spd": "I UNDERSTAND",
+}
 
 
-def _console_qss():
-    return f"""
-    QPlainTextEdit {{
-        background-color: {C['inset']};
-        border: 1px solid {C['glass_border']};
-        border-radius: 12px;
-        color: {C['text_hi']};
-        font-family: "JetBrains Mono", "Consolas", "Menlo", monospace;
-        font-size: 12px;
-        padding: 14px;
-        selection-background-color: {C['accent_dim']};
-        selection-color: {C['accent_hi']};
-    }}
-    QPlainTextEdit:focus {{ border: 1px solid {C['accent']}; }}
-    """
-
-
-class Motion:
-    """Premium motion system - centralised easings and helpers."""
-    @staticmethod
-    def fade(widget, dur=220, start=0.0, end=1.0):
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-        anim = QPropertyAnimation(widget, b"windowOpacity")
-        anim.setDuration(dur)
-        anim.setStartValue(start)
-        anim.setEndValue(end)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        # keep reference
-        if not hasattr(widget, "_anims"):
-            widget._anims = []
-        widget._anims.append(anim)
-        return anim
-
-    @staticmethod
-    def scale_hover(widget):
-        orig = widget.geometry()
-        def enter(e):
-            anim = QPropertyAnimation(widget, b"geometry") if hasattr(widget, "geometry") else None
-            if anim:
-                anim.setDuration(140)
-                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-                r = widget.geometry()
-                r.adjust(-1, -1, 1, 1)
-                anim.setEndValue(r)
-                anim.start()
-        widget.enterEvent = enter
-        return widget
-
-    @staticmethod
-    def shimmer(bar: QProgressBar):
-        bar.setStyleSheet(
-            f"QProgressBar {{ background:{C['inset']}; border:1px solid {C['glass_border']}; border-radius:6px; height:8px; text-align:center; color:{C['text']}; }}"
-            f"QProgressBar::chunk {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {C['grad_a']}, stop:0.5 {C['accent_hi']}, stop:1 {C['grad_b']}); border-radius:5px; }}"
-        )
+def _experimental_banner(text):
+    """Amber-striped EXPERIMENTAL warning bar for per-chip experimental
+    collapsibles. Mirrors _risk_banner but amber."""
+    w = QWidget()
+    w.setStyleSheet("background: transparent;")
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    icon = QLabel("🧪")
+    icon.setStyleSheet(f"color: {C['warn']}; font-size: 14px; font-weight: 800;")
+    icon.setFixedWidth(18)
+    lay.addWidget(icon)
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(
+        f"color: #fde68a; font-size: 11px; font-weight: 600;"
+        f" background: rgba(251, 191, 36, 18);"
+        f" border: 1px solid rgba(251, 191, 36, 110);"
+        f" border-left: 3px solid {C['warn']}; border-radius: 6px;"
+        f" padding: 6px 10px;"
+    )
+    lay.addWidget(lbl, 1)
+    return w
 
 
 class ConsoleHighlighter(QTextDocument):
@@ -523,55 +485,6 @@ class LogHighlighter:
                 elif "[error]" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
                 elif text.strip().startswith("[check]"): hself.setFormat(0, len(text), fmt_dim)
         self._hl = _HL(doc)
-
-
-def _parse_version(tag):
-    """Simple version parser: strips leading 'v', extracts numeric + alpha segments."""
-    if not tag:
-        return (0, 0, 0), ""
-    t = tag.lstrip("v")
-    parts = t.split("-", 1)
-    num_parts = []
-    for p in parts[0].split("."):
-        try:
-            num_parts.append(int(p))
-        except ValueError:
-            num_parts.append(0)
-    while len(num_parts) < 3:
-        num_parts.append(0)
-    alpha = parts[1] if len(parts) > 1 else ""
-    return tuple(num_parts), alpha
-
-
-def _display_version(tag):
-    """Display version: strips trailing '.0' patches.
-    1.2.0 -> 1.2, 1.2.1 -> 1.2.1, 1.2.0-beta -> 1.2-beta, 2.0.0 -> 2.0.
-    Preserves prerelease suffix (-beta, -rc1, etc.) exactly."""
-    if not tag:
-        return ""
-    t = tag.lstrip("v")
-    parts = t.split("-", 1)
-    numeric = parts[0]
-    suffix = f"-{parts[1]}" if len(parts) > 1 else ""
-    # Split numeric, strip trailing zeros but keep at least major.minor
-    nums = numeric.split(".")
-    # Remove trailing "0" segments while we have >2 parts
-    while len(nums) > 2 and nums[-1] == "0":
-        nums.pop()
-    # Special case: 1.0.0 -> 1.0, 2.0 stays 2.0 etc.
-    clean = ".".join(nums)
-    return f"{clean}{suffix}"
-
-
-def _is_beta_version(tag):
-    """True if version string denotes a beta/prerelease."""
-    if not tag:
-        return False
-    _, alpha = _parse_version(tag)
-    if not alpha:
-        return False
-    low = alpha.lower()
-    return any(k in low for k in ("beta", "alpha", "rc", "pre"))
 
 
 class LogBridge(QObject):
@@ -611,22 +524,101 @@ class DeviceMonitor(QObject):
         self._stop.set()
 
     def _poll(self):
+        # Robustness: the poll loop must NEVER die. A stray non-BridgeError
+        # (an unexpected bridge JSON shape, an AttributeError in a helper)
+        # used to kill this thread silently - detection then stopped forever
+        # and the GUI showed a stale connection. Any exception is treated
+        # like a transient failure: counted on the same streak gate.
         while not self._stop.is_set():
             try:
                 usb = bridge.detect_all()
                 hid = bridge.list_samsung_hid()
-                adb_devs = bridge.adb_status()
-            except bridge.BridgeError as e:
+                self._poll_err_streak = 0
+            except Exception as e:
+                # Transient poll failure (USB timeout, our own probes
+                # contending the port, re-enumeration window): a single
+                # failure must NOT drop the connection display - that is
+                # the exact flap users see. Only after consecutive failed
+                # polls does the error state surface.
+                self._poll_err_streak = getattr(self, "_poll_err_streak", 0) + 1
+                if self._poll_err_streak < 2:
+                    self._stop.wait(self.interval)
+                    continue
                 self.state.emit({"error": str(e)})
-            else:
-                samsung = [d for d in usb if d.get("is_samsung")]
-                mtk_devs = [d for d in usb if d.get("vid") == mtk.MTK_VID]
-                fastboot = [d for d in usb if _is_fastboot(d)]
-                edl_devs = [d for d in usb if _is_edl(d)]
-                qcom_devs = [d for d in usb if d.get("vid") == 0x05C6]
-                spd_devs = [d for d in usb if d.get("vid") == 0x1782]
+                self._stop.wait(self.interval)
+                continue
+            try:
+                # ADB probe is lazy: only spawn `adb` when USB hints at ADB or
+                # previous poll saw ADB (avoids `adb start-server` at every
+                # startup for MTP-only devices).
+                samsung_pre = [d for d in usb if isinstance(d, dict) and d.get("is_samsung")]
+                has_usb_adb = any(_has_adb_iface(d) for d in usb)
+                # Also consider Samsung ADB composite PIDs that expose ADB without explicit iface
+                has_usb_adb = has_usb_adb or any(d.get("pid") in (0x685E, 0x68A3, 0x6868) for d in samsung_pre)
+                should_probe_adb = has_usb_adb or bool(self._last_state and self._last_state.get("adb"))
+                # Always probe on first poll and periodically to catch newly enabled ADB without USB re-enumeration
+                if not hasattr(self, "_poll_count"):
+                    self._poll_count = 0
+                    should_probe_adb = True
+                self._poll_count += 1
+                if self._poll_count % 5 == 0:
+                    should_probe_adb = True
+                # Backoff gate: when the native handshake keeps coming up dry
+                # while the USB bus still sees ADB-capable hardware, every
+                # re-probe is another CNXN - and on devices whose adbd resets
+                # its USB function on our CNXN, each retry causes another
+                # re-enumeration at a new address (the storm makes the phone
+                # drop off the bus entirely). Stop probing until it expires.
+                if _time.monotonic() < getattr(self, "_adb_probe_backoff_until", 0.0):
+                    should_probe_adb = False
+                probed = False
+                if should_probe_adb:
+                    probed = True
+                    try:
+                        # Presence, never verified listing: a native probe
+                        # from this 3s loop claims interfaces and handshakes,
+                        # re-enumerating fragile hardware (USB modems) every
+                        # cycle. States come from the system server when it
+                        # runs; otherwise rows report presence as `unknown`.
+                        adb_devs = bridge.adb_presence_status()
+                    except Exception:
+                        # Retain last-known ADB devices on a transient failure:
+                        # resetting to [] flips the mode display off/on every
+                        # time our own probes contend the adb server (the flap).
+                        # Only while USB still sees a device - a retained entry
+                        # for an unplugged phone would be a ghost row.
+                        if getattr(self, "_last_adb_devs", None) and usb:
+                            adb_devs = self._last_adb_devs
+                        else:
+                            adb_devs = []
+                    # Dry-probe counting: the probe produced no rows while
+                    # the USB bus still sees ADB-capable hardware. After two
+                    # consecutive dry probes, stop probing for 45s - each
+                    # re-probe is another CNXN and on devices whose adbd
+                    # resets its USB function on our CNXN, each retry causes
+                    # another re-enumeration at a new address (the storm
+                    # makes the phone drop off the bus entirely). Resets as
+                    # soon as real rows come back.
+                    if adb_devs:
+                        self._adb_dry_streak = 0
+                    elif probed and has_usb_adb:
+                        self._adb_dry_streak = getattr(self, "_adb_dry_streak", 0) + 1
+                        if self._adb_dry_streak >= 2:
+                            self._adb_probe_backoff_until = _time.monotonic() + 45.0
+                else:
+                    adb_devs = self._last_adb_devs if usb else []
+                self._last_adb_devs = adb_devs
+                samsung = samsung_pre
+                mtk_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == mtk.MTK_VID]
+                fastboot = [d for d in usb if isinstance(d, dict) and _is_fastboot(d)]
+                edl_devs = [d for d in usb if isinstance(d, dict) and _is_edl(d)]
+                qcom_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x05C6]
+                spd_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x1782]
+                apple_devs = [d for d in usb if isinstance(d, dict) and _is_apple(d)]
+                other_android = [d for d in usb if isinstance(d, dict) and _is_generic_android(d)]
                 mode = _detect_mode(samsung, mtk_devs, adb_devs, fastboot, edl_devs,
-                                    qcom_devs, spd_devs)
+                                    qcom_devs, spd_devs, apple_devs=apple_devs,
+                                    other_android=other_android)
                 current_state = {
                     "samsung": samsung,
                     "mtk": mtk_devs,
@@ -636,505 +628,26 @@ class DeviceMonitor(QObject):
                     "edl": edl_devs,
                     "qcom": qcom_devs,
                     "spd": spd_devs,
+                    "apple": apple_devs,
+                    "other_android": other_android,
                     "mode": mode,
                 }
                 if current_state != self._last_state:
                     self.state.emit(current_state)
                     self._last_state = current_state
+            except Exception:
+                # A stray error inside the success block (bad JSON shape, a
+                # helper crash) must not kill the poll loop: keep the last
+                # known state and treat it as transient.
+                self._poll_err_streak = getattr(self, "_poll_err_streak", 0) + 1
             self._stop.wait(self.interval)
+
+
 
 
 # ---------------------------------------------------------------------------
 # Painted glyphs
 # ---------------------------------------------------------------------------
-def _draw_computer(size, connected=False):
-    pix = QPixmap(size, size)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = float(size)
-
-    # ground shadow
-    p.setBrush(QColor(0, 0, 0, 70))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(s * 0.28, s * 0.945, s * 0.44, s * 0.05))
-
-    # stand base
-    base = QRectF(s * 0.27, s * 0.86, s * 0.46, s * 0.09)
-    bgrad = QLinearGradient(0, base.top(), 0, base.bottom())
-    bgrad.setColorAt(0, QColor(C["border_hi"]))
-    bgrad.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(bgrad)
-    p.setPen(QPen(QColor(C["border_hi"]), 1))
-    p.drawRoundedRect(base, s * 0.05, s * 0.05)
-    p.setPen(QPen(QColor(255, 255, 255, 42), 1))
-    p.drawLine(QPointF(base.x() + s * 0.05, base.y() + 1.6),
-               QPointF(base.x() + base.width() - s * 0.05, base.y() + 1.6))
-    # neck
-    ngrad = QLinearGradient(0, s * 0.70, 0, s * 0.90)
-    ngrad.setColorAt(0, QColor(C["border_hi"]))
-    ngrad.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(ngrad)
-    p.setPen(QPen(QColor(C["border_hi"]), 1))
-    p.drawRoundedRect(QRectF(s * 0.455, s * 0.72, s * 0.09, s * 0.16), s * 0.03, s * 0.03)
-
-    # monitor bezel (dark metallic frame)
-    bezel = QRectF(s * 0.06, s * 0.03, s * 0.88, s * 0.70)
-    fr = QLinearGradient(bezel.left(), bezel.top(), bezel.right(), bezel.bottom())
-    fr.setColorAt(0, QColor("#3a4450"))
-    fr.setColorAt(0.5, QColor("#232b35"))
-    fr.setColorAt(1, QColor("#10151d"))
-    p.setBrush(fr)
-    p.setPen(QPen(QColor("#4a5563"), 1.2))
-    p.drawRoundedRect(bezel, s * 0.09, s * 0.09)
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(bezel.x() + s * 0.02, bezel.y() + s * 0.02),
-               QPointF(bezel.x() + bezel.width() - s * 0.02, bezel.y() + s * 0.02))
-
-    # screen
-    screen = QRectF(bezel.x() + s * 0.055, bezel.y() + s * 0.06,
-                    bezel.width() - s * 0.11, bezel.height() - s * 0.12)
-    if connected:
-        sc = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sc.setColorAt(0, QColor(C["accent_hi"]))
-        sc.setColorAt(0.55, QColor(C["grad_b"]))
-        sc.setColorAt(1, QColor(C["grad_a"]))
-    else:
-        sc = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sc.setColorAt(0, QColor("#25314a"))
-        sc.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(sc)
-    p.setPen(QPen(QColor(0, 0, 0, 120), 1))
-    p.drawRoundedRect(screen, s * 0.04, s * 0.04)
-
-    if connected:
-        # desktop: sun glow
-        orb = QRadialGradient(screen.x() + screen.width() * 0.72,
-                              screen.y() + screen.height() * 0.28, s * 0.22)
-        orb.setColorAt(0, QColor(255, 255, 255, 90))
-        orb.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(orb)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(screen.x() + screen.width() * 0.55,
-                             screen.y() + screen.height() * 0.10,
-                             s * 0.36, s * 0.36))
-        # desktop window
-        wx = screen.x() + screen.width() * 0.16
-        wy = screen.y() + screen.height() * 0.15
-        ww = screen.width() * 0.52
-        wh = screen.height() * 0.5
-        p.setBrush(QColor(13, 17, 26, 180))
-        p.setPen(QPen(QColor(C["accent"]), 1))
-        p.drawRoundedRect(QRectF(wx, wy, ww, wh), s * 0.02, s * 0.02)
-        p.setPen(QPen(QColor(C["accent_hi"]), 1))
-        p.drawLine(QPointF(wx + s * 0.02, wy + wh * 0.09),
-                   QPointF(wx + ww - s * 0.02, wy + wh * 0.09))
-        p.setBrush(QColor(C["accent_hi"]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(wx + s * 0.02, wy + wh * 0.14, ww * 0.45, s * 0.02),
-                          s * 0.008, s * 0.008)
-        # second window hint
-        p.setBrush(QColor(13, 17, 26, 140))
-        p.setPen(QPen(QColor(C["border_hi"]), 1))
-        p.drawRoundedRect(QRectF(wx + ww * 0.30, wy + wh * 0.58, ww * 0.62, wh * 0.32),
-                          s * 0.02, s * 0.02)
-    else:
-        # dark screen with faint reflection
-        sh = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sh.setColorAt(0, QColor(255, 255, 255, 30))
-        sh.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(sh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(screen.adjusted(s * 0.02, s * 0.02, -s * 0.02, -s * 0.3),
-                          s * 0.03, s * 0.03)
-
-    # glass diagonal reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(screen.x(), screen.y() + screen.height() * 0.6),
-               QPointF(screen.x() + screen.width() * 0.5, screen.y()))
-
-    # webcam dot
-    p.setBrush(QColor(C["border_hi"]))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() / 2 - s * 0.014,
-                         bezel.y() + s * 0.006, s * 0.028, s * 0.028))
-    p.setBrush(QColor(10, 14, 20))
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() / 2 - s * 0.008,
-                         bezel.y() + s * 0.012, s * 0.016, s * 0.016))
-
-    # status LED (bottom-right of bezel)
-    led = QColor(C["ok"]) if connected else QColor(C["mute"])
-    p.setBrush(led)
-    p.drawEllipse(QRectF(bezel.x() + bezel.width() - s * 0.06,
-                         bezel.y() + bezel.height() - s * 0.045,
-                         s * 0.026, s * 0.026))
-    p.end()
-    return pix
-
-
-def _draw_phone(size, connected):
-    pix = QPixmap(size, size)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = float(size)
-
-    # ground shadow
-    p.setBrush(QColor(0, 0, 0, 70))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(s * 0.36, s * 0.945, s * 0.28, s * 0.045))
-
-    # ambient glow when connected
-    if connected:
-        glow = QRadialGradient(s * 0.5, s * 0.45, s * 0.58)
-        glow.setColorAt(0, QColor(34, 197, 94, 80))
-        glow.setColorAt(1, QColor(34, 197, 94, 0))
-        p.setBrush(glow)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(0, 0, s, s))
-
-    # body with metallic frame
-    body = QRectF(s * 0.30, s * 0.02, s * 0.40, s * 0.94)
-    frame = body.adjusted(-s * 0.006, -s * 0.006, s * 0.006, s * 0.006)
-    fr = QLinearGradient(frame.left(), frame.top(), frame.right(), frame.bottom())
-    fr.setColorAt(0, QColor("#b9c2cc"))
-    fr.setColorAt(0.5, QColor("#7c8a99"))
-    fr.setColorAt(1, QColor("#3d4754"))
-    p.setBrush(fr)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(frame, s * 0.10, s * 0.10)
-
-    if connected:
-        bg = QLinearGradient(0, 0, 0, s)
-        bg.setColorAt(0, QColor("#263544"))
-        bg.setColorAt(1, QColor("#141b26"))
-    else:
-        bg = QLinearGradient(0, 0, 0, s)
-        bg.setColorAt(0, QColor(C["card_hover"]))
-        bg.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(bg)
-    p.setPen(QPen(QColor("#0a0f15"), 1))
-    p.drawRoundedRect(body, s * 0.09, s * 0.09)
-    # left edge light reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(body.x() + s * 0.012, body.y() + s * 0.06),
-               QPointF(body.x() + s * 0.012, body.y() + body.height() - s * 0.06))
-
-    # side buttons
-    p.setBrush(QColor("#9aa7b5"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawRoundedRect(QRectF(frame.x() - s * 0.014, s * 0.22, s * 0.018, s * 0.09), 1, 1)
-    p.drawRoundedRect(QRectF(frame.x() - s * 0.014, s * 0.34, s * 0.018, s * 0.06), 1, 1)
-    p.drawRoundedRect(QRectF(frame.x() + frame.width(), s * 0.20, s * 0.018, s * 0.12), 1, 1)
-
-    # screen
-    screen = QRectF(body.x() + s * 0.022, body.y() + s * 0.05,
-                    body.width() - s * 0.044, body.height() - s * 0.15)
-    if connected:
-        sg = QLinearGradient(screen.left(), screen.top(), screen.right(), screen.bottom())
-        sg.setColorAt(0, QColor(C["grad_b"]))
-        sg.setColorAt(1, QColor(C["grad_a"]))
-    else:
-        sg = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sg.setColorAt(0, QColor("#1d2939"))
-        sg.setColorAt(1, QColor(C["inset"]))
-    p.setBrush(sg)
-    p.setPen(QPen(QColor(0, 0, 0, 110), 1))
-    p.drawRoundedRect(screen, s * 0.035, s * 0.035)
-
-    if connected:
-        # wallpaper glow
-        orb = QRadialGradient(screen.x() + screen.width() * 0.5,
-                              screen.y() + screen.height() * 0.4, s * 0.28)
-        orb.setColorAt(0, QColor(255, 255, 255, 70))
-        orb.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(orb)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(screen.x() + screen.width() * 0.25,
-                             screen.y() + screen.height() * 0.15,
-                             screen.width() * 0.5, screen.width() * 0.5))
-        # status bar
-        p.setPen(QPen(QColor(255, 255, 255, 150), 1))
-        p.drawLine(QPointF(screen.x() + s * 0.03, screen.y() + s * 0.035),
-                   QPointF(screen.x() + screen.width() - s * 0.03,
-                           screen.y() + s * 0.035))
-        # clock
-        p.setPen(QPen(QColor(255, 255, 255, 220), 1.4))
-        fm = p.font()
-        fm.setBold(True)
-        p.setFont(fm)
-        p.drawText(QRectF(screen.x(), screen.y() + s * 0.055, screen.width(), s * 0.06),
-                   Qt.AlignmentFlag.AlignHCenter, "09:41")
-        # app icon row
-        p.setBrush(QColor(255, 255, 255, 190))
-        p.setPen(Qt.PenStyle.NoPen)
-        for i in range(4):
-            ix = screen.x() + screen.width() * (0.12 + i * 0.24)
-            iy = screen.y() + screen.height() * 0.70
-            p.drawRoundedRect(QRectF(ix, iy, s * 0.048, s * 0.048), s * 0.012, s * 0.012)
-        # status text
-        p.setPen(QPen(QColor(255, 255, 255, 120), 1))
-        p.drawText(QRectF(screen.x() + s * 0.03, screen.y() + s * 0.14,
-                          screen.width() - s * 0.06, s * 0.03),
-                   Qt.AlignmentFlag.AlignHCenter, "CONNECTED")
-    else:
-        # lock screen: faint sheen + label
-        sh = QLinearGradient(screen.left(), screen.top(), screen.left(), screen.bottom())
-        sh.setColorAt(0, QColor(255, 255, 255, 34))
-        sh.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(sh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(screen.adjusted(s * 0.02, s * 0.02, -s * 0.02, -s * 0.35),
-                          s * 0.03, s * 0.03)
-        p.setPen(QPen(QColor(255, 255, 255, 60), 1))
-        p.drawText(QRectF(screen.x(), screen.y() + s * 0.16, screen.width(), s * 0.03),
-                   Qt.AlignmentFlag.AlignHCenter, "OFFLINE")
-
-    # glass diagonal reflection
-    p.setPen(QPen(QColor(255, 255, 255, 26), 1))
-    p.drawLine(QPointF(screen.x(), screen.y() + screen.height() * 0.5),
-               QPointF(screen.x() + screen.width() * 0.55, screen.y()))
-
-    # camera punch-hole with lens ring
-    ring = QColor(C["ok"]) if connected else QColor(C["border_hi"])
-    p.setPen(QPen(ring, 1))
-    p.setBrush(QColor(8, 12, 18))
-    p.drawEllipse(QRectF(s * 0.463, s * 0.062, s * 0.074, s * 0.074))
-    p.setBrush(QColor(20, 28, 40))
-    p.drawEllipse(QRectF(s * 0.473, s * 0.072, s * 0.054, s * 0.054))
-    p.setBrush(QColor(4, 6, 10))
-    p.drawEllipse(QRectF(s * 0.483, s * 0.082, s * 0.034, s * 0.034))
-    if connected:
-        p.setPen(QPen(QColor(C["ok"]), 0.8))
-        p.drawArc(QRectF(s * 0.478, s * 0.077, s * 0.044, s * 0.044), 30 * 16, 200 * 16)
-
-    # home indicator bar
-    p.setBrush(QColor(255, 255, 255, 110))
-    p.drawRoundedRect(
-        QRectF(s * 0.42, screen.y() + screen.height() + s * 0.02,
-               s * 0.16, s * 0.012), 1, 1
-    )
-
-    # USB-C port on the bottom edge (where the cable plugs in)
-    port_w = s * 0.13
-    port_h = s * 0.052
-    port_x = body.x() + (body.width() - port_w) / 2
-    port_y = body.y() + body.height() - port_h
-    if connected:
-        glow = QRadialGradient(port_x + port_w / 2, port_y + port_h / 2, s * 0.10)
-        glow.setColorAt(0, QColor(34, 197, 94, 150))
-        glow.setColorAt(1, QColor(34, 197, 94, 0))
-        p.setBrush(glow)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QRectF(port_x - s * 0.03, port_y - s * 0.01,
-                             port_w + s * 0.06, s * 0.10))
-        p.setBrush(QColor(10, 14, 20))
-        p.setPen(QPen(QColor("#9aa7b5"), 1))
-        p.drawRoundedRect(QRectF(port_x, port_y, port_w, port_h), 2, 2)
-        p.setBrush(QColor(C["ok"]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(
-            QRectF(port_x + port_w * 0.24, port_y + port_h * 0.3,
-                   port_w * 0.52, port_h * 0.4), 1, 1
-        )
-    else:
-        p.setBrush(QColor(8, 11, 16))
-        p.setPen(QPen(QColor("#7c8a99"), 1))
-        p.drawRoundedRect(QRectF(port_x, port_y, port_w, port_h), 2, 2)
-        p.setBrush(QColor(20, 26, 36))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(
-            QRectF(port_x + port_w * 0.24, port_y + port_h * 0.3,
-                   port_w * 0.52, port_h * 0.4), 1, 1
-        )
-    p.end()
-    return pix
-
-
-def _draw_logo(size, version=None):
-    """Draw the FlashPilot hex logo. When *version* is a beta (e.g. 1.2.1-beta)
-    a 'BETA' pill + the display version is painted onto the pixmap so the
-    launcher / window icon itself advertises the channel. Display version
-    strips trailing .0 -> 1.2.0 shows as 1.2, 1.2.1 stays 1.2.1."""
-    # Resolve version to show on the logo: explicit arg else current app version
-    try:
-        _ver = version if version is not None else APP_VERSION
-    except Exception:
-        _ver = version or ""
-    _is_beta = _is_beta_version(_ver) if _ver else False
-    _disp = _display_version(_ver) if _ver else ""
-    # For stable the logo stays clean; for beta we reserve a bottom strip
-    # so the pill doesn't overlap the hex art.
-    pix = QPixmap(size, size)
-    pix.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pix)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = float(size)
-
-    # Premium outer glow effect
-    outer_glow = QRadialGradient(s * 0.5, s * 0.5, s * 0.5)
-    outer_glow.setColorAt(0, QColor(99, 102, 241, 40))
-    outer_glow.setColorAt(0.5, QColor(139, 92, 246, 20))
-    outer_glow.setColorAt(1, QColor(139, 92, 246, 0))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(outer_glow)
-    p.drawEllipse(QRectF(0, 0, s, s))
-
-    # Outer hexagonal chip die with premium gradient
-    hexpts = []
-    for i in range(6):
-        ang = math.pi / 180.0 * (60 * i - 30)
-        hexpts.append(QPointF(s * 0.5 + s * 0.44 * math.cos(ang),
-                              s * 0.5 + s * 0.44 * math.sin(ang)))
-    hx = QPolygonF(hexpts)
-    g = QLinearGradient(0, 0, s, s)
-    g.setColorAt(0, QColor("#6366f1"))
-    g.setColorAt(0.3, QColor("#8b5cf6"))
-    g.setColorAt(0.7, QColor("#a855f7"))
-    g.setColorAt(1, QColor("#22d3ee"))
-    p.setPen(QPen(QColor("#c4b5fd"), s * 0.025))
-    p.setBrush(g)
-    p.drawPolygon(hx)
-
-    # Inner hexagonal ring with metallic effect
-    inner_ring = []
-    for i in range(6):
-        ang = math.pi / 180.0 * (60 * i - 30)
-        inner_ring.append(QPointF(s * 0.5 + s * 0.36 * math.cos(ang),
-                                 s * 0.5 + s * 0.36 * math.sin(ang)))
-    ring_grad = QLinearGradient(0, 0, s, s)
-    ring_grad.setColorAt(0, QColor("#1e1b4b"))
-    ring_grad.setColorAt(0.5, QColor("#312e81"))
-    ring_grad.setColorAt(1, QColor("#1e1b4b"))
-    p.setPen(QPen(QColor("#818cf8"), s * 0.015))
-    p.setBrush(ring_grad)
-    p.drawPolygon(QPolygonF(inner_ring))
-
-    # Inner core with premium dark gradient
-    inner = []
-    for i in range(6):
-        ang = math.pi / 180.0 * (60 * i - 30)
-        inner.append(QPointF(s * 0.5 + s * 0.26 * math.cos(ang),
-                             s * 0.5 + s * 0.26 * math.sin(ang)))
-    core_grad = QRadialGradient(s * 0.5, s * 0.5, s * 0.3)
-    core_grad.setColorAt(0, QColor("#0f172a"))
-    core_grad.setColorAt(0.5, QColor("#1e293b"))
-    core_grad.setColorAt(1, QColor("#020617"))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(core_grad)
-    p.drawPolygon(QPolygonF(inner))
-
-    # Premium circuit traces with gradient
-    for i in range(6):
-        ang = math.pi / 180.0 * (60 * i - 30)
-        x0 = s * 0.5 + s * 0.26 * math.cos(ang)
-        y0 = s * 0.5 + s * 0.26 * math.sin(ang)
-        x1 = s * 0.5 + s * 0.42 * math.cos(ang)
-        y1 = s * 0.5 + s * 0.42 * math.sin(ang)
-        
-        trace_grad = QLinearGradient(x0, y0, x1, y1)
-        trace_grad.setColorAt(0, QColor("#818cf8"))
-        trace_grad.setColorAt(1, QColor("#22d3ee"))
-        p.setPen(QPen(trace_grad, s * 0.028, Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap))
-        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-
-    # Secondary decorative traces
-    for i in range(12):
-        ang = math.pi / 180.0 * (30 * i - 15)
-        x0 = s * 0.5 + s * 0.32 * math.cos(ang)
-        y0 = s * 0.5 + s * 0.32 * math.sin(ang)
-        x1 = s * 0.5 + s * 0.38 * math.cos(ang)
-        y1 = s * 0.5 + s * 0.38 * math.sin(ang)
-        
-        p.setPen(QPen(QColor(129, 140, 248, 100), s * 0.015, Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap))
-        p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-
-    # Premium centre node with multi-layer glow
-    node_glow = QRadialGradient(s * 0.5, s * 0.5, s * 0.2)
-    node_glow.setColorAt(0, QColor(99, 102, 241, 80))
-    node_glow.setColorAt(0.5, QColor(139, 92, 246, 40))
-    node_glow.setColorAt(1, QColor(139, 92, 246, 0))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(node_glow)
-    p.drawEllipse(QRectF(s * 0.3, s * 0.3, s * 0.4, s * 0.4))
-
-    # Centre node with premium gradient
-    core = QRadialGradient(s * 0.5, s * 0.5, s * 0.16)
-    core.setColorAt(0, QColor("#f8fafc"))
-    core.setColorAt(0.3, QColor("#e2e8f0"))
-    core.setColorAt(0.7, QColor("#cbd5e1"))
-    core.setColorAt(1, QColor("#6366f1"))
-    p.setBrush(core)
-    p.setPen(QPen(QColor("#c4b5fd"), s * 0.02))
-    p.drawEllipse(QRectF(s * 0.34, s * 0.34, s * 0.32, s * 0.32))
-
-    # Inner bright core
-    inner_core = QRadialGradient(s * 0.5, s * 0.5, s * 0.08)
-    inner_core.setColorAt(0, QColor("#ffffff"))
-    inner_core.setColorAt(0.5, QColor("#e0e7ff"))
-    inner_core.setColorAt(1, QColor("#a5b4fc"))
-    p.setBrush(inner_core)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.drawEllipse(QRectF(s * 0.42, s * 0.42, s * 0.16, s * 0.16))
-
-    # ---- BETA badge + version (only when running a beta build) ----
-    if _is_beta and s >= 28:
-        # Use the display version without the redundant trailing .0
-        # e.g. 1.2.0-beta -> 1.2-beta, displayed as "BETA  1.2"
-        ver_text = _disp
-        # For very small icons (title bar ~34px) keep the badge compact
-        if s < 48:
-            # Small corner pill: just "BETA"
-            pill_w, pill_h = s * 0.52, s * 0.22
-            pill_x, pill_y = s - pill_w - s * 0.04, s * 0.04
-            grad = QLinearGradient(pill_x, pill_y, pill_x + pill_w, pill_y)
-            grad.setColorAt(0, QColor("#f59e0b"))
-            grad.setColorAt(1, QColor("#ea580c"))
-            p.setBrush(grad)
-            p.setPen(QPen(QColor("#fef3c7"), s * 0.008))
-            p.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
-            p.setPen(QPen(QColor("#ffffff")))
-            f = QFont("Inter", max(4, int(s * 0.09)), QFont.Weight.ExtraBold)
-            p.setFont(f)
-            p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
-                       Qt.AlignmentFlag.AlignCenter, "BETA")
-        else:
-            # Larger logo: pill at bottom with "BETA  •  v1.2" (or v1.2.1)
-            vlabel = ver_text if ver_text else _ver
-            # Ensure v prefix for version
-            if vlabel and not vlabel.lower().startswith("v"):
-                vlabel = f"v{vlabel}"
-            label = f"BETA  {vlabel}" if vlabel else "BETA"
-            # Measure to size pill
-            f = QFont("Inter", max(5, int(s * 0.07)), QFont.Weight.ExtraBold)
-            fm = QFontMetricsF(f)
-            tw = fm.horizontalAdvance(label)
-            pill_w = tw + s * 0.18
-            pill_h = s * 0.15
-            pill_x = (s - pill_w) / 2
-            pill_y = s - pill_h - s * 0.06
-            # Pill background
-            grad = QLinearGradient(pill_x, pill_y, pill_x + pill_w, pill_y + pill_h)
-            grad.setColorAt(0, QColor("#f59e0b"))
-            grad.setColorAt(0.5, QColor("#ea580c"))
-            grad.setColorAt(1, QColor("#dc2626"))
-            p.setBrush(grad)
-            p.setPen(QPen(QColor("#fef3c7"), s * 0.01))
-            # shadow
-            p.setOpacity(0.85)
-            p.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), pill_h / 2, pill_h / 2)
-            p.setOpacity(1.0)
-            p.setPen(QPen(QColor("#ffffff")))
-            p.setFont(f)
-            p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
-                       Qt.AlignmentFlag.AlignCenter, label)
-
-    p.end()
-    return pix
-
-
 # ---------------------------------------------------------------------------
 # Device state helpers
 # ---------------------------------------------------------------------------
@@ -1309,11 +822,104 @@ _SAMSUNG_PIDS = {
 }
 
 
-def _has_adb_iface(ifaces):
-    return any(
-        i["class"] == 255 and i["subclass"] == 66 and i["protocol"] == 1
-        for i in ifaces
-    )
+def _has_adb_iface(d):
+    """True if a device exposes the ADB interface signature (class 255/sub 66/proto 1).
+
+    Accepts either a device dict (reads d['interfaces']) or a bare list of
+    interface dicts (legacy callers pass device['interfaces']). This keeps both
+    the robust `_find_target_device` path and the legacy `_detect_mode` loop
+    working regardless of which shape is passed."""
+    def _match_ifaces(ifaces):
+        for i in (ifaces or []):
+            if isinstance(i, dict) and i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 1:
+                return True
+        return False
+    if isinstance(d, dict):
+        return _match_ifaces(d.get("interfaces"))
+    if isinstance(d, (list, tuple)):
+        return _match_ifaces(d)
+    return False
+
+
+def _adb_overlay(adb_devs, dev):
+    """'\\nADB · connected (serial)' suffix when `dev` exposes the ADB
+    interface and `adb_devs` lists it authorized, else None.
+
+    The first-match display order in `_on_device_state` starves the
+    adb_devs branch for every phone that is on the USB bus (samsung /
+    other_android / spd all match earlier), so an authorized ADB transport
+    never surfaced in the connection label — the exact 'connected and auth
+    but GUI does not show connected' report."""
+    if dev is None or not _has_adb_iface(dev):
+        return None
+    auth = [a for a in (adb_devs or []) if a.get("state") == "device"]
+    if not auth:
+        return None
+    return f"\nADB · connected ({auth[0].get('serial', 'unknown')})"
+
+
+def _has_mtp_iface(d):
+    """True if a device exposes MTP/PTP image interface (class 6)."""
+    return any(i.get("class") == 6 for i in d.get("interfaces", []))
+
+
+def _find_target_device():
+    """Find the actual phone/tablet among USB devices, not a card reader/hub.
+
+    Priority: ADB iface (255/66/1) -> MTP iface (class 6) -> Samsung VID 0x04e8
+    -> any device whose product/name looks like a phone (contains SM-/TECNO etc.).
+    Explicitly SKIPS HID-only devices (keyboard/mouse), hubs (class 9) and
+    smartcard readers (class 11) so the Broadcom BCM5880 serial never leaks in.
+    """
+    try:
+        devs = bridge.detect_all()
+    except Exception:
+        return None
+    # 1) ADB interface (the authoritative phone signature)
+    for d in devs:
+        if _has_adb_iface(d):
+            return d
+    # 2) MTP / PTP image interface
+    for d in devs:
+        if _has_mtp_iface(d):
+            return d
+    # 3) Samsung vendor
+    for d in devs:
+        if d.get("vid") == 0x04E8:
+            return d
+    # 4) Any device whose product/manufacturer looks like a phone (and not a HID/reader)
+    for d in devs:
+        prod = (d.get("product") or "").lower()
+        mfr = (d.get("manufacturer") or "").lower()
+        classes = {i.get("class") for i in d.get("interfaces", [])}
+        if classes & {3, 9, 11}:  # skip HID, hub, smartcard
+            continue
+        if prod or mfr:
+            if any(k in prod or k in mfr for k in ("phone", "tecno", "infinix", "itel", "sm-", "android", "unisoc", "samsung", "spark", "redmi", "xiaomi", "pixel", "nexus")):
+                return d
+    # 5) Last resort: first device with a non-empty product AND bulk endpoints (not pure HID)
+    for d in devs:
+        prod = (d.get("product") or "").strip()
+        has_bulk = any(e.get("transfer_type") == "bulk" for i in d.get("interfaces", []) for e in i.get("endpoints", []))
+        if prod and has_bulk:
+            return d
+    return None
+
+
+def _find_mtp_device():
+    """Find first USB device exposing MTP (class 6) regardless of VID."""
+    try:
+        for d in bridge.detect_all():
+            if _has_mtp_iface(d):
+                return d
+    except Exception:
+        pass
+    return None
+
+
+def _find_any_usb_device():
+    """Preferred phone device (ADB/MTP first), else generic non-HID/reader device."""
+    return _find_target_device()
 
 
 def _is_fastboot(d):
@@ -1321,18 +927,94 @@ def _is_fastboot(d):
     PID 0x4ee0 (also 0xd00d on older devices), or any device whose interface
     reports class 255 / subclass 66 / protocol 3 (fastboot's ADB-offshoot
     protocol number). Samsung MediaTek A14s boot fastboot this way."""
+    if not isinstance(d, dict):
+        return False
     if d.get("vid") == 0x18D1 and d.get("pid") in (0x4EE0, 0xD00D):
         return True
-    return any(
-        i["class"] == 255 and i["subclass"] == 66 and i["protocol"] == 3
-        for i in d.get("interfaces", [])
-    )
+    for i in d.get("interfaces", []) or []:
+        if not isinstance(i, dict):
+            continue
+        if i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3:
+            return True
+    return False
 
 
 def _is_edl(d):
     """Qualcomm Emergency Download: VID 0x05c6, PIDs 0x9008 (classic EDL) and
     0x900e (UFS/Emmc 9x45+ Sahara-capable)."""
+    if not isinstance(d, dict):
+        return False
     return d.get("vid") == 0x05C6 and d.get("pid") in (0x9008, 0x900E)
+
+
+_APPLE_VID = 0x05AC
+_ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
+
+
+def _is_apple(d):
+    """Apple devices enumerate under VID 0x05ac (iPhone/iPad/iPod)."""
+    return isinstance(d, dict) and d.get("vid") == _APPLE_VID
+
+
+def _apple_mode(d):
+    """Return a human label for an Apple USB device state."""
+    pid = d.get("pid", 0)
+    prod = (d.get("product") or "").lower()
+    if "recovery" in prod or "restore" in prod:
+        return "APPLE RECOVERY MODE (iTunes restore)"
+    if pid in (0x1222, 0x1227):
+        return "APPLE DFU MODE (Device Firmware Update)"
+    if _has_mtp_iface(d):
+        return "APPLE DEVICE (PTP/Image Transfer)"
+    return "APPLE DEVICE (normal / other)"
+
+
+def _is_generic_android(d):
+    """Best-effort: a non-vendor Android device (not Samsung/MTK/QCOM/SPD/Apple).
+
+    True when the device exposes the Android ADB gadget (255/66/1) or an MTP/
+    PTP image interface (class 6) under a non-vendor VID, or its product/
+    manufacturer hints at an Android phone."""
+    if not isinstance(d, dict):
+        return False
+    vid = d.get("vid", 0)
+    if vid in (0x04E8, 0x05C6, 0x0E8D, 0x1782, _APPLE_VID):
+        return False
+    if _has_adb_iface(d):
+        return True
+    if any(i.get("class") == 255 and i.get("subclass") == 66 for i in d.get("interfaces", [])):
+        return True
+    if _has_mtp_iface(d):
+        return True
+    if vid in _ANDROID_GENERIC_VIDS:
+        return True
+    prod = (d.get("product") or "").lower()
+    mfr = (d.get("manufacturer") or "").lower()
+    for kw in ("android", "phone", "tecno", "infinix", "itel", "xiaomi", "redmi",
+               "oppo", "vivo", "oneplus", "realme", "pixel", "nexus", "motorola",
+               "lenovo", "huawei", "honor", "asus", "transsion", "spark", "smartphone"):
+        if kw in prod or kw in mfr:
+            return True
+    return False
+
+
+def _generic_android_mode(d):
+    """Human label for a generic (non-vendor) Android device."""
+    if not isinstance(d, dict):
+        return "ANDROID DEVICE"
+    pid = d.get("pid", 0)
+    vid = d.get("vid", 0)
+    if _has_adb_iface(d):
+        return "ANDROID DEVICE - ADB (debug composite)"
+    if any(i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3
+           for i in d.get("interfaces", [])):
+        return "ANDROID DEVICE - FASTBOOT (bootloader)"
+    if _has_mtp_iface(d):
+        return "ANDROID DEVICE - MTP (media transfer)"
+    prod = (d.get("product") or "").strip()
+    if prod:
+        return f"ANDROID DEVICE - {prod.upper()}"
+    return f"ANDROID DEVICE (VID 0x{vid:04X} PID 0x{pid:04X})"
 
 
 # Spreadtrum / UNISOC feature-phone download & engineering modes (VID 0x1782).
@@ -1431,7 +1113,7 @@ def _fmt_usb_full(d):
 
 
 def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=None,
-                 qcom_devs=None, spd_devs=None):
+                 qcom_devs=None, spd_devs=None, apple_devs=None, other_android=None):
     # Fastboot is its own transport - a Google-VID composite. Check it before
     # the Samsung-PID table so it isn't swallowed as 'OTHER MODE'.
     if fastboot:
@@ -1440,6 +1122,14 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # Qualcomm EDL - a 05c6 VID composite, separate from the Samsung table.
     if edl_devs:
         return "EDL MODE (Qualcomm Emergency Download)"
+
+    # Apple devices (iPhone/iPad) - VID 0x05ac. Recognize DFU/recovery/normal.
+    if apple_devs:
+        return _apple_mode(apple_devs[0])
+
+    # Generic non-vendor Android (any brand that isn't Samsung/MTK/QCOM/SPD/Apple).
+    if other_android:
+        return _generic_android_mode(other_android[0])
 
     # Check for Samsung Download Mode (Odin mode / HID / download PIDs) FIRST
     try:
@@ -1462,6 +1152,10 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
 
     # A Qualcomm device that is NOT in EDL (e.g. a modem in normal mode).
     if qcom_devs:
+        # HS-USB Diagnostics (05c6:9006) is a distinct mode - name it, do
+        # not fold it into the generic "QUALCOMM DEVICE" label.
+        if any(d.get("pid") == 0x9006 for d in qcom_devs):
+            return "QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)"
         return "QUALCOMM DEVICE (modem / normal mode)"
 
     # The adb device STATE is the only reliable way to distinguish stock
@@ -1476,22 +1170,35 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         return "ADB PRESENT - UNAUTHORIZED (allow USB debugging on phone)"
     if "offline" in adb_states:
         return "ADB PRESENT - OFFLINE (unplug + replug, accept dialog)"
+    # Generic ADB transport (non-Samsung VID or Samsung without USB descriptor)
+    # was previously mis-reported as OTHER MODE because the interface scan only
+    # looked at `samsung` devices. Detect authorized ADB directly from adbd state.
+    if "device" in adb_states:
+        return "ADB ENABLED (debug composite) - normal boot"
 
+    # Interface-based protocol naming (ALL device lists, not just Samsung):
+    # a phone that fell through the mode branches above (e.g. a Tecno in
+    # PTP/MTP on the MTK VID, no ADB row) must still get its actual USB
+    # protocol named - never a bare "OTHER".
     adb = image = hid = diag = storage = ptp = rndis = False
-    for d in samsung:
-        if _has_adb_iface(d["interfaces"]):
+    all_devs = (samsung + (mtk_devs or []) + (fastboot or []) + (edl_devs or [])
+                + (qcom_devs or []) + (spd_devs or []) + (apple_devs or [])
+                + (other_android or []))
+    for d in all_devs:
+        ifaces = d.get("interfaces") or []
+        if _has_adb_iface(ifaces):
             adb = True
-        image = image or any(i["class"] == 6 for i in d["interfaces"])
-        hid = hid or any(i["class"] == 3 for i in d["interfaces"])
+        image = image or any(i["class"] == 6 for i in ifaces)
+        hid = hid or any(i["class"] == 3 for i in ifaces)
         diag = diag or any(
             i["class"] == 2 and i["subclass"] == 2 and i["protocol"] == 1
-            for i in d["interfaces"]
+            for i in ifaces
         )
-        storage = storage or any(i["class"] == 8 for i in d["interfaces"])
-        ptp = ptp or any(i["class"] == 6 and i["subclass"] == 1 for i in d["interfaces"])
+        storage = storage or any(i["class"] == 8 for i in ifaces)
+        ptp = ptp or any(i["class"] == 6 and i["subclass"] == 1 for i in ifaces)
         rndis = rndis or any(
             i["class"] == 0xEF and i["subclass"] == 4 and i["protocol"] == 1
-            for i in d["interfaces"]
+            for i in ifaces
         )
 
     # Check for EDL mode (Qualcomm emergency download)
@@ -1512,14 +1219,16 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         prod = (d.get("product") or "").lower()
         is_samsung_mtk = "samsung" in mfr or "samsung" in prod
         prefix = "SAMSUNG MTK" if is_samsung_mtk else "MEDIATEK"
-        if pid == 0x2000:
+        # Only flashing-mode PIDs claim the low-level label. Any other PID
+        # (e.g. a normal-boot Tecno in PTP/MTP: 0e8d:2008, product string
+        # "Android ADB Interface") must fall through to interface-based
+        # protocol naming below - the badge names the actual USB protocol.
+        if pid == 0x0003:
             return f"{prefix} BROM (held state)"
-        elif pid == 0x0003:
+        elif pid == 0x2000:
             return f"{prefix} PRELOADER (first bootloader stage)"
-        elif pid == 0x0004:
+        elif pid in (0x0004, 0x1004):
             return f"{prefix} DA (flashing active)"
-        else:
-            return f"{prefix} MODE (VID 0x0E8D PID 0x{pid:04X})"
     
     if adb and diag and image:
         return "MTP + DIAG + ADB (combined config)"
@@ -1547,6 +1256,11 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         known = _SAMSUNG_PIDS.get(d["pid"])
         if known:
             return known
+    # Last resort for an MTK device with no recognizable protocol
+    # interface (vendor-specific modem port): name the vendor + PID
+    # instead of a bare OTHER.
+    for d in (mtk_devs or []):
+        return f"MEDIATEK MODE (VID 0x0E8D PID 0x{d.get('pid', 0) & 0xFFFF:04X})"
     return "OTHER MODE"
 
 
@@ -1560,18 +1274,29 @@ def _mode_chip(mode):
         return "ADB", C["chip_blue"], C["chip_text"], C["accent"]
     if "BROM" in m:
         return "BROM", C["err_dim"], C["err"], C["err"]
-    if "MTK" in m:
+    if "MTK" in m or "MEDIATEK" in m:
+        # "MEDIATEK" does not contain the substring "MTK" — a generic
+        # MTK-mode label ("MEDIATEK MODE (VID 0x0E8D PID 0x2008)") used to
+        # fall all the way through to OTHER.
         return "MTK", C["warn_dim"], C["warn"], C["warn"]
+    if "EDL" in m:
+        # Most specific first: "EDL MODE (Qualcomm Emergency Download)"
+        # contains the substring "Download" and used to fall through to
+        # the DOWNLOAD chip (a Samsung download-mode label).
+        return "EDL", C["err_dim"], C["err"], C["err"]
     if "DIAG" in m:
         return "DIAG/AT", C["warn_dim"], C["warn"], C["warn"]
     if "DOWNLOAD" in m:
         return "DOWNLOAD", C["err_dim"], C["err"], C["err"]
-    if "EDL" in m:
-        return "EDL", C["err_dim"], C["err"], C["err"]
     if "FASTBOOT" in m:
         return "FASTBOOT", C["warn_dim"], C["warn"], C["warn"]
     if "BOOTLOADER" in m:
         return "BOOTLOADER", C["warn_dim"], C["warn"], C["warn"]
+    if "QUALCOMM" in m:
+        # Whole-bus Qualcomm-normal mode: "QUALCOMM DEVICE (modem / normal
+        # mode)" — NOT MTP (the substring "normal" used to fall through to
+        # the MTP chip and mislabeled every Qualcomm-normal setup).
+        return "QUALCOMM", C["warn_dim"], C["warn"], C["warn"]
     if "TETHERING" in m or "RNDIS" in m:
         return "RNDIS", C["ok_dim"], C["ok"], C["ok"]
     if "STORAGE" in m:
@@ -1660,55 +1385,87 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y()
 
 
-class SamsungSubTabs(QFrame):
-    """Horizontal sub-tab bar for the Samsung operations panel - a compact
-    terminal-style segmented control (FLASH / UNLOCK & FRP / INFO & TOOLS) so
-    the operations are split into focused views instead of one congested column."""
+class FlowHost(QFrame):
+    """Container that correctly delegates heightForWidth to its FlowLayout — so wrapping preview/theme grids stay visible and clickable on small screens."""
+    def hasHeightForWidth(self):
+        lay = self.layout()
+        return lay.hasHeightForWidth() if lay else super().hasHeightForWidth()
 
+    def heightForWidth(self, w):
+        lay = self.layout()
+        if lay and lay.hasHeightForWidth():
+            m = self.contentsMargins()
+            return lay.heightForWidth(w - m.left() - m.right()) + m.top() + m.bottom()
+        return super().heightForWidth(w)
+
+    def sizeHint(self):
+        # For QScrollArea with widgetResizable, sizeHint based on current width so wrapping is accounted
+        lay = self.layout()
+        if lay and lay.hasHeightForWidth() and self.width() > 0:
+            return QSize(self.width(), self.heightForWidth(self.width()))
+        if lay:
+            return lay.sizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self):
+        lay = self.layout()
+        if lay:
+            # Minimum is one row height
+            return lay.minimumSize()
+        return super().minimumSizeHint()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Trigger height recalculation when width changes (wrap)
+        self.updateGeometry()
+
+
+class SamsungSubTabs(QFrame):
+    """Pill sub-tab strip: hairline chips, gradient fill when active."""
     tab_selected = pyqtSignal(str)
 
-    def __init__(self, tabs, parent=None):
-        super().__init__(parent)
-        self.setObjectName("subnav")
-        self.setStyleSheet(
-            f"QFrame#subnav {{ background:{C['inset']};"
-            f" border:1px solid {C['border']}; border-radius:7px; }}"
-        )
+    def __init__(self, tabs):
+        super().__init__()
+        self.setObjectName("subtabs")
+        self.setStyleSheet("QFrame#subtabs { background: transparent; }")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(3, 3, 3, 3)
-        lay.setSpacing(3)
-
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
-        self._keys = []
+        self._buttons = {}
         for i, (key, label) in enumerate(tabs):
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(30)
-            btn.setStyleSheet(
-                f"QPushButton {{ border:none; border-radius:4px; padding:0 14px;"
-                f" font-family:'JetBrains Mono','Consolas',monospace;"
-                f" font-size:10px; font-weight:800; letter-spacing:1.5px;"
-                f" color:{C['mute']}; background:transparent; }}"
-                f" QPushButton:hover {{ color:{C['text']};"
-                f" background:{C['card_hover']}; }}"
-                f" QPushButton:checked {{ color:#04121a;"
-                f" background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); }}"
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            f = b.font(); f.setPixelSize(10); f.setBold(True); b.setFont(f)
+            b.setFixedHeight(26)
+            b.setStyleSheet(
+                "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9);"
+                " border:1px solid rgba(255,255,255,0.08); border-radius:13px;"
+                " padding:0 14px; letter-spacing:0.6px; }"
+                "QPushButton:hover { color:#e2e8f0;"
+                " border-color:rgba(255,255,255,0.22); background:rgba(255,255,255,20); }"
+                f"QPushButton:checked {{ color:#04121a;"
+                f" background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+                f" stop:0 {C['grad_b']}, stop:1 {C['grad_a']});"
+                f" border: 1px solid {C['sel_border']}; }}"
+                f"QPushButton:focus {{ border: 1px solid {C['focus_ring']}; outline: none; }}"
+                f"QPushButton:checked:focus {{ border: 1px solid {C['sel_border']}; outline: none; }}"
             )
-            btn.clicked.connect(
-                lambda _=False, k=key: self.tab_selected.emit(k)
-            )
-            self._group.addButton(btn, i)
-            self._keys.append(key)
-            lay.addWidget(btn, 1)
-        if self._keys:
-            self._group.button(0).setChecked(True)
+            if i == 0:
+                b.setChecked(True)
+            b.clicked.connect(lambda _=False, k=key: self.tab_selected.emit(k))
+            self._group.addButton(b)
+            lay.addWidget(b)
+            self._buttons[key] = b
+        lay.addStretch(1)
 
-    def set_tab(self, key):
-        if key in self._keys:
-            self._group.button(self._keys.index(key)).setChecked(True)
+    def set_active(self, key):
+        if hasattr(self, "_buttons"):
+            for k, b in self._buttons.items():
+                b.setChecked(k == key)
 
 
 class CollapsibleSection(QFrame):
@@ -1716,12 +1473,12 @@ class CollapsibleSection(QFrame):
     terminal title that toggles the body. Keeps dense pages (like the FLASH
     tab) to one screen - advanced panels collapse by default."""
 
-    def __init__(self, title, body, accent=C["accent"], collapsed=False,
+    def __init__(self, title, body, accent=None, collapsed=False,
                  parent=None):
         super().__init__(parent)
         self.setObjectName("colsec")
         self._title = title
-        self._accent = accent
+        self._accent = accent or C["accent"]
         self._collapsed = collapsed
         self.setStyleSheet(
             f"QFrame#colsec {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
@@ -1807,28 +1564,36 @@ class MetricCard(QFrame):
         super().__init__()
         self.setObjectName("metric")
         self._accent_hex = accent
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 12)
-        lay.setSpacing(5)
-        top = QHBoxLayout()
-        top.setSpacing(8)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 5, 8, 6)
+        lay.setSpacing(7)
         bar = QLabel()
-        bar.setFixedSize(3, 24)
+        bar.setFixedSize(3, 18)
         bar.setStyleSheet(f"background:{accent}; border-radius:1.5px;")
-        top.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(0)
         cap = QLabel(caption.upper())
         cap.setStyleSheet(
-            f"color:{C['mute']}; font-size:10px; font-weight:700; letter-spacing:1px;"
+            f"color:{C['mute']}; font-size:8px; font-weight:700; letter-spacing:1px;"
         )
-        top.addWidget(cap)
-        lay.addLayout(top)
+        col.addWidget(cap)
         self.value = QLabel(value)
         self.value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.value.setWordWrap(True)
+        self.value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        try:
+            from PyQt6.QtWidgets import QSizePolicy
+            self.value.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
+        except Exception:
+            pass
+        self.value.setToolTip(value)
         self.value.setStyleSheet(
-            f"color:{C['text']}; font-size:14px; font-weight:600; background:transparent;"
+            f"color:{C['text']}; font-size:11px; font-weight:600; background:transparent;"
         )
-        lay.addWidget(self.value)
+        col.addWidget(self.value)
+        lay.addLayout(col, 1)
         self.setStyleSheet(
             f"QFrame#metric {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));"
@@ -1842,6 +1607,10 @@ class MetricCard(QFrame):
     def set(self, text):
         if self.value.text() != text:
             self.value.setText(text)
+            try:
+                self.value.setToolTip(text)
+            except Exception:
+                pass
 
 
 class _SettingsCatButton(QPushButton):
@@ -1965,55 +1734,6 @@ class SectionTitle(QLabel):
         p.end()
 
 
-class StatusOrb(QWidget):
-    """Pulsing connection indicator."""
-
-    def __init__(self):
-        super().__init__()
-        self._color = QColor(C["mute"])
-        self._phase = 0.0
-        self._connected = False
-        self._anim = True
-        self.setFixedSize(22, 22)
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(35)
-
-    def set_animations(self, on):
-        self._anim = bool(on)
-        if not on:
-            self._phase = 0.0
-            self.update()
-
-    def set_connected(self, c):
-        if c != self._connected:
-            self._connected = c
-            self._phase = 0.0
-            if not c:
-                self.update()
-
-    def _tick(self):
-        if self._connected and self._anim:
-            self._phase = (self._phase + 0.05) % 1.0
-            self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx = cy = 11.0
-        if self._connected:
-            r = 4.5 + 5.0 * (1.0 - self._phase)
-            halo = QColor(C["ok"])
-            halo.setAlpha(int(130 * (1.0 - self._phase)))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(halo)
-            p.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(C["ok"]) if self._connected else QColor(C["mute"]))
-        p.drawEllipse(QRectF(cx - 5, cy - 5, 10, 10))
-        p.end()
-
-
 def _metal_gradient(x0, y0, x1, y1):
     g = QLinearGradient(x0, y0, x1, y1)
     g.setColorAt(0.00, QColor("#e8edf2"))
@@ -2022,455 +1742,6 @@ def _metal_gradient(x0, y0, x1, y1):
     g.setColorAt(0.55, QColor("#9aa5b1"))
     g.setColorAt(1.00, QColor("#6b7683"))
     return g
-
-
-class ConnectionScene(QWidget):
-    """Computer -- cable -- phone, with the USB cable plugging into the
-    BOTTOM of the phone (like a real phone port) instead of its side.
-
-    Connected: the plug is seated in the phone's port, cable taut, data pulse
-    running. Disconnected: the plug pulls out and dangles below the empty port
-    on a slack cable.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(176)
-        self._connected = False
-        self._plug_t = 0.0
-        self._vendor = None
-        self._vendor_color = None
-        self._anim = True
-        self._phase = 0.0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
-
-    def set_animations(self, on):
-        self._anim = bool(on)
-        if not on:
-            self._phase = 0.0
-            self._plug_t = 1.0 if self._connected else 0.0
-            self.update()
-
-    def set_connected(self, c):
-        if self._connected == c:
-            return
-        self._connected = c
-        self.update()
-
-    def set_vendor(self, label, color=None):
-        self._vendor = label
-        self._vendor_color = color or C["ok"]
-        self.update()
-
-    def _tick(self):
-        self._phase = (self._phase + 0.02) % 1.0
-        # ease the plug between dangling and seated so insertion/removal is smooth
-        target = 1.0 if self._connected else 0.0
-        if self._anim:
-            step = 0.08
-        else:
-            step = 1.0
-        if abs(self._plug_t - target) > 0.001:
-            if self._plug_t < target:
-                self._plug_t = min(target, self._plug_t + step)
-            else:
-                self._plug_t = max(target, self._plug_t - step)
-        self.update()
-
-    def _cable_path(self, c0, plug_pt, rail):
-        path = QPainterPath()
-        path.moveTo(c0)
-        t = self._plug_t
-        if t > 0.5:
-            # mostly seated: tight, straight cable
-            path.cubicTo(c0.x() + 16, c0.y(), c0.x() + 18, rail,
-                         c0.x() + 30, rail)
-            path.lineTo(plug_pt.x(), rail)
-            path.cubicTo(plug_pt.x(), rail, plug_pt.x(),
-                         plug_pt.y() - 5, plug_pt.x(), plug_pt.y())
-        else:
-            # dangling: deeper sag, then droops down to the loose plug
-            sway = math.sin(self._phase * math.tau) * (2.2 if self._anim else 0.0)
-            path.cubicTo(c0.x() + 22, c0.y() + 2, c0.x() + 26, rail,
-                         c0.x() + 40 + sway, rail)
-            path.lineTo(plug_pt.x(), rail)
-            path.cubicTo(plug_pt.x(), rail + 2, plug_pt.x() + 3,
-                         plug_pt.y() - 14, plug_pt.x(), plug_pt.y())
-        return path
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w = float(self.width())
-        h = float(self.height())
-
-        # premium glass panel backdrop
-        p.setPen(QPen(QColor(255,255,255,18), 1))
-        p.setBrush(QColor(13,22,34,160))
-        p.drawRoundedRect(QRectF(1,1,w-2,h-2), 14, 14)
-        # inner top highlight
-        p.setPen(QPen(QColor(255,255,255,28), 1))
-        p.drawLine(QPointF(14,1), QPointF(w-14,1))
-
-        # circuit-grid backdrop: faint traces + nodes + a vertical scanline
-        p.setClipRect(QRectF(4,4,w-8,h-8))
-        grid = QColor(C["accent"])
-        grid.setAlpha(18)
-        p.setPen(QPen(grid, 1))
-        step = 26.0
-        gx = 0.0
-        while gx < w:
-            p.drawLine(QPointF(gx, 0), QPointF(gx, h))
-            gx += step
-        gy = 0.0
-        while gy < h:
-            p.drawLine(QPointF(0, gy), QPointF(w, gy))
-            gy += step
-        # junction nodes where traces cross
-        node = QColor(C["accent_hi"])
-        node.setAlpha(50)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(node)
-        for gxx in range(1, int(w / step)):
-            for gyy in range(1, int(h / step)):
-                if (gxx + gyy) % 3 == 0:
-                    p.drawEllipse(QRectF(gxx * step - 1.2, gyy * step - 1.2, 2.4, 2.4))
-        # moving vertical scanline sweep
-        scan_x = int((self._phase * (w + 80)) - 40)
-        sc = QLinearGradient(scan_x - 20, 0, scan_x + 20, 0)
-        sc.setColorAt(0, QColor(125, 211, 252, 0))
-        sc.setColorAt(0.5, QColor(125, 211, 252, 22))
-        sc.setColorAt(1, QColor(125, 211, 252, 0))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(sc)
-        p.drawRect(QRect(scan_x - 20, 0, 40, int(h)))
-        p.setClipping(False)
-
-        icon = 80.0
-        pc_x = 10.0
-        phone_x = w - 10.0 - icon
-        top_y = (h - icon) * 0.24
-        pc_y = top_y
-        phone_y = top_y
-
-        # devices
-        p.drawPixmap(int(pc_x), int(pc_y),
-                     _draw_computer(int(icon), self._connected))
-        p.drawPixmap(int(phone_x), int(phone_y),
-                     _draw_phone(int(icon), self._connected))
-
-        # connected: soft radial glow behind the phone + vendor chip
-        if self._connected:
-            glow = QRadialGradient(phone_x + icon / 2, phone_y + icon / 2,
-                                   icon * 0.9)
-            vc = QColor(self._vendor_color or C["ok"])
-            glow.setColorAt(0.0, QColor(vc.red(), vc.green(), vc.blue(), 70))
-            glow.setColorAt(0.6, QColor(vc.red(), vc.green(), vc.blue(), 20))
-            glow.setColorAt(1.0, QColor(vc.red(), vc.green(), vc.blue(), 0))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(glow)
-            p.drawEllipse(QRectF(phone_x - 4, phone_y - 4,
-                                 icon + 8, icon + 8))
-
-            # premium PIT ring when in DOWNLOAD
-            if self._vendor and "DOWNLOAD" in self._vendor.upper():
-                p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), 90), 1.6, Qt.PenStyle.DotLine))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(QRectF(phone_x - 6, phone_y - 6, icon + 12, icon + 12))
-                # rotating segment
-                p.setPen(QPen(QColor(vc.red(), vc.green(), vc.blue(), 180), 2.2))
-                ang = int(self._phase * 360)
-                p.drawArc(QRectF(phone_x - 6, phone_y - 6, icon + 12, icon + 12), ang*16, 70*16)
-
-            if self._vendor:
-                fm = p.fontMetrics()
-                bw = fm.horizontalAdvance(self._vendor) + 20
-                bh = 22
-                bx = phone_x + icon / 2 - bw / 2
-                by = max(0.0, phone_y - 28)
-                p.setPen(QPen(QColor(255,255,255,18), 1))
-                p.setBrush(QColor(14, 20, 30, 185))
-                p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
-                p.setPen(QPen(QColor(255,255,255,32), 0.8))
-                p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
-                p.setPen(QPen(vc))
-                p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.ExtraBold))
-                p.drawText(QRectF(bx, by, bw, bh),
-                           Qt.AlignmentFlag.AlignCenter, self._vendor)
-
-        # --- plug geometry (interpolated for smooth insert/remove) ---
-        t = self._plug_t
-        plug_w = 20.0
-        plug_h = 13.0
-        px = phone_x + icon * 0.5
-        port_bottom = phone_y + icon * 0.95
-
-        # plug travels from dangling (t=0) up into the port (t=1)
-        sway = math.sin(self._phase * math.tau) * (2.2 if self._anim else 0.0)
-        plug_y = port_bottom - plug_h + 1 + (1.0 - t) * 18.0
-        plug_x = px - plug_w / 2 + sway * (1.0 - t)
-        plug = QRectF(plug_x, plug_y, plug_w, plug_h)
-        plug_pt = QPointF(plug.center().x(), plug.top())
-        c0 = QPointF(pc_x + icon * 0.92, pc_y + icon * 0.60)
-
-        # --- cable ---
-        rail = h - 24 if t > 0.5 else h - 9
-        path = self._cable_path(c0, plug_pt, rail)
-
-        # soft drop shadow under the whole cable
-        p.setPen(QPen(QColor(0, 0, 0, 70), 8, Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.drawPath(path.translated(0, 1.8))
-        # braided body
-        p.setPen(QPen(QColor("#2b3441"), 7.0, Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.drawPath(path)
-        p.setPen(QPen(QColor("#44515f"), 3.6, Qt.PenStyle.SolidLine,
-                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.drawPath(path)
-        p.setPen(QPen(QColor("#5c6c7c"), 1.1, Qt.PenStyle.DashLine,
-                      Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.drawPath(path)
-        if self._connected:
-            p.setPen(QPen(QColor(C["ok"]), 1.8, Qt.PenStyle.SolidLine,
-                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            p.drawPath(path)
-            # data pulse dots along cable when connected
-            if self._anim:
-                for k in (0.25, 0.55, 0.85):
-                    tpos = (self._phase + k) % 1.0
-                    pt = path.pointAtPercent(tpos)
-                    glow = QRadialGradient(pt.x(), pt.y(), 6)
-                    vc2 = QColor(C["accent_hi"])
-                    glow.setColorAt(0, QColor(vc2.red(), vc2.green(), vc2.blue(), 220))
-                    glow.setColorAt(1, QColor(vc2.red(), vc2.green(), vc2.blue(), 0))
-                    p.setBrush(glow)
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.drawEllipse(QRectF(pt.x()-5, pt.y()-5, 10, 10))
-                    p.setBrush(QColor(255,255,255,230))
-                    p.drawEllipse(QRectF(pt.x()-2, pt.y()-2, 4, 4))
-
-        # --- computer socket ---
-        sock = QRectF(c0.x() - 3, c0.y() - 6, 9, 12)
-        p.setPen(QPen(QColor("#7c8a99"), 1))
-        p.setBrush(QColor(12, 16, 22))
-        p.drawRoundedRect(sock, 1.5, 1.5)
-        if self._connected:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(C["ok"]))
-            p.drawRoundedRect(QRectF(sock.x() + 2.5, sock.y() + 2.5, 4, 7), 1.5, 1.5)
-
-        # --- plug (premium USB-C connector) ---
-        # soft shadow under plug
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 100))
-        p.drawRoundedRect(plug.translated(0, 2.5), 4, 4)
-
-        # animated connection glow (breathing) around the connector
-        breathe = 0.5 + 0.5 * math.sin(self._phase * math.tau * 2)
-        if self._connected:
-            vc = QColor(self._vendor_color or C["ok"])
-            halo = QRadialGradient(plug.center().x(), plug.center().y(),
-                                   plug_w * 1.25)
-            halo.setColorAt(0, QColor(vc.red(), vc.green(), vc.blue(),
-                                      int(70 + 50 * breathe)))
-            halo.setColorAt(0.55, QColor(vc.red(), vc.green(), vc.blue(),
-                                         int(26 + 20 * breathe)))
-            halo.setColorAt(1, QColor(vc.red(), vc.green(), vc.blue(), 0))
-            p.setBrush(halo)
-            p.drawRoundedRect(plug.adjusted(-6, -5, 6, 5), 7, 7)
-
-        # connector collar (strain-relief where the sleeve meets the cable)
-        collar = QRectF(plug.x() + 1.5, plug.y() - 1.2, plug.width() - 3, 3.5)
-        cr = QLinearGradient(collar.left(), collar.top(), collar.right(), collar.bottom())
-        cr.setColorAt(0, QColor("#4a525d"))
-        cr.setColorAt(0.5, QColor("#6b7683"))
-        cr.setColorAt(1, QColor("#39424e"))
-        p.setPen(QPen(QColor("#2c343f"), 1))
-        p.setBrush(cr)
-        p.drawRoundedRect(collar, 1.5, 1.5)
-
-        # metal plug body (brushed, with bevels)
-        body_rect = plug
-        pg = QLinearGradient(plug.left(), plug.top(), plug.right(), plug.bottom())
-        pg.setColorAt(0.00, QColor("#f2f5f8"))
-        pg.setColorAt(0.20, QColor("#c7cfd8"))
-        pg.setColorAt(0.48, QColor("#9aa5b1"))
-        pg.setColorAt(0.52, QColor("#7d8895"))
-        pg.setColorAt(1.00, QColor("#58636f"))
-        p.setPen(QPen(QColor("#39424e"), 1))
-        p.setBrush(pg)
-        p.drawRoundedRect(body_rect, 5, 5)
-
-        # top sheen (moving highlight while powered)
-        if self._anim and self._connected:
-            sweep = self._phase
-        else:
-            sweep = 0.35
-        shw = QRectF(plug.x() + 1.5, plug.y() + 1, plug.width() - 3, plug.height() * 0.36)
-        sh = QLinearGradient(shw.left(), shw.top(), shw.right(), shw.top())
-        sh.setColorAt(max(0.0, sweep - 0.5), QColor(255, 255, 255, 0))
-        sh.setColorAt(sweep, QColor(255, 255, 255, 110))
-        sh.setColorAt(min(1.0, sweep + 0.5), QColor(255, 255, 255, 0))
-        p.setBrush(sh)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(shw, 2, 2)
-
-        # grip ridges (machined lines)
-        p.setPen(QPen(QColor(20, 26, 34, 80), 1))
-        for i in range(3):
-            gx = plug.x() + 3 + i * (plug.width() - 6) / 2
-            p.drawLine(QPointF(gx, plug.y() + plug.height() * 0.40),
-                       QPointF(gx, plug.bottom() - 1.2))
-
-        # USB-C tip (recessed metal tongue with gold contacts)
-        tip_w = 10.0
-        tip_h = 7.0
-        tip = QRectF(plug_pt.x() - tip_w / 2, plug.y() - tip_h + 1.2, tip_w, tip_h)
-        tg = QLinearGradient(tip.left(), tip.top(), tip.left(), tip.bottom())
-        tg.setColorAt(0, QColor("#e8edf2"))
-        tg.setColorAt(0.5, QColor("#aeb9c4"))
-        tg.setColorAt(1, QColor("#7c8895"))
-        p.setPen(QPen(QColor("#3d4754"), 0.8))
-        p.setBrush(tg)
-        p.drawRoundedRect(tip, 1.5, 1.5)
-        # gold pin contacts (2x3)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#f0c060"))
-        for row in range(2):
-            for k in range(3):
-                cx = tip.x() + 1.6 + k * 2.3
-                cy = tip.y() + 1.5 + row * 2.3
-                p.drawRoundedRect(QRectF(cx, cy, 1.2, 0.8), 0.5, 0.5)
-        # darker tongue core between the pins
-        p.setPen(QPen(QColor("#2c343f"), 1))
-        p.drawLine(QPointF(tip.center().x(), tip.y() + 0.6),
-                   QPointF(tip.center().x(), tip.bottom() - 0.6))
-
-        # activity LED on the plug: pulses with data while powered
-        if self._connected:
-            led_on = (math.sin(self._phase * math.tau * 6) > -0.4)
-            led_rad = 2.6 + 0.4 * breathe
-            led = QRadialGradient(plug.right() - 4.5, plug.y() + 4.5, 5)
-            led_col = QColor(self._vendor_color or C["ok"])
-            led.setColorAt(0, QColor(led_col.red(), led_col.green(), led_col.blue(), 220))
-            led.setColorAt(1, QColor(led_col.red(), led_col.green(), led_col.blue(), 0))
-            p.setBrush(led)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QRectF(plug.right() - 7.5, plug.y() + 2.5, 7.5, 7.5))
-            p.setBrush(led_col if led_on else QColor(led_col.red(), led_col.green(),
-                                                     led_col.blue(), 120))
-            p.drawEllipse(QRectF(plug.right() - 5.6, plug.y() + 4.2, 3.8, 3.8))
-
-        # --- data pulses travelling along the cable (2 phases) ---
-        if self._connected:
-            for k in range(2):
-                ph = (self._phase + k * 0.5) % 1.0
-                pos = path.pointAtPercent(ph)
-                glow = QRadialGradient(pos.x(), pos.y(), 9)
-                vc = QColor(C["accent_hi"])
-                glow.setColorAt(0, QColor(vc.red(), vc.green(), vc.blue(), 200))
-                glow.setColorAt(1, QColor(vc.red(), vc.green(), vc.blue(), 0))
-                p.setBrush(glow)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QRectF(pos.x() - 9, pos.y() - 9, 18, 18))
-                p.setPen(QPen(QColor(C["accent_hi"]), 5.0, Qt.PenStyle.SolidLine,
-                              Qt.PenCapStyle.RoundCap))
-                p.drawLine(pos, QPointF(pos.x() - 14, pos.y()))
-                p.setPen(QPen(QColor(255, 255, 255, 130), 2.0, Qt.PenStyle.SolidLine,
-                              Qt.PenCapStyle.RoundCap))
-                p.drawLine(pos, QPointF(pos.x() - 14, pos.y()))
-        p.end()
-
-
-class AccentStrip(QWidget):
-    """Ultra-thin animated gradient sheen pinned to the top of a panel."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(3)
-        self._phase = 0.0
-        self._active = False
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(30)
-
-    def set_active(self, a):
-        self._active = a
-        if not a:
-            self.update()
-
-    def _tick(self):
-        if self._active:
-            self._phase = (self._phase + 0.012) % 1.0
-            self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        grad = QLinearGradient(0, 0, w, 0)
-        grad.setColorAt(0, QColor(C["grad_a"]))
-        grad.setColorAt(0.5, QColor(C["grad_b"]))
-        grad.setColorAt(1, QColor(C["grad_a"]))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(grad)
-        p.drawRoundedRect(0, 0, w, h, h / 2, h / 2)
-        if self._active:
-            sweep = int(w * 0.34)
-            x0 = int(self._phase * (w + sweep)) - sweep
-            sheen = QLinearGradient(x0, 0, x0 + sweep, 0)
-            sheen.setColorAt(0, QColor(255, 255, 255, 0))
-            sheen.setColorAt(0.5, QColor(255, 255, 255, 200))
-            sheen.setColorAt(1, QColor(255, 255, 255, 0))
-            p.setBrush(sheen)
-            p.drawRoundedRect(x0, 0, sweep, h, h / 2, h / 2)
-        p.end()
-
-
-class ShimmerBar(QWidget):
-    """Animated gradient sweep used as the busy/progress indicator."""
-
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(8)
-        self._active = False
-        self._phase = 0.0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(30)
-
-    def set_active(self, a):
-        self._active = a
-        if not a:
-            self.update()
-
-    def _tick(self):
-        if self._active:
-            self._phase = (self._phase + 0.02) % 1.0
-            self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(C["inset"]))
-        p.drawRoundedRect(0, 0, w, h, h / 2, h / 2)
-        if self._active:
-            sweep = int(w * 0.42)
-            x0 = int((self._phase * (w + sweep)) - sweep)
-            grad = QLinearGradient(x0, 0, x0 + sweep, 0)
-            grad.setColorAt(0, QColor(C["grad_a"]))
-            grad.setColorAt(1, QColor(C["grad_b"]))
-            p.setBrush(grad)
-            p.drawRoundedRect(x0, 0, sweep, h, h / 2, h / 2)
-        else:
-            p.setBrush(QColor(C["border"]))
-            p.drawRoundedRect(0, 0, w, h, h / 2, h / 2)
-        p.end()
 
 
 class WindowButton(QWidget):
@@ -2820,18 +2091,34 @@ class SplashScreen(QWidget):
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
-class FrpWindow(QMainWindow):
+class FlashPilotWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FlashPilot")
 
         self._cached_model = None
         self._cached_adb_status = None
+        self._cached_build = None
+        self._cached_android = None
+        self._cached_serial = None
         self._update_in_progress = False
         self._last_pid = None
+        self._device_connected = False
+        self._last_has_adb = False
+        self._last_usb_product = None
         self._maximized = False
         self._log_buffer = []
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
+        # stop button -> active FlashJob id for per-device STOP (chip pages).
+        # A page stop cancels exactly its own job's device scope; entries are
+        # replaced on each run and cleared when the worker finishes.
+        self._stop_job = {}
+        # Capability-gated buttons: (weakref, job, mode, command, base tip).
+        # _refresh_gates() enables/disables them from bridge.actions_for()
+        # for the displayed device. Display-only and fail-open; enforcement
+        # stays in the pre-execution gate.
+        self._gated_buttons = []
+        self._gate_cache = {}
         self._combo_styled = False
         self._anim_enabled = True
         self.settings = QSettings("FlashPilot", "FlashingTool")
@@ -2843,8 +2130,8 @@ class FrpWindow(QMainWindow):
 
         # Fit the window to the available screen so it is never cut off.
         screen = QApplication.primaryScreen().availableGeometry()
-        fit_w = min(1180, max(960, screen.width() - 120))
-        fit_h = min(760, max(640, screen.height() - 80))
+        fit_w = min(1180, max(940, screen.width() - 140))
+        fit_h = min(720, max(600, screen.height() - 110))
         self.setMinimumSize(fit_w, fit_h)
         self.resize(fit_w, fit_h)
 
@@ -2873,7 +2160,13 @@ class FrpWindow(QMainWindow):
         self.setStyleSheet(_BASE_QSS + _console_qss())
 
         self._build_ui()
-        self.nav.select("samsung")
+        # Global fix: action buttons should not retain focus rect (was flashing red in Crimson)
+        for btn in self.findChildren(QPushButton):
+            if not btn.isCheckable():
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setAutoDefault(False)
+                btn.setDefault(False)
+        if hasattr(self, "oem_bar"): self.oem_bar.select("samsung")
 
         # apply persisted effect settings to the freshly-built widgets
         if not self.settings.value("animations", "true", type=bool):
@@ -2923,6 +2216,11 @@ class FrpWindow(QMainWindow):
             self._auto_update_timer.start(15000)
 
         self._install_shortcuts()
+        # Global shake: when enabled, any button tap shakes itself + the trio
+        try:
+            QApplication.instance().installEventFilter(self)
+        except Exception:
+            pass
         self.refresh_device()
         self.log_line(
             f"FlashPilot — console ready "
@@ -2933,13 +2231,62 @@ class FrpWindow(QMainWindow):
         # from GitHub in _check_update_thread. Show the acceptance dialog once
         # per beta version so the risk text is never "out of focus" toast.
         if _is_beta_version(APP_VERSION):
-            QTimer.singleShot(1200, lambda: self._show_beta_risk_dialog(APP_VERSION, ""))
+            QTimer.singleShot(1200, self._show_beta_gate_async)
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._combo_styled:
             self._combo_styled = True
             self._restyle_combos()
+        # Window open — geometry + fade via effect on Linux (once per show)
+        if not getattr(self, "_shown_anim", False):
+            self._shown_anim = True
+            try:
+                import sys
+                if self.settings.value("animations", "true", type=bool) and self.settings.value("anim_window", "true", type=bool):
+                    from .animations import Motion
+                    if not sys.platform.startswith("linux"):
+                        self.setWindowOpacity(0.0)
+                    Motion.window_open(self, dur=260)
+                else:
+                    if not sys.platform.startswith("linux"):
+                        self.setWindowOpacity(1.0)
+            except Exception:
+                pass
+
+    def eventFilter(self, obj, event):
+        # Global shake/rubber cascade: respects separate toggles + master
+        try:
+            from PyQt6.QtWidgets import QPushButton
+            if event.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QPushButton):
+                master = self.settings.value("animations", "true", type=bool)
+                if not master:
+                    return super().eventFilter(obj, event)
+                trio = getattr(self, "_anim_preview_trio", [])
+                if obj in trio:
+                    return super().eventFilter(obj, event)
+                from .animations import Motion
+                do_shake = self.settings.value("anim_shake", "true", type=bool)
+                do_rubber = self.settings.value("anim_rubber", "true", type=bool)
+                # Shake + rubber both touch geometry/stylesheet — never run concurrently or they leave red border / shrunk fixedSize.
+                if do_shake and do_rubber:
+                    Motion.shake(obj, amplitude=5)
+                    for b in trio:
+                        Motion.shake(b, amplitude=4)
+                    # Queue rubber after shake finishes (lock also guards, but explicit sequencing is clearer).
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(420, lambda o=obj, t=list(trio): [Motion.rubber(o, scale=1.06, dur=380)] + [Motion.rubber(b, scale=1.04, dur=360) for b in t])
+                elif do_shake:
+                    Motion.shake(obj, amplitude=5)
+                    for b in trio:
+                        Motion.shake(b, amplitude=4)
+                elif do_rubber:
+                    Motion.rubber(obj, scale=1.06, dur=380)
+                    for b in trio:
+                        Motion.rubber(b, scale=1.04, dur=360)
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
 
     def _restyle_combos(self):
         if hasattr(self, "_s_theme"):
@@ -2955,6 +2302,8 @@ class FrpWindow(QMainWindow):
         QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh_device)
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.refresh_device)
         QShortcut(QKeySequence("Ctrl+Escape"), self).activated.connect(self.on_stop)
+        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(
+            lambda: self._on_section("settings"))
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
@@ -2965,14 +2314,16 @@ class FrpWindow(QMainWindow):
         root = QFrame()
         root.setObjectName("root")
         root.setStyleSheet(
-            f"QFrame#root {{ background: rgba(5, 9, 15, 244);"
-            f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['accent']};"
-            f" border-radius: 12px; }}"
+            f"QFrame#root {{ background:"
+            f" qradialgradient(cx:0.5, cy:-0.15, radius:1.2,"
+            f"   stop:0 rgba(23, 37, 60, 248), stop:1 rgba(5, 9, 15, 246));"
+            f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['border_hi']};"
+            f" border-radius: 16px; }}"
         )
         root_shadow = QGraphicsDropShadowEffect(root)
-        root_shadow.setBlurRadius(42)
-        root_shadow.setOffset(0, 14)
-        root_shadow.setColor(QColor(0, 0, 0, 170))
+        root_shadow.setBlurRadius(64)
+        root_shadow.setOffset(0, 18)
+        root_shadow.setColor(QColor(0, 0, 0, 210))
         root.setGraphicsEffect(root_shadow)
         self._root_shadow = root_shadow
         self._root = root
@@ -2990,26 +2341,26 @@ class FrpWindow(QMainWindow):
         root_lay.addWidget(strip_wrap)
 
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(30, 18, 30, 26)
+        outer.setContentsMargins(14, 10, 14, 10)
         outer.addWidget(root)
         self._outer = outer
 
         # --- custom title bar ---
         titlebar = DragBar(self)
-        titlebar.setFixedHeight(58)
+        titlebar.setFixedHeight(46)
         titlebar.setObjectName("dragbar")
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 rgba(16, 26, 40, 90), stop:0.55 rgba(10, 15, 23, 0),"
-            f" stop:1 rgba(10, 15, 23, 90));"
-            f" border-bottom: 1px solid {C['border']}; }}"
+            f" stop:0 rgba(20, 32, 50, 110), stop:0.5 rgba(10, 15, 23, 0),"
+            f" stop:1 rgba(20, 32, 50, 110));"
+            f" border-bottom: 1px solid rgba(255,255,255,0.055); }}"
         )
         tb = QHBoxLayout(titlebar)
-        tb.setContentsMargins(20, 8, 10, 6)
+        tb.setContentsMargins(12, 4, 8, 2)
         tb.setSpacing(12)
 
         logo = QLabel()
-        logo.setPixmap(_draw_logo(34))
+        logo.setPixmap(_draw_logo(30))
         tb.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         title_box = QVBoxLayout()
@@ -3048,13 +2399,41 @@ class FrpWindow(QMainWindow):
         self.global_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.global_stop_btn.setToolTip("Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD")
         self.global_stop_btn.clicked.connect(self.on_stop)
+
+        # Header Settings — frees the rail slot (TFT-style top-right gear)
+        self.settings_btn = QPushButton("⚙")
+        self.settings_btn.setFixedSize(32, 32)
+        self.settings_btn.setToolTip("Settings (Ctrl+,)")
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setStyleSheet(
+            "QPushButton { color:#cbd5e1; background:rgba(255,255,255,8);"
+            " border:1px solid rgba(255,255,255,12); border-radius:16px;"
+            " font-size:15px; font-weight:800; }"
+            "QPushButton:hover { background:#334155; color:#fff; }"
+        )
+        self.settings_btn.clicked.connect(lambda: self._on_section("settings"))
+        tb.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.global_stop_btn.setFixedHeight(32)
         self.global_stop_btn.setMinimumWidth(110)
         tb.addWidget(self.global_stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        # Auto-sync: single global STOP reflects any chip flow (same _FLOW_LABEL)
+        # Auto-sync: global STOP is enabled while ANY device has an op running.
         self._global_stop_timer = QTimer(self)
-        self._global_stop_timer.timeout.connect(lambda: self.global_stop_btn.setEnabled(_FLOW_LABEL[0] is not None))
+        self._global_stop_timer.timeout.connect(lambda: self.global_stop_btn.setEnabled(_flows_running() > 0))
         self._global_stop_timer.start(150)
+        # Per-row job-state chips: driven from the JobManager, no second
+        # scan. Terminal states hold briefly (their chip shows), then the
+        # row goes idle again.
+        self._row_widgets = {}
+        self._row_state_timer = QTimer(self)
+        self._row_state_timer.timeout.connect(self._refresh_row_states)
+        self._row_state_timer.start(600)
+        # Keyboard nav: Enter/double-click on the device list picks that
+        # device (arrows move the selection natively in QListWidget).
+        try:
+            self.device_list.itemActivated.connect(self._on_device_picked)
+            self.device_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        except Exception:
+            pass
 
         self.badge = ModeBadge()
         tb.addWidget(self.badge, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -3070,32 +2449,34 @@ class FrpWindow(QMainWindow):
 
         root_lay.addWidget(titlebar)
 
-        # --- content ---
+        # --- content: OEM chips on top, scene on left, page fills middle ---
+        self._section_index = {"samsung": 0}
+        samsung_icon = next((b.get('icon', 'Ⓢ') for b in device_pages.BRANDS if b['key'] == 'samsung'), 'Ⓢ')
+        oem_items = [("samsung", samsung_icon, "Samsung")]
+        for b in device_pages.BRANDS:
+            if b["key"] == "samsung":
+                continue
+            oem_items.append((f"dev_{b['key']}", b.get('icon', '▣'), b['label']))
+        oem_items.append(("general", "⚡", "General"))
+        tools = [
+            ("fus", "⬇", "FUS"),
+            ("mtk", "▣", "MTK"),
+            ("qc", "◈", "Qualcomm"),
+            ("spd", "✦", "SPD"),
+        ]
+        self.oem_bar = OemChipBar(oem_items, tools=tools)
+        self.oem_bar.section_selected.connect(self._on_section)
+        root_lay.addWidget(self.oem_bar)
+
         body = QHBoxLayout()
-        body.setContentsMargins(18, 4, 18, 14)
-        body.setSpacing(14)
+        body.setContentsMargins(10, 4, 10, 6)
+        body.setSpacing(10)
 
-        self.nav = NavRail(
-            [
-                ("samsung", "◉", "Samsung"),
-                ("quick", "⚡", "Quick Actions"),
-                ("fus", "⬇", "Firmware Downloader"),
-                ("mtk", "▣", "MTK Tools"),
-                ("qc", "◈", "Qualcomm"),
-                ("spd", "✦", "SPD / Unisoc"),
-                ("battery", "⚡", "Battery Repair"),
-                ("network", "📶", "Network Repair"),
-                ("settings", "⚙", "Settings"),
-            ]
-        )
-        self.nav.section_selected.connect(self._on_section)
-        body.addWidget(self.nav)
-
+        self._device_stacks = {}
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("QStackedWidget { background: transparent; }")
 
-        # Samsung page = operations/console panel (device scene + metrics live
-        # in the shared connection banner above the stack).
+        # Samsung hub page (operations/console panel).
         dash = QWidget()
         dash_lay = QHBoxLayout(dash)
         dash_lay.setContentsMargins(0, 0, 0, 0)
@@ -3103,28 +2484,127 @@ class FrpWindow(QMainWindow):
         dash_lay.addWidget(self._build_right(), 1)
         self._stack.addWidget(dash)
 
-        self._stack.addWidget(self._build_quick_page())
-        self._stack.addWidget(self._build_fus_page())
-        self._stack.addWidget(self._build_mtk_page())
-        self._stack.addWidget(self._build_qc_page())
-        self._stack.addWidget(self._build_spd_page())
-        self._stack.addWidget(self._build_battery_page())
-        self._stack.addWidget(self._build_network_page())
-        self._stack.addWidget(self._build_settings_page())
+        # Brand drill-down pages (level 2/3 live inside each stack entry).
+        # Samsung's Supported-Devices lives INSIDE the Samsung hub instead.
+        self._device_stacks = getattr(self, "_device_stacks", {})
+        for b in device_pages.BRANDS:
+            if b["key"] == "samsung":
+                continue
+            self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
+            self._section_index[f"dev_{b['key']}"] = len(self._section_index)
 
-        # Connection banner shared by every section so the computer-cable-phone
-        # scene (and its live animation) is visible on Samsung / MTK / Qualcomm.
-        stack_col = QVBoxLayout()
-        stack_col.setContentsMargins(0, 0, 0, 0)
-        stack_col.setSpacing(10)
-        stack_col.addWidget(self._build_conn_bar())
-        stack_col.addWidget(self._stack, 1)
+        # General = Quick + Battery + Network behind sub-tabs.
+        gen = QWidget()
+        gen.setStyleSheet("background: transparent;")
+        gv = QVBoxLayout(gen)
+        gv.setContentsMargins(0, 0, 0, 0)
+        gv.setSpacing(8)
+        gen_tabs = SamsungSubTabs(
+            [("quick", "QUICK"), ("battery", "BATTERY"), ("network", "NETWORK")]
+        )
+        gv.addWidget(gen_tabs)
+        gen_stack = QStackedWidget()
+        gen_stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        for b in (self._build_quick_page, self._build_battery_page,
+                  self._build_network_page):
+            gen_stack.addWidget(b())
+        gen_keys = ["quick", "battery", "network"]
+        gen_tabs.tab_selected.connect(
+            lambda k: gen_stack.setCurrentIndex(gen_keys.index(k) if k in gen_keys else 0)
+        )
+        gv.addWidget(gen_stack, 1)
 
-        body.addLayout(stack_col, 1)
+        for key, widget in (
+            ("general", gen),
+            ("fus", self._build_fus_page()),
+            ("mtk", self._build_mtk_page()),
+            ("qc", self._build_qc_page()),
+            ("spd", self._build_spd_page()),
+            ("settings", self._build_settings_page()),
+        ):
+            self._stack.addWidget(widget)
+            self._section_index[key] = len(self._section_index)
+        self._gen_stack = gen_stack
 
-        # Shared console/log column on the right side, visible on every section
-        # (Samsung / MTK / Qualcomm / Settings) - TFT-unlock-tools style.
+        # LEFT: connection scene (keeps its size) + state + compact metrics.
+        left_panel = QFrame()
+        left_panel.setObjectName("connbar")
+        self._conn = left_panel
+        left_panel.setFixedWidth(232)
+        left_panel.setStyleSheet(
+            f"QFrame#connbar {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 rgba(15, 24, 38, 225), stop:1 rgba(7, 12, 19, 230));"
+            f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
+            f" border-radius: 9px; }}"
+        )
+        ll = QVBoxLayout(left_panel)
+        ll.setContentsMargins(10, 8, 10, 8)
+        ll.setSpacing(6)
+        self.scene = ConnectionScene()
+        self.scene.setMinimumHeight(120)
+        ll.addWidget(self.scene, 1)
+
+        srow = QHBoxLayout()
+        srow.setSpacing(6)
+        self.orb = StatusOrb()
+        srow.addWidget(self.orb, 0, Qt.AlignmentFlag.AlignTop)
+        self.conn_state = QLabel("No device connected")
+        self.conn_state.setWordWrap(True)
+        self.conn_state.setStyleSheet(
+            f"color:{C['dim']}; font-size:10px; font-weight:500; background:transparent;"
+        )
+        srow.addWidget(self.conn_state, 1)
+        ll.addLayout(srow)
+
+        # Multi-device list: one row per connected phone (model · transports).
+        # Clicking a row switches the detail tiles/scene to that device
+        # (display only — each operation still picks its own target).
+        self._display_key = None
+        self.device_list = QListWidget()
+        self.device_list.setMaximumHeight(96)
+        self.device_list.setStyleSheet(
+            f"QListWidget {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:8px; color:{C['text']}; font-size:11px; }}"
+            f"QListWidget::item {{ padding:4px 6px; border-bottom:1px solid {C['border']}; }}"
+            f"QListWidget::item:selected {{ background:{C['accent_dim']}; color:{C['accent_hi']}; }}"
+        )
+        self.device_list.setToolTip("Connected devices — click to inspect one")
+        self.device_list.itemClicked.connect(self._on_device_picked)
+        ll.addWidget(self.device_list)
+
+        mgrid = QGridLayout()
+        mgrid.setSpacing(4)
+        self.info = {}
+        tiles = [
+            ("Device Model", C["grad_b"]), ("USB Mode", C["accent"]),
+            ("Interface", C["ok"]), ("ADB Status", C["warn"]),
+            ("Build Number", C["warn_dim"]), ("Android Ver", C["ok_dim"]),
+            ("Serial", C["err_dim"]), ("PIT Health", C["err_dim"]),
+        ]
+        for i, (name, accent) in enumerate(tiles):
+            card = MetricCard(name, "--", accent)
+            self.info[name] = card
+            mgrid.addWidget(card, i // 2, i % 2)
+        for i in range(2):
+            mgrid.setColumnStretch(i, 1)
+        for r in range((len(tiles) + 1) // 2):
+            mgrid.setRowStretch(r, 1)
+        ll.addLayout(mgrid)
+        # Quick "Copy Info" helper for current device
+        self.info_copy_btn = QPushButton("Copy Device Info")
+        self.info_copy_btn.setStyleSheet(_btn_ghost())
+        self.info_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.info_copy_btn.setToolTip("Copy model / build / android / serial to clipboard")
+        self.info_copy_btn.clicked.connect(self._copy_device_info)
+        ll.addWidget(self.info_copy_btn)
+        body.addWidget(left_panel, 0)
+
+        # MIDDLE: the content page fills the entire remaining space.
+        body.addWidget(self._stack, 1)
+
+        # RIGHT: shared console stays where it is.
         body.addWidget(self._build_console())
+
         root_lay.addLayout(body, 1)
 
         self._grip = QSizeGrip(root)
@@ -3153,20 +2633,20 @@ class FrpWindow(QMainWindow):
         conn.setStyleSheet(
             f"QFrame#connbar {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 rgba(15, 24, 38, 225), stop:1 rgba(7, 12, 19, 230));"
-            f" border: 1px solid {C['border']}; border-top: 1px solid {C['accent']};"
+            f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
             f" border-radius: 9px; }}"
             f" QFrame#connbar:hover {{ border: 1px solid {C['border_hi']};"
             f" background: rgba(16, 25, 39, 230); }}"
         )
         conn_lay = QHBoxLayout(conn)
-        conn_lay.setContentsMargins(14, 8, 14, 8)
+        conn_lay.setContentsMargins(10, 5, 10, 5)
         conn_lay.setSpacing(14)
 
         # left: animated computer -- cable -- phone scene + orb + state
         left = QVBoxLayout()
         left.setSpacing(4)
         self.scene = ConnectionScene()
-        self.scene.setMinimumHeight(108)
+        self.scene.setMinimumHeight(54)
         left.addWidget(self.scene, 1)
 
         row = QHBoxLayout()
@@ -3186,9 +2666,7 @@ class FrpWindow(QMainWindow):
 
         # right: live device metric cards (model / mode / interface / adb / pit)
         grid = QGridLayout()
-        grid.setSpacing(10)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        grid.setSpacing(6)
         self.info = {}
         tiles = [
             ("Device Model", C["grad_b"]),
@@ -3200,7 +2678,8 @@ class FrpWindow(QMainWindow):
         for i, (name, accent) in enumerate(tiles):
             card = MetricCard(name, "--", accent)
             self.info[name] = card
-            grid.addWidget(card, i // 2, i % 2)
+            grid.addWidget(card, 0, i)   # single horizontal row -> banner stays short
+            grid.setColumnStretch(i, 1)
         conn_lay.addLayout(grid, 2)
 
         return conn
@@ -3237,15 +2716,14 @@ class FrpWindow(QMainWindow):
         self.stop_btn.setVisible(False)
         lay.addLayout(top_row)
 
-        # TFT-style sub-tabs so the operations are split into focused views
-        # instead of one congested scrollable column.
+        # TFT-style hub: SUPPORTED | ODIN FLASH | UNLOCK | ADVANCED FLASH | TOOLS.
+        # Unlock opens its own inner tab row (FRP / MDM / CARRIER / SCREEN LOCK).
         self.samsung_tabs = SamsungSubTabs(
             [
-                ("flash", "FLASH"),
-                ("frp", "FRP"),
-                ("lock", "SCREEN LOCK"),
-                ("mdm", "MDM"),
-                ("carrier", "CARRIER LOCK"),
+                ("supported", "SUPPORTED DEVICES"),
+                ("flash", "ODIN FLASH"),
+                ("unlock", "UNLOCK"),
+                ("adv", "ADVANCED FLASH"),
                 ("tools", "INFO & TOOLS"),
             ]
         )
@@ -3275,37 +2753,17 @@ class FrpWindow(QMainWindow):
             "FLASH OPTIONS", self.options_panel, accent=C["warn"],
             collapsed=True
         )
-        self._adv_sec = CollapsibleSection(
-            "ADVANCED FLASH", self.adv_panel, accent=C["ok"],
-            collapsed=True
-        )
         fh_lay.addWidget(self._firmware_sec)
         fh_lay.addWidget(self._options_sec)
-        fh_lay.addWidget(self._adv_sec)
-        fh_lay.addStretch(1)
-        flash_scroll.setWidget(flash_host)
-        fp_lay.addWidget(flash_scroll)
-        self.samsung_stack.addWidget(flash_page)
 
-        frp_page = self._build_ops_flow_page(["FRP bypass"])
-        self.samsung_stack.addWidget(frp_page)
-
-        lock_page = self._build_ops_flow_page(["Screen lock remove"])
-        self.samsung_stack.addWidget(lock_page)
-
-        mdm_page = self._build_ops_flow_page(["MDM unlock"])
-        self.samsung_stack.addWidget(mdm_page)
-
-        carrier_page = self._build_ops_flow_page(["Carrier lock"])
-        self.samsung_stack.addWidget(carrier_page)
-
-        utils_body = QWidget()
-        utils_body.setStyleSheet("background: transparent;")
-        u_lay = QVBoxLayout(utils_body)
-        u_lay.setContentsMargins(0, 0, 0, 0)
-        u_lay.setSpacing(0)
+        # Odin utilities moved from INFO & TOOLS → here (under ODIN FLASH, not INFO)
+        _odin_utils_body = QWidget()
+        _odin_utils_body.setStyleSheet("background: transparent;")
+        _odin_ulay = QVBoxLayout(_odin_utils_body)
+        _odin_ulay.setContentsMargins(0, 0, 0, 0)
+        _odin_ulay.setSpacing(0)
         self._add_job_flows(
-            u_lay, ["Odin Flashing (Advanced)"],
+            _odin_ulay, ["Flash Firmware"],
             modes=["Download mode", "ADB"],
             methods=[
                 "odin_preflight", "odin_efs_backup", "odin_efs_restore",
@@ -3313,6 +2771,70 @@ class FrpWindow(QMainWindow):
                 "reboot_normal",
             ],
         )
+        fh_lay.addWidget(CollapsibleSection("ODIN UTILITIES", _odin_utils_body, accent=C["mute"], collapsed=True))
+        fh_lay.addStretch(1)
+        flash_scroll.setWidget(flash_host)
+        fp_lay.addWidget(flash_scroll)
+        self.samsung_stack.addWidget(flash_page)
+
+        # SUPPORTED DEVICES — reuse the devices drill-down (level2/3) here
+        from . import devices as _dp
+        self._device_stacks.setdefault("samsung", None)
+        if self._device_stacks.get("samsung") is None:
+            self._device_stacks["samsung"] = _dp.build_brand_page(self, "samsung")
+        self.samsung_stack.addWidget(self._device_stacks["samsung"])
+
+        # UNLOCK — nested tabs: FRP / MDM / CARRIER / SCREEN LOCK
+        unlock_wrap = QWidget()
+        unlock_wrap.setStyleSheet("background: transparent;")
+        uv = QVBoxLayout(unlock_wrap)
+        uv.setContentsMargins(0, 0, 0, 0)
+        uv.setSpacing(8)
+        unlock_tabs = SamsungSubTabs(
+            [("frp", "FRP"), ("mdm", "MDM"),
+             ("carrier", "CARRIER LOCK"), ("lock", "SCREEN LOCK")]
+        )
+        uv.addWidget(unlock_tabs)
+        unlock_stack = QStackedWidget()
+        unlock_stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        u_keys = ["frp", "mdm", "carrier", "lock"]
+        u_pages = {
+            "frp": self._build_ops_flow_page(["Remove FRP"]),
+            "mdm": self._build_ops_flow_page(["Remove MDM"]),
+            "carrier": self._build_ops_flow_page(["Unlock Carrier"]),
+            "lock": self._build_ops_flow_page(["Remove Screen Lock"]),
+        }
+        for k in u_keys:
+            unlock_stack.addWidget(u_pages[k])
+        unlock_tabs.tab_selected.connect(
+            lambda k: unlock_stack.setCurrentIndex(
+                u_keys.index(k) if k in u_keys else 0)
+        )
+        uv.addWidget(unlock_stack, 1)
+        self._unlock_stack = unlock_stack
+        self.samsung_stack.addWidget(unlock_wrap)
+
+        # ADVANCED FLASH — dedicated tab (was collapsed section on FLASH)
+        adv_page = QWidget()
+        adv_page.setStyleSheet("background: transparent;")
+        av = QVBoxLayout(adv_page)
+        av.setContentsMargins(0, 0, 0, 0)
+        av.setSpacing(8)
+        adv_scroll = self._ops_scroll_area()
+        adv_host = QWidget()
+        adv_host.setStyleSheet("background: transparent;")
+        ah = QVBoxLayout(adv_host)
+        ah.setContentsMargins(0, 0, 0, 0)
+        ah.setSpacing(8)
+        self._adv_sec = CollapsibleSection(
+            "ADVANCED FLASH", self.adv_panel, accent=C["ok"], collapsed=False
+        )
+        ah.addWidget(self._adv_sec)
+        ah.addStretch(1)
+        adv_scroll.setWidget(adv_host)
+        av.addWidget(adv_scroll)
+        self.samsung_stack.addWidget(adv_page)
+
         tools_combo = QWidget()
         tools_combo.setStyleSheet("background: transparent;")
         tc_lay = QVBoxLayout(tools_combo)
@@ -3324,18 +2846,39 @@ class FrpWindow(QMainWindow):
         hv = QVBoxLayout(host)
         hv.setContentsMargins(0, 0, 0, 0)
         hv.setSpacing(10)
-        self._add_job_flows(hv, ["Read device info", "Detect", "Reboot device",
-                                 "Fix Settings / UI crash"])
-        utils = CollapsibleSection(
-            "ODIN UTILITIES", utils_body, accent=C["mute"], collapsed=True
-        )
-        hv.addWidget(utils)
+        self._add_job_flows(hv, ["Read Device Info", "Detect Devices", "Reboot",
+                                 "Repair Settings"])
         hv.addStretch(1)
         scroll.setWidget(host)
         tc_lay.addWidget(scroll)
         self.samsung_stack.addWidget(tools_combo)
 
+        # EXPERIMENTAL — Samsung Knox (per-chip, amber, every-run ack)
+        knox_exp_host = QWidget()
+        knox_exp_host.setStyleSheet("background: transparent;")
+        knox_exp_lay = QVBoxLayout(knox_exp_host)
+        knox_exp_lay.setContentsMargins(0, 0, 0, 0)
+        knox_exp_lay.setSpacing(8)
+        knox_exp_lay.addWidget(_experimental_banner(
+            "EXPERIMENTAL — Knox bypass permanently trips eFuse (0x1, irreversible). Educational, own device only. Audit logged. Every run requires the checkbox."))
+        self._add_job_flows(knox_exp_lay, ["Knox / Warranty"])
+        knox_exp_body = QWidget()
+        knox_exp_body.setStyleSheet("background: transparent;")
+        _knox_body_lay = QVBoxLayout(knox_exp_body)
+        _knox_body_lay.setContentsMargins(16, 14, 16, 14)
+        _knox_body_lay.setSpacing(8)
+        _knox_body_lay.addWidget(knox_exp_host)
+        lay.addWidget(CollapsibleSection("KNOX — EXPERIMENTAL", knox_exp_body, accent=C["warn"], collapsed=True))
+
         lay.addWidget(self.samsung_stack, 1)
+
+        # Fix: default stack is 0 (ODIN FLASH) but tabs default to SUPPORTED → mismatch
+        # User sees FLASH while selector says SUPPORTED. Sync to FLASH.
+        try:
+            self.samsung_tabs.set_active("flash")
+            self.samsung_stack.setCurrentIndex(0)
+        except Exception:
+            pass
 
         self.shimmer = ShimmerBar()
         self.shimmer.setVisible(False)
@@ -3348,9 +2891,21 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _on_samsung_tab(self, key):
-        index = {"flash": 0, "frp": 1, "lock": 2, "mdm": 3,
-                 "carrier": 4, "tools": 5}.get(key, 0)
+        index = {"supported": 1, "flash": 0, "unlock": 2,
+                 "adv": 3, "tools": 4}.get(key, 0)
         self.samsung_stack.setCurrentIndex(index)
+        # Fix shrink: Samsung sub-stack hides FlowHost; invalidate so heightForWidth recomputes.
+        try:
+            w = self.samsung_stack.currentWidget()
+            if w:
+                for child in w.findChildren(QFrame):
+                    lay = child.layout()
+                    if lay and hasattr(lay, "invalidate"):
+                        lay.invalidate()
+                w.updateGeometry()
+                self.samsung_stack.updateGeometry()
+        except Exception:
+            pass
 
     def _build_quick_page(self):
         """TFT-style QUICK page: one-tap Factory reset / Reboot / ADB / Fastboot
@@ -3409,6 +2964,7 @@ class FrpWindow(QMainWindow):
             "partition access, FRP markers - tells you which flow to use next."
         )
         triage_btn.clicked.connect(self._adb_triage)
+        self._gate_button(triage_btn, command="adb_shell")
         xos_row.addWidget(triage_btn)
         xos_row.addStretch(1)
         hv.addLayout(xos_row)
@@ -3434,6 +2990,7 @@ class FrpWindow(QMainWindow):
             "show the storage map"
         )
         self._pit_fetch_btn.clicked.connect(self._pit_fetch_clicked)
+        self._gate_button(self._pit_fetch_btn, command="pit-fetch")
         pit_btn_row.addWidget(self._pit_fetch_btn)
         self._pit_cache_lbl = QLabel("")
         self._pit_cache_lbl.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
@@ -3500,6 +3057,7 @@ class FrpWindow(QMainWindow):
         self._nf_flash_btn.setStyleSheet(_btn_primary())
         self._nf_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._nf_flash_btn.clicked.connect(self._native_flash_clicked)
+        self._gate_button(self._nf_flash_btn, job="Flash Firmware", mode="Download mode")
         nf_btn_row.addWidget(self._nf_flash_btn)
         nf_btn_row.addStretch(1)
         hv.addLayout(nf_btn_row)
@@ -3523,8 +3081,8 @@ class FrpWindow(QMainWindow):
                 "There is NO undo. Continue?",
                 confirm_label="Wipe Device",
                 on_confirm=lambda: self._run_ops_flow(
-                    "FRP bypass", "ADB", "factory_reset",
-                    frp.FLOWS["factory_reset"]().name,
+                    "Remove FRP", "ADB", "factory_reset",
+                    core.FLOWS["factory_reset"]().name,
                 ),
             )
         )
@@ -3534,7 +3092,7 @@ class FrpWindow(QMainWindow):
 
         # --- ADB: one-tap reboot destinations ---
         hv.addWidget(SectionTitle("ADB / USB DEBUGGING"))
-        self._add_job_flows(hv, ["Reboot device"], modes=["ADB"])
+        self._add_job_flows(hv, ["Reboot"], modes=["ADB"])
         sw_row = QHBoxLayout()
         sw_row.setSpacing(8)
         sw_btn = QPushButton("Setup wizard bypass")
@@ -3545,8 +3103,8 @@ class FrpWindow(QMainWindow):
         )
         sw_btn.clicked.connect(
             lambda: self._run_ops_flow(
-                "FRP bypass", "ADB", "setup_wizard",
-                frp.FLOWS["setup_wizard"]().name,
+                "Remove FRP", "ADB", "setup_wizard",
+                core.FLOWS["setup_wizard"]().name,
             )
         )
         sw_row.addWidget(sw_btn)
@@ -3555,7 +3113,7 @@ class FrpWindow(QMainWindow):
 
         # --- Fastboot: reboot out of / within bootloader mode ---
         hv.addWidget(SectionTitle("FASTBOOT"))
-        self._add_job_flows(hv, ["Reboot device"], modes=["FASTBOOT"])
+        self._add_job_flows(hv, ["Reboot"], modes=["FASTBOOT"])
 
         hv.addStretch(1)
         scroll.setWidget(host)
@@ -3581,13 +3139,24 @@ class FrpWindow(QMainWindow):
         for job in jobs:
             seen = set()
             entries = []
-            for mode in frp.modes_for(job):
+            try:
+                _modes = core.modes_for(job)
+            except KeyError:
+                continue
+            for mode in _modes:
                 if modes is not None and mode not in modes:
                     continue
-                for key in frp.methods_for(job, mode):
+                try:
+                    _methods = core.methods_for(job, mode)
+                except KeyError:
+                    continue
+                for key in _methods:
                     if key in seen:
                         continue
                     if methods is not None and key not in methods:
+                        continue
+                    # Skip flows that haven't been registered
+                    if key not in core.FLOWS:
                         continue
                     seen.add(key)
                     entries.append((key, mode))
@@ -3601,12 +3170,34 @@ class FrpWindow(QMainWindow):
             parent_layout.addWidget(header)
             flow = FlowLayout(spacing=8)
             for key, mode in entries:
-                name = frp.FLOWS[key]().name
+                try:
+                    _factory = core.FLOWS[key]
+                    name = _factory().name if callable(_factory) else getattr(_factory, "name", key)
+                except Exception as e:
+                    name = f"{key} ({e})"
                 b = QPushButton(name)
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                b.setAutoDefault(False)
+                b.setDefault(False)
                 b.setStyleSheet(_btn_ghost())
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setToolTip(f"{job} / {mode} / {key}")
-                if run_cb is None:
+                exp_feature = _EXPERIMENTAL_FLOW_MAP.get(key)
+                if exp_feature:
+                    # EXPERIMENTAL: amber dashed border + every-run ownership ack.
+                    b.setStyleSheet(_btn_ghost() + " QPushButton { border: 1px dashed #f59e0b; } QPushButton:focus { border: 1px dashed #f59e0b; outline: none; }")
+                    title, warn = experimental.get_warning(exp_feature)
+                    b.setToolTip(f"[EXPERIMENTAL] {title}\n{job} / {mode} / {key}")
+                    b.clicked.connect(
+                        lambda _=False, j=job, m=mode, k=key, n=name, f=exp_feature, t=title, tx=warn:
+                            self._confirm_experimental_overlay(
+                                f, t, tx, k, confirm_label="I Accept — Run",
+                                on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
+                                    (run_cb(j, m, k, n) if run_cb else self._run_ops_flow(j, m, k, n)),
+                                chip="wipe",
+                            )
+                    )
+                elif run_cb is None:
                     confirm = _DESTRUCTIVE_CONFIRM.get(key)
                     if confirm:
                         b.clicked.connect(
@@ -3641,6 +3232,10 @@ class FrpWindow(QMainWindow):
                             )
                         )
                 flow.addWidget(b)
+                # Capability display-gating: this button may only run when
+                # the backend offers one of the job's actions for the
+                # displayed device. Applied by _refresh_gates().
+                self._gate_button(b, job=job, mode=mode)
             parent_layout.addLayout(flow)
 
     def _build_ops_flow_page(self, jobs, modes=None, run_cb=None):
@@ -3676,14 +3271,14 @@ class FrpWindow(QMainWindow):
         if flash_jobs:
             tab_specs.append(("flash", "FLASH", flash_jobs))
         tab_specs += [
-            ("frp", "FRP", ["FRP bypass"]),
-            ("lock", "SCREEN LOCK", ["Screen lock remove"]),
-            ("mdm", "MDM", ["MDM unlock"]),
+            ("frp", "FRP", ["Remove FRP"]),
+            ("lock", "SCREEN LOCK", ["Remove Screen Lock"]),
+            ("mdm", "MDM", ["Remove MDM"]),
             (
                 "tools",
                 "INFO & TOOLS",
-                ["Read device info", "Detect", "Reboot device",
-                 "Fix Settings / UI crash"],
+                ["Read Device Info", "Detect Devices", "Reboot",
+                 "Repair Settings"],
             ),
         ]
         modeset = set(modes)
@@ -3692,9 +3287,9 @@ class FrpWindow(QMainWindow):
         for key, label, jobs in tab_specs:
             count = 0
             for job in jobs:
-                for mode in frp.modes_for(job):
+                for mode in core.modes_for(job):
                     if mode in modeset:
-                        count += len(frp.methods_for(job, mode))
+                        count += len(core.methods_for(job, mode))
             if not count:
                 continue
             tabs.append((key, label))
@@ -3720,9 +3315,19 @@ class FrpWindow(QMainWindow):
         keys = [k for k, _ in pages]
         for _, page in pages:
             stack.addWidget(page)
-        subnav.tab_selected.connect(
-            lambda key: stack.setCurrentIndex(keys.index(key) if key in keys else 0)
-        )
+        def _on_chip_tab(key):
+            try:
+                stack.setCurrentIndex(keys.index(key) if key in keys else 0)
+                w = stack.currentWidget()
+                if w:
+                    for child in w.findChildren(QFrame):
+                        lay = child.layout()
+                        if lay and hasattr(lay, "invalidate"):
+                            lay.invalidate()
+                    w.updateGeometry()
+            except Exception:
+                pass
+        subnav.tab_selected.connect(_on_chip_tab)
         v.addWidget(stack, 1)
         return section
 
@@ -3733,7 +3338,7 @@ class FrpWindow(QMainWindow):
         self.firmware_panel.setStyleSheet(
             f"QFrame#firmware {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
             f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
         )
         f_lay = QVBoxLayout(self.firmware_panel)
@@ -3795,6 +3400,7 @@ class FrpWindow(QMainWindow):
             "Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)"
         )
         self.flash_btn.clicked.connect(self._on_flash_slots)
+        self._gate_button(self.flash_btn, job="Flash Firmware", mode="Download mode")
         run_row.addWidget(self.flash_btn)
         self.check_tar_btn = QPushButton("Check archive")
         self.check_tar_btn.setStyleSheet(_btn_ghost())
@@ -3804,7 +3410,7 @@ class FrpWindow(QMainWindow):
         )
         self.check_tar_btn.clicked.connect(
             lambda: self._run_ops_flow(
-                "Odin Flashing (Advanced)", "Download mode",
+                "Flash Firmware", "Download mode",
                 "odin_check_tar", "Check firmware archive (odin4)"
             )
         )
@@ -3923,6 +3529,32 @@ class FrpWindow(QMainWindow):
 
         # BL downgrade override row (native multi-partition flash gate)
         opt_row3 = FlowLayout(spacing=8)
+        self.skip_efs_cb = QCheckBox("Skip EFS backup requirement (ODIN4_SKIP_BACKUP=1)")
+        self.skip_efs_cb.setChecked(False)
+        self.skip_efs_cb.setToolTip(
+            "OFF by default (safety). The flash refuses to run without a recent\n"
+            "EFS backup (<30 days) or an authorized-ADB auto-backup. Tick this\n"
+            "ONLY if you already have backups elsewhere - EFS holds IMEI/radio\n"
+            "calibration; losing it without a backup is unrecoverable."
+        )
+        self.skip_efs_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row3.addWidget(self.skip_efs_cb)
+        self.engine_native_cb = QCheckBox("Use native engine (recommended)")
+        self.engine_native_cb.setChecked(True)
+        self.engine_native_cb.setToolTip(
+            "ON  = FlashPilot's own single-session Rust writer.\n"
+            "     Preserves Loke's one-session-per-plug rule; best for\n"
+            "     MTK-Samsung units like A14/A15 Helio variants.\n"
+            "OFF = Samsung's proprietary odin4 binary (Exynos fallback)."
+        )
+        self.engine_native_cb.setStyleSheet(
+            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
+            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        opt_row3.addWidget(self.engine_native_cb)
         self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
         self.force_bl_cb.setChecked(False)
         self.force_bl_cb.setToolTip(
@@ -4116,14 +3748,17 @@ class FrpWindow(QMainWindow):
         panel.setObjectName("console")
         panel.setStyleSheet(
             f"QFrame#console {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(13, 20, 31, 230), stop:1 rgba(6, 10, 16, 235));"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
-            f" border-radius: 9px; }}"
-            f" QFrame#console:hover {{ border: 1px solid {C['border_hi']};"
-            f" background: rgba(15, 23, 35, 235); }}"
+            f" stop:0 rgba(14, 22, 34, 232), stop:1 rgba(7, 11, 17, 240));"
+            f" border: 1px solid rgba(255,255,255,0.06);"
+            f" border-left: 2px solid {C['border_hi']};"
+            f" border-top: 1px solid rgba(255,255,255,0.045);"
+            f" border-radius: 14px; }}"
+            f" QFrame#console:hover {{ border-color: rgba(255,255,255,0.11);"
+            f" border-left-color: {C['accent_hi']};"
+            f" background: rgba(16, 25, 38, 238); }}"
         )
-        panel.setMinimumWidth(360)
-        panel.setMaximumWidth(430)
+        panel.setMinimumWidth(330)
+        panel.setMaximumWidth(380)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(10)
@@ -4142,14 +3777,22 @@ class FrpWindow(QMainWindow):
         console_row.addStretch(1)
 
         self.wrap_btn = self._tool_button("Wrap", self._toggle_wrap)
+        self.wrap_btn.setFixedWidth(52)
+        self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
         self.clear_btn = self._tool_button("Clear", self._clear_console)
+        self.clear_btn.setFixedWidth(52)
+        self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.clear_btn.setToolTip("Clear console (Ctrl+L)")
         console_row.addWidget(self.clear_btn)
         self.copy_btn = self._tool_button("Copy", self._copy_console)
+        self.copy_btn.setFixedWidth(52)
+        self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.copy_btn.setToolTip("Copy console to clipboard (Ctrl+Shift+C)")
         console_row.addWidget(self.copy_btn)
         self.save_btn = self._tool_button("Save", self._save_console)
+        self.save_btn.setFixedWidth(52)
+        self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
         self.save_btn.setToolTip("Save console to a text file (Ctrl+S)")
         console_row.addWidget(self.save_btn)
         lay.addLayout(console_row)
@@ -4256,12 +3899,340 @@ class FrpWindow(QMainWindow):
 
     # ----------------------------- section switching ----------------------
     def _on_section(self, key):
-        order = {"samsung": 0, "quick": 1, "fus": 2, "mtk": 3, "qc": 4, "spd": 5,
-                 "battery": 6, "network": 7, "settings": 8}
-        idx = order.get(key, 0)
+        self._current_section = key
+        idx = getattr(self, "_section_index", {}).get(key, 0)
         self._stack.setCurrentIndex(idx)
-        self.nav.select(key)
+        if hasattr(self, "oem_bar"):
+            self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
+        # Fix shrink: stacked pages hide FlowLayout's width; force relayout on show.
+        try:
+            w = self._stack.currentWidget()
+            if w:
+                for child in w.findChildren(QFrame):
+                    lay = child.layout()
+                    if lay and hasattr(lay, "invalidate"):
+                        lay.invalidate()
+                w.updateGeometry()
+                self._stack.updateGeometry()
+        except Exception:
+            pass
+
+    # --------------------- model action router (devices drill-down) --------
+    def start_model_action(self, act, brand_label, meta, feature=None):
+        """Wire a Devices drill-down action to the real engine for its chip.
+
+        act: frp | info | backup | flash | adb_enable | kg_unlock
+        meta: model dict from supported_devices.json (engine, vid, ...)
+        feature: experimental feature id when routed through the ownership
+        overlay (lets the runner consume the matching per-run ack token).
+        Only researched models reach here with enabled buttons; guards below
+        keep un-researched or missing-input cases safe and guided."""
+        engine = (meta.get("engine") or "").lower()
+        label = f"{brand_label} {meta.get('model','')}"
+        self.log_line(f"[device] {label}: {act} via {engine or 'n/a'}")
+
+        if act == "info":
+            self.refresh_device()
+            return
+
+        if act == "kg_unlock":
+            # Samsung AT KnoxGuard chain through the bridge. Pinned to one
+            # explicitly-picked Samsung device (never first-match): with
+            # several Samsungs attached this refuses instead of unlocking
+            # the wrong phone. Validation (scans) stays on the GUI thread;
+            # the bridge call runs in a worker (previously synchronous —
+            # the 30s chain froze the whole window).
+            try:
+                sams = [r for r in _devices.list_devices()
+                        if isinstance(r, dict) and (r.get("usb") or {}).get("vid") == 0x04E8
+                        and r.get("key")]
+                skeys = [r["key"] for r in sams]
+                if not skeys:
+                    raise RuntimeError("no Samsung device on USB")
+                if len(skeys) > 1:
+                    raise RuntimeError(
+                        f"{len(skeys)} Samsung devices connected — KG unlock "
+                        "needs exactly one target (unplug the others)")
+                key = skeys[0]
+                # Per-device run guard: a concurrent op on the SAME phone
+                # blocks this.
+                if not _flow_start("KG unlock", destructive=True, key=key):
+                    self._toasts.show_warn("Operation already running",
+                                           _flow_busy_msg(key=key))
+                    return
+                # Fresh target for the picked key (never a stale cached one).
+                tgt = _devices.resolve_usb_target(key)
+                if not tgt:
+                    _flow_end(key=key)
+                    raise RuntimeError("Samsung device left USB — replug and retry")
+
+                def work():
+                    flux = jobs.start_job(key, "KG unlock", "AT", "kg_unlock", ())
+                    flux.set_state("VALIDATED")
+                    flux.set_state("RUNNING")
+                    try:
+                        with _devices.device_scope(key):
+                            out = bridge._run(["at-kg-unlock", tgt, "4000"],
+                                              timeout=30)
+                        jobs.finish_job(flux.job_id, "COMPLETED")
+                        self.log_line(f"[kg] {out}")
+                        self._toasts.show_ok("KG unlock",
+                                             f"{label}: chain sent — check phone")
+                    except Exception as e:  # noqa: BLE001
+                        state, code = jobs.classify_failure(e, key)
+                        jobs.finish_job(flux.job_id, state, str(e), code)
+                        self.log_line(f"[kg] failed: {e}")
+                        self._toasts.show_error("KG unlock failed", str(e))
+                    finally:
+                        _flow_end(key=key)
+
+                threading.Thread(target=work, daemon=True).start()
+            except Exception as e:  # noqa: BLE001
+                self._toasts.show_error("KG unlock failed", str(e))
+            return
+
+        # Per-model per-engine reverse-engineered flows. Each action key maps
+        # directly to a flow registered in core.FLOWS via the per-engine naming
+        # convention (tecno_* / apple_* / samsung_* / mtk_*). The flow itself
+        # decides whether it needs ADB, BROM, MTP, etc. — this dispatcher
+        # only needs to (a) make sure the flow exists and (b) run it.
+        if act in core.FLOWS:
+            # For BROM/MTK paths, make sure the matching workbench is open so
+            # the user can see progress + the FDL fields the flow reads.
+            engine = (meta.get("engine") or "").lower()
+            if act.endswith("_brom") and engine in ("spd", "mtk"):
+                self._on_section(engine)
+            if act == "flash" and engine in ("spd", "mtk"):
+                # Flash is special: never inline; just open the workbench.
+                self._on_section(engine)
+                self._toasts.show_info(
+                    f"{label} · Flash",
+                    "Open the workbench (FDL + firmware dir) and press Flash Firmware."
+                )
+                return
+            # Map to a generic (job, mode) so the global flow runner's status
+            # banner reads sensibly. The flow name itself is the source of truth.
+            job_mode = {
+                "tecno_frp_adb":         ("Remove FRP",          "ADB"),
+                "tecno_frp_brom":        ("Remove FRP",          "Samsung BROM" if engine == "spd" else "MTK BROM"),
+                "tecno_screen_lock_adb": ("Remove Screen Lock",  "ADB"),
+                "tecno_screen_lock_brom":("Remove Screen Lock",  "Samsung BROM" if engine == "spd" else "MTK BROM"),
+                "tecno_mdm_adb":         ("Remove MDM",          "ADB"),
+                "tecno_mdm_brom":        ("Remove MDM",          "Samsung BROM" if engine == "spd" else "MTK BROM"),
+                "tecno_device_info":     ("Read Device Info",     "ADB"),
+                "tecno_enable_adb":      ("Remove FRP",          "MTP"),
+                "moto_frp_adb":          ("Remove FRP",          "ADB"),
+                "moto_frp_fastboot":     ("Remove FRP",          "FASTBOOT"),
+                "fastboot_unlock":       ("Unlock Bootloader",   "FASTBOOT"),
+                "fastboot_lock":         ("Lock Bootloader",     "FASTBOOT"),
+                "frp_fake_login":        ("Remove FRP",          "ADB"),
+                "frp_fake_login_testdpc": ("Remove FRP",        "ADB"),
+                "frp_fake_login_adp":     ("Remove FRP",        "ADB"),
+                "pac_extract":           ("Flash Firmware",      "SPD"),
+                "pac_pack":              ("Flash Firmware",      "SPD"),
+                "ofp_extract":           ("Flash Firmware",      "SPD"),
+                "apple_info":            ("Read Device Info",    "ADB"),
+                "apple_passcode_guide":  ("Read Device Info",    "ADB"),
+            }.get(act)
+            if job_mode:
+                self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}",
+                                   feature=feature)
+            else:
+                # Generic fallback: just run the flow under a synthetic label
+                self._run_ops_flow("Read Device Info", "ADB", act, f"{label} · {act}",
+                                   feature=feature)
+            return
+
+        if engine == "spd":
+            self._on_section("spd")
+            if act == "screen_lock":
+                # Screen lock removal: ADB locksettings first (device is ADB live),
+                # fall back to BROM factory format if no ADB.
+                self._run_ops_flow("Remove Screen Lock", "ADB",
+                                   "screen_lock_locksettings",
+                                   f"{label} · screen lock remove (ADB)")
+                return
+            if act == "flash":
+                self._on_section("spd")
+                self._toasts.show_info(
+                    f"{label} · Flash",
+                    "Load this model's FDL1/FDL2 + firmware dir on the SPD tab, "
+                    "then Flash Firmware.")
+                return
+            have_fdl = bool(self.spd_files["fdl1"].text().strip())
+            if not have_fdl:
+                self._toasts.show_warn(
+                    f"{label} · {act}",
+                    "Load this model's FDL1/FDL2 binaries on the SPD tab "
+                    "(they are model-specific) then press the action again.",
+                )
+                return
+            if act == "frp":
+                self._spd_frp()
+            elif act == "backup":
+                from PyQt6.QtWidgets import QFileDialog
+                out_dir = QFileDialog.getExistingDirectory(
+                    self, "Backup output folder",
+                    self.settings.value("default_dir", os.path.expanduser("~/Downloads")),
+                )
+                if not out_dir:
+                    return
+                a1 = self._spd_addr(self.spd_fdl1_addr)
+                fdl1 = self.spd_files["fdl1"].text().strip()
+                fdl2 = self.spd_files["fdl2"].text().strip()
+                args = ["spd-backup", self._spd_resolve_target() or "", fdl1,
+                        f"0x{a1:x}" if a1 is not None else "0x0"]
+                if fdl2:
+                    a2 = self._spd_addr(self.spd_fdl2_addr)
+                    args += [fdl2, f"0x{a2:x}" if a2 is not None else "0x0"]
+                args.append(out_dir)
+                self._spd_run(args, timeout=3600)
+            elif act == "adb_enable":
+                self._spd_enable_adb()
+            else:
+                self._toasts.show_info(f"{label} · {act}",
+                                       "Wiring lands in the next step.")
+            return
+
+        if engine in ("mtk", "qcom", "kirin"):
+            # MediaTek / Qualcomm / Huawei engines — route ADB-capable actions to
+            # the universal ADB flows; BROM/low-level to their workbench tabs.
+            if act == "screen_lock":
+                self._run_ops_flow("Remove Screen Lock", "ADB",
+                                   "screen_lock_locksettings",
+                                   f"{label} · screen lock remove (ADB)")
+                return
+            if act == "adb_enable":
+                # Motorola (22b8) has no Samsung AT path — Samsung flow would
+                # log A02s/SDM450 guidance and confuse. Give Moto steps instead.
+                vid = str(meta.get("vid", "")).lower()
+                model_l = str(meta.get("model", "")).lower()
+                if "22b8" in vid or "moto" in model_l or "g6" in model_l or "motorola" in brand_label.lower():
+                    self.log_line(f"[device] {label}: Moto G6 has no AT ADB enable (22b8 MTP vendor, no diag port)")
+                    self._toasts.show_info(
+                        f"{label} · Enable ADB",
+                        "Moto G6 FRP-locked has no ADB: use on-phone Browser (TalkBack → YouTube → Chrome → Settings) "
+                        "or reboot to fastboot (Vol Down+Power) then fastboot erase frp. No Samsung *#0*#/AT.")
+                    return
+                self._run_ops_flow("Remove FRP", "MTP", "enable_adb",
+                                   f"{label} · enable ADB")
+                return
+            if act == "frp":
+                # Prefer ADB FRP when authorized; else per-chip path
+                try:
+                    adb_up = any(d["state"] == "device" for d in bridge.adb_status())
+                except Exception:
+                    adb_up = False
+                if adb_up:
+                    self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
+                                       f"{label} · FRP bypass (ADB)")
+                    return
+                vid = str(meta.get("vid", "")).lower()
+                model_l = str(meta.get("model", "")).lower()
+                if "22b8" in vid or "moto" in model_l or "motorola" in brand_label.lower():
+                    self.log_line(f"[device] {label}: Moto G6 FRP — no ADB, use browser/fastboot")
+                    self._toasts.show_info(
+                        f"{label} · FRP",
+                        "No ADB: on-phone Browser (TalkBack → Chrome → Settings → remove account) "
+                        "or fastboot (Vol Down+Power) → fastboot erase frp + cache.")
+                    return
+                # MTK combo / MTP enable path
+                method = "mtk_combo_flash" if engine == "mtk" else "enable_adb"
+                self._on_section("mtk")
+                self._toasts.show_info(
+                    f"{label} · FRP",
+                    "Load DA + scatter on the MTK tab (or catch BROM) — "
+                    "FRP clears via combo flash. For ADB method, authorize "
+                    "USB debugging first.")
+                return
+            if act == "flash":
+                self._on_section("mtk")
+                self._toasts.show_info(
+                    f"{label} · Flash",
+                    "Load DA + scatter + firmware dir on the MTK tab, then Flash.")
+                return
+            if act == "backup":
+                self._on_section("mtk")
+                self._toasts.show_info(
+                    f"{label} · Backup",
+                    "Use MTK tab Backup Partitions (DA + scatter required).")
+                return
+            if act == "info":
+                self._on_section("mtk")
+                self._spd_detect()
+                return
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
+            return
+
+        if engine == "motorola":
+            # Brand-wide Motorola/Lenovo routing (universal entry + any moto
+            # model). Moto-specific acts are handled above via core.FLOWS;
+            # generic acts map to the universal ADB flows or honest guidance.
+            if act == "screen_lock":
+                self._run_ops_flow("Remove Screen Lock", "ADB",
+                                   "screen_lock_locksettings",
+                                   f"{label} · screen lock remove (ADB)")
+                return
+            if act == "adb_enable":
+                # Motorola (22b8) has no Samsung AT path and no Linux MDL
+                # driver — on-phone steps only.
+                self.log_line(f"[device] {label}: Moto has no AT ADB enable (no diag port on Linux)")
+                self._toasts.show_info(
+                    f"{label} · Enable ADB",
+                    "No PC-side ADB enable on Motorola: on the phone use the "
+                    "Browser/TalkBack route to Settings → Developer options → "
+                    "USB debugging, or unlock via fastboot (see FRP REMOVE → FB).")
+                return
+            if act == "frp":
+                try:
+                    adb_up = any(d["state"] == "device" for d in bridge.adb_status())
+                except Exception:
+                    adb_up = False
+                if adb_up:
+                    self._run_ops_flow("Remove FRP", "ADB", "moto_frp_adb",
+                                       f"{label} · FRP reset (ADB)")
+                else:
+                    self.log_line(f"[device] {label}: Moto FRP — no ADB, use fastboot flow or on-phone route")
+                    self._toasts.show_info(
+                        f"{label} · FRP",
+                        "No authorized ADB. Either run FRP REMOVE → FB "
+                        "(unlock token → erase frp), or on-phone Browser → "
+                        "Settings → remove account.")
+                return
+            if act in ("flash", "backup"):
+                self._toasts.show_info(
+                    f"{label} · {act}",
+                    "Motorola flash/backup is fastboot-based with model-specific "
+                    "stock firmware (not bundled). Use the FASTBOOT job flows "
+                    "(fastboot_flash / fastboot_erase) with your firmware files.")
+                return
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
+            return
+
+        # Samsung / Odin engines
+        if act == "frp":
+            try:
+                methods = core.methods_for("Remove FRP", "Download mode")
+                method = methods[0] if methods else "download_frp"
+            except Exception:
+                method = "download_frp"
+            self._run_ops_flow("Remove FRP", "Download mode", method,
+                               f"{label} · FRP bypass (download mode)")
+        elif act == "backup":
+            self._run_ops_flow("Flash Firmware", "Download mode",
+                               "odin_efs_backup", f"{label} · EFS backup")
+        elif act == "flash":
+            self._on_section("samsung")
+            self._toasts.show_info(
+                f"{label} · Flash",
+                "Load AP/BL/CP/CSC in Samsung ▸ FLASH slots, then Flash — "
+                "PIT safety contract runs automatically.")
+        else:
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
 
     # ----------------------------- Native one-session flash ---------------
     def _nf_pick_tar(self):
@@ -4279,33 +4250,72 @@ class FrpWindow(QMainWindow):
         if not tar_path or not os.path.isfile(tar_path):
             self._toasts.show_warn("Native flash", "Pick a .tar archive first")
             return
-        if not frp._download_mode_device():
+        # Pin to one explicitly-picked Download-mode device: the core smart
+        # flash resolves its target through the ambient scope, so without a
+        # pinned key it would take the first Download-mode phone.
+        picked = self._pick_device("Flash Firmware", "Download mode")
+        if picked == "__cancelled__":
+            return
+        if not picked:
             self._toasts.show_warn(
                 "Native flash", "Put the phone in Download mode first "
                 "(Vol Down + Power, then Vol Up)."
             )
             return
+        device_key = picked
+        from ..core import actions as _actions_mod
+        ok, last = _actions_mod.check_actions(
+            device_key, ["samsung_odin_flash"], bridge.validate_action)
+        if not ok:
+            self.log_line(f"[refused] Flash Firmware is not valid for {device_key}: {last}")
+            self._toasts.show_warn("Unsupported for this device",
+                                   "Flash cannot run on the selected device "
+                                   "in its current state.")
+            return
+        # Per-device run guard: a concurrent ops flow on the SAME phone must
+        # block this (the old _nf_busy flag alone could not see it).
+        if not _flow_start("Native flash", destructive=True, key=device_key):
+            self._toasts.show_warn("Operation already running",
+                                   _flow_busy_msg(key=device_key))
+            return
         patch = self._nf_patch_cb.isChecked()
 
         def do_flash():
-            self.log_line(f"[smart-flash] {os.path.basename(tar_path)} "
-                          f"(vbmeta patch={'on' if patch else 'off'})")
+            flux = jobs.start_job(device_key, "Flash Firmware", "Download mode",
+                                  "smart_flash", ["samsung_odin_flash"])
+            flux.set_state("VALIDATED")
+            flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    flux.append_log(str(line))
+                except Exception:
+                    pass
+                self.log_line(line)
+
+            emit(f"[smart-flash] {os.path.basename(tar_path)} "
+                 f"(vbmeta patch={'on' if patch else 'off'})")
             try:
-                result = frp.flash_archive_smart(
-                    tar_path, log=self.log_line, patch_vbmeta=patch,
-                )
+                with _devices.device_scope(device_key):
+                    result = core.flash_archive_smart(
+                        tar_path, log=emit, patch_vbmeta=patch,
+                    )
                 ok = True
                 summary = (f"flashed {len(result['flashed'])} partitions, "
                            f"skipped {len(result['skipped'])}, "
                            f"reboot={result['rebooted']}")
+                jobs.finish_job(flux.job_id, "COMPLETED")
             except Exception as e:
                 ok = False
                 summary = str(e)
-                self.log_line(f"[smart-flash] ERROR: {e}")
+                emit(f"[smart-flash] ERROR: {e}")
+                state, code = jobs.classify_failure(e, device_key)
+                jobs.finish_job(flux.job_id, state, str(e), code)
 
             def done():
                 self._nf_busy = False
                 self._nf_flash_btn.setEnabled(True)
+                _flow_end(key=device_key)
                 if ok:
                     self._toasts.show_ok(
                         "Flash complete", summary)
@@ -4404,34 +4414,32 @@ class FrpWindow(QMainWindow):
         lay.addLayout(bl)
         dlg.exec()
 
-    def _adb_triage(self):
+    def _adb_triage(self, device_key=None):
         """Probe connected ADB device: lock state, root, partition access."""
-        if not _flow_start("ADB triage", destructive=False):
-            try:
-                self.show_toast(_flow_busy_msg(), "warning")
-            except Exception:
-                pass
+        prep = self._adb_begin("ADB triage", "adb_triage", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
             lines = []
-            emit = lambda m: self._ui.line.emit(m) if hasattr(self, "_ui") else None
+            base_emit = lambda m: self._ui.line.emit(m) if hasattr(self, "_ui") else None
+
+            def emit(m):
+                try:
+                    if flux:
+                        flux.append_log(str(m))
+                except Exception:
+                    pass
+                return base_emit(m)
+
+            if flux:
+                flux.set_state("RUNNING")
             enforced = False
             su = ""
             try:
-                try:
-                    devs = bridge.adb_status()
-                except Exception as e:
-                    self._ui.ui.emit(lambda _e=str(e): self.show_toast("ADB unavailable", _e, "error"))
-                    return
-                devs = [d for d in devs if d.get("state") == "device"]
-                if not devs:
-                    self._ui.ui.emit(lambda: self.show_toast(
-                        "No authorized ADB device", "Enable ADB first", "warning"))
-                    emit("[warn] ADB triage: no authorized device — enable USB debugging and tap Allow")
-                    return
-                serial = devs[0].get("serial", "?")
-                sh = lambda c: bridge.adb_shell(c, timeout=10).strip()
+                emit(f"[step] ADB triage on {serial}")
+                sh = lambda c: bridge.adb_shell(c, timeout=10, serial=serial, rescue=False).strip()
                 lines.append("=" * 60)
                 lines.append("ADB DEVICE TRIAGE")
                 lines.append("=" * 60)
@@ -4459,7 +4467,7 @@ class FrpWindow(QMainWindow):
                 # lock enforcement - Quality 0 means no security enforced
                 enforced = False
                 try:
-                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10)
+                    lock_dump = bridge.adb_shell("dumpsys lock_settings", timeout=10, serial=serial, rescue=False)
                     quality = None
                     ctype = None
                     for ln in lock_dump.splitlines():
@@ -4479,7 +4487,7 @@ class FrpWindow(QMainWindow):
                 try:
                     outp = bridge.adb_shell(
                         "dd if=/dev/block/by-name/misc bs=512 count=1 2>/dev/null | wc -c",
-                        timeout=10).strip()
+                        timeout=10, serial=serial, rescue=False).strip()
                     can_dd = outp not in ("0", "")
                 except Exception:
                     pass
@@ -4513,6 +4521,12 @@ class FrpWindow(QMainWindow):
                     except Exception:
                         pass
                 self._ui.ui.emit(_update_view)
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] ADB triage stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:
                 err = str(e)
                 try:
@@ -4520,9 +4534,12 @@ class FrpWindow(QMainWindow):
                     emit(f"[error] Triage failed: {err}")
                 except Exception:
                     pass
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 try:
-                    _flow_end()
+                    _flow_end(key=device_key)
                 except Exception:
                     pass
 
@@ -4532,7 +4549,7 @@ class FrpWindow(QMainWindow):
         if getattr(self, "_pit_fetching", False):
             return
         d = mtp.find_samsung()
-        in_dl = frp._download_mode_device()
+        in_dl = core._download_mode_device()
         if not in_dl and not (d and d.get("pid") == 0x685d
                               and not mtp.is_adb_composite(d)):
             self._toasts.show_warn(
@@ -4547,7 +4564,7 @@ class FrpWindow(QMainWindow):
 
         def work():
             try:
-                contract = frp.pit_contract(target=target, log=None)
+                contract = core.pit_contract(target=target, log=None)
                 health = contract["health"]
                 raw = contract["raw"]
                 text_lines = [f"target: {target}"
@@ -4624,6 +4641,7 @@ class FrpWindow(QMainWindow):
         self.fus_detect_btn.setStyleSheet(_btn_ghost())
         self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_detect_btn.clicked.connect(self._fus_detect_device)
+        self._gate_button(self.fus_detect_btn, command="adb_shell")
         r1.addWidget(self.fus_detect_btn)
         
         lbl_reg = QLabel("Region:")
@@ -4669,6 +4687,42 @@ class FrpWindow(QMainWindow):
         form_lay.addLayout(r3)
 
         lay.addWidget(form_card)
+
+        # SamFW-style firmware details card: shows the exact firmware the
+        # connected device needs. Auto-filled by Detect / Check Version.
+        details_card = QFrame()
+        details_card.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 3px solid {C['accent']}; border-radius: 10px; }}"
+        )
+        details_lay = QVBoxLayout(details_card)
+        details_lay.setContentsMargins(12, 10, 12, 10)
+        details_lay.setSpacing(6)
+        details_title = QLabel("📋 FIRMWARE FOR THIS DEVICE")
+        details_title.setStyleSheet(f"color:{C['accent_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;")
+        details_lay.addWidget(details_title)
+        details_grid = QGridLayout()
+        details_grid.setContentsMargins(0, 0, 0, 0)
+        details_grid.setHorizontalSpacing(12)
+        details_grid.setVerticalSpacing(3)
+        self.fus_detail_vals = {}
+        for _row, (_dkey, _dlabel) in enumerate((
+            ("model", "Model"), ("region", "Region / CSC"),
+            ("pda", "PDA (AP)"), ("csc_ver", "CSC"), ("cp", "Modem (CP)"),
+            ("size", "Size"), ("file", "File"),
+        )):
+            _k = QLabel(_dlabel + ":")
+            _k.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:600;")
+            _v = QLabel("—")
+            _v.setStyleSheet(f"color:{C['text']}; font-size:11px; font-weight:700; font-family:'Consolas','Monaco',monospace;")
+            _v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            _v.setWordWrap(True)
+            details_grid.addWidget(_k, _row, 0)
+            details_grid.addWidget(_v, _row, 1)
+            self.fus_detail_vals[_dkey] = _v
+        details_grid.setColumnStretch(1, 1)
+        details_lay.addLayout(details_grid)
+        lay.addWidget(details_card)
 
         # Actions row
         act_row = QHBoxLayout()
@@ -4727,38 +4781,186 @@ class FrpWindow(QMainWindow):
         return panel
 
     def _fus_detect_device(self):
-        self.fus_status_lbl.setText("Scanning connected Samsung device...")
+        self.fus_status_lbl.setText("Scanning connected Samsung device (ADB or Download mode)...")
         def work():
             try:
-                devs = bridge.adb_devices()
-                if not devs:
-                    raise RuntimeError("No ADB device authorized/connected. Please connect phone in normal/ADB mode.")
-                model = bridge.adb_shell("getprop ro.product.model", timeout=5).strip()
-                csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5).strip()
-                if not csc:
-                    csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5).strip()
-                if not csc:
-                    csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5).strip()
-                if not model:
-                    model = "SM-S918B"
-                if not csc:
-                    csc = "EUX"
-
-                def ok():
+                try:
+                    devs = bridge.adb_devices()
+                except Exception:
+                    devs = []
+                if devs:
+                    model, csc = self._fus_detect_via_adb()
+                    def ok_adb():
+                        self.fus_model_input.setText(model)
+                        self.fus_region_input.setText(csc)
+                        self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
+                        self.show_toast(f"Detected {model} [{csc}]", "success")
+                        self._fus_check_version()
+                    self._ui.ui.emit(ok_adb)
+                    return
+                # No ADB: fall back to download (Odin) mode.
+                def _dlog(msg):
+                    try:
+                        if hasattr(self, "_ui") and self._ui:
+                            self._ui.line.emit(f"[fus-detect] {msg}")
+                    except Exception:
+                        pass
+                # Zero-USB fast path: the background monitor may already have
+                # resolved the model via its own Odin probe - reuse it instead
+                # of contending the port with a second probe.
+                cached = (getattr(self, "_cached_model", "") or "").strip()
+                if cached and not cached.startswith(("0x", "--", "(")) and cached.strip().lower() not in (
+                    "adb", "samsung", "mediatek", "qualcomm", "unknown",
+                ):
+                    _dlog(f"using already-known model {cached} (no USB probe needed)")
+                    model = cached.upper()
+                else:
+                    _dlog("no ADB device - trying download (Odin) mode ...")
+                    model = self._fus_detect_via_download_mode(log=_dlog)
+                def ok_dl():
+                    region = self.fus_region_input.text().strip() or "EUX"
                     self.fus_model_input.setText(model)
-                    self.fus_region_input.setText(csc)
-                    self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
-                    self.show_toast(f"Detected {model} [{csc}]", "success")
+                    try:
+                        if model and model != getattr(self, "_cached_model", None):
+                            self._cached_model = model
+                        if hasattr(self, "info") and "Device Model" in self.info:
+                            self.info["Device Model"].set(model)
+                    except Exception:
+                        pass
+                    self.fus_status_lbl.setText(
+                        f"Detected download-mode phone: {model} "
+                        f"(CSC unreadable in download mode - verify region [{region}], then Check Version)"
+                    )
+                    self.show_toast(f"Detected {model} (download mode)", "success")
                     self._fus_check_version()
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(ok_dl)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"Detection failed: {err}")
                     self.show_toast(f"Device detection failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _fus_detect_via_adb(self):
+        """Return (model, csc) from an ADB-connected phone. Raises on failure.
+
+        Pinned to the displayed device when it is ADB-authorized (a model/CSC
+        read from the wrong phone offers the wrong firmware for download).
+        Explicit FUS Detect context: default rescue applies.
+        """
+        serial = None
+        try:
+            serial = self._adb_serial_for_key(getattr(self, "_display_key", None))
+            if serial:
+                auth = [d.get("serial") for d in bridge.adb_status()
+                        if d.get("state") == "device"]
+                if serial not in auth:
+                    serial = None
+        except Exception:
+            serial = None
+        model = bridge.adb_shell("getprop ro.product.model", timeout=5, serial=serial, rescue=False).strip()
+        csc = bridge.adb_shell("getprop ro.boot.hardware.ods.csc", timeout=5, serial=serial).strip()
+        if not csc:
+            csc = bridge.adb_shell("getprop persist.sys.sales_code", timeout=5, serial=serial).strip()
+        if not csc:
+            csc = bridge.adb_shell("getprop ro.csc.sales_code", timeout=5, serial=serial, rescue=False).strip()
+        if not model:
+            model = "SM-S918B"
+        if not csc:
+            csc = "EUX"
+        return model, csc
+
+    def _fus_detect_via_download_mode(self, log=None):
+        """Read the SM- model from a phone in Odin download mode.
+
+        Returns the model string (e.g. 'SM-A145M'). CSC/region cannot be
+        read in download mode, so the caller keeps the region field as-is.
+        Raises RuntimeError when no download-mode phone is present or the
+        model cannot be determined.
+        """
+        import re
+        def _log(msg):
+            try:
+                if log:
+                    log(msg)
+            except Exception:
+                pass
+        _log("scanning USB for Samsung download-mode phone ...")
+        d = core._download_mode_device()
+        if not d:
+            raise RuntimeError(
+                "No ADB device authorized/connected and no Samsung phone in "
+                "download mode found. Connect the phone in normal/ADB mode, "
+                "or in Download mode (Vol Down + Power, then Vol Up)."
+            )
+        target = f"{d['vid']:04x}:{d['pid']:04x}@{d['bus']}:{d['address']}"
+        _log(f"found {d['vid']:04x}:{d['pid']:04x} at bus={d['bus']} addr={d['address']} -> target {target}")
+        try:
+            res = bridge.usb_detach_kernel(target, timeout=15)
+            _log(f"detach result: {res.get('detached') if isinstance(res, dict) else res}")
+        except Exception as e:
+            _log(f"kernel detach skipped: {e}")
+        # Retry on transient "Resource busy": our own background monitor
+        # fires odin-model probes on its own cycle and may briefly hold the
+        # port. A persistent busy across all attempts means an external
+        # holder (cdc_acm/ModemManager) - see the hint below.
+        last_err: Exception | None = None
+        info = None
+        for attempt in range(3):
+            try:
+                _log(f"reading model via odin-model probe (attempt {attempt + 1}/3) ...")
+                info = bridge.odin_model(target)
+                _log(f"probe answered: {info}")
+                break
+            except Exception as e:
+                last_err = e
+                _log(f"probe attempt {attempt + 1} failed: {e}")
+                if attempt < 2:
+                    import time as _t
+                    _t.sleep(3)
+        else:
+            raise RuntimeError(
+                f"Download-mode phone found at {target} but the model probe failed 3x: {last_err} "
+                "(reinstall the latest .deb so udev rules apply, reload with "
+                "`sudo udevadm control --reload-rules && sudo udevadm trigger`, replug the phone; "
+                "if 'Resource busy' persists, ModemManager/cdc_acm is holding the port - "
+                "try `sudo systemctl stop ModemManager`)"
+            )
+        model = (info.get("model") or "").strip() if isinstance(info, dict) else str(info or "").strip()
+        if not model or model.startswith("("):
+            raise RuntimeError(
+                f"Could not read model from download-mode phone (got {model!r}). "
+                "Type the SM- model manually."
+            )
+        # FUS wants the marketing model (SM-A145M). The Odin probe sometimes
+        # returns a bare code (A145M); restore the SM- prefix in that case.
+        if not model.startswith(("SM-", "GT-", "SC-")) and re.match(r"^[A-Z]\d", model):
+            model = "SM-" + model
+        return model.upper()
+
+    def _fus_set_details(self, details):
+        """Fill the SamFW-style firmware card. Runs on the GUI thread."""
+        def _fmt_size(n):
+            if not n:
+                return "—"
+            if n >= 1024 ** 3:
+                return f"{n / (1024 ** 3):.2f} GB"
+            return f"{n / (1024 ** 2):.1f} MB"
+        vals = {
+            "model": details.get("model") or "—",
+            "region": details.get("region") or "—",
+            "pda": details.get("pda") or "—",
+            "csc_ver": details.get("csc") or "—",
+            "cp": details.get("cp") or "—",
+            "size": _fmt_size(details.get("size_bytes")),
+            "file": details.get("filename") or "—",
+        }
+        for k, v in vals.items():
+            lbl = (self.fus_detail_vals or {}).get(k)
+            if lbl is not None:
+                lbl.setText(v)
 
     def _fus_check_version(self):
         model = self.fus_model_input.text().strip()
@@ -4767,24 +4969,31 @@ class FrpWindow(QMainWindow):
             self.show_toast("Enter device model and region first.", "error")
             return
         self.fus_check_btn.setEnabled(False)
-        self.fus_status_lbl.setText(f"Checking latest version for {model} ({region})...")
+        self.fus_status_lbl.setText(f"Fetching firmware for {model} ({region})...")
 
         def work():
             try:
-                ver = fus.check_latest_version(model, region)
+                details = fus.get_firmware_details(model, region)
                 def ok():
-                    self.fus_version_input.setText(ver)
-                    self.fus_status_lbl.setText(f"Latest version found: {ver}")
+                    self.fus_version_input.setText(details["version"])
+                    self._fus_set_details(details)
+                    size_txt = (
+                        f" ({details['size_bytes'] / (1024 ** 2):.0f} MB)"
+                        if details.get("size_bytes") else ""
+                    )
+                    self.fus_status_lbl.setText(
+                        f"Latest firmware for {model} ({region}): {details['version']}{size_txt}"
+                    )
                     self.fus_check_btn.setEnabled(True)
-                    self.show_toast(f"Latest firmware: {ver}", "success")
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                    self.show_toast(f"Latest firmware: {details['version']}", "success")
+                self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"Check failed: {err}")
                     self.fus_check_btn.setEnabled(True)
                     self.show_toast(f"Check failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4805,14 +5014,14 @@ class FrpWindow(QMainWindow):
                     self.fus_list_btn.setEnabled(True)
                     self.fus_status_lbl.setText(f"Found {len(versions)} versions for {model} ({region})")
                     self.show_toast(f"Found {len(versions)} firmware versions", "success")
-                QMetaObject.invokeMethod(self, ok, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
                     self.fus_status_lbl.setText(f"List failed: {err}")
                     self.fus_list_btn.setEnabled(True)
                     self.show_toast(f"List failed: {err}", "error")
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4833,7 +5042,7 @@ class FrpWindow(QMainWindow):
         for v in versions:
             size_mb = v['size'] / (1024 * 1024)
             item = QListWidgetItem(f"{v['version']}  ({size_mb:.1f} MB, rcount={v['rcount']})")
-            item.setData(Qt.ItemDataRole.UserRole, v['version'])
+            item.setData(Qt.ItemDataRole.UserRole, v)
             list_w.addItem(item)
         lay.addWidget(list_w)
         
@@ -4854,8 +5063,21 @@ class FrpWindow(QMainWindow):
     def _select_version_from_dialog(self, dlg, list_w):
         item = list_w.currentItem()
         if item:
-            ver = item.data(Qt.ItemDataRole.UserRole)
+            data = item.data(Qt.ItemDataRole.UserRole)
+            ver = data.get("version") if isinstance(data, dict) else data
             self.fus_version_input.setText(ver)
+            if isinstance(data, dict):
+                parts = (ver or "").split("/")
+                self._fus_set_details({
+                    "model": self.fus_model_input.text().strip().upper(),
+                    "region": self.fus_region_input.text().strip().upper(),
+                    "pda": parts[0] if len(parts) > 0 else "",
+                    "csc": parts[1] if len(parts) > 1 else "",
+                    "cp": parts[2] if len(parts) > 2 else "",
+                    "size_bytes": data.get("size"),
+                    "filename": None,
+                })
+                self.fus_status_lbl.setText(f"Selected firmware: {ver}")
             dlg.accept()
             self.show_toast(f"Selected version: {ver}", "info")
 
@@ -4882,12 +5104,12 @@ class FrpWindow(QMainWindow):
                 def upd():
                     self.fus_progress.setValue(pct)
                     self.fus_status_lbl.setText(f"Downloading... {downloaded/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB ({pct}%)")
-                QMetaObject.invokeMethod(self, upd, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(upd)
 
         def log_cb(msg):
             def l():
                 self._append_console(f"[fus] {msg}")
-            QMetaObject.invokeMethod(self, l, Qt.ConnectionType.QueuedConnection)
+            self._ui.ui.emit(l)
 
         def work():
             try:
@@ -4904,7 +5126,7 @@ class FrpWindow(QMainWindow):
                     self.show_toast("Firmware downloaded & decrypted successfully!", "success")
                     self._last_decrypted_fw = dec_file
                     _flow_end()
-                QMetaObject.invokeMethod(self, done, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(done)
             except Exception as e:
                 err = str(e)
                 def fail():
@@ -4913,7 +5135,7 @@ class FrpWindow(QMainWindow):
                     self._append_console(f"[fus] ERROR: {err}")
                     self.show_toast(f"Download failed: {err}", "error")
                     _flow_end()
-                QMetaObject.invokeMethod(self, fail, Qt.ConnectionType.QueuedConnection)
+                self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -4922,9 +5144,10 @@ class FrpWindow(QMainWindow):
         if not fw or not os.path.exists(fw):
             self.show_toast("No downloaded firmware found to load.", "warning")
             return
-        # Populate AP path in Samsung tab if available
-        if hasattr(self, "ap_input"):
-            self.ap_input.setText(fw)
+        # Populate AP slot in Samsung tab if available
+        ap_slot = getattr(self, "slot_inputs", {}).get("AP")
+        if ap_slot is not None:
+            ap_slot.setText(fw)
             self.show_toast("Loaded decrypted firmware into AP slot!", "success")
             self._on_section("samsung")
         else:
@@ -4973,7 +5196,7 @@ class FrpWindow(QMainWindow):
         combo_panel.setStyleSheet(
             f"QFrame#combo {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
             f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
         )
         combo_lay = QVBoxLayout(combo_panel)
@@ -5088,6 +5311,7 @@ class FrpWindow(QMainWindow):
             "Flash ALL partitions from the firmware directory using the scatter file"
         )
         self.mtk_flash_combo_btn.clicked.connect(self._mtk_flash)
+        self._gate_button(self.mtk_flash_combo_btn, command="mtk-flash")
         flash_row.addWidget(self.mtk_flash_combo_btn)
         self.mtk_check_combo_btn = QPushButton("Check Scatter")
         self.mtk_check_combo_btn.setStyleSheet(_btn_ghost())
@@ -5096,6 +5320,7 @@ class FrpWindow(QMainWindow):
             "Validate the scatter file and firmware directory without flashing"
         )
         self.mtk_check_combo_btn.clicked.connect(self._mtk_check_scatter)
+        self._gate_button(self.mtk_check_combo_btn, command="mtk-check-scatter")
         flash_row.addWidget(self.mtk_check_combo_btn)
         flash_row.addStretch(1)
         combo_lay.addLayout(flash_row)
@@ -5135,6 +5360,7 @@ class FrpWindow(QMainWindow):
             "marked non-downloadable. Needs the DA binary + BROM/preloader."
         )
         gen_btn.clicked.connect(self._mtk_gen_scatter)
+        self._gate_button(gen_btn, command="mtk-gpt")
         gen_row.addWidget(gen_btn)
         dump_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
         dump_btn.setStyleSheet(_btn_ghost())
@@ -5199,6 +5425,7 @@ class FrpWindow(QMainWindow):
             "the device GPT. No scatter file required."
         )
         self.mtk_flash_part_btn.clicked.connect(self._mtk_flash_part)
+        self._gate_button(self.mtk_flash_part_btn, command="mtk-flash-part")
         acts_row3.addWidget(self.mtk_flash_part_btn)
         frp_gpt_btn = QPushButton("FRP Bypass (No Scatter)")
         frp_gpt_btn.setStyleSheet(_btn_ghost())
@@ -5208,6 +5435,7 @@ class FrpWindow(QMainWindow):
             "No scatter file required."
         )
         frp_gpt_btn.clicked.connect(self._mtk_frp_gpt)
+        self._gate_button(frp_gpt_btn, command="mtk-frp-gpt")
         acts_row3.addWidget(frp_gpt_btn)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
@@ -5232,6 +5460,24 @@ class FrpWindow(QMainWindow):
             self.mtk_stop_btn, self.mtk_progress, self._mtk_reset_ui,
         )
         lay.addWidget(mtk_ops, 1)
+
+        # EXPERIMENTAL — MediaTek IMEI (per-chip, amber, every-run ack)
+        _mtk_exp_host = QWidget()
+        _mtk_exp_host.setStyleSheet("background: transparent;")
+        _mtk_exp_lay = QVBoxLayout(_mtk_exp_host)
+        _mtk_exp_lay.setContentsMargins(0, 0, 0, 0)
+        _mtk_exp_lay.setSpacing(8)
+        _mtk_exp_lay.addWidget(_experimental_banner(
+            "EXPERIMENTAL — MediaTek IMEI via NVRAM (nvdata MP0B001_*). Foreign IMEI on a non-owned device may be ILLEGAL. Educational, own device only. Every run requires the checkbox — Change additionally requires “I UNDERSTAND”."))
+        self._add_job_flows(_mtk_exp_lay, ["IMEI Repair / Change"], modes={"MTK BROM", "ADB"})
+        _mtk_exp_body = QWidget()
+        _mtk_exp_body.setStyleSheet("background: transparent;")
+        _mtk_exp_body_lay = QVBoxLayout(_mtk_exp_body)
+        _mtk_exp_body_lay.setContentsMargins(16, 14, 16, 14)
+        _mtk_exp_body_lay.setSpacing(8)
+        _mtk_exp_body_lay.addWidget(_mtk_exp_host)
+        lay.addWidget(CollapsibleSection("IMEI — EXPERIMENTAL", _mtk_exp_body, accent=C["warn"], collapsed=True))
+
         lay.addWidget(self.mtk_progress)
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
@@ -5249,33 +5495,319 @@ class FrpWindow(QMainWindow):
         if d:
             self.mtk_fw_dir.setText(d)
 
-    def _mtk_run(self, args, timeout=600):
-        if not _flow_start(f"MTK {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _key_for_bus_addr(self, tgt):
+        """Device key for a `bus:addr` target via fresh scan, or None when
+        that transport is not on USB now. Used when callers pass explicit
+        targets (no picking dialog needed — the target IS the choice)."""
+        if not tgt or not isinstance(tgt, str):
+            return None
+        try:
+            devs = bridge.detect_all() or []
+        except Exception:
+            return None
+        for d in devs:
+            if not isinstance(d, dict):
+                continue
+            try:
+                if f"{d['bus']}:{d['address']}" == tgt:
+                    return _devices.device_key(d) or None
+            except (KeyError, TypeError):
+                continue
+        return None
+
+    def _chip_begin(self, tag, cmd, modes, args, device_key=None,
+                    stop_btn=None, target_idx=1, destructive=True):
+        """Shared prologue for chip-page direct runners (MTK/QC/SPD).
+
+        Picks a device (dialog only when >1 candidate; an explicit
+        non-"auto" target derives its key from a fresh scan instead),
+        validates against the backend registry, takes the per-device lock,
+        clears scoped cancels, starts the FlashJob (VALIDATED), and splices
+        a fresh explicit bus:addr target over "auto".
+
+        Returns (device_key, flux, args) or (None, None, None) when the run
+        must not start (refusal/busy/gone — already logged + toasted).
+        """
+        from ..core import actions as _actions_mod
+
+        label = f"{tag} {cmd}" if cmd else tag
+        if device_key is None and len(args) > target_idx and args[target_idx] != "auto":
+            device_key = self._key_for_bus_addr(args[target_idx])
+            if not device_key:
+                self._ui.line.emit(
+                    f"[refused] {label}: target {args[target_idx]} is not on USB now.")
+                self._ui.toast.emit("warn", "Device gone",
+                                    "The selected target is no longer connected.")
+                return None, None, None
+        if device_key is None:
+            picked = self._pick_device(label, modes)
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return None, None, None
+            device_key = picked
+        if not device_key:
+            self._ui.line.emit(f"[refused] {label}: no matching device detected.")
+            self._ui.toast.emit("warn", "No device",
+                                f"No {tag} device detected for this operation.")
+            return None, None, None
+        action_ids = _actions_mod.actions_for_command(cmd)
+        ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
+        if not ok and action_ids and _actions_mod.is_transient_refusal(last):
+            import time as _t
+            self._ui.line.emit(
+                f"[info] {label}: device temporarily unreadable "
+                "(re-enumerating?) — settling 2.5s and retrying ...")
+            _t.sleep(2.5)
+            ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
+        if not ok:
+            self._ui.line.emit(
+                f"[refused] {label} is not valid for this device right now "
+                f"({device_key}): {last}")
+            self._ui.toast.emit("warn", "Unsupported for this device",
+                                f"{label} cannot run on the selected device "
+                                "in its current state. If the GUI shows it "
+                                "connected, wait a moment and retry.")
+            return None, None, None
+        if not _flow_start(label, destructive=destructive, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running",
+                                _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return None, None, None
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        mode_txt = ", ".join(sorted(set(modes) if isinstance(modes, (set, list, tuple)) else [modes])) if modes else ""
+        flux = jobs.start_job(device_key, label, mode_txt, cmd or "", action_ids or ())
+        flux.set_state("VALIDATED")
+        tgt = _devices.resolve_usb_target(device_key)
+        if not tgt:
+            # Same transient window as validation (serial unreadable for a
+            # moment while re-enumerating): settle and retry once before
+            # refusing. The lock is held, so this briefly blocks sibling
+            # ops on the same device only — acceptable on a failure path.
+            import time as _t
+            self._ui.line.emit(
+                f"[info] {label}: transport unreadable "
+                "(re-enumerating?) — settling 2.5s and retrying ...")
+            _t.sleep(2.5)
+            tgt = _devices.resolve_usb_target(device_key)
+        if not tgt:
+            self._ui.line.emit(
+                f"[refused] {label}: {device_key} left USB before start.")
+            self._ui.toast.emit("warn", "Device gone",
+                                "The device disconnected before the operation started. "
+                                "If the GUI still shows it connected, wait a moment "
+                                "and retry.")
+            _flow_end(key=device_key)
+            return None, None, None
+        # Target↔identity binding: the frozen target must still belong to
+        # the SAME device (Section-32: a replacement phone can occupy the
+        # same bus:addr; open matches vid/pid/bus/addr, not the serial).
+        # Zero-touch serial compare — a mismatch refuses with the exact
+        # coaching; absence passes through (the worker's open reports it).
+        serial_for_check = (device_key[4:]
+                            if isinstance(device_key, str)
+                            and device_key.startswith("adb:") else "")
+        if serial_for_check:
+            try:
+                cur = bridge.verify_target(tgt, serial_for_check)
+                if cur and cur != serial_for_check:
+                    self._ui.line.emit(
+                        f"[refused] {label}: device identity changed at "
+                        f"{tgt} — it is now serial '{cur}', not "
+                        f"'{serial_for_check}'. Replug the intended device "
+                        "and retry.")
+                    self._ui.toast.emit(
+                        "warn", "Device replaced",
+                        "The phone at that port is not the one the "
+                        "operation was validated for.")
+                    _flow_end(key=device_key)
+                    return None, None, None
+            except bridge.BridgeError as e:
+                if "identity changed" in str(e).lower():
+                    self._ui.line.emit(f"[refused] {label}: {e}")
+                    self._ui.toast.emit(
+                        "warn", "Device replaced",
+                        "The phone at that port is not the one the "
+                        "operation was validated for.")
+                    _flow_end(key=device_key)
+                    return None, None, None
+                # Absent/other: the worker's open reports it; not fatal here.
+        args = list(args)
+        if len(args) > target_idx and args[target_idx] == "auto":
+            args[target_idx] = tgt.split("@")[-1]
+        if stop_btn is not None:
+            try:
+                self._stop_job[stop_btn] = flux.job_id
+            except Exception:
+                pass
+        return device_key, flux, args
+
+    def _adb_serial_for_key(self, device_key):
+        """ADB serial for a device key, or None when it cannot be determined.
+
+        `adb:` keys carry it directly; other keys resolve through the merged
+        device rows (ADB leg first, then the row serial). None means the
+        device cannot be safely targeted — callers must refuse, never fall
+        back to first-authorized.
+        """
+        if isinstance(device_key, str) and device_key.startswith("adb:"):
+            return device_key[4:] or None
+        try:
+            rows = _devices.candidates_for_modes({"ADB"})
+        except Exception:
+            return None
+        for r in rows or []:
+            if isinstance(r, dict) and r.get("key") == device_key:
+                adb = r.get("adb") or {}
+                return adb.get("serial") or r.get("serial") or None
+        return None
+
+    def _adb_begin(self, label, method, device_key=None):
+        """Shared prologue for ADB-mechanism tools (triage/battery/network).
+
+        Picks an authorized device (dialog only when >1 candidate),
+        resolves its ADB serial once, validates `adb_shell` against the
+        backend, takes the per-device lock, clears scoped cancels and starts
+        the FlashJob (VALIDATED). Workers must pass `serial=` to every
+        `adb_shell` call so multi-step loops cannot hop phones mid-run.
+        Returns (serial, device_key, flux) or (None, None, None).
+        """
+        from ..core import actions as _actions_mod
+
+        if device_key is None:
+            picked = self._pick_device(label, "ADB")
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return None, None, None
+            device_key = picked
+        if not device_key:
+            # The merged pick scans USB descriptors, which flap; the ADB
+            # daemon's rows are independent (TCP, zero USB) and stay
+            # authoritative for ADB presence while the bus cycle drops the
+            # descriptors. When exactly one authorized device exists, use
+            # it instead of refusing — this is the "shows connected but
+            # actions say no adb" gap. Multiple → ambiguous (refuse with
+            # guidance); zero → genuine absence.
+            try:
+                auth = [d for d in bridge.adb_status()
+                        if d.get("state") == "device"]
+            except Exception:
+                auth = []
+            if len(auth) == 1:
+                device_key = f"adb:{auth[0].get('serial', '')}"
+                self._ui.line.emit(
+                    f"[info] {label}: USB scan missed the device (re-"
+                    f"enumerating) — using the ADB daemon row ({device_key})")
+            elif len(auth) > 1:
+                # Several authorized daemon rows: show the RUN picker over
+                # them instead of refusing — run semantics ('Run on this
+                # device' / 'Cancel'), not stop semantics.
+                picked = self._pick_from_keys(
+                    label, sorted(f"adb:{d.get('serial', '')}" for d in auth))
+                if picked == "__cancelled__":
+                    self._ui.line.emit("[info] device choice cancelled.")
+                    return None, None, None
+                device_key = picked
+                self._ui.line.emit(
+                    f"[info] {label}: USB scan missed (re-enumerating) — "
+                    f"picked from the ADB daemon rows ({device_key})")
+            else:
+                self._ui.line.emit(
+                    "[warn] No authorized ADB device found right now — enable USB "
+                    "debugging and tap Allow. If the GUI shows the device as "
+                    "connected, it may be re-enumerating: wait a moment and retry.")
+                self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
+                return None, None, None
+        serial = self._adb_serial_for_key(device_key)
+        if not serial:
+            self._ui.line.emit(
+                f"[refused] {label}: cannot determine the ADB serial for {device_key}.")
+            self._ui.toast.emit("warn", "Cannot target device",
+                                "The selected device has no usable ADB serial.")
+            return None, None, None
+        # One retry on transient resolution failures: USB serials can be
+        # unreadable for a moment while a device re-enumerates (marginal
+        # links/cables), while the ADB daemon still reports it connected.
+        # Retrying once after a short settle covers that window; a real
+        # absence fails again with a clear message.
+        ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
+        if not ok and _actions_mod.is_transient_refusal(last):
+            import time as _t
+            _t.sleep(2.5)
+            ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
+        if not ok:
+            self._ui.line.emit(
+                f"[refused] {label} is not valid for this device right now "
+                f"({device_key}): {last}")
+            self._ui.toast.emit("warn", "Unsupported for this device",
+                                f"{label} cannot run on the selected device "
+                                "in its current state.")
+            return None, None, None
+        if not _flow_start(label, destructive=False, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running",
+                                _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return None, None, None
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        flux = jobs.start_job(device_key, label, "ADB", method, ["adb_shell"])
+        flux.set_state("VALIDATED")
+        return serial, device_key, flux
+
+    def _mtk_run(self, args, timeout=600, device_key=None):
+        prep = self._chip_begin("MTK", args[0] if args else "",
+                                {"MTK BROM", "MTK"}, args,
+                                device_key=device_key,
+                                stop_btn=self.mtk_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"MTK: {args[0]} done")
                 self._ui.toast.emit("ok", f"MTK {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] MTK operation stopped by user")
+                emit("[cancelled] MTK operation stopped by user")
                 self._ui.status.emit("MTK: operation cancelled")
                 self._ui.toast.emit("warn", "MTK operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] MTK {args[0]}: {e}")
+                emit(f"[error] MTK {args[0]}: {e}")
                 self._ui.status.emit(f"MTK: {args[0]} failed")
                 self._ui.toast.emit("error", f"MTK {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.mtk_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.mtk_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._mtk_reset_ui)
 
-        bridge.clear_cancel()
         self.mtk_stop_btn.setEnabled(True)
         self.mtk_progress.setVisible(True)
         self.mtk_progress.setValue(150)
@@ -5286,9 +5818,38 @@ class FrpWindow(QMainWindow):
         self.mtk_progress.setValue(1000)
         QTimer.singleShot(400, lambda: self.mtk_progress.setVisible(False))
 
+    def _stop_active_job(self, stop_btn, tag):
+        """Per-device STOP for a chip page's stop button.
+
+        When the button is mapped to a live FlashJob (started from that
+        page), cancel exactly that job's device — other devices keep
+        running. Returns True when a job was stopped. Returns False (caller
+        falls back to legacy broadcast) when no live job is mapped.
+        """
+        try:
+            job_id = self._stop_job.get(stop_btn)
+        except Exception:
+            job_id = None
+        if job_id:
+            job = jobs.get_job(job_id)
+            if job is not None and job.is_active:
+                jobs.cancel_job(job_id)
+                self._ui.status.emit(f"{tag}: stopping {job.device_key} ...")
+                self._ui.line.emit(
+                    f"[warn] {tag}: stop requested for {job.device_key} "
+                    f"(job {job_id}) — other devices keep running ...")
+                return True
+            try:
+                self._stop_job.pop(stop_btn, None)
+            except Exception:
+                pass
+        return False
+
     def _mtk_stop(self):
+        if self._stop_active_job(self.mtk_stop_btn, "MTK"):
+            return
         bridge.request_cancel()
-        frp.request_cancel()
+        core.request_cancel()
         self._ui.status.emit("MTK: stopping ...")
         self._ui.line.emit("[warn] MTK: stop requested, killing bridge ...")
 
@@ -5365,6 +5926,12 @@ class FrpWindow(QMainWindow):
         patched file is saved to ~/Downloads/preloader_patched.bin and
         auto-selected as the DA binary."""
         out = os.path.expanduser("~/Downloads/preloader_patched.bin")
+        if not bridge.BRIDGE.exists():
+            self._toasts.show_error(
+                "Bridge missing",
+                "flashpilot-bridge not built - run `cargo build --release` "
+                "(Settings ▸ Tools ▸ Rebuild bridge).")
+            return
         if not _flow_start("MTK preloader dump", destructive=True):
             self._ui.status.emit("Busy: " + _flow_busy_msg())
             self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
@@ -5380,15 +5947,32 @@ class FrpWindow(QMainWindow):
         def work():
             deadline = _time.monotonic() + 240
             attempt = 0
+            beat = 0.0
+            crash_cd = 0.0
             os.environ["MTK_PRELOADER_OUT"] = out
             try:
                 while _time.monotonic() < deadline:
-                    if frp.cancel_requested():
+                    if core.cancel_requested():
                         self._ui.line.emit("[cancelled] MTK preloader dump stopped")
                         return
+                    devs = mtk.find_mtk()
+                    if _time.monotonic() - beat >= 5.0:
+                        beat = _time.monotonic()
+                        stages = [mtk.stage_label(mtk.pid_stage(x.get("pid", 0)))[0]
+                                  for x in devs] or ["none"]
+                        try:
+                            vids = sorted({hex(x.get("vid", 0))
+                                           for x in bridge.detect_all()})
+                        except Exception:
+                            vids = []
+                        self._ui.line.emit(
+                            f"[wait] polling BROM/preloader - MTK devices: "
+                            f"{len(devs)} ({', '.join(stages)}) | bus VIDs: "
+                            f"{', '.join(vids) or 'none'} - power phone OFF, "
+                            f"then plug USB")
                     d = None
                     stage = None
-                    for x in mtk.find_mtk():
+                    for x in devs:
                         st = mtk.pid_stage(x.get("pid", 0))
                         if st in ("brom", "preloader"):
                             d = x
@@ -5397,6 +5981,26 @@ class FrpWindow(QMainWindow):
                     if not d:
                         _time.sleep(0.7)
                         continue
+
+                    # PRELOADER-held (0x2000): fire crash-to-BROM, then keep
+                    # polling for the true BROM window instead of wasting a
+                    # kamakiri attempt on a port that cannot handshake.
+                    if stage == "preloader":
+                        tgt2000 = f"{d.get('bus')}:{d.get('address')}"
+                        if _time.monotonic() >= crash_cd:
+                            crash_cd = _time.monotonic() + 6.0
+                            self._ui.line.emit(
+                                f"  preloader 0e8d:2000 caught - sending "
+                                f"crash-to-BROM ({tgt2000}) ...")
+                            try:
+                                res = bridge._run(
+                                    ["mtk-crash-brom", tgt2000], timeout=25)
+                                self._ui.line.emit(res)
+                            except Exception as e:  # noqa: BLE001
+                                self._ui.line.emit(f"  crash send failed: {e}")
+                        _time.sleep(1.2)
+                        continue
+
                     target = f"{d.get('bus')}:{d.get('address')}"
                     attempt += 1
                     self._ui.line.emit(
@@ -5408,11 +6012,12 @@ class FrpWindow(QMainWindow):
                             ["mtk-exploit", target, "mtk_bypass"], timeout=120
                         )
                         self._ui.line.emit(res)
-                    except bridge.BridgeError as e:
+                    except Exception as e:  # noqa: BLE001
                         self._ui.line.emit(
-                            f"  attempt {attempt} lost the device ({e}) - "
-                            "waiting for the next window ..."
+                            f"  attempt {attempt} failed ({e}) - waiting for "
+                            "the next BROM window ..."
                         )
+                        _time.sleep(1)
                         continue
                     if os.path.isfile(out) and os.path.getsize(out):
                         self._ui.ui.emit(lambda: self.mtk_files["da"].setText(out))
@@ -5435,6 +6040,14 @@ class FrpWindow(QMainWindow):
                 self._ui.ui.emit(self._mtk_reset_ui)
 
         threading.Thread(target=work, daemon=True).start()
+
+    @property
+    def mtk_files(self):
+        """Compatibility view over the MTK page inputs (da/scatter edits)."""
+        return {
+            "da": getattr(self, "mtk_da_edit", None) or QLineEdit(),
+            "scatter": getattr(self, "mtk_scatter_edit", None) or QLineEdit(),
+        }
 
     def _mtk_gen_scatter(self):
         """Generate an SP Flash Tool scatter file from the device's own GPT
@@ -5602,6 +6215,31 @@ class FrpWindow(QMainWindow):
             self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
             return
         self._ui.line.emit(f"[step] MTK flashing: scatter={scatter} da={da} fw={fw}")
+        # Firmware↔device model match (cautious gate): the firmware
+        # directory/file name usually carries the model (SM-A145F_...,
+        # KG6-...). When the displayed device's model is known (ADB
+        # getprops) and PROVABLY differs, block unless explicitly
+        # overridden — wrong-model firmware may not boot. Unverifiable
+        # (no model in the name / device) passes with a note.
+        try:
+            import glob as _g
+            fw_name = next((os.path.basename(p) for p in sorted(_g.glob(os.path.join(fw, "*.tar.md5")) + _g.glob(os.path.join(fw, "*.tar")) + _g.glob(os.path.join(fw, "*.img")))), "")
+            fw_model = core._model_from_firmware_name(fw_name) if fw_name else ""
+            dev_model = (self._cached_model or "").strip()
+            if fw_model and dev_model:
+                match = core._models_match(dev_model, fw_model)
+                if match is False and os.environ.get("MTK_FORCE_MODEL", "0") != "1":
+                    self._toasts.show_error(
+                        "Firmware model mismatch",
+                        f"Firmware is for '{fw_model}' but the device is "
+                        f"'{dev_model}'. Set MTK_FORCE_MODEL=1 to override.")
+                    self._ui.line.emit(
+                        f"[refused] MTK flash: firmware model '{fw_model}' "
+                        f"!= device model '{dev_model}' — refusing "
+                        "(MTK_FORCE_MODEL=1 overrides).")
+                    return
+        except Exception:
+            pass
         auth_bypass = self.mtk_auth_bypass_cb.isChecked()
         
         def run_flash():
@@ -5697,8 +6335,30 @@ class FrpWindow(QMainWindow):
     def _mtk_frp_gpt(self):
         da = self.mtk_da_edit.text().strip()
         if not da:
-            self._ui.line.emit("[warn] MTK: DA binary is required")
-            self._toasts.show_warn("MTK files missing", "Select a DA binary")
+            # Bundled-DA path: FRP removal for ANY MediaTek device via BROM
+            # with no user-supplied DA (the mtkclient V5/V6 containers are
+            # parsed natively and the per-chip DA is picked by dacode).
+            da_dir = bridge.bundled_mtk_da_dir()
+            if not da_dir:
+                self._ui.line.emit("[warn] MTK: no DA selected and no bundled DA containers found")
+                self._toasts.show_warn(
+                    "MTK files missing",
+                    "Select a DA binary (no bundled containers in root/tools/mtk)")
+                return
+            self._ui.line.emit("[step] MTK FRP bypass (BROM, bundled DA — any MTK device)")
+            self._confirm_overlay(
+                "FRP Bypass (Bundled DA — any MTK)",
+                "Boot the bundled mtkclient DA over BROM and clear lock / FRP\n"
+                "partitions by NAME from the device GPT — no DA file needed.\n\n"
+                "Picks the per-chip DA automatically. On SBC/SLA/DAA-protected\n"
+                "BROMs the kamakiri2 exploit runs first.\n"
+                "This formats or zero-fills frp, nvdata, metadata, persistent,\n"
+                "protect1/2, and keystore partitions where present.\n"
+                "User data may be erased. Continue?",
+                confirm_label="Clear FRP",
+                on_confirm=lambda: self._mtk_run(
+                    ["mtk-frp-brom", "auto", da_dir], timeout=1800),
+            )
             return
         self._ui.line.emit("[step] MTK FRP bypass (GPT mode, no scatter): da={}".format(da))
         self._confirm_overlay(
@@ -5847,6 +6507,11 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Flash via Firehose": "qcom-flash",
+                "Backup Partitions": "qcom-backup",
+                "Get Device Info": "qcom-info",
+            }.get(label))
             acts_row1.addWidget(b)
         acts_row1.addStretch(1)
         acts.addLayout(acts_row1)
@@ -5860,6 +6525,10 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "FRP Reset": "qcom-frp-reset",
+                "Enable ADB": "adb_shell",
+            }.get(label))
             acts_row2.addWidget(b)
         acts_row2.addStretch(1)
         self.qc_stop_btn = QPushButton("Stop")
@@ -5963,7 +6632,7 @@ class FrpWindow(QMainWindow):
 
         fb_btns2 = QHBoxLayout()
         fb_btns2.setSpacing(6)
-        fb_btns2.addWidget(_fb_run("fastboot_read", "Getvar", "fastboot getvar all - dump device variables"))
+        fb_btns2.addWidget(_fb_run("fastboot_getvar", "Getvar", "fastboot getvar all - dump device variables"))
         fb_btns2.addWidget(_fb_run("fastboot_oem", "OEM", "fastboot oem <cmd> (set FASTBOOT_OEM, default device-info)"))
         fb_btns2.addStretch(1)
         fb_lay.addLayout(fb_btns2)
@@ -5979,6 +6648,24 @@ class FrpWindow(QMainWindow):
             self.qc_stop_btn, self.qc_progress, self._qc_reset_ui,
         )
         lay.addWidget(qc_ops, 1)
+
+        # EXPERIMENTAL — Qualcomm QCN + IMEI (per-chip, amber, every-run ack)
+        _qc_exp_host = QWidget()
+        _qc_exp_host.setStyleSheet("background: transparent;")
+        _qc_exp_lay = QVBoxLayout(_qc_exp_host)
+        _qc_exp_lay.setContentsMargins(0, 0, 0, 0)
+        _qc_exp_lay.setSpacing(8)
+        _qc_exp_lay.addWidget(_experimental_banner(
+            "EXPERIMENTAL — QCN/IMEI writes modem NV (NV 550/682, sec.dat). Foreign IMEI or non-owned device may be ILLEGAL (US 18 USC 1029 etc.) and can kill cellular. Educational, own device only. Every run requires the checkbox — IMEI Change additionally requires typing “I UNDERSTAND”."))
+        self._add_job_flows(_qc_exp_lay, ["QCN / Modem", "IMEI Repair / Change"], modes={"EDL", "ADB"})
+        _qc_exp_body = QWidget()
+        _qc_exp_body.setStyleSheet("background: transparent;")
+        _qc_exp_body_lay = QVBoxLayout(_qc_exp_body)
+        _qc_exp_body_lay.setContentsMargins(16, 14, 16, 14)
+        _qc_exp_body_lay.setSpacing(8)
+        _qc_exp_body_lay.addWidget(_qc_exp_host)
+        lay.addWidget(CollapsibleSection("QCN / IMEI — EXPERIMENTAL", _qc_exp_body, accent=C["warn"], collapsed=True))
+
         lay.addWidget(self.qc_progress)
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
@@ -5999,7 +6686,7 @@ class FrpWindow(QMainWindow):
         else:
             os.environ.pop("FASTBOOT_IMAGE", None)
         self._run_job_flow(
-            "Reboot device", "FASTBOOT", method, label,
+            "Reboot", "FASTBOOT", method, label,
             self.qc_stop_btn, self.qc_progress, self._qc_reset_ui,
         )
 
@@ -6015,33 +6702,58 @@ class FrpWindow(QMainWindow):
         if d:
             self.qc_fw_dir.setText(d)
 
-    def _qc_run(self, args, timeout=600):
-        if not _flow_start(f"Qualcomm {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _qc_run(self, args, timeout=600, device_key=None):
+        prep = self._chip_begin("Qualcomm", args[0] if args else "",
+                                {"EDL"}, args,
+                                device_key=device_key,
+                                stop_btn=self.qc_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"Qualcomm: {args[0]} done")
                 self._ui.toast.emit("ok", f"Qualcomm {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] Qualcomm operation stopped by user")
+                emit("[cancelled] Qualcomm operation stopped by user")
                 self._ui.status.emit("Qualcomm: operation cancelled")
                 self._ui.toast.emit("warn", "Qualcomm operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] Qualcomm {args[0]}: {e}")
+                emit(f"[error] Qualcomm {args[0]}: {e}")
                 self._ui.status.emit(f"Qualcomm: {args[0]} failed")
                 self._ui.toast.emit("error", f"Qualcomm {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.qc_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.qc_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._qc_reset_ui)
 
-        bridge.clear_cancel()
         self.qc_stop_btn.setEnabled(True)
         self.qc_progress.setVisible(True)
         self.qc_progress.setValue(150)
@@ -6053,47 +6765,65 @@ class FrpWindow(QMainWindow):
         QTimer.singleShot(400, lambda: self.qc_progress.setVisible(False))
 
     def _qc_stop(self):
+        if self._stop_active_job(self.qc_stop_btn, "Qualcomm"):
+            return
         bridge.request_cancel()
-        frp.request_cancel()
+        core.request_cancel()
         self._ui.status.emit("Qualcomm: stopping ...")
         self._ui.line.emit("[warn] Qualcomm: stop requested, killing bridge ...")
 
-    def _qc_adb(self):
+    def _qc_adb(self, device_key=None):
         """Best-effort ADB enable for a Qualcomm device that is booted to
         Android (or recovery) and reachable over adb. EDL-mode devices can't
         enable ADB directly - tell the user so."""
+        prep = self._adb_begin("Enable ADB", "qc_adb_enable", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def work():
-            try:
-                devs = bridge.adb_status()
-            except bridge.BridgeError:
-                devs = []
-            if not any(d["state"] == "device" for d in devs):
-                self._ui.line.emit(
-                    "[warn] No authorized ADB device found. Boot the phone to "
-                    "Android/recovery with USB debugging on, then retry."
-                )
-                self._ui.toast.emit(
-                    "warn", "Enable ADB", "No authorized ADB device detected"
-                )
-                return
-            serial = next(d["serial"] for d in devs if d["state"] == "device")
-            self._ui.line.emit(f"[step] Enabling ADB on {serial} ...")
-            for cmd in (
-                "setprop persist.sys.usb.config adb",
-                "setprop sys.usb.config adb",
-                "settings put global adb_enabled 1",
-                "svc usb setFunctions adb",
-            ):
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
                 try:
-                    out = bridge.adb_shell(cmd, timeout=10)
-                    if out:
-                        self._ui.line.emit(f"  {cmd} -> {out[:120]}")
-                    else:
-                        self._ui.line.emit(f"  {cmd} -> ok")
-                except bridge.BridgeError as e:
-                    self._ui.line.emit(f"[warn] {cmd}: {e}")
-            self._ui.line.emit("[ok] ADB enable commands sent")
-            self._ui.toast.emit("ok", "Enable ADB", "Commands sent to device")
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            try:
+                emit(f"[step] Enabling ADB on {serial} ...")
+                for cmd in (
+                    "setprop persist.sys.usb.config adb",
+                    "setprop sys.usb.config adb",
+                    "settings put global adb_enabled 1",
+                    "svc usb setFunctions adb",
+                ):
+                    try:
+                        out = bridge.adb_shell(cmd, timeout=10, serial=serial, rescue=False)
+                        if out:
+                            emit(f"  {cmd} -> {out[:120]}")
+                        else:
+                            emit(f"  {cmd} -> ok")
+                    except bridge.BridgeError as e:
+                        emit(f"[warn] {cmd}: {e}")
+                emit("[ok] ADB enable commands sent")
+                self._ui.toast.emit("ok", "Enable ADB", "Commands sent to device")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] Enable ADB stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
+            except Exception as e:  # noqa: BLE001
+                emit(f"[error] Enable ADB: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6103,8 +6833,10 @@ class FrpWindow(QMainWindow):
         def work():
             try:
                 out = bridge._run(["qcom-detect"])
-                self._ui.ui.emit(lambda s=out: self.qc_status.setText(
-                    s or "No Qualcomm EDL device detected"))
+                txt = (out or "").strip()
+                if not txt or txt in ("[]", "{}", "null"):
+                    txt = "No Qualcomm device — no 05c6 over USB (any 05c6: EDL 9008/900E/6000/modem) or Qualcomm chip via ADB (qcom/msm) — enter EDL (power off, Vol Up+Down, plug) or connect Qualcomm in normal MTP/ADB"
+                self._ui.ui.emit(lambda s=txt: self.qc_status.setText(s))
                 self._ui.line.emit(f"[info] {out}")
             except bridge.BridgeError as e:
                 self._ui.ui.emit(lambda err=e: self.qc_status.setText(
@@ -6133,46 +6865,78 @@ class FrpWindow(QMainWindow):
             return
         self._qc_run(["qcom-backup", "auto", prog, "/tmp/qcom_backup"], timeout=1800)
 
-    def _qc_info(self):
+    def _qc_info(self, device_key=None):
+        prep = self._chip_begin("Qualcomm", "qcom-info", {"EDL"},
+                                ["qcom-info", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.qc_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, resolved = prep
+        tgt = resolved[1]
         self.qc_progress.setVisible(True)
         self.qc_progress.setValue(150)
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             lines = []
             try:
-                all_devs = bridge.detect_all()
-                qcom = [d for d in all_devs if d.get("vid") == 0x05C6]
-                if qcom:
-                    lines.append("=== Qualcomm USB Device(s) ===")
-                    for d in qcom:
-                        lines.extend(_fmt_usb_full(d))
-                        pid = d.get("pid", 0)
-                        if pid in (0x9008, 0x900E):
-                            lines.append("  -> EDL mode (Sahara/firehose capable)")
-                        else:
-                            lines.append("  -> normal/modem mode (not in EDL)")
+                with _devices.device_scope(device_key):
+                    all_devs = bridge.detect_all()
+                    qcom = [d for d in all_devs if d.get("vid") == 0x05C6]
+                    if qcom:
+                        lines.append("=== Qualcomm USB Device(s) ===")
+                        for d in qcom:
+                            lines.extend(_fmt_usb_full(d))
+                            pid = d.get("pid", 0)
+                            if pid in (0x9008, 0x900E):
+                                lines.append("  -> EDL mode (Sahara/firehose capable)")
+                            else:
+                                lines.append("  -> normal/modem mode (not in EDL)")
+                            lines.append("")
+                    else:
+                        lines.append("No Qualcomm USB device (VID 05c6) found over USB")
                         lines.append("")
-                else:
-                    lines.append("No Qualcomm USB device (VID 05c6) found over USB")
-                    lines.append("")
 
-                out = bridge._run(["qcom-info", "auto"], timeout=120)
+                    out = bridge._run(["qcom-info", tgt], timeout=120)
                 lines.append("--- Sahara device info ---")
                 lines.append(out or "(Sahara handshake not available - device not in EDL)")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.status.emit("Qualcomm: device info complete")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] Qualcomm info stopped by user")
+                emit("[cancelled] Qualcomm info stopped by user")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
                 lines.append("--- Sahara device info ---")
                 lines.append(f"(Sahara handshake failed: {e})")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.status.emit("Qualcomm: info partial")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.qc_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.qc_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._qc_reset_ui)
 
-        bridge.clear_cancel()
         self.qc_stop_btn.setEnabled(True)
         threading.Thread(target=work, daemon=True).start()
 
@@ -6198,7 +6962,7 @@ class FrpWindow(QMainWindow):
             "are sure this is the right firmware for your model.",
             confirm_label="Continue",
             on_confirm=lambda: self._run_ops_flow(
-                "Odin Flashing (Advanced)", "Download mode", method, label
+                "Flash Firmware", "Download mode", method, label
             ),
         )
 
@@ -6370,7 +7134,258 @@ class FrpWindow(QMainWindow):
         overlay.raise_()
         ok.setFocus()
 
-    def _show_beta_risk_dialog(self, cur, stable_tag):
+    def _confirm_experimental_overlay(self, feature, title, text, method_key,
+                                      confirm_label, on_confirm, chip="wipe"):
+        """EXPERIMENTAL gate (Q2-B): every run requires an ownership checkbox.
+
+        The OK button stays disabled until the user checks the ownership box.
+        For ``_EXPERIMENTAL_TYPE_CONFIRM`` keys (IMEI change) the user must ALSO
+        type the required phrase before OK enables. Audit is logged on show /
+        cancel / confirm regardless of the per-version ack (which is NOT used
+        to auto-enable — the checkbox is always required)."""
+        grad = ("#f59e0b", "#fbbf24")
+        accent = grad[0]
+
+        overlay = QFrame(self._root)
+        overlay.setObjectName("confirmOverlay")
+        overlay.setStyleSheet("QFrame#confirmOverlay { background: rgba(4, 9, 18, 215); border-radius: 18px; }")
+        overlay.setGeometry(0, 0, self._root.width(), self._root.height())
+
+        card = QFrame(overlay)
+        card.setObjectName("confirmCard")
+        card.setFixedWidth(620)
+        card.setMinimumHeight(380)
+        card.setStyleSheet(
+            f"QFrame#confirmCard {{ background: {C['card']}; border: 1px solid {accent}; border-top: 2px solid {accent}; border-radius: 16px; }}"
+        )
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(42)
+        shadow.setOffset(0, 14)
+        shadow.setColor(QColor(0, 0, 0, 220))
+        card.setGraphicsEffect(shadow)
+        card._drag_pos = None  # type: ignore
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(26, 18, 26, 20)
+        v.setSpacing(14)
+
+        hdr_wrap = QFrame()
+        hdr_wrap.setStyleSheet("background: transparent;")
+        hdr = QHBoxLayout(hdr_wrap)
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(10)
+        pill = QLabel(" EXPERIMENTAL ")
+        pill.setStyleSheet(
+            f"color: #04121a; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[0]}, stop:1 {grad[1]});"
+            " border-radius: 7px; padding: 4px 12px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
+        )
+        pill.setFixedHeight(24)
+        hdr.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        t = QLabel(title)
+        t.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 800;")
+        t.setWordWrap(True)
+        hdr.addWidget(t, 1)
+        x_btn = QPushButton("✕")
+        x_btn.setFixedSize(28, 28)
+        x_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        x_btn.setStyleSheet(
+            "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
+            "QPushButton:hover { background: #334155; color: #ffffff; }"
+        )
+        x_btn.setToolTip("Close")
+        hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
+        v.addWidget(hdr_wrap)
+
+        def _start_drag(e):
+            if e.button() == Qt.MouseButton.LeftButton:
+                card._drag_pos = e.globalPosition().toPoint() - card.pos()  # type: ignore
+
+        def _do_drag(e):
+            if getattr(card, "_drag_pos", None) is not None and e.buttons() & Qt.MouseButton.LeftButton:
+                np = e.globalPosition().toPoint() - card._drag_pos  # type: ignore
+                np.setX(max(0, min(np.x(), overlay.width() - card.width())))
+                np.setY(max(0, min(np.y(), overlay.height() - card.height())))
+                card.move(np)
+
+        def _end_drag(e):
+            card._drag_pos = None  # type: ignore
+
+        for wdg in (hdr_wrap, t, pill):
+            wdg.setCursor(Qt.CursorShape.OpenHandCursor)
+            wdg.mousePressEvent = _start_drag  # type: ignore
+            wdg.mouseMoveEvent = _do_drag  # type: ignore
+            wdg.mouseReleaseEvent = _end_drag  # type: ignore
+
+        v.addWidget(_experimental_banner(
+            "EXPERIMENTAL — Educational purpose only. You certify you own this device "
+            "and accept all brick/warranty/legal risk."))
+
+        m = QLabel(text)
+        m.setStyleSheet("color: #e2e8f0; font-size: 13px; font-weight: 500; line-height: 145%;")
+        m.setWordWrap(True)
+        m.setTextFormat(Qt.TextFormat.PlainText)
+        v.addWidget(m)
+
+        # Mandatory ownership checkbox — required EVERY run.
+        cb = QCheckBox(
+            "I own this device, understand this is EXPERIMENTAL and educational "
+            "purpose only, and I accept all risk."
+        )
+        cb.setStyleSheet(
+            "QCheckBox { color: #fde68a; font-size: 12px; font-weight: 700; spacing: 10px; }"
+            "QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #f59e0b; border-radius: 5px; background: #0f172a; }"
+            "QCheckBox::indicator:checked { background: #f59e0b; border-color: #f59e0b; }"
+        )
+        v.addWidget(cb)
+
+        # Optional stronger "type to confirm" field for IMEI change.
+        required_phrase = _EXPERIMENTAL_TYPE_CONFIRM.get(method_key, "")
+        type_edit = None
+        if required_phrase:
+            te = QLineEdit()
+            te.setPlaceholderText(f"Type “{required_phrase}” to enable")
+            te.setStyleSheet(
+                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']}; "
+                "border-radius:8px; padding:6px 10px; color:#f8fafc; }}"
+            )
+            v.addWidget(te)
+            type_edit = te
+
+        btns = QHBoxLayout()
+        btns.setSpacing(12)
+        cancel = QPushButton("Cancel")
+        cancel.setStyleSheet(_btn_ghost())
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel.setFixedWidth(120)
+
+        ok = QPushButton(confirm_label)
+        ok.setStyleSheet(
+            f"QPushButton {{ color: #04121a; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[0]}, stop:1 {grad[1]});"
+            " border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+            f"QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[1]}, stop:1 {grad[0]}); }}"
+            "QPushButton:disabled { background: #334155; color: #94a3b8; }"
+        )
+        ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok.setFixedWidth(180)
+        ok.setEnabled(False)
+
+        def _recheck(*_):
+            en = cb.isChecked()
+            if type_edit is not None:
+                en = en and type_edit.text().strip() == required_phrase
+            ok.setEnabled(en)
+
+        cb.toggled.connect(_recheck)
+        if type_edit is not None:
+            type_edit.textChanged.connect(_recheck)
+
+        def close():
+            overlay.hide()
+            overlay.deleteLater()
+
+        def close_and_audit_cancel():
+            try:
+                experimental.audit_log(feature, "cancel")
+            except Exception:
+                pass
+            close()
+
+        cancel.clicked.connect(close_and_audit_cancel)
+        x_btn.clicked.connect(close_and_audit_cancel)
+
+        def on_ok():
+            try:
+                experimental.set_acknowledged(feature, True)
+                experimental.audit_log(feature, "ack_and_confirm")
+            except Exception:
+                pass
+            # Per-run ack token consumed by _run_ops_flow/_run_job_flow into
+            # ctx['experimental_ack'] so core's strict gate passes this run
+            # only. Counted per feature with timestamps (see token_note):
+            # two confirms authorize two runs, and stale confirms expire
+            # instead of authorizing a much later run.
+            try:
+                if not isinstance(getattr(self, "_exp_ack_once", None), dict):
+                    self._exp_ack_once = {}
+                experimental.token_note(self._exp_ack_once, feature)
+            except Exception:
+                pass
+            close()
+            on_confirm()
+
+        ok.clicked.connect(on_ok)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        v.addLayout(btns)
+
+        def center():
+            card.adjustSize()
+            max_h = overlay.height() - 32
+            if card.height() > max_h:
+                card.setFixedHeight(max_h)
+            card.move((overlay.width() - card.width()) // 2, (overlay.height() - card.height()) // 2)
+
+        def on_resize(e):
+            QFrame.resizeEvent(overlay, e)
+            center()
+
+        overlay.resizeEvent = on_resize  # type: ignore
+        center()
+        overlay.show()
+        overlay.raise_()
+        try:
+            experimental.audit_log(feature, "dialog_shown")
+        except Exception:
+            pass
+
+    def _fetch_latest_stable_tag(self, timeout=5):
+        """Live latest non-draft, non-prerelease tag from GitHub (never
+        hand-coded). Returns '' when offline or nothing published."""
+        import json as _json
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                "https://api.github.com/repos/Legendary-Brilliantforous/"
+                "flashpilot/releases",
+                headers={"User-Agent": "FlashPilot"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                rel = _json.loads(r.read().decode("utf-8"))
+            best, bt = None, (0, 0, 0)
+            for x in rel:
+                if x.get("draft") or x.get("prerelease"):
+                    continue
+                tag = (x.get("tag_name") or "").lstrip("v")
+                tv, _ = _parse_version(tag)
+                if tv > bt:
+                    best, bt = tag, tv
+            return best or ""
+        except Exception:
+            return ""
+
+    def _show_beta_gate_async(self):
+        """Fetch latest stable off-thread, then open the beta gate on UI."""
+        def work():
+            tag = self._fetch_latest_stable_tag()
+            def show():
+                try:
+                    self._show_beta_risk_dialog(APP_VERSION, tag)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    try:
+                        self.log_line(f"[error] beta dialog crashed: {e}")
+                        self._toasts.show_error("Beta dialog error", str(e))
+                    except Exception:
+                        pass
+            try:
+                self._ui.ui.emit(show)
+            except Exception:
+                show()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_beta_risk_dialog(self, cur, stable_tag, force=False):
         """Beta acceptance gate — replaces the easy-to-miss toast.
 
         Shows a blocking in-window card that requires an explicit
@@ -6380,13 +7395,35 @@ class FrpWindow(QMainWindow):
         high contrast (no translucency blur) so it never looks
         'out of focus'."""
         key = f"beta_risk_accepted_{cur}"
+        # One-time reset per version: clears stale accepted/seen flags so a
+        # freshly installed beta ALWAYS surfaces the risk dialog at least
+        # once (stale flags from prior sessions silently suppressed it).
+        reset_marker = f"beta_gate_reset_v2_{cur}"
+        if not self.settings.value(reset_marker, False, type=bool):
+            self.settings.setValue(f"beta_risk_accepted_{cur}", False)
+            self.settings.setValue(f"beta_notice_seen_{cur}", False)
+            self.settings.setValue(reset_marker, True)
         if self.settings.value(key, False, type=bool):
             return
         # Settings: first_install (default) shows once per beta version,
         # every_boot shows on every launch. Bigger than toast (320px) -> 620px.
         mode = self.settings.value("beta_warning_mode", "first_install")
-        if mode == "first_install" and self.settings.value(key, False, type=bool):
-            return
+        seen_key = f"beta_notice_seen_{cur}"
+        if force:
+            self.settings.setValue(key, False)
+        elif mode == "first_install" and self.settings.value(key, False, type=bool):
+            # Still show ONCE per version even if accepted, so a freshly
+            # installed beta always surfaces the warning (user had accepted
+            # during earlier testing, which silently hid it).
+            if self.settings.value(seen_key, False, type=bool):
+                try:
+                    self._ui.line.emit("[beta] notice suppressed (already accepted "
+                                       "for this version) — Settings ▸ Updates ▸ "
+                                       "'Preview beta warning' to see it again.")
+                except Exception:
+                    pass
+                return
+            # fall through to show once, then mark seen
         # Prevent stacking multiple beta dialogs if update check fires twice
         if getattr(self, "_beta_dialog_open", False):
             return
@@ -6468,10 +7505,17 @@ class FrpWindow(QMainWindow):
 
         # Version line — installed (downloaded) vs latest stable on GitHub (dynamic, never hand-coded)
         disp_cur = _display_version(cur)
-        disp_stable = _display_version(stable_tag) if stable_tag else "none yet"
+        if stable_tag:
+            stable_line = (
+                f"Latest <b>stable</b> on GitHub is "
+                f"<b style='color:#7dd3fc;'>{stable_tag}</b>  "
+                f"(display v{_display_version(stable_tag)})."
+            )
+        else:
+            stable_line = "Latest <b>stable</b> on GitHub: <i>not published yet.</i>"
         ver_line = QLabel(
-            f"You downloaded <b style='color:#fbbf24;'>{cur}</b>  (display v{disp_cur}).<br>"
-            f"Latest <b>stable</b> on GitHub is <b style='color:#7dd3fc;'>{stable_tag or '—'}</b> (display v{disp_stable})."
+            f"You downloaded <b style='color:#fbbf24;'>{cur}</b>  "
+            f"(display v{disp_cur}).<br>{stable_line}"
         )
         ver_line.setTextFormat(Qt.TextFormat.RichText)
         ver_line.setWordWrap(True)
@@ -6531,6 +7575,10 @@ class FrpWindow(QMainWindow):
             overlay.hide()
             overlay.deleteLater()
             self._beta_dialog_open = False
+            try:
+                self.settings.setValue(f"beta_notice_seen_{cur}", True)
+            except Exception:
+                pass
 
         def close_and_exit():
             close_only()
@@ -6581,7 +7629,7 @@ class FrpWindow(QMainWindow):
         overlay.raise_()
         cb.setFocus()
 
-    def _show_centered_notice(self, title, message, pill="INFO", pill_grad=(" #0ea5e9", "#22d3ee"), ok_label="OK"):
+    def _show_centered_notice(self, title, message, pill="INFO", pill_grad=(" #0ea5e9", "#22d3ee"), ok_label="OK", ok_callback=None, secondary_label=None, secondary_callback=None):
         """Generic big centered notice for stable channels — same UX as beta
         dialog (620px, draggable, X to close, high-contrast text) so stable
         toasts don't look 'not good enough' next to the beta gate."""
@@ -6669,6 +7717,21 @@ class FrpWindow(QMainWindow):
 
         btns = QHBoxLayout()
         btns.setSpacing(12)
+
+        if secondary_label and secondary_callback:
+            sec_btn = QPushButton(secondary_label)
+            sec_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            sec_btn.setFixedWidth(160)
+            sec_btn.setStyleSheet(
+                "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #10b981, stop:1 #06b6d4); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
+                "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #34d399, stop:1 #06b6d4); }"
+            )
+            btns.addWidget(sec_btn)
+            def _sec_clicked():
+                close()
+                secondary_callback()
+            sec_btn.clicked.connect(_sec_clicked)
+
         ok = QPushButton(ok_label)
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
         ok.setFixedWidth(160)
@@ -6686,7 +7749,11 @@ class FrpWindow(QMainWindow):
             self._centered_open = False  # type: ignore
 
         x_btn.clicked.connect(close)
-        ok.clicked.connect(close)
+        def _ok_clicked():
+            close()
+            if ok_callback:
+                ok_callback()
+        ok.clicked.connect(_ok_clicked)
 
         def center():
             card.adjustSize()
@@ -6752,6 +7819,55 @@ class FrpWindow(QMainWindow):
         det_row.addWidget(self.spd_status, 1)
         lay.addLayout(det_row)
 
+        # ——— Immediate BROM Factory Reset (FIRST) ———
+        brom_box = QFrame()
+        brom_box.setObjectName("brombox")
+        brom_box.setStyleSheet(
+            f"QFrame#brombox {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['border']}; border-left: 3px solid #a78bfa;"
+            f" border-radius: 10px; }}"
+        )
+        brom_lay = QVBoxLayout(brom_box)
+        brom_lay.setContentsMargins(12, 10, 12, 10)
+        brom_lay.setSpacing(6)
+        brom_title = QLabel("⚡ BROM FACTORY RESET — IMMEDIATE (FIRST)")
+        brom_title.setStyleSheet(f"color:#c4b5fd; font-weight:800; font-size:11px; letter-spacing:0.6px;")
+        brom_lay.addWidget(brom_title)
+        brom_info = QLabel(
+            "One-click wipe for SPD BROM (1782:4d00). When caught, immediately erases "
+            "userdata/cache/frp via BSL — no firmware flash. Works BROM-only without FDL; "
+            "if FDL1/FDL2 are selected below they are used for full userdata wipe."
+        )
+        brom_info.setWordWrap(True)
+        brom_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        brom_lay.addWidget(brom_info)
+        brom_btn_row = QHBoxLayout()
+        brom_btn_row.setSpacing(10)
+        self.spd_brom_factory_btn = QPushButton("⚡ Factory Reset (BROM) — 1-Click")
+        self.spd_brom_factory_btn.setStyleSheet(_btn_primary())
+        self.spd_brom_factory_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spd_brom_factory_btn.setToolTip(
+            "Immediate factory reset from BROM. Auto-catches 1782:4d00 window (~2s),\n"
+            "erases userdata/cache/frp via BROM-only (no FDL needed) or with FDL1/FDL2\n"
+            "for full wipe. Do this FIRST before any flash. If FDLs are set they must match chipset."
+        )
+        self.spd_brom_factory_btn.clicked.connect(self._spd_brom_factory_reset)
+        self._gate_button(self.spd_brom_factory_btn, command="spd-format")
+        brom_btn_row.addWidget(self.spd_brom_factory_btn)
+        self.spd_brom_auto_check = QCheckBox("Auto-run when BROM caught")
+        self.spd_brom_auto_check.setChecked(False)
+        self.spd_brom_auto_check.setStyleSheet(f"QCheckBox {{ color:{C['dim']}; font-size:11px; }}")
+        self.spd_brom_auto_check.setToolTip("If checked, Format will fire automatically the instant BROM is caught — no extra click.")
+        brom_btn_row.addWidget(self.spd_brom_auto_check)
+        brom_btn_row.addStretch(1)
+        brom_lay.addLayout(brom_btn_row)
+        brom_lay.addWidget(_risk_banner(
+            "BROM factory reset erases user data (password/PIN/FRP). No FDL needed for basic wipe; "
+            "if FDLs are set, mismatch = hard-brick. This is intentionally the FIRST operation for SPD."
+        ))
+        lay.addWidget(brom_box)
+
         self.spd_files = {}
         for name, lbl, flt in (
             ("fdl1", "FDL1 binary", "FDL (*.bin);;All files (*)"),
@@ -6814,6 +7930,11 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Get Device Info": "spd-info",
+                "Flash Firmware": "spd-flash",
+                "Backup Partitions": "spd-backup",
+            }.get(label))
             acts_row1.addWidget(b)
         acts_row1.addStretch(1)
         acts.addLayout(acts_row1)
@@ -6827,6 +7948,10 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            self._gate_button(b, command={
+                "Format / Unlock": "spd-format",
+                "FRP Reset": "spd-frp",
+            }.get(label))
             acts_row2.addWidget(b)
         acts_row2.addStretch(1)
         self.spd_stop_btn = QPushButton("Stop")
@@ -6858,6 +7983,7 @@ class FrpWindow(QMainWindow):
                 + ("Needs FDL1+FDL2." if mode != "normal" else "")
             )
             b.clicked.connect(lambda _=False, m=mode: self._spd_boot(m))
+            self._gate_button(b, command="spd-boot")
             acts_row3.addWidget(b)
         acts_row3.addStretch(1)
         acts.addLayout(acts_row3)
@@ -6986,6 +8112,7 @@ class FrpWindow(QMainWindow):
             "packed file exists and ends with _magic.img (safety marker)."
         )
         self.spd_magic_flash_btn.clicked.connect(self._spd_magic_flash)
+        self._gate_button(self.spd_magic_flash_btn, command="spd-flash")
         mpb_row.addWidget(self.spd_magic_flash_btn)
         mpb_row.addStretch(1)
         adv_lay.addLayout(mpb_row)
@@ -7003,7 +8130,7 @@ class FrpWindow(QMainWindow):
         adb_box.setStyleSheet(
             f"QFrame#spdadb {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['accent']};"
+            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
             f" border-radius: 9px; }}"
         )
         adb_lay = QVBoxLayout(adb_box)
@@ -7034,6 +8161,7 @@ class FrpWindow(QMainWindow):
         self.spd_adb_btn.setStyleSheet(_btn_primary())
         self.spd_adb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.spd_adb_btn.clicked.connect(self._spd_enable_adb)
+        self._gate_button(self.spd_adb_btn, command="spd-flash")
         adb_row.addWidget(self.spd_adb_btn)
         adb_lay.addLayout(adb_row)
         adb_lay.addWidget(_risk_banner(
@@ -7082,10 +8210,28 @@ class FrpWindow(QMainWindow):
         self.spd_progress.setVisible(False)
         spd_ops = self._build_chip_ops_section(
             "spd",
-            {"ADB", "MTP", "FASTBOOT"},
+            {"ADB", "MTP", "FASTBOOT", "SPD"},
             self.spd_stop_btn, self.spd_progress, self._spd_reset_ui,
         )
         lay.addWidget(spd_ops, 1)
+
+        # EXPERIMENTAL — SPD/UNISOC IMEI + PAC (per-chip, amber, every-run ack)
+        _spd_exp_host = QWidget()
+        _spd_exp_host.setStyleSheet("background: transparent;")
+        _spd_exp_lay = QVBoxLayout(_spd_exp_host)
+        _spd_exp_lay.setContentsMargins(0, 0, 0, 0)
+        _spd_exp_lay.setSpacing(8)
+        _spd_exp_lay.addWidget(_experimental_banner(
+            "EXPERIMENTAL — SPD IMEI via BSL modem-NV. Foreign IMEI on a non-owned device may be ILLEGAL. Educational, own device only. Every run requires the checkbox — Change additionally requires “I UNDERSTAND”."))
+        self._add_job_flows(_spd_exp_lay, ["IMEI Repair / Change"], modes={"ADB"})
+        _spd_exp_body = QWidget()
+        _spd_exp_body.setStyleSheet("background: transparent;")
+        _spd_exp_body_lay = QVBoxLayout(_spd_exp_body)
+        _spd_exp_body_lay.setContentsMargins(16, 14, 16, 14)
+        _spd_exp_body_lay.setSpacing(8)
+        _spd_exp_body_lay.addWidget(_spd_exp_host)
+        lay.addWidget(CollapsibleSection("IMEI — EXPERIMENTAL", _spd_exp_body, accent=C["warn"], collapsed=True))
+
         lay.addWidget(self.spd_progress)
         page_scroll.setWidget(host)
         panel_lay.addWidget(page_scroll)
@@ -7109,33 +8255,58 @@ class FrpWindow(QMainWindow):
         """Best-effort current SPD download target from the poll state."""
         return getattr(self, "_last_spd_target", None)
 
-    def _spd_run(self, args, timeout=900):
-        if not _flow_start(f"SPD {args[0]}", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _spd_run(self, args, timeout=900, device_key=None):
+        prep = self._chip_begin("SPD", args[0] if args else "",
+                                {"SPD"}, args,
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, args = prep
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                out = bridge._run(args, timeout=timeout)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(args, timeout=timeout)
+                emit(out or "(no output)")
                 self._ui.status.emit(f"SPD: {args[0]} done")
                 self._ui.toast.emit("ok", f"SPD {args[0]}", "Completed successfully")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                self._ui.line.emit("[cancelled] SPD operation stopped by user")
+                emit("[cancelled] SPD operation stopped by user")
                 self._ui.status.emit("SPD: operation cancelled")
                 self._ui.toast.emit("warn", "SPD operation", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD {args[0]}: {e}")
+                emit(f"[error] SPD {args[0]}: {e}")
                 self._ui.status.emit(f"SPD: {args[0]} failed")
                 self._ui.toast.emit("error", f"SPD {args[0]}", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
@@ -7147,8 +8318,10 @@ class FrpWindow(QMainWindow):
         QTimer.singleShot(400, lambda: self.spd_progress.setVisible(False))
 
     def _spd_stop(self):
+        if self._stop_active_job(self.spd_stop_btn, "SPD"):
+            return
         bridge.request_cancel()
-        frp.request_cancel()
+        core.request_cancel()
         self._ui.status.emit("SPD: stopping ...")
         self._ui.line.emit("[warn] SPD: stop requested, killing bridge ...")
 
@@ -7250,8 +8423,81 @@ class FrpWindow(QMainWindow):
                 self._ui.ui.emit(on_timeout)
             else:
                 self._spd_watch_active = False
+                # Auto factory reset if armed — this makes BROM → immediate wipe the FIRST operation
+                try:
+                    if hasattr(self, "spd_brom_auto_check") and self.spd_brom_auto_check.isChecked():
+                        # Use main-thread to run format so dialog + flow are safe
+                        def auto_fmt(t=caught):
+                            fdl1_a = self.spd_files["fdl1"].text().strip() if hasattr(self, "spd_files") else ""
+                            # BROM should not require FDL — BROM-only path uses "none"
+                            if not fdl1_a or not os.path.isfile(fdl1_a):
+                                self._ui.line.emit("[spd] Auto BROM factory reset (BROM-only, no FDL) → spd-format BROM-only")
+                                args_a = ["spd-format", t, "none", "0x0"]
+                            else:
+                                a1_a = self._spd_addr(self.spd_fdl1_addr)
+                                if a1_a is None:
+                                    a1_a = 0
+                                fdl2_a = self.spd_files["fdl2"].text().strip()
+                                args_a = ["spd-format", t, fdl1_a, f"0x{a1_a:x}"]
+                                if fdl2_a and os.path.isfile(fdl2_a):
+                                    a2_a = self._spd_addr(self.spd_fdl2_addr)
+                                    if a2_a is not None:
+                                        args_a += [fdl2_a, f"0x{a2_a:x}"]
+                                self._ui.line.emit(f"[spd] Auto BROM factory reset → {' '.join(args_a)}")
+                            self._spd_run(args_a, timeout=900)
+                        self._ui.ui.emit(auto_fmt)
+                except Exception:
+                    pass
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _spd_brom_factory_reset(self):
+        """One-click BROM factory reset — the FIRST operation for SPD.
+
+        BROM should NOT require FDL file: if FDLs are selected they are used for
+        full userdata wipe, otherwise BROM-only raw erase (PS/NV) runs immediately.
+        If BROM already present runs spd-format immediately; otherwise arms auto-watch.
+        """
+        # FDL is optional for BROM — only use if file exists
+        fdl1_raw = self.spd_files["fdl1"].text().strip() if hasattr(self, "spd_files") else ""
+        fdl1 = fdl1_raw if fdl1_raw and os.path.isfile(fdl1_raw) else None
+        a1 = self._spd_addr(self.spd_fdl1_addr)
+        if fdl1 and a1 is None:
+            return
+        if not fdl1:
+            a1 = 0  # BROM-only ignores base
+        fdl2_raw = self.spd_files["fdl2"].text().strip() if hasattr(self, "spd_files") else ""
+        fdl2 = fdl2_raw if fdl2_raw and os.path.isfile(fdl2_raw) else None
+        a2 = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
+        tgt = self._spd_resolve_target()
+        if tgt:
+            # BROM already caught — immediate confirm + format (FIRST)
+            if fdl1:
+                fdl2_part = f" + FDL2 {os.path.basename(fdl2)}" if fdl2 else " (FDL1-only, feature phone)"
+                detail = f"FDL1: {os.path.basename(fdl1)}{fdl2_part}\nFull BSL erase (userdata/cache/frp or PS+NV)."
+            else:
+                detail = "BROM-only (no FDL) — raw erase of PS/NV regions via BootROM.\nFor full Android userdata wipe, select FDL1/FDL2 then retry."
+            self._confirm_overlay(
+                "BROM Factory Reset — Immediate",
+                f"BROM already caught @ {tgt} (1782:4d00).\n"
+                f"Immediately factory-reset this SPD device FIRST?\n\n"
+                f"{detail}\n"
+                "User data will be wiped — this is intentionally the FIRST operation.",
+                confirm_label="Factory Reset NOW",
+                on_confirm=lambda t=tgt, f1=(fdl1 or "none"), aa1=(a1 if a1 is not None else 0), f2=fdl2, aa2=a2: self._spd_run(
+                    ["spd-format", t, f1, f"0x{aa1:x}"] + ([f2, f"0x{aa2:x}"] if f2 and aa2 is not None else []),
+                    timeout=900,
+                ),
+            )
+            return
+        # No BROM yet — arm auto and start watcher so format is FIRST when BROM appears
+        try:
+            self.spd_brom_auto_check.setChecked(True)
+        except Exception:
+            pass
+        self._ui.line.emit("[spd] BROM not yet present — arming auto factory reset (FIRST) + starting watch (no FDL needed)")
+        self.show_toast("BROM Factory Reset armed (FIRST)", "Hold VOL-/boot key + plug USB — format will auto-run on catch (BROM-only if no FDL)", "info")
+        self._spd_brom_watch()
 
     def _spd_resolve_target(self):
         """Resolve 'auto' to the current SPD download device target string."""
@@ -7288,24 +8534,55 @@ class FrpWindow(QMainWindow):
             self._ui.line.emit("[warn] SPD: invalid FDL base address")
             return None
 
-    def _spd_info(self):
+    def _spd_info(self, device_key=None):
+        prep = self._chip_begin("SPD", "spd-info", {"SPD"},
+                                ["spd-info", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, resolved = prep
+        tgt = resolved[1]
         self.spd_status.setText("Reading device info...")
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[info] spd-info: no SPD device in download mode")
-                    self._ui.ui.emit(lambda: self.spd_status.setText(
-                        "No SPD device detected"))
-                    return
-                out = bridge._run(["spd-info", tgt], timeout=60)
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(["spd-info", tgt], timeout=60)
+                emit(out or "(no output)")
                 self._ui.ui.emit(lambda: self.spd_status.setText("Info above"))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] SPD info stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD device info: {e}")
+                emit(f"[error] SPD device info: {e}")
                 self._ui.ui.emit(lambda err=e: self.spd_status.setText(
                     f"Read error: {err}"))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -7545,11 +8822,6 @@ class FrpWindow(QMainWindow):
             ),
         )
 
-    def _spd_enable_adb(self):
-        self._ui.line.emit("[info] SPD Enable ADB: preparing patched boot...")
-        self._toasts.show_info("SPD ADB", "Enable ADB via patched boot - coming soon, use SPD Boot patch flow")
-        # TODO: implement spd-enable-adb bridge call when firmware backend ready
-
     def _spd_frp(self):
         fdl1 = self._spd_require_files()
         if not fdl1:
@@ -7633,97 +8905,147 @@ class FrpWindow(QMainWindow):
                 entries.append((name, img))
         return entries
 
-    def _spd_flash_run(self, fdl1, a1, fdl2, entries):
-        if not _flow_start("SPD flash", destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _spd_flash_run(self, fdl1, a1, fdl2, entries, device_key=None):
+        prep = self._chip_begin("SPD", "spd-flash", {"SPD"},
+                                ["spd-flash", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn)
+        if prep[0] is None:
             return
+        device_key, flux, _resolved = prep
+        # The helper resolved + validated the device and replaced "auto"
+        # with the fresh bus:addr target: argv[1] of the placeholder.
+        tgt = _resolved[1]
 
         def work():
-            try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[error] SPD: no download device")
-                    self._ui.ui.emit(self._spd_reset_ui)
-                    return
-                # Safety net: back up boot-critical partitions before writing.
-                try:
-                    from python.core.safety import preflash_backup
-                    a2v = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
-                    preflash_backup("spd", bridge, lambda m: self._ui.line.emit(m),
-                                    target=tgt, fdl1=fdl1, a1=a1,
-                                    fdl2=fdl2 or "", a2=a2v)
-                except Exception as e:  # noqa: BLE001
-                    self._ui.line.emit(f"[safety] backup skipped: {e}")
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
 
-                args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
-                if fdl2:
-                    a2 = self._spd_addr(self.spd_fdl2_addr) or 0
-                    args += [fdl2, f"0x{a2:x}"]
-                for part, file in entries:
-                    args.append(f"{part}={file}")
-                out = bridge._run(args, timeout=1800)
-                self._ui.line.emit(out or "(no output)")
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            try:
+                with _devices.device_scope(device_key):
+                    # Safety net: back up boot-critical partitions before writing.
+                    try:
+                        from python.core.safety import preflash_backup
+                        a2v = self._spd_addr(self.spd_fdl2_addr) if fdl2 else None
+                        preflash_backup("spd", bridge, emit,
+                                        target=tgt, fdl1=fdl1, a1=a1,
+                                        fdl2=fdl2 or "", a2=a2v)
+                    except Exception as e:  # noqa: BLE001
+                        emit(f"[safety] backup skipped: {e}")
+
+                    args = ["spd-flash", tgt, fdl1, f"0x{a1:x}"]
+                    if fdl2:
+                        a2 = self._spd_addr(self.spd_fdl2_addr) or 0
+                        args += [fdl2, f"0x{a2:x}"]
+                    for part, file in entries:
+                        args.append(f"{part}={file}")
+                    out = bridge._run(args, timeout=1800)
+                emit(out or "(no output)")
                 self._ui.status.emit("SPD: flash complete")
                 self._ui.toast.emit("ok", "SPD flash", "Completed")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled:
+                emit("[cancelled] SPD flash stopped by user")
+                self._ui.toast.emit("warn", "SPD flash", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD flash: {e}")
+                emit(f"[error] SPD flash: {e}")
                 self._ui.toast.emit("error", "SPD flash", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
         threading.Thread(target=work, daemon=True).start()
 
-    def _spd_backup(self):
+    def _spd_backup(self, device_key=None):
         fdl1 = self._spd_require_files()
         if not fdl1:
             return
-        if not _flow_start("SPD backup", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
-            return
         a1 = self._spd_addr(self.spd_fdl1_addr)
         if a1 is None:
-            _flow_end()
             return
         fdl2 = self.spd_files["fdl2"].text().strip()
         fw = self.spd_fw_dir.text().strip()
         out_dir = fw or "/tmp/spd_backup"
         self._ui.line.emit(f"[step] SPD backup: fdl1={fdl1} fdl2={fdl2} out={out_dir}")
         self._toasts.show_ok("SPD backup queued", "Reading partition table...")
+        prep = self._chip_begin("SPD", "spd-backup", {"SPD"},
+                                ["spd-backup", "auto"],
+                                device_key=device_key,
+                                stop_btn=self.spd_stop_btn,
+                                destructive=False)
+        if prep[0] is None:
+            return
+        device_key, flux, _resolved = prep
+        tgt = _resolved[1]
 
         def work():
+            dev_tag = f"[{device_key}] "
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                tgt = self._spd_resolve_target()
-                if not tgt:
-                    self._ui.line.emit("[error] SPD: no download device")
-                    self._ui.ui.emit(self._spd_reset_ui)
-                    return
-                out = bridge._run(
-                    ["spd-backup", tgt, fdl1, f"0x{a1:x}",
-                     fdl2 or "none", "0", out_dir],
-                    timeout=900,
-                )
-                self._ui.line.emit(out or "(no output)")
+                with _devices.device_scope(device_key):
+                    out = bridge._run(
+                        ["spd-backup", tgt, fdl1, f"0x{a1:x}",
+                         fdl2 or "none", "0", out_dir],
+                        timeout=900,
+                    )
+                emit(out or "(no output)")
                 self._ui.status.emit("SPD: backup complete")
                 self._ui.toast.emit("ok", "SPD backup", "Partition table dumped")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled:
+                emit("[cancelled] SPD backup stopped by user")
+                self._ui.toast.emit("warn", "SPD backup", "Cancelled")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
-                self._ui.line.emit(f"[error] SPD backup: {e}")
+                emit(f"[error] SPD backup: {e}")
                 self._ui.toast.emit("error", "SPD backup", str(e))
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
-                bridge.clear_cancel()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(self.spd_stop_btn) == flux.job_id:
+                        self._stop_job.pop(self.spd_stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._spd_reset_ui)
 
-        bridge.clear_cancel()
         self.spd_stop_btn.setEnabled(True)
         self.spd_progress.setVisible(True)
         self.spd_progress.setValue(150)
@@ -7781,6 +9103,15 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            # ADB-mechanism cards gate on adb_shell availability.
+            self._gate_button(b, command={
+                "_battery_report": "adb_shell",
+                "_battery_repair": "adb_shell",
+                "_battery_load_test": "adb_shell",
+                "_network_report": "adb_shell",
+                "_network_repair": "adb_shell",
+                "_network_modem_reset": "adb_shell",
+            }.get(getattr(slot, "__name__", "")))
             cv.addWidget(b)
             return c
 
@@ -7915,6 +9246,15 @@ class FrpWindow(QMainWindow):
             b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
+            # ADB-mechanism cards gate on adb_shell availability.
+            self._gate_button(b, command={
+                "_battery_report": "adb_shell",
+                "_battery_repair": "adb_shell",
+                "_battery_load_test": "adb_shell",
+                "_network_report": "adb_shell",
+                "_network_repair": "adb_shell",
+                "_network_modem_reset": "adb_shell",
+            }.get(getattr(slot, "__name__", "")))
             cv.addWidget(b)
             return c
 
@@ -8119,18 +9459,10 @@ class FrpWindow(QMainWindow):
         return row
 
     def _settings_switch(self):
-        cb = QCheckBox()
-        cb.setCursor(Qt.CursorShape.PointingHandCursor)
-        cb.setStyleSheet(
-            f"QCheckBox::indicator {{ width:36px; height:20px; }}"
-            f" QCheckBox::indicator:unchecked {{"
-            f"  image: none; background: {C['border']}; border-radius: 10px;"
-            f"  border: 1px solid {C['border_hi']}; }}"
-            f" QCheckBox::indicator:checked {{"
-            f"  image: none; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"   stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); border-radius: 10px;"
-            f"  border: 1px solid {C['accent_hi']}; }}"
-        )
+        cb = BeautifulToggle()
+        # Ensure thumbPos matches initial checked without anim on first show
+        cb.setChecked(False)
+        cb._thumb_pos = 0.0
         return cb
 
     # --- General -----------------------------------------------------------
@@ -8281,6 +9613,21 @@ class FrpWindow(QMainWindow):
             "ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version.",
             self._beta_every_boot,
         )
+        prev_btn = QPushButton("Preview beta warning")
+        prev_btn.setStyleSheet(
+            f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
+            f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
+            f" QPushButton:hover {{ border-color:{C['accent']}; }}"
+        )
+        prev_btn.setFixedWidth(200)
+        prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        prev_btn.clicked.connect(lambda: self._show_beta_risk_dialog(
+            APP_VERSION, "", force=True))
+        self._settings_row(
+            bl, "Preview beta warning",
+            "Show the full-screen beta risk dialog now (ignores 'accepted' state).",
+            prev_btn,
+        )
 
         lay.addStretch(1)
         return page
@@ -8326,53 +9673,244 @@ class FrpWindow(QMainWindow):
     # --- Appearance --------------------------------------------------------
     def _build_settings_appearance(self):
         page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(18)
 
-        bl = self._settings_box("THEME", lay)
+        # THEME — 10 cards only (no dropdown) — progressively advanced, fit-well
+        bl = self._settings_box("THEME — 10 professional accents (click a card)", lay)
+        # Hidden combo for back-compat (cards drive it)
         self._s_theme = QComboBox()
         self._s_theme.addItems(list(ACCENT_THEMES))
-        self._s_theme.setCurrentText(
-            self.settings.value("theme", "Cobalt Blue")
-        )
-        self._style_combo(self._s_theme)
+        self._s_theme.setCurrentText(self.settings.value("theme", "Slate Professional"))
         self._s_theme.currentTextChanged.connect(self._apply_theme)
-        self._settings_row(
-            bl, "Accent theme",
-            "Colour pack used across buttons, gradients and highlights.",
-            self._s_theme,
-        )
-        # premium theme preview swatches
-        sw_row = QHBoxLayout()
-        sw_row.setSpacing(8)
-        for th, tok in ACCENT_THEMES.items():
-            dot = QLabel()
-            dot.setFixedSize(22, 22)
-            dot.setToolTip(th)
-            dot.setStyleSheet(f"background:{tok['accent']}; border:2px solid {tok['accent_hi']}; border-radius:11px;")
-            dot.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
-            sw_row.addWidget(dot)
-        sw_row.addStretch(1)
-        bl.addLayout(sw_row)
+        self._s_theme.setVisible(False)
+        intro = QLabel("Whole-app live — buttons, cards, console, shimmer, cable/ORB recolor instantly. Each next theme is a touch more advanced.")
+        intro.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        intro.setWordWrap(True)
+        bl.addWidget(intro)
+        # Fit-well wrapping grid: FlowHost delegates heightForWidth so wrap is visible/clickable on small screens
+        grid_host = FlowHost()
+        grid_host.setStyleSheet("background: transparent;")
+        grid = FlowLayout(grid_host, spacing=10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        for idx, (th, tok) in enumerate(ACCENT_THEMES.items()):
+            card = QFrame()
+            card.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Fixed width for wrapping — 158 allows 3 per row on 520px, 2 on 340px, always visible via wrap
+            card.setFixedWidth(158)
+            h = 64 + (idx // 3) * 4 + (1 if idx >= 7 else 0) * 4
+            card.setFixedHeight(h)
+            card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            is_sel = self.settings.value("theme", "Slate Professional") == th
+            # Progressively advanced border/glow
+            prog = idx / 9.0  # 0..1
+            # Level 0-2: flat, 3-5: soft glow, 6-8: double border, 9: premium halo
+            if idx < 3:
+                bd = tok["accent_hi"] if is_sel else "rgba(255,255,255,14)"
+                bw = "2px" if is_sel else "1px"
+                shadow = ""
+            elif idx < 6:
+                bd = tok["accent_hi"] if is_sel else "rgba(255,255,255,20)"
+                bw = "2px" if is_sel else "1px"
+                shadow = f" QFrame {{ border-bottom: 1px solid {tok['accent_hi']}20; }}"
+            elif idx < 9:
+                bd = tok["accent_hi"] if is_sel else tok["accent"] + "55"
+                bw = "2px" if is_sel else "1.5px"
+                shadow = ""
+            else:
+                bd = tok["accent_hi"]
+                bw = "2px"
+                shadow = f" QFrame {{ border-top: 1px solid rgba(255,255,255,18); }}"
+            # Gradient gets more stops as we advance
+            if idx < 2:
+                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['grad_b']})"
+            elif idx < 5:
+                mid = tok["accent"]
+                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.55 {mid}, stop:1 {tok['grad_b']})"
+            elif idx < 8:
+                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.35 {tok['accent']}, stop:0.75 {tok['grad_b']}, stop:1 {tok['accent_hi']})"
+            else:
+                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.5 {tok['accent_hi']}, stop:1 {tok['grad_b']})"
+            card.setStyleSheet(
+                f"QFrame {{ background: {bg}; border: {bw} solid {bd}; border-radius: 11px; }}"
+                + shadow
+            )
+            card.setToolTip(f"{th}\n{tok['accent']} → {tok['grad_b']} (click to apply)")
+            # Subtle drop shadow for most advanced tiers
+            if idx >= 6:
+                sd = QGraphicsDropShadowEffect(card)
+                sd.setBlurRadius(12 + idx * 2)
+                sd.setOffset(0, 2)
+                sd.setColor(QColor(0, 0, 0, 90 if idx < 8 else 120))
+                card.setGraphicsEffect(sd)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 10, 12, 10)
+            cl.setSpacing(2)
+            # Advancement badge for later cards
+            hdr = QHBoxLayout()
+            hdr.setSpacing(6)
+            name = QLabel(th)
+            name.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 800; background: transparent; border: none;")
+            hdr.addWidget(name, 1)
+            if idx >= 3:
+                lvl = QLabel(f"Lv{idx+1}")
+                lvl.setFixedHeight(16)
+                lvl.setStyleSheet(f"color: {tok['accent_hi']}; background: rgba(0,0,0,22); border: 1px solid {tok['accent_hi']}55; border-radius: 8px; padding: 0 5px; font-size: 8px; font-weight: 800;")
+                hdr.addWidget(lvl, 0)
+            cl.addLayout(hdr)
+            hexlbl = QLabel(f"{tok['accent']} → {tok['grad_b']}")
+            hexlbl.setStyleSheet("color: rgba(255,255,255,195); font-size: 9px; background: transparent; border: none;")
+            cl.addWidget(hexlbl)
+            # tiny progress bar hint for most advanced
+            if idx >= 5:
+                bar = QFrame()
+                bar.setFixedHeight(2)
+                bar.setStyleSheet(f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['accent_hi']}); border-radius: 1px; }}")
+                cl.addWidget(bar)
+            card.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
+            grid.addWidget(card)
+        bl.addWidget(grid_host)
+        hint = QLabel("Tip: cards only — no dropdown. Each next theme adds a stop/glow, fitted in a 3-column grid that never overflows.")
+        hint.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        hint.setWordWrap(True)
+        bl.addWidget(hint)
+
+        # ANIMATIONS — granular, not single switch
+        bl2 = self._settings_box("ANIMATIONS — granular", lay)
         self._s_anim = self._settings_switch()
         self._s_anim.setChecked(self.settings.value("animations", "true", type=bool))
         self._s_anim.toggled.connect(self._apply_animations)
         self._settings_row(
-            bl, "Animated effects",
-            "Live cable pulse, status orb and shimmer sweeps.",
+            bl2, "Master animations",
+            "Global toggle — disables all motion when off.",
             self._s_anim,
         )
+        # Granular toggles — every toggle demos immediately when turned ON, stops when OFF
+        def _make_anim_toggle(key, label, detail):
+            sw = self._settings_switch()
+            sw.setChecked(self.settings.value(key, "true", type=bool))
+            def _on_toggled(on, k=key, s=sw):
+                self.settings.setValue(k, bool(on))
+                if on and self.settings.value("animations", "true", type=bool):
+                    try:
+                        do_s = self.settings.value("anim_shake", "true", type=bool)
+                        do_r = self.settings.value("anim_rubber", "true", type=bool)
+                        if do_s and do_r:
+                            Motion.shake(s, amplitude=4)
+                            from PyQt6.QtCore import QTimer
+                            QTimer.singleShot(420, lambda w=s: Motion.rubber(w, scale=1.10, dur=320))
+                        elif do_s:
+                            Motion.shake(s, amplitude=4)
+                        elif do_r:
+                            Motion.rubber(s, scale=1.10, dur=320)
+                    except Exception:
+                        pass
+                try:
+                    if k == "anim_cable":
+                        if hasattr(self, "scene"):
+                            self.scene.update()
+                    elif k == "anim_orb":
+                        self.orb.set_animations(bool(on) and self._s_anim.isChecked())
+                    elif k == "anim_window":
+                        if on:
+                            Motion.window_open(self, dur=220)
+                    elif k == "anim_shake":
+                        if on:
+                            Motion.shake(s, amplitude=6)
+                    elif k == "anim_rubber":
+                        if on:
+                            Motion.rubber(s, scale=1.08, dur=340)
+                    elif k == "anim_bubble":
+                        if on and hasattr(self, "scene"):
+                            Motion.bubble_splash(self.scene, count=6)
+                    elif k == "anim_shimmer":
+                        if hasattr(self, "shimmer"):
+                            self.shimmer.setVisible(bool(on) and self._s_anim.isChecked())
+                            self.shimmer.update()
+                except Exception:
+                    pass
+            sw.toggled.connect(_on_toggled)
+            self._settings_row(bl2, label, detail, sw)
+            return sw
+
+        self._s_anim_cable = _make_anim_toggle("anim_cable", "Cable pulse", "Animated data flow in the connection banner.")
+        self._s_anim_orb = _make_anim_toggle("anim_orb", "Status orb", "Pulsing LED orb next to connection state.")
+        self._s_anim_shimmer = _make_anim_toggle("anim_shimmer", "Shimmer bar", "Progress shimmer during flash.")
+        self._s_anim_toast = _make_anim_toggle("anim_toast", "Toast slide", "Slide-in animation for notifications.")
+        self._s_anim_window = _make_anim_toggle("anim_window", "Window pop", "Rubber window open/close pop.")
+        self._s_anim_shake = _make_anim_toggle("anim_shake", "Button shake", "Every button tap shakes (when enabled).")
+        self._s_anim_rubber = _make_anim_toggle("anim_rubber", "Rubber band", "Elastic pop on buttons/windows (when enabled).")
+        self._s_anim_bubble = _make_anim_toggle("anim_bubble", "Bubble splash", "Bubbles rising from USB-C on phone connect (when enabled).")
+
+        # No preview row — toggle itself demos immediately when turned ON (see _make_anim_toggle)
+
         self._s_blur = self._settings_switch()
         self._s_blur.setChecked(self.settings.value("blur", "true", type=bool))
         self._s_blur.toggled.connect(self._apply_blur)
         self._settings_row(
-            bl, "Window glow / shadow",
+            bl2, "Window glow / shadow",
             "Drop shadow and halo around the main window.",
             self._s_blur,
         )
 
+        # SHORTCUTS — table with all shortcuts, editable hint
+        bl3 = self._settings_box("SHORTCUTS", lay)
+        shortcuts = [
+            ("F5 / Ctrl+R", "Re-scan USB / ADB"),
+            ("Ctrl+Enter", "Run selected operation"),
+            ("Ctrl+L", "Clear console"),
+            ("Ctrl+S", "Save console log"),
+            ("Ctrl+F", "Find in console"),
+            ("Ctrl+Shift+C", "Copy console"),
+            ("Ctrl+Esc", "Stop any operation (global)"),
+        ]
+        for k, d in shortcuts:
+            row = QHBoxLayout()
+            chip = QLabel(k)
+            chip.setStyleSheet(
+                f"color:{C['dim']}; font-weight:700; font-size:10px;"
+                f" background:{C['card_hover']}; border:1px solid {C['border']};"
+                f" border-radius:6px; padding:3px 8px;"
+            )
+            chip.setFixedWidth(130)
+            desc = QLabel(d)
+            desc.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+            row.addWidget(chip)
+            row.addWidget(desc, 1)
+            bl3.addLayout(row)
+        sc_hint = QLabel("Shortcuts are fixed in this build — custom key mapping is planned. Use Settings → Tools → Reset to restore defaults.")
+        sc_hint.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
+        sc_hint.setWordWrap(True)
+        bl3.addWidget(sc_hint)
+
+        # UI DENSITY / FONT — more UI improvements
+        bl4 = self._settings_box("UI DENSITY", lay)
+        self._s_density = QComboBox()
+        self._s_density.addItems(["Comfortable", "Compact", "Spacious"])
+        self._s_density.setCurrentText(self.settings.value("density", "Comfortable"))
+        self._style_combo(self._s_density)
+        self._s_density.currentTextChanged.connect(lambda v: self.settings.setValue("density", v))
+        self._settings_row(bl4, "Layout density", "Compact saves vertical space, Spacious adds padding.", self._s_density)
+        self._s_font = QSpinBox()
+        self._s_font.setRange(8, 16)
+        self._s_font.setValue(int(self.settings.value("font_size", 13)))
+        self._s_font.setSuffix(" px")
+        self._s_font.valueChanged.connect(lambda v: self.settings.setValue("font_size", int(v)))
+        self._settings_row(bl4, "Base font size", "Applies to console and cards (restart to fully apply).", self._s_font)
+
         lay.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
         return page
 
     def _apply_theme(self, name):
@@ -8383,16 +9921,72 @@ class FrpWindow(QMainWindow):
         self._ui.line.emit(f"[settings] theme -> {name}")
 
     def _rebuild_theme(self):
-        self._toasts.show_ok("Theme applied", "Restyled accent & gradients")
-        self.setStyleSheet(_BASE_QSS + _console_qss())
-        for combo in (self._s_theme,):
-            self._style_combo(combo)
+        self._toasts.show_ok("Theme applied", f"Restyled whole app — {self.settings.value('theme', 'Neon Circuit')}")
+        # Regenerate QSS with current C so whole app recolors, not just the accent line
+        try:
+            self.setStyleSheet(_get_base_qss() + _console_qss())
+        except Exception:
+            self.setStyleSheet(_BASE_QSS + _console_qss())
+        # Accent strip (top line)
+        if hasattr(self, "_accent_strip") and self._accent_strip:
+            try:
+                self._accent_strip.update()
+            except Exception:
+                pass
+        # Root card border-top
+        if hasattr(self, "_root") and self._root:
+            try:
+                self._root.setStyleSheet(
+                    f"QFrame#root {{ background: rgba(5, 9, 15, 244);"
+                    f" border: 1px solid {C['border_hi']}; border-top: 2px solid {C['border_hi']};"
+                    f" border-radius: 12px; }}"
+                )
+            except Exception:
+                pass
+        # Connection banner
+        if hasattr(self, "_conn") and self._conn:
+            try:
+                self._set_conn_glow(None)
+            except Exception:
+                pass
+        # Restyle combos and button gradients that captured C at creation
+        for combo in (getattr(self, "_s_theme", None),):
+            if combo:
+                try:
+                    self._style_combo(combo)
+                except Exception:
+                    pass
+        # Force full repaint so cards/buttons pick up new gradients
+        try:
+            self.update()
+            for w in self.findChildren(QFrame):
+                w.update()
+        except Exception:
+            pass
 
     def _apply_animations(self, on):
         self.settings.setValue("animations", on)
         self._anim_enabled = bool(on)
         for w in (self.scene, self.orb):
-            w.set_animations(bool(on))
+            try:
+                w.set_animations(bool(on))
+            except Exception:
+                pass
+        # Granular toggles are standard beautiful but disabled when Master off
+        for attr in ("_s_anim_cable","_s_anim_orb","_s_anim_shimmer","_s_anim_toast","_s_anim_window","_s_anim_shake","_s_anim_rubber","_s_anim_bubble"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.setEnabled(bool(on))
+                    w.setToolTip("" if on else "Master animations off")
+                except Exception:
+                    pass
+        # Also preview buttons respect master
+        for b in getattr(self, "_anim_preview_trio", []):
+            try:
+                b.setEnabled(bool(on))
+            except Exception:
+                pass
 
     def _apply_blur(self, on):
         self.settings.setValue("blur", on)
@@ -8412,7 +10006,7 @@ class FrpWindow(QMainWindow):
             ("Bridge binary", str(bridge.BRIDGE)),
             ("Bridge built", "yes" if bridge.BRIDGE.exists()
              else "no (run `cargo build --release`)"),
-            ("ADB available", "yes" if bridge.has_adb() else "no (adb not on PATH)"),
+            ("ADB available", "yes (native)" if bridge.has_adb() else "no (bridge not built)"),
         ]
         for label, value in rows:
             row = QHBoxLayout()
@@ -8452,19 +10046,24 @@ class FrpWindow(QMainWindow):
     def _rebuild_bridge(self):
         def work():
             self._ui.line.emit("[build] cargo build --release ...")
-            rc = os.system("cd %s && cargo build --release 2>&1" % (
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            ))
+            root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            rc = subprocess.run(
+                ["cargo", "build", "--release"], cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            for line in (rc.stdout or "").splitlines():
+                self._ui.line.emit(f"  {line}")
             self._ui.line.emit(
-                f"[build] {'OK' if rc == 0 else f'FAILED (rc={rc})'}"
+                f"[build] {'OK' if rc.returncode == 0 else f'FAILED (rc={rc.returncode})'}"
             )
             self._ui.toast.emit(
-                "ok", "Bridge build", "Succeeded" if rc == 0 else "Failed - see console"
+                "ok", "Bridge build", "Succeeded" if rc.returncode == 0 else "Failed - see console"
             )
         threading.Thread(target=work, daemon=True).start()
 
     def _open_log_dir(self):
-        os.system('xdg-open "%s" 2>/dev/null' % os.path.expanduser("~/Downloads"))
+        subprocess.Popen(["xdg-open", os.path.expanduser("~/Downloads")],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _reset_settings(self):
         self.settings.clear()
@@ -8563,6 +10162,156 @@ class FrpWindow(QMainWindow):
 
         lay.addStretch(1)
         return page
+
+    def _download_and_prompt_install(self, latest_url, stable_tag):
+        import threading
+
+        fpath = os.path.expanduser("~/flashpilot_update.deb")
+        self.show_toast("Downloading update", f"Downloading FlashPilot {stable_tag}...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit(f"[check] Downloading {stable_tag} ...")
+            except Exception:
+                pass
+
+        def _worker(url=latest_url, tag=stable_tag, dest=fpath):
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(url, dest)
+                if os.path.exists(dest):
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] Downloaded {tag} to {dest}")
+                        except Exception:
+                            pass
+                        self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
+                else:
+                    self._ui.ui.emit(lambda: self.show_toast("Download failed", "File missing after download.", "error"))
+            except Exception as e:
+                try:
+                    if hasattr(self, "_ui") and self._ui:
+                        self._ui.line.emit(f"[check] Download failed: {e}")
+                        self._ui.ui.emit(lambda _e=e: self.show_toast("Download failed", str(_e), "error"))
+                    else:
+                        self.show_toast("Download failed", str(e), "error")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _prompt_install_update(self, stable_tag, fpath):
+        self._show_centered_notice(
+            "Update Downloaded",
+            f"FlashPilot {stable_tag} has been downloaded successfully.\n\nDo you want to install this update now?",
+            pill="INSTALL",
+            pill_grad=("#10b981", "#06b6d4"),
+            ok_label="Later",
+            secondary_label="Install Now",
+            secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
+        )
+
+    def _execute_sudo_install(self, fpath):
+        import threading
+
+        if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
+            self.show_toast("Installation Failed", "Update file not found.", "error")
+            return
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        password, ok = QInputDialog.getText(
+            self,
+            "Sudo Password Required",
+            "Enter your sudo password to install the FlashPilot update:",
+            QLineEdit.EchoMode.Password
+        )
+        if not (ok and password):
+            return
+        self.show_toast("Installing update", "Running sudo dpkg -i ...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit("[check] Installing update (sudo dpkg -i) ...")
+            except Exception:
+                pass
+
+        def _worker(pw=password, dest=fpath):
+            import subprocess
+            try:
+                res = subprocess.run(
+                    ["sudo", "-S", "dpkg", "-i", dest],
+                    input=pw + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except Exception as e:
+                self._ui.ui.emit(lambda _e=e: self.show_toast("Installation Failed", str(_e), "error"))
+                return
+            finally:
+                # Never keep the password referenced longer than needed.
+                pw = ""
+            if res.returncode == 0:
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit("[check] Update installed - restarting into the new version ...")
+                    except Exception:
+                        pass
+                self._ui.ui.emit(lambda: self.show_toast("Update Installed", "Restarting FlashPilot...", "success"))
+                QTimer.singleShot(1500, self._restart_application)
+            else:
+                err = (res.stderr or "").strip() or (res.stdout or "").strip() or "Installation failed"
+                # Avoid echoing a wrong-password sudo prompt verbatim forever; keep it short.
+                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast("Installation Failed", _e, "error"))
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit(f"[check] Install failed: {err[-500:]}")
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _restart_application(self):
+        import os
+        import sys
+        try:
+            from PyQt6.QtCore import QProcess
+            from PyQt6.QtWidgets import QApplication
+            # Installed .deb runs via /usr/bin/flashpilot (venv python + /usr/share/flashpilot/main.py).
+            # Prefer relaunching through the launcher so the new install is picked up,
+            # instead of re-execing the possibly-stale current interpreter path.
+            launcher = "/usr/bin/flashpilot"
+            try:
+                from python.core import APP_VERSION  # noqa: F401  (keeps import cheap/local)
+            except Exception:
+                pass
+            using_installed_tree = os.path.exists("/usr/share/flashpilot/main.py")
+            if os.path.exists(launcher) and os.access(launcher, os.X_OK) and using_installed_tree:
+                try:
+                    QProcess.startDetached(launcher, [])
+                    try:
+                        QApplication.quit()
+                    except Exception:
+                        pass
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    return
+                except Exception:
+                    pass
+            # Source checkout / dev run: re-exec the same interpreter + argv.
+            try:
+                self.close()
+            except Exception:
+                pass
+            try:
+                QApplication.quit()
+            except Exception:
+                pass
+            os.execl(sys.executable, sys.executable, *sys.argv)
+        except Exception:
+            try:
+                self.close()
+            except Exception:
+                pass
 
     def _check_update(self):
         # Auto-check: silent, must not block model refresh or close window
@@ -8701,18 +10450,9 @@ class FrpWindow(QMainWindow):
                     except Exception:
                         pass
                 
-                if stable_tag:
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda cur=current, stable=stable_tag: self._show_beta_risk_dialog(cur, stable))
-                        except Exception:
-                            pass
-                else:
-                    if hasattr(self, "_ui") and self._ui:
-                        try:
-                            self._ui.ui.emit(lambda cur=current: self._show_beta_risk_dialog(cur, ""))
-                        except Exception:
-                            pass
+                if hasattr(self, "_ui") and self._ui:
+                    tag0 = stable_tag if stable_tag else ""
+                    self._ui.ui.emit(lambda cur=current, st=tag0: self._show_beta_risk_dialog(cur, st))
             
             if newer_stable:
                 if hasattr(self, "_ui") and self._ui:
@@ -8726,31 +10466,41 @@ class FrpWindow(QMainWindow):
                     if a["name"].endswith("_amd64.deb"):
                         latest_url = a["browser_download_url"]
                         break
-                if latest_url and auto_download:
-                    fpath = os.path.expanduser("~/flashpilot_update.deb")
-                    try:
-                        urllib.request.urlretrieve(latest_url, fpath)
-                        if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
-                            try:
-                                self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
-                            except Exception:
-                                pass
-                    except Exception as dl_err:
+                if latest_url:
+                    if auto_download:
+                        fpath = os.path.expanduser("~/flashpilot_update.deb")
+                        try:
+                            urllib.request.urlretrieve(latest_url, fpath)
+                            if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
+                                    self._ui.ui.emit(lambda tag=stable_tag, fp=fpath: self._prompt_install_update(tag, fp))
+                                except Exception:
+                                    pass
+                        except Exception as dl_err:
+                            if hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                                    self._ui.ui.emit(lambda tag=stable_tag: self._show_centered_notice(
+                                        "Stable update available",
+                                        f"New stable version {tag} is available.\n\nAuto-download failed. Visit GitHub or try manual download.",
+                                        pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
+                                    ))
+                                except Exception:
+                                    pass
+                    else:
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.line.emit(f"[check] Auto-download failed: {dl_err}")
+                                self._ui.ui.emit(lambda url=latest_url, tag=stable_tag: self._show_centered_notice(
+                                    "Stable update available",
+                                    f"New stable version {tag} is available.\n\nClick 'Download Update' to download and install automatically, or visit GitHub.",
+                                    pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"),
+                                    ok_label="OK",
+                                    secondary_label="Download Update",
+                                    secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                ))
                             except Exception:
                                 pass
-                if hasattr(self, "_ui") and self._ui:
-                    try:
-                        dl_msg = "Downloaded to ~/flashpilot_update.deb.\n\n" if auto_download and latest_url else ""
-                        self._ui.ui.emit(lambda tag=stable_tag, ad=dl_msg: self._show_centered_notice(
-                            "Stable update available",
-                            f"New stable version {tag} is available.\n\n{ad}Visit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                            pill="UPDATE", pill_grad=("#0ea5e9", "#22d3ee"), ok_label="OK"
-                        ))
-                    except Exception:
-                        pass
             else:
                 # No newer stable version – distinguish ahead / up-to-date / beta
                 if current_alpha:
@@ -8790,8 +10540,32 @@ class FrpWindow(QMainWindow):
                             except Exception:
                                 pass
                 
-                # Beta channel notice
+                # Beta channel notice (with download/install, mirroring the stable path)
                 if newer_beta:
+                    beta_url = None
+                    try:
+                        for a in (latest_beta.get("assets", []) if latest_beta else []):
+                            if a["name"].endswith("_amd64.deb"):
+                                beta_url = a["browser_download_url"]
+                                break
+                    except Exception:
+                        beta_url = None
+                    if beta_url and auto_download:
+                        try:
+                            fpath = os.path.expanduser("~/flashpilot_update.deb")
+                            urllib.request.urlretrieve(beta_url, fpath)
+                            if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Automatically downloaded beta {beta_tag} to {fpath}")
+                                    self._ui.ui.emit(lambda tag=beta_tag, fp=fpath: self._prompt_install_update(tag, fp))
+                                except Exception:
+                                    pass
+                        except Exception as dl_err:
+                            if hasattr(self, "_ui") and self._ui:
+                                try:
+                                    self._ui.line.emit(f"[check] Beta auto-download failed: {dl_err}")
+                                except Exception:
+                                    pass
                     if current_alpha:
                         # Already on beta but newer beta available
                         if hasattr(self, "_ui") and self._ui:
@@ -8801,11 +10575,21 @@ class FrpWindow(QMainWindow):
                                 pass
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.ui.emit(lambda tag=beta_tag, cur=current: self._show_centered_notice(
-                                    "Beta update available",
-                                    f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
-                                ))
+                                if beta_url:
+                                    self._ui.ui.emit(lambda url=beta_url, tag=beta_tag, cur=current: self._show_centered_notice(
+                                        "Beta update available",
+                                        f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nClick 'Download Beta' to download and install automatically.",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"),
+                                        ok_label="Later",
+                                        secondary_label="Download Beta",
+                                        secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                    ))
+                                else:
+                                    self._ui.ui.emit(lambda tag=beta_tag, cur=current: self._show_centered_notice(
+                                        "Beta update available",
+                                        f"Newer beta {tag} is available (you run {cur}).\n\nBeta may contain bugs — for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                    ))
                             except Exception:
                                 pass
                     else:
@@ -8816,11 +10600,21 @@ class FrpWindow(QMainWindow):
                                 pass
                         if hasattr(self, "_ui") and self._ui:
                             try:
-                                self._ui.ui.emit(lambda tag=beta_tag: self._show_centered_notice(
-                                    "Beta version available",
-                                    f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
-                                    pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
-                                ))
+                                if beta_url:
+                                    self._ui.ui.emit(lambda url=beta_url, tag=beta_tag: self._show_centered_notice(
+                                        "Beta version available",
+                                        f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nClick 'Download Beta' to download and install automatically.",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"),
+                                        ok_label="Later",
+                                        secondary_label="Download Beta",
+                                        secondary_callback=lambda: self._download_and_prompt_install(url, tag)
+                                    ))
+                                else:
+                                    self._ui.ui.emit(lambda tag=beta_tag: self._show_centered_notice(
+                                        "Beta version available",
+                                        f"You are on the latest stable version ({current}).\n\nBeta release {tag} is available for testing.\n\nBeta versions may contain bugs and should be used for testing only.\n\nVisit: https://github.com/Legendary-Brilliantforous/flashpilot",
+                                        pill="BETA", pill_grad=("#f59e0b", "#ea580c"), ok_label="OK"
+                                    ))
                             except Exception:
                                 pass
                 
@@ -8968,12 +10762,23 @@ class FrpWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             maximized = self.isMaximized()
-            if maximized:
-                self._outer.setContentsMargins(0, 0, 0, 0)
-                self._root_shadow.setEnabled(False)
-            else:
-                self._outer.setContentsMargins(30, 26, 30, 34)
-                self._root_shadow.setEnabled(True)
+            try:
+                if maximized:
+                    self._outer.setContentsMargins(0, 0, 0, 0)
+                    if getattr(self, "_root_shadow", None) is not None:
+                        try:
+                            self._root_shadow.setEnabled(False)
+                        except RuntimeError:
+                            pass
+                else:
+                    self._outer.setContentsMargins(30, 26, 30, 34)
+                    if getattr(self, "_root_shadow", None) is not None:
+                        try:
+                            self._root_shadow.setEnabled(True)
+                        except RuntimeError:
+                            pass
+            except Exception:
+                pass
 
     # ----------------------------- UI helpers -----------------------------
     # ----------------------------- console engine --------------------------
@@ -9302,6 +11107,14 @@ class FrpWindow(QMainWindow):
     # ----------------------------- device state ---------------------------
     def _on_device_state(self, state):
         if "error" in state:
+            # Sticky connection: a scan error (even after consecutive failed
+            # polls) must not visually drop a device we saw connected moments
+            # ago - that is the exact flap users report. Keep the orb/scene
+            # lit and show re-scanning instead; the next good poll restores
+            # the exact state.
+            if getattr(self, "_last_conn", False) or getattr(self, "_device_connected", False):
+                self.conn_state.setText("Re-scanning USB ... (last scan failed)")
+                return
             self.badge.set_state(None)
             self.orb.set_connected(False)
             self.scene.set_connected(False)
@@ -9309,6 +11122,12 @@ class FrpWindow(QMainWindow):
             self._set_conn_glow(C["border_hi"])
             self.conn_state.setText(f"Scan error: {state['error']}")
             self._update_device_info(False, None, None)
+            try:
+                if self.settings.value("animations", "true", type=bool):
+                    from .animations import Motion
+                    Motion.cable_shake(self.scene, amp=6, dur=420)
+            except Exception:
+                pass
             return
         samsung = state["samsung"]
         mtk_devs = state.get("mtk", [])
@@ -9316,20 +11135,32 @@ class FrpWindow(QMainWindow):
         edl_devs = state.get("edl", [])
         qcom_devs = state.get("qcom", [])
         spd_devs = state.get("spd", [])
+        apple_devs = state.get("apple", [])
+        other_android = state.get("other_android", [])
         adb_devs = state.get("adb", [])
         mode = state["mode"]
         self.badge.set_state(mode)
         self._last_spd_target = (
             f"{spd_devs[0]['bus']}:{spd_devs[0]['address']}" if spd_devs else None
         )
-        connected_any = bool(fastboot or samsung or mtk_devs or edl_devs or qcom_devs or spd_devs)
+        connected_any = bool(fastboot or samsung or mtk_devs or edl_devs or qcom_devs or spd_devs or apple_devs or other_android or adb_devs)
         self._accent_strip.set_active(connected_any)
+
+        # Track ADB exposure for lazy probing - don't spawn adb server at startup for non-ADB devices
+        has_adb_iface = any(_has_adb_iface(d) for d in samsung) or any(_has_adb_iface(d) for d in other_android)
+        self._last_has_adb = bool(adb_devs) or has_adb_iface or (mode and "ADB" in mode.upper())
 
         # toast on connect / disconnect transitions
         if connected_any and not getattr(self, "_last_conn", False):
             self._toasts.show_ok("Device connected", mode or "USB device detected")
         elif not connected_any and getattr(self, "_last_conn", False):
             self._toasts.show_info("Device disconnected")
+            try:
+                if self.settings.value("animations", "true", type=bool):
+                    from .animations import Motion
+                    Motion.cable_shake(self.scene, amp=5, dur=360)
+            except Exception:
+                pass
         self._last_conn = connected_any
 
         # Any connected low-level/composite device gets the live animation;
@@ -9346,7 +11177,10 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, d["pid"], mode)
+            fb_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if fb_fallback and fb_fallback.lower() == "adb":
+                fb_fallback = None
+            self._update_device_info(True, d["pid"], mode, fallback_model=fb_fallback)
         elif samsung:
             first = samsung[0]
             self.orb.set_connected(True)
@@ -9359,7 +11193,14 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['ok']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, first["pid"], mode)
+            sam_fallback = (first.get("product") or first.get("manufacturer") or "").strip() or None
+            if sam_fallback and sam_fallback.lower() in ("adb", "samsung_android", "samsung android"):
+                sam_fallback = None
+            # Prefer cached model, otherwise product string as immediate placeholder (better than "--")
+            self._update_device_info(True, first["pid"], mode, fallback_model=sam_fallback)
+            ov = _adb_overlay(adb_devs, first)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif "RECOVERY" in mode.upper():
             rec = [d for d in adb_devs if d["state"] in ("recovery", "sideload")]
             serial = rec[0]["serial"] if rec else "unknown"
@@ -9385,7 +11226,10 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['err']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, pid, mode)
+            edl_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if edl_fallback and edl_fallback.lower() == "adb":
+                edl_fallback = None
+            self._update_device_info(True, pid, mode, fallback_model=edl_fallback)
         elif qcom_devs:
             d = qcom_devs[0]
             pid = d.get("pid")
@@ -9399,7 +11243,13 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, pid, mode)
+            qcom_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if qcom_fallback and qcom_fallback.lower() == "adb":
+                qcom_fallback = None
+            self._update_device_info(True, pid, mode, fallback_model=qcom_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif spd_devs:
             d = spd_devs[0]
             pid = d.get("pid")
@@ -9414,12 +11264,20 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, pid, mode)
+            spd_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if spd_fallback and spd_fallback.lower() == "adb":
+                spd_fallback = None
+            self._update_device_info(True, pid, mode, fallback_model=spd_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif mtk_devs:
             d = mtk_devs[0]
             pid = d.get("pid")
-            stage = {0x2000: "MediaTek BROM", 0x0003: "MediaTek Preloader",
-                     0x0004: "MediaTek Download Agent"}.get(pid, "MediaTek low-level")
+            stage = {0x0003: "MediaTek BROM", 0x2000: "MediaTek Preloader",
+                     0x0004: "MediaTek Download Agent",
+                     0x1004: "MediaTek Download Agent"}.get(
+                pid, "MediaTek device (normal boot)")
             self.orb.set_connected(True)
             self.scene.set_connected(True)
             mfr = d.get("manufacturer") or ""
@@ -9452,7 +11310,56 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, pid, mode)
+            # For MTK, also supply fallback from product/manufacturer so model not "--"
+            mtk_fallback = (d.get("product") or d.get("manufacturer") or vendor_display or "").strip() or None
+            if mtk_fallback and mtk_fallback.lower() == "adb":
+                mtk_fallback = None
+            self._update_device_info(True, pid, mode, fallback_model=mtk_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
+        elif apple_devs:
+            d = apple_devs[0]
+            pid = d.get("pid")
+            self.orb.set_connected(True)
+            self.scene.set_connected(True)
+            self.scene.set_vendor("APPLE", C["warn"])
+            self._set_conn_glow(C["warn"])
+            self.conn_state.setText(
+                f"05ac:{pid:04x} · Apple\nbus {d['bus']} · addr {d['address']}"
+            )
+            self.conn_state.setStyleSheet(
+                f"color:{C['warn']}; font-size:12px; font-weight:600; background:transparent;"
+            )
+            apple_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if apple_fallback and apple_fallback.lower() == "adb":
+                apple_fallback = None
+            self._update_device_info(True, pid, mode, fallback_model=apple_fallback)
+        elif other_android:
+            d = other_android[0]
+            pid = d.get("pid")
+            mfr = d.get("manufacturer") or ""
+            prod = d.get("product") or ""
+            self.orb.set_connected(True)
+            self.scene.set_connected(True)
+            vendor_display = (prod or mfr or "ANDROID")
+            self.scene.set_vendor(vendor_display.upper(), C["ok"])
+            self._set_conn_glow(C["ok"])
+            self.conn_state.setText(
+                f"{d.get('vid', 0):04x}:{pid:04x} · Android\n{prod or mfr}\nbus {d['bus']} · addr {d['address']}"
+            )
+            self.conn_state.setStyleSheet(
+                f"color:{C['ok']}; font-size:12px; font-weight:600; background:transparent;"
+            )
+            android_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if android_fallback and android_fallback.lower() == "adb":
+                android_fallback = None
+            if android_fallback is None and self._cached_model:
+                android_fallback = self._cached_model
+            self._update_device_info(True, pid, mode, fallback_model=android_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif adb_devs:
             auth_adb = [d for d in adb_devs if d["state"] == "device"]
             d = auth_adb[0] if auth_adb else adb_devs[0]
@@ -9470,7 +11377,39 @@ class FrpWindow(QMainWindow):
             self.conn_state.setStyleSheet(
                 f"color:{C['ok'] if auth_adb else C['warn']}; font-size:12px; font-weight:600; background:transparent;"
             )
-            self._update_device_info(True, None, mode)
+            # Pre-parse model from adb extra for immediate display (no shell needed)
+            import re as _re
+            adb_extra = d.get("extra", "")
+            adb_fallback = None
+            if adb_extra:
+                for _k in ("model", "product"):
+                    _m = _re.search(rf"{_k}:([^\s]+)", adb_extra)
+                    if _m:
+                        _cand = _m.group(1).replace("_", "-").strip()
+                        if _cand and _cand.lower() != "adb":
+                            adb_fallback = _cand
+                            break
+            if not adb_fallback and self._cached_model:
+                adb_fallback = self._cached_model
+            # Even when ADB is unauthorized, model is still readable via USB/MTP without ADB shell
+            if not adb_fallback:
+                try:
+                    # Target the actual phone device (ADB/MTP), not siblings like a card reader
+                    _tgt_dev = _find_target_device()
+                    if _tgt_dev:
+                        _cand = (_tgt_dev.get("product") or _tgt_dev.get("manufacturer") or "").strip()
+                        if _cand and _cand.lower() not in ("adb", "samsung_android", "samsung android", ""):
+                            adb_fallback = _cand
+                        # Also stash the real serial so it isn't clobbered by a reader's serial
+                        _ser = (_tgt_dev.get("serial") or "").strip()
+                        if _ser:
+                            try:
+                                self._cached_serial = _ser
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            self._update_device_info(True, None, mode, fallback_model=adb_fallback)
         else:
             self.orb.set_connected(False)
             self.scene.set_connected(False)
@@ -9481,66 +11420,450 @@ class FrpWindow(QMainWindow):
                 f"color:{C['dim']}; font-size:12px; background:transparent;"
             )
             self._update_device_info(False, None, None)
+        # Multi-device list refresh (additive — never disturbs the single-
+        # device display above). Keeps the inspected row if still present.
+        # Change-detection cadence: detect-merged is heavier than detect-all
+        # (the native ADB probe costs up to ~6s per ADB-mode device), so the
+        # merged rebuild only runs when the device set actually changes —
+        # not on every 3s poll. Keys are Rust-stable (usb:<ports> /
+        # adb:<serial>), so a re-enumeration that keeps the physical port
+        # still counts as "unchanged" and keeps the inspected row selected.
+        try:
+            sig = (
+                mode,
+                tuple(sorted(
+                    f"{d.get('vid', 0):04x}:{d.get('pid', 0):04x}@{d.get('bus')}:{d.get('address')}"
+                    for d in (samsung + mtk_devs + fastboot + edl_devs + qcom_devs + spd_devs + apple_devs + other_android)
+                )),
+                tuple(sorted(str(a.get("serial", "")) for a in adb_devs)),
+            )
+        except Exception:
+            sig = None
+        if sig != getattr(self, "_last_device_list_sig", None):
+            self._last_device_list_sig = sig
+            try:
+                self._refresh_device_list()
+            except Exception:
+                pass
 
-    def _update_device_info(self, connected, pid, mode):
+    def _refresh_device_list(self):
+        """Rebuild the connection-bar device list from devices.list_devices().
+
+        The rebuild fires on the monitor's change-detection — i.e. right
+        after the monitor SAW a device set. But this second live scan can
+        hit a re-enumeration window and drop a device the monitor just
+        saw (the exact "not allowing switching between devices" report:
+        both phones were in the monitor state, one row rendered). Retry
+        once when the scan returns fewer devices than the monitor state;
+        a persistent absence renders honestly."""
+        rows = []
+        try:
+            rows = _devices.list_devices()
+        except Exception:
+            rows = []
+        # Monitor-state distinct-device count (what the rebuild was
+        # triggered by). Merged USB rows and adb rows describe the SAME
+        # phone, so count distinct serials across categories; serialless
+        # devices count individually.
+        try:
+            mon = getattr(self, "_monitor", None)
+            mon_state = getattr(mon, "_last_state", None) if mon else None
+            mon_keys = set()
+            if mon_state:
+                for k in ("samsung", "mtk", "fastboot", "edl", "qcom",
+                          "spd", "apple", "other_android"):
+                    for d in (mon_state.get(k) or []):
+                        if not isinstance(d, dict):
+                            continue
+                        s = (d.get("serial") or "").strip()
+                        if s:
+                            mon_keys.add(f"adb:{s}")
+                        else:
+                            # serialless: key on vid:pid@bus:addr snapshot
+                            mon_keys.add(
+                                f"usb:{d.get('vid', 0):04x}:{d.get('pid', 0):04x}"
+                                f"@{d.get('bus')}:{d.get('address')}")
+                for a in (mon_state.get("adb") or []):
+                    if isinstance(a, dict) and a.get("serial"):
+                        mon_keys.add(f"adb:{a['serial']}")
+            if mon_keys and len({r.get("key") for r in rows if r.get("key")}) < len(mon_keys):
+                import time as _t
+                self._ui.line.emit(
+                    f"[info] device list: scan saw {len(rows)} of "
+                    f"{len(mon_keys)} devices (re-enumerating?) — "
+                    "settling 2.5s and retrying ...")
+                _t.sleep(2.5)
+                try:
+                    rows = _devices.list_devices()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        keys = {r.get("key") for r in rows if r.get("key")}
+        if self._display_key not in keys:
+            self._display_key = rows[0]["key"] if rows else None
+        try:
+            self.device_list.blockSignals(True)
+            self.device_list.clear()
+            self._row_widgets = {}
+            for r in rows:
+                transports = ", ".join(r.get("transports", []))
+                key = r.get("key")
+                # Per-row job-state chip: text + foreground color driven by
+                # the JobManager (no setItemWidget — widget rows crash the
+                # offscreen compositor). The chip suffix shows RUNNING
+                # while a job is active on this device; the row colors
+                # follow the job state.
+                item = QListWidgetItem(f"{r.get('label', '?')}  [{transports}]")
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                self.device_list.addItem(item)
+                self._row_widgets[key] = (item, f"{r.get('label', '?')}  [{transports}]")
+                if key == self._display_key:
+                    self.device_list.setCurrentItem(item)
+        finally:
+            try:
+                self.device_list.blockSignals(False)
+            except Exception:
+                pass
+        # Only override the single-device chain display when several phones
+        # are attached (that display is first-match and ambiguous then).
+        if self._display_key and len(rows) > 1:
+            self._show_device_row(self._display_key)
+        # Capability display-gating follows the list rebuild (fail-open).
+        try:
+            self._refresh_gates()
+        except Exception:
+            pass
+
+    def _refresh_row_states(self):
+        """Drive the per-row job chips from the JobManager (no scans).
+
+        Text + color, no setItemWidget (widget rows crash the offscreen
+        compositor): RUNNING colors the row accent with a ● suffix,
+        terminal states color the row, idle renders plain.
+        """
+        try:
+            widgets = getattr(self, "_row_widgets", None) or {}
+            if not widgets:
+                return
+            active = {j.device_key for j in jobs.active_jobs() if j.device_key}
+            from PyQt6.QtGui import QColor
+            for key, (item, base_text) in widgets.items():
+                try:
+                    if key in active:
+                        if "● RUNNING" not in item.text():
+                            item.setText(f"{base_text}  ● RUNNING")
+                        item.setForeground(QColor("#38bdf8"))
+                    else:
+                        item.setText(base_text)
+                        item.setForeground(QColor("#e2e8f0"))
+                except RuntimeError:
+                    # The row was removed by a rebuild between ticks.
+                    continue
+        except Exception:
+            pass
+
+    def _on_device_picked(self, item):
+        """Connection-bar click: inspect that device in the tiles/scene."""
+        try:
+            self._display_key = item.data(Qt.ItemDataRole.UserRole)
+            self._show_device_row(self._display_key)
+            self._refresh_gates()
+        except Exception:
+            pass
+
+    def _show_device_row(self, key):
+        """Render one list_devices() row into orb/scene/tiles (display only)."""
+        rows = []
+        try:
+            rows = _devices.list_devices()
+        except Exception:
+            return
+        row = next((r for r in rows if r.get("key") == key), None)
+        if row is None:
+            return
+        try:
+            self.orb.set_connected(True)
+            self.scene.set_connected(True)
+            transports = row.get("transports", []) or ["USB"]
+            self.scene.set_vendor(transports[0].upper(), C["ok"])
+            self._set_conn_glow(C["ok"])
+            self.conn_state.setText(row.get("label", key))
+            self.conn_state.setStyleSheet(
+                f"color:{C['ok']}; font-size:12px; font-weight:600; background:transparent;"
+            )
+            # The ModeBadge (top bar, near Stop) follows the SELECTED
+            # device: it previously showed the whole-bus mode, so a
+            # Qualcomm-normal setup kept reading MTP even after switching
+            # to a phone in ADB mode.
+            badge_mode = {
+                "ADB": "ADB ENABLED (debug composite) - normal boot",
+                "FASTBOOT": "FASTBOOT MODE (bootloader unlocked / fastboot)",
+                "Download mode": "DOWNLOAD MODE (Samsung Odin / Download)",
+                "Samsung BROM": "SAMSUNG BROM",
+                "MTK BROM": "MTK BROM (bootrom)",
+                "MTK": "MTK (download agent)",
+                "EDL": "EDL MODE (Qualcomm Emergency Download)",
+                "SPD": "SPD DOWNLOAD (Unisoc download mode)",
+                "MTP": "MTP (media transfer)",
+                "USB": "USB DEVICE (vendor-specific / diag)",
+            }.get(transports[0], transports[0])
+            try:
+                self.badge.set_state(badge_mode)
+            except Exception:
+                pass
+            usb = row.get("usb") or {}
+            adb = row.get("adb") or {}
+            serial = (usb.get("serial") or adb.get("serial") or "--").strip() or "--"
+            model = (usb.get("product") or usb.get("manufacturer") or "--").strip() or "--"
+            try:
+                self.info["Serial"].set(serial)
+                self.info["Device Model"].set(model)
+                self.info["USB Mode"].set(", ".join(transports))
+                if adb:
+                    self.info["ADB Status"].set(adb.get("state", "--"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _update_device_info(self, connected, pid, mode, fallback_model=None):
         if not connected:
             self._cached_model = None
             self._cached_adb_status = None
+            self._cached_build = None
+            self._cached_android = None
+            self._cached_serial = None
             self._model_refresh_in_progress = False
             self._last_pid = None
+            self._device_connected = False
+            self._last_has_adb = False
+            self._last_usb_product = None
+            try:
+                self._detailed_logged = False
+                self._usb_dumped = False
+                self._last_logged_model = None
+            except Exception:
+                pass
             for name in self.info:
                 self.info[name].set("--")
             return
 
         self._last_pid = pid
-        self.info["Device Model"].set(
-            self._cached_model
-            if self._cached_model is not None
-            else ("0x%04x" % pid if pid is not None else "adb device")
-        )
-        self.info["USB Mode"].set((mode or "--")[:40])
+        self._device_connected = True
+        if fallback_model:
+            self._last_usb_product = fallback_model
+        # Show known model immediately from USB/MTP without waiting for
+        # background ADB/AT probe - avoids "--" flash and hard-coded "adb".
+        immediate = self._cached_model or fallback_model
+        if immediate is None:
+            immediate = f"0x{pid:04x}" if pid is not None else "--"
+        # Guard: never show literal "adb" as model
+        if isinstance(immediate, str) and immediate.strip().lower() == "adb":
+            immediate = f"0x{pid:04x}" if pid is not None else "--"
+        self.info["Device Model"].set(immediate)
+        # USB Mode can be long (e.g. "ADB PRESENT - UNAUTHORIZED (allow USB debugging on phone)") — let MetricCard word-wrap handle it, don't truncate
+        self.info["USB Mode"].set(mode or "--")
         self.info["Interface"].set("USB")
-        self._refresh_model_and_adb()
+        # Keep phone image vendor in sync with Device Model (user expects model on phone graphic)
+        try:
+            if hasattr(self, "scene") and self.scene and immediate not in ("--",) and not immediate.startswith("0x"):
+                if not (mode and any(k in mode.upper() for k in ("RECOVERY", "FASTBOOT", "EDL", "SPREADTRUM", "BROM", "PRELOADER", "DOWNLOAD"))):
+                    if immediate.strip().lower() not in ("samsung", "mediatek", "qualcomm", "adb"):
+                        self.scene.set_vendor(immediate.upper(), C["ok"])
+                        # Also ensure cached model reflects immediate for later background refinement
+                        if not self._cached_model:
+                            self._cached_model = immediate
+        except Exception:
+            pass
+        # Defer ADB-heavy probe: only query ADB when device actually
+        # exposes ADB (has_adb or mode contains ADB). Non-ADB devices get
+        # model via USB/MTP/AT without spawning adb server at startup.
+        should_probe_adb = bool(self._last_has_adb or (mode and "ADB" in mode.upper()))
+        # Always allow a lightweight non-ADB refresh (USB product/AT) even
+        # without ADB, but skip heavy adb shell when not needed.
+        self._refresh_model_and_adb(probe_adb=should_probe_adb)
 
-    def _refresh_model_and_adb(self):
+    def _refresh_model_and_adb(self, probe_adb=None):
         """Background probe for the real model + adb state. Reruns on a timer
         so it picks up the phone's 'Allow USB debugging' acceptance without
         needing a USB re-enumeration."""
         if self._model_refresh_in_progress:
             return
-        if not self._last_pid:
+        if not getattr(self, "_device_connected", False):
             return
+        # Lazy ADB: don't spawn `adb start-server` at startup for non-ADB devices
+        if probe_adb is None:
+            probe_adb = bool(getattr(self, "_last_has_adb", False))
         self._model_refresh_in_progress = True
         pid = self._last_pid
+        # Remember whether this refresh should query ADB (used inside work)
+        probe_adb_flag = probe_adb
         current_adb = self.info["ADB Status"].value.text()
         # Only show a transient "Checking..." on the first resolution; keep the
         # last known value afterwards so the metric does not flicker every poll.
-        if self._cached_adb_status is None and not current_adb.startswith("Connected"):
+        if probe_adb_flag and self._cached_adb_status is None and not current_adb.startswith("Connected"):
             self.info["ADB Status"].set("Checking...")
+        elif not probe_adb_flag and self._cached_adb_status is None:
+            # For non-ADB devices keep status as Not connected without "Checking..."
+            if current_adb.strip() in ("--", ""):
+                self.info["ADB Status"].set("Not connected")
 
         def work():
             model = ""
+            mfr = ""
+            brand = ""
+            build_id = ""
+            android_ver = ""
+            serial_prop = ""
             adb_status = "Not connected"
-            try:
-                adb_devs = bridge.adb_status()
-                authorized = [d for d in adb_devs if d["state"] == "device"]
-                if authorized:
-                    serial = authorized[0]["serial"]
-                    adb_status = f"Connected ({serial})"
+            adb_devs = []
+            if probe_adb_flag:
+                # Reuse the DeviceMonitor's fresh state instead of another
+                # native probe: this ran on the 3s timer and every extra
+                # adb_status was another CNXN session per tick (on devices
+                # whose adbd resets its USB function on our CNXN that
+                # re-enumerates the phone every cycle). The monitor state is
+                # <=3s old and costs zero extra USB I/O.
+                mon = getattr(self, "_monitor", None)
+                mon_state = getattr(mon, "_last_state", None) if mon else None
+                if mon_state is not None:
+                    adb_devs = list(mon_state.get("adb") or [])
+                else:
                     try:
-                        model = bridge.adb_shell(
-                            "getprop ro.product.model", timeout=8
-                        ).strip()
-                        mfr = bridge.adb_shell(
-                            "getprop ro.product.manufacturer", timeout=8
-                        ).strip()
-                        brand = bridge.adb_shell(
-                            "getprop ro.product.brand", timeout=8
-                        ).strip()
+                        # Presence (see DeviceMonitor): this display path
+                        # must not natively probe.
+                        adb_devs = bridge.adb_presence_status()
                     except bridge.BridgeError:
-                        model = ""
-                        mfr = ""
-                        brand = ""
+                        adb_devs = []
+                        adb_status = "Error"
+            else:
+                # Lightweight poll: keep adb_status as Not connected without spawning adb server
+                # Still try to refresh model via non-ADB paths (MTP/USB/AT) below
+                adb_devs = []
+                adb_status = "Not connected"
+            try:
+                authorized = [d for d in adb_devs if d["state"] == "device"]
+                # Displayed-device preference + absence detection: when the
+                # inspected device is off the bus (re-enumerating?), keep
+                # its row's static tiles — never render another device's
+                # identity under the selected row (the "switch falls back
+                # to the first phone" report).
+                disp = getattr(self, "_display_key", None)
+                disp_serial = (disp[4:] if isinstance(disp, str)
+                               and disp.startswith("adb:") else None)
+                displayed_absent = bool(
+                    disp_serial and not any(
+                        d.get("serial") == disp_serial for d in authorized))
+                if authorized and not displayed_absent:
+                    serial = authorized[0]["serial"]
+                    # Prefer the DISPLAYED device: this 3s refresh must
+                    # render the device the user is inspecting, not the
+                    # first authorized (clicking the modem then fell back
+                    # to the first phone's identity every cycle).
+                    try:
+                        if disp_serial and any(
+                                d["serial"] == disp_serial for d in authorized):
+                            serial = disp_serial
+                    except Exception:
+                        pass
+                    # The displayed device's extra (fallback model source):
+                    # authorized[0]'s extra belongs to the first phone and
+                    # reverted the tiles when the displayed getprops were
+                    # empty.
+                    try:
+                        want = serial
+                        extra = next(
+                            (d.get("extra", "") for d in authorized
+                             if d.get("serial") == want),
+                            authorized[0].get("extra", ""))
+                    except Exception:
+                        extra = authorized[0].get("extra", "")
+                    adb_status = f"Connected ({serial})"
+                    # Device info (model/build/android) never changes every
+                    # 3s - fetch it only when the authorized serial changes
+                    # or on first resolution. Each getprop poll was 6 native
+                    # ADB sessions per timer tick; on devices whose adbd
+                    # resets its USB function on our CNXN that re-enumerates
+                    # the phone 6x per cycle (the address storm).
+                    if serial != getattr(self, "_last_props_serial", None) or not self._cached_model:
+                        self._last_props_serial = serial
+                        try:
+                            # Pin the whole burst to this serial: per-call
+                            # re-resolution could otherwise hop phones
+                            # mid-burst when several are authorized.
+                            # rescue=False: this is the passive poll timer - a
+                            # busy claim (system adb server holds the interface)
+                            # must fail fast into the fallbacks below, never
+                            # kill-server (the phone re-enumerates every time).
+                            model = bridge.adb_shell(
+                                "getprop ro.product.model", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            mfr = bridge.adb_shell(
+                                "getprop ro.product.manufacturer", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            brand = bridge.adb_shell(
+                                "getprop ro.product.brand", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            # Extended device info: build, android, serial
+                            build_id = bridge.adb_shell(
+                                "getprop ro.build.display.id", timeout=8, rescue=False, serial=serial
+                            ).strip() or bridge.adb_shell(
+                                "getprop ro.build.version.incremental", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            android_ver = bridge.adb_shell(
+                                "getprop ro.build.version.release", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            sdk_ver = bridge.adb_shell(
+                                "getprop ro.build.version.sdk", timeout=8, rescue=False, serial=serial
+                            ).strip()
+                            # Prefer ro.serialno, fallback to adb serial
+                            serial_prop = bridge.adb_shell(
+                                "getprop ro.serialno", timeout=8, rescue=False, serial=serial
+                            ).strip() or serial
+                            if android_ver and sdk_ver:
+                                android_ver = f"{android_ver} (API {sdk_ver})"
+                        except bridge.BridgeError:
+                            model = ""
+                            mfr = ""
+                            brand = ""
+                            build_id = ""
+                            android_ver = ""
+                            serial_prop = serial
+                    # Cache extended info for metrics
+                    if 'build_id' not in locals():
+                        build_id = ""
+                    if 'android_ver' not in locals():
+                        android_ver = ""
+                    if 'serial_prop' not in locals():
+                        serial_prop = serial
+                    # Fallback: parse model from `adb devices -l` extra field
+                    # e.g. "model:SM_G991B device:..." when getprop is blocked
+                    if not model and extra:
+                        import re
+                        for key in ("model", "product"):
+                            m = re.search(rf"{key}:([^\s]+)", extra)
+                            if m:
+                                cand = m.group(1).replace("_", "-")
+                                if cand and cand.lower() != "adb":
+                                    model = cand
+                                    break
+                    # Fallback: USB descriptor product/manufacturer strings (target the phone, not a reader)
+                    if not model:
+                        try:
+                            _tgt_dev = _find_target_device()
+                            if _tgt_dev:
+                                prod = (_tgt_dev.get("product") or "").strip()
+                                mf = (_tgt_dev.get("manufacturer") or "").strip()
+                                if prod and prod.lower() != "adb":
+                                    model = prod
+                                if not mfr and mf:
+                                    mfr = mf
+                                _ser = (_tgt_dev.get("serial") or "").strip()
+                                if _ser and not serial_prop:
+                                    serial_prop = _ser
+                        except Exception:
+                            pass
                     if model and model != self._cached_model:
                         self._cached_model = model
                         self._ui.line.emit(f"Device Model: {model}")
@@ -9554,32 +11877,355 @@ class FrpWindow(QMainWindow):
                     if self._cached_adb_status != adb_status:
                         self._cached_adb_status = adb_status
                         self._ui.line.emit(f"ADB: {serial}")
+                elif displayed_absent:
+                    # The inspected device is off the bus (re-enumerating?):
+                    # keep its row's static tiles — never render another
+                    # device's identity under the selected row.
+                    adb_status = f"Not connected ({disp_serial})"
+                    self._cached_adb_status = adb_status
+                    self._ui.metric.emit("ADB Status", adb_status)
+                    return
                 elif any(d["state"] == "unauthorized" for d in adb_devs):
                     adb_status = "Unauthorized - tap Allow"
-                    self._ui.line.emit(
-                        "ADB: device present but NOT authorized - tap Allow on the phone"
-                    )
-                else:
-                    # No ADB transport. If the device exposes the diag AT port,
-                    # the model may still be readable via AT+DEVCONINFO while in
-                    # test mode (*#0*#) - try it before falling back to the pid.
-                    try:
-                        if mtp.is_diag_config(mtp.find_samsung() or {}):
-                            model = mtp.read_model_via_at(timeout_ms=5000)
+                    # Throttle console spam: only log once per state change
+                    if self._cached_adb_status != adb_status:
+                        self._ui.line.emit(
+                            "ADB: device present but NOT authorized - tap Allow on the phone"
+                        )
+                    # Heavy probes (getprop / MTP) run ONCE per serial: every
+                    # 3s retry was more device I/O per tick (native sessions
+                    # on the poll timer) and never succeeded while busy -
+                    # the per-serial flag stops the churn. Re-armed when the
+                    # user taps Allow (the authorized branch fetches props).
+                    _unauth_serial = next(
+                        (d["serial"] for d in adb_devs if d["state"] == "unauthorized"), "")
+                    _props_tried = getattr(self, "_unauth_props_tried_serial", None)
+                    if (not build_id or not android_ver) and _props_tried != _unauth_serial:
+                        self._unauth_props_tried_serial = _unauth_serial
+                        try:
+                            # Try ADB getprop even when unauthorized — sometimes ro.build still answers
+                            # (rescue=False: passive poll timer - busy must fail fast, never kill-server.
+                            # Pinned to the unauthorized serial: unscoped calls could otherwise
+                            # hop phones mid-burst when several are attached.)
+                            _userial = _unauth_serial or None
+                            cand_build = bridge.adb_shell("getprop ro.build.display.id", timeout=5, rescue=False, serial=_userial).strip()
+                            if not cand_build:
+                                cand_build = bridge.adb_shell("getprop ro.build.version.incremental", timeout=5, rescue=False, serial=_userial).strip()
+                            if cand_build and cand_build.lower() != "adb":
+                                build_id = cand_build
+                            cand_and = bridge.adb_shell("getprop ro.build.version.release", timeout=5, rescue=False, serial=_userial).strip()
+                            if cand_and:
+                                # Also try sdk for API level
+                                try:
+                                    cand_sdk = bridge.adb_shell("getprop ro.build.version.sdk", timeout=5, rescue=False, serial=_userial).strip()
+                                    if cand_sdk:
+                                        cand_and = f"{cand_and} (API {cand_sdk})"
+                                except Exception:
+                                    pass
+                                android_ver = cand_and
+                        except Exception:
+                            pass
+                    # Still fetch model via USB/MTP/AT even when ADB is
+                    # unauthorized - once per serial (same cycle as the
+                    # gated getprop attempt above; every-3s MTP sessions
+                    # claimed the phone's MTP interface per tick).
+                    if _props_tried == _unauth_serial and (not model or not build_id or not serial_prop):
+                        try:
+                            # Try MTP model (generic, not just Samsung) — also captures build/serial
+                            _sam_mtp_u = _find_mtp_device() or mtp.find_samsung() or {}
+                            if _sam_mtp_u and any(i.get("class") == 6 for i in _sam_mtp_u.get("interfaces", [])):
+                                target_u = f"{_sam_mtp_u['vid']:04x}:{_sam_mtp_u['pid']:04x}@{_sam_mtp_u['bus']}:{_sam_mtp_u['address']}"
+                                try:
+                                    info_u = bridge.mtp_info(target_u, timeout_ms=5000)
+                                    if isinstance(info_u, dict):
+                                        if info_u.get("model"):
+                                            cand_u = info_u["model"].strip()
+                                            if cand_u and cand_u.lower() != "adb":
+                                                model = cand_u
+                                        if info_u.get("device_version") and not build_id:
+                                            build_id = info_u["device_version"].strip()
+                                        if info_u.get("serial_number") and not serial_prop:
+                                            serial_prop = info_u["serial_number"].strip()
+                                except Exception:
+                                    pass
+                            if not model:
+                                # Try AT model (diag port)
+                                _sam_at = mtp.find_samsung() or {}
+                                _is_dl_u = _sam_at.get("pid") in (0x685d, 0x685c, 0x685e) or _sam_at.get("mode") == "samsung-odin"
+                                if not _is_dl_u and mtp.is_diag_config(_sam_at):
+                                    cand_at = mtp.read_model_via_at(timeout_ms=5000)
+                                    if cand_at and cand_at.lower() != "adb":
+                                        model = cand_at
+                            if not model or not serial_prop:
+                                # Fallback USB product/serial strings — target the phone, skip readers
+                                try:
+                                    _tgt_u = _find_target_device()
+                                    if _tgt_u:
+                                        _cand_u = (_tgt_u.get("product") or "").strip()
+                                        _ser_u = (_tgt_u.get("serial") or "").strip()
+                                        if _ser_u and not serial_prop and _ser_u.lower() != "adb":
+                                            serial_prop = _ser_u
+                                        if _cand_u and _cand_u.lower() not in ("adb", "samsung_android", "samsung android", ""):
+                                            if not model:
+                                                model = _cand_u
+                                    if not model and getattr(self, "_last_usb_product", None):
+                                        model = self._last_usb_product
+                                except Exception:
+                                    pass
                             if model and model != self._cached_model:
                                 self._cached_model = model
-                                self._ui.line.emit(
-                                    f"Device Model: {model} (via AT channel)"
-                                )
-                    except Exception:  # noqa: BLE001
-                        pass
+                                self._ui.line.emit(f"Device Model: {model} (via USB/MTP while ADB unauthorized)")
+                                # Keep phone image vendor in sync with Device Model
+                                if hasattr(self, "scene") and self.scene and model.lower() != "samsung":
+                                    self.scene.set_vendor(model.upper(), C["ok"])
+                        except Exception:
+                            pass
+                elif any(d["state"] == "offline" for d in adb_devs):
+                    adb_status = "Offline - replug cable"
+                    if self._cached_adb_status != adb_status:
+                        self._ui.line.emit("ADB: device offline - unplug + replug, accept dialog")
+                    # Also try to get model via non-ADB while offline (target device)
+                    if not model or not serial_prop:
+                        try:
+                            _sam_off = _find_target_device() or mtp.find_samsung() or {}
+                            if _sam_off:
+                                _cand_off = (_sam_off.get("product") or "").strip()
+                                _ser_off = (_sam_off.get("serial") or "").strip()
+                                if _cand_off and _cand_off.lower() != "adb" and not model:
+                                    model = _cand_off
+                                    if model and model != self._cached_model:
+                                        self._cached_model = model
+                                        if hasattr(self, "scene") and self.scene:
+                                            self.scene.set_vendor(model.upper(), C["warn"])
+                                if _ser_off and not serial_prop:
+                                    serial_prop = _ser_off
+                        except Exception:
+                            pass
+                else:
+                    # No ADB transport - try MTP model first (works without ADB/test mode),
+                    # then AT if in diag config, before falling back to USB strings.
+                    if not model or not build_id or not serial_prop:
+                        try:
+                            _sam_mtp = _find_mtp_device() or mtp.find_samsung() or {}
+                            if _sam_mtp and any(i.get("class") == 6 for i in _sam_mtp.get("interfaces", [])):
+                                target = f"{_sam_mtp['vid']:04x}:{_sam_mtp['pid']:04x}@{_sam_mtp['bus']}:{_sam_mtp['address']}"
+                                try:
+                                    info = bridge.mtp_info(target, timeout_ms=5000)
+                                    if isinstance(info, dict):
+                                        if info.get("model") and not model:
+                                            cand = info["model"].strip()
+                                            if cand and cand.lower() != "adb":
+                                                model = cand
+                                                if model and model != self._cached_model:
+                                                    self._cached_model = model
+                                                    self._ui.line.emit(f"Device Model: {model} (via MTP)")
+                                        if info.get("device_version") and not build_id:
+                                            build_id = info["device_version"].strip()
+                                        if info.get("serial_number") and not serial_prop:
+                                            serial_prop = info["serial_number"].strip()
+                                        if info.get("manufacturer") and not mfr:
+                                            mfr = info["manufacturer"].strip()
+                                except bridge.BridgeError:
+                                    pass
+                                except Exception:
+                                    pass
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if not model:
+                        try:
+                            _sam = mtp.find_samsung() or {}
+                            # Download-mode (Loke) exposes a CDC-ACM *interrupt*
+                            # interface that falsely looks like a diag port - but
+                            # there is NO AT channel there, only a bulk session.
+                            # Attempting AT on it spams 'bulk read: timed out'
+                            # every poll. Only probe AT when not in download mode.
+                            _is_dl = _sam.get("pid") in (0x6601, 0x685d, 0x685c, 0x685e, 0x68c3, 0x68ef, 0x4eee, 0x4eef) \
+                                or _sam.get("mode") == "samsung-odin"
+                            if not _is_dl and mtp.is_diag_config(_sam):
+                                model = mtp.read_model_via_at(timeout_ms=5000)
+                                if model and model != self._cached_model:
+                                    self._cached_model = model
+                                    self._ui.line.emit(
+                                        f"Device Model: {model} (via AT channel)"
+                                    )
+                        except Exception:  # noqa: BLE001
+                            pass
+                    # No automatic Odin model probe here - by design. Probing
+                    # opens a USB session on the download-mode port, and an
+                    # unsolicited background probe contends with (and breaks)
+                    # explicit user actions (FUS Detect, flashing). The model
+                    # for download-mode phones is resolved on demand by those
+                    # actions, which publish it to _cached_model.
+                    # Last fallback for non-ADB: use USB product/serial strings directly (target phone)
+                    if (not model and not self._cached_model) or not serial_prop:
+                        # Use already known product from _last_usb_product if available
+                        if not model and getattr(self, "_last_usb_product", None) and self._last_usb_product.strip().lower() != "adb":
+                            model = self._last_usb_product.strip()
+                        if not model or not serial_prop:
+                            try:
+                                _tgt2 = _find_target_device()
+                                if _tgt2:
+                                    if not model:
+                                        prod = (_tgt2.get("product") or "").strip()
+                                        if prod and prod.lower() != "adb":
+                                            model = prod
+                                    if not serial_prop:
+                                        ser = (_tgt2.get("serial") or "").strip()
+                                        if ser and ser.lower() != "adb":
+                                            serial_prop = ser
+                            except Exception:
+                                pass
+                    if not adb_devs:
+                        adb_status = "Not connected"
                 self._cached_adb_status = adb_status
-                self._ui.metric.emit(
-                    "Device Model", model or self._cached_model or f"0x{pid:04x}"
-                )
+                # --- Live resolver override: real serial / android / build (no fake 01234...) ---
+                try:
+                    # Pass the display-fixed serial: the live resolver must
+                    # probe the device the user is inspecting, or its cached
+                    # first-device identity overrides the selection (the
+                    # "click modem, details fall back to kg6" bug).
+                    live = device_info.get_live_identity(serial or None)
+                    # live serial is already filtered fake; prefer it over cached/usb placeholder
+                    if live.get("serial") and not device_info._is_fake_serial(live["serial"]):
+                        # Only override if we don't have a trusted ADB serial, or live is more complete
+                        # For Apple, live serial is UDID/SerialNumber — always prefer
+                        if not serial_prop or device_info._is_fake_serial(serial_prop) or live["serial"] != serial_prop:
+                            serial_prop = live["serial"]
+                    if live.get("android_ver"):
+                        android_ver = live["android_ver"]
+                    if live.get("build"):
+                        build_id = live["build"]
+                    if live.get("model") and live["model"].strip().lower() not in ("adb", "samsung_android", ""):
+                        # Apple ProductType or Android ro.product.model — prefer live if current is fallback
+                        if not model or model.startswith("0x") or model.lower() in ("adb",):
+                            model = live["model"]
+                        # Update mfr for vendor badge if live has it
+                        if live.get("mfr") and not mfr:
+                            mfr = live["mfr"]
+                except Exception:
+                    pass
+                # Never emit a hard-coded "adb" as model - use real product/model or placeholder
+                fallback = f"0x{pid:04x}" if pid is not None else "--"
+                # If we still have no model, keep previous cached or show fallback
+                emit_model = model or self._cached_model or fallback
+                # Guard against the literal "adb" sneaking in as model (bridge bug)
+                if isinstance(emit_model, str) and emit_model.strip().lower() == "adb":
+                    emit_model = fallback if fallback != "--" else "--"
+                self._ui.metric.emit("Device Model", emit_model)
                 self._ui.metric.emit("ADB Status", adb_status)
-            except bridge.BridgeError:
-                self._ui.metric.emit("ADB Status", "Error")
+                # Extended info: build, android, serial (cached) — filtered fake serial
+                if build_id and build_id != self._cached_build and build_id.strip().lower() not in ("adb",):
+                    self._cached_build = build_id
+                if android_ver and android_ver != self._cached_android and android_ver.strip().lower() not in ("adb",):
+                    self._cached_android = android_ver
+                # Filter fake serial before caching/emitting
+                try:
+                    if serial_prop and device_info._is_fake_serial(serial_prop):
+                        serial_prop = ""
+                except Exception:
+                    pass
+                if serial_prop and serial_prop != self._cached_serial and not serial_prop.strip().lower() in ("adb",):
+                    self._cached_serial = serial_prop
+                # NEVER hardcode "Tap Allow" — show blank "--" until real data arrives
+                build_out = build_id or self._cached_build or "--"
+                android_out = android_ver or self._cached_android or "--"
+                serial_out = serial_prop or self._cached_serial or "--"
+                # Final fake filter on emit
+                try:
+                    if serial_out != "--" and device_info._is_fake_serial(serial_out):
+                        serial_out = "--"
+                except Exception:
+                    pass
+                self._ui.metric.emit("Build Number", build_out)
+                self._ui.metric.emit("Android Ver", android_out)
+                self._ui.metric.emit("Serial", serial_out)
+                # Log detailed info once per connection (throttled)
+                try:
+                    if emit_model not in ("--",) and not emit_model.startswith("0x"):
+                        should_log = not getattr(self, "_detailed_logged", False) or emit_model != getattr(self, "_last_logged_model", None)
+                        if should_log and (build_id or android_ver or serial_prop):
+                            self._ui.line.emit(f"Device Info: Model {emit_model} | Build {build_id or self._cached_build or 'unknown'} | Android {android_ver or self._cached_android or 'unknown'} | Serial {serial_prop or self._cached_serial or 'unknown'}")
+                            self._detailed_logged = True
+                            self._last_logged_model = emit_model
+                except Exception:
+                    pass
+                # Deep USB/MTP dump when Build/Android still unknown (dig deeper — no hardcoded text)
+                try:
+                    if (not build_id and not self._cached_build) and not getattr(self, "_usb_dumped", False):
+                        self._usb_dumped = True
+                        try:
+                            all_u = bridge.detect_all()
+                            for d in all_u:
+                                vid = d.get("vid", 0)
+                                pid_u = d.get("pid", 0)
+                                self._ui.line.emit(f"USB raw: {vid:04x}:{pid_u:04x} {d.get('manufacturer')}/{d.get('product')} serial={d.get('serial')} mode={d.get('mode')} bcdDev={d.get('bcd_device'):04x} bus={d.get('bus')} addr={d.get('address')} ifaces={len(d.get('interfaces',[]))}")
+                                # Detailed iface dump
+                                for iface in d.get("interfaces", []):
+                                    eps = ",".join(f"{e['address']:02x}:{e['transfer_type']}" for e in iface.get("endpoints", []))
+                                    self._ui.line.emit(f"  Iface {iface.get('number')}: class={iface.get('class')} sub={iface.get('subclass')} proto={iface.get('protocol')} eps=[{eps}]")
+                                if any(i.get("class")==6 for i in d.get("interfaces", [])):
+                                    tgt = f"{vid:04x}:{pid_u:04x}@{d.get('bus')}:{d.get('address')}"
+                                    try:
+                                        info_raw = bridge.mtp_info(tgt, timeout_ms=4000)
+                                        self._ui.line.emit(f"MTP raw {tgt}: {info_raw}")
+                                    except Exception as e:
+                                        self._ui.line.emit(f"MTP {tgt} failed: {e}")
+                            # Also dump ADB raw for correlation
+                            try:
+                                adb_raw = bridge._run(["adb-devices"], timeout=8)
+                                self._ui.line.emit(f"ADB raw: {adb_raw}")
+                            except Exception as e:
+                                self._ui.line.emit(f"ADB raw failed: {e}")
+                            # Best-effort build/android from MTP GetDeviceInfo (device_version)
+                            try:
+                                # For each MTP device, extract device_version as build hint
+                                for d2 in all_u:
+                                    if any(i.get("class") == 6 for i in d2.get("interfaces", [])):
+                                        _t2 = f"{d2.get('vid'):04x}:{d2.get('pid'):04x}@{d2.get('bus')}:{d2.get('address')}"
+                                        try:
+                                            _info2 = bridge.mtp_info(_t2, timeout_ms=4000)
+                                            _di = _info2 if isinstance(_info2, dict) else {}
+                                            _dv = (_di.get("device_version") or "").strip()
+                                            if _dv and _dv.lower() != "adb":
+                                                if not build_id:
+                                                    self._ui.metric.emit("Build Number", _dv)
+                                                    self._cached_build = _dv
+                                                    self._ui.line.emit(f"Build (MTP device_version): {_dv}")
+                                            _mn = (_di.get("manufacturer") or "").strip()
+                                            _mo = (_di.get("model") or "").strip()
+                                            if _mn and _mo:
+                                                self._ui.line.emit(f"MTP identifies: {_mn} {_mo}")
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            self._ui.line.emit(f"USB/MTP deep dump failed: {e}")
+                except Exception:
+                    pass
+                # Keep phone image name in sync with Device Model (throttled, main-thread safe)
+                try:
+                    if emit_model not in ("--",) and not emit_model.startswith("0x"):
+                        lower_em = emit_model.strip().lower()
+                        if lower_em not in ("samsung", "mediatek", "qualcomm", "adb", "samsung_android"):
+                            # Update cached model for immediate vendor display next time
+                            if emit_model != self._cached_model:
+                                self._cached_model = emit_model
+                            # Use ui signal to touch widgets on main thread
+                            self._ui.ui.emit(lambda em=emit_model: self.scene.set_vendor(em.upper(), C["ok"]) if hasattr(self, "scene") and self.scene else None)
+                except Exception:
+                    pass
+            except Exception as e:  # noqa: BLE001
+                # Ensure metrics always update even on unexpected errors
+                try:
+                    fallback = f"0x{pid:04x}" if pid is not None else "--"
+                    self._ui.metric.emit("Device Model", self._cached_model or fallback)
+                    self._ui.metric.emit("ADB Status", adb_status if adb_status != "Not connected" else "Error")
+                    self._ui.metric.emit("Build Number", self._cached_build or "--")
+                    self._ui.metric.emit("Android Ver", self._cached_android or "--")
+                    self._ui.metric.emit("Serial", self._cached_serial or "--")
+                except Exception:
+                    pass
             finally:
                 self._model_refresh_in_progress = False
                 self._update_in_progress = False
@@ -9587,12 +12233,57 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _poll_adb_metric(self):
-        if self._last_pid:
+        if getattr(self, "_device_connected", False):
             self._refresh_model_and_adb()
 
+    def _copy_device_info(self):
+        """Copy current device info (model/build/android/serial/mode) to clipboard."""
+        try:
+            info = {
+                "Model": self.info.get("Device Model", {}).value.text() if "Device Model" in self.info else "--",
+                "USB Mode": self.info.get("USB Mode", {}).value.text() if "USB Mode" in self.info else "--",
+                "Interface": self.info.get("Interface", {}).value.text() if "Interface" in self.info else "--",
+                "ADB Status": self.info.get("ADB Status", {}).value.text() if "ADB Status" in self.info else "--",
+                "Build Number": self.info.get("Build Number", {}).value.text() if "Build Number" in self.info else "--",
+                "Android Ver": self.info.get("Android Ver", {}).value.text() if "Android Ver" in self.info else "--",
+                "Serial": self.info.get("Serial", {}).value.text() if "Serial" in self.info else "--",
+                "PIT Health": self.info.get("PIT Health", {}).value.text() if "PIT Health" in self.info else "--",
+            }
+            # Fallback to cached values if metrics still "--"
+            if info["Model"] == "--" and getattr(self, "_cached_model", None):
+                info["Model"] = self._cached_model
+            if info["Build Number"] == "--" and getattr(self, "_cached_build", None):
+                info["Build Number"] = self._cached_build
+            text = "\n".join(f"{k}: {v}" for k, v in info.items())
+            QApplication.clipboard().setText(text)
+            self._ui.line.emit(f"[info] Device info copied to clipboard:\n{text}")
+            self.show_toast("Device info copied", "Model/build/serial copied to clipboard", "success")
+        except Exception as e:
+            self._ui.line.emit(f"[error] Copy failed: {e}")
+
     def closeEvent(self, event):
+        # Window shrink close — 180ms scale 1→0.92 + fade, then actually close
+        if not getattr(self, "_close_anim_done", False):
+            try:
+                if self.settings.value("animations", "true", type=bool) and self.settings.value("anim_window", "true", type=bool):
+                    event.ignore()
+                    from .animations import Motion
+                    def do_close():
+                        self._close_anim_done = True
+                        super(FlashPilotWindow, self).close()
+                    Motion.window_close(self, dur=180, on_finished=do_close)
+                    return
+            except Exception:
+                pass
         self._monitor.stop()
         self._adb_timer.stop()
+        # Window memory: size/position/maximized restore on the next launch.
+        try:
+            self.settings.setValue("win_maximized", self.isMaximized())
+            if not self.isMaximized():
+                self.settings.setValue("win_geometry", self.saveGeometry())
+        except Exception:
+            pass
         super().closeEvent(event)
 
     def resizeEvent(self, event):
@@ -9707,13 +12398,18 @@ class FrpWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- battery repair --------------------------
-    def _battery_report(self):
+    def _battery_report(self, device_key=None):
         """ADB battery diagnostics with accurate health estimation: reads the
         fuel-gauge sysfs (charge_full / charge_full_design -> health %), plus
         dumpsys battery / batteryproperties and top consumers."""
+        prep = self._adb_begin("Battery report", "battery_report", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def _sysfs(path):
             try:
-                return bridge.adb_shell(f"cat {path}", timeout=8).strip()
+                return bridge.adb_shell(f"cat {path}", timeout=8, serial=serial, rescue=False).strip()
             except bridge.BridgeError:
                 return None
             except Exception:  # noqa: BLE001
@@ -9733,18 +12429,19 @@ class FrpWindow(QMainWindow):
             return "Critical - replace the battery"
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Battery report needs an authorized ADB device - "
-                        "enable USB debugging and tap Allow"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
+                emit(f"[step] Battery report on {serial}")
                 lines = ["=== Battery Report ==="]
 
                 # -- fuel gauge (accurate health) --
@@ -9817,7 +12514,7 @@ class FrpWindow(QMainWindow):
 
                 # -- dumpsys battery --
                 try:
-                    raw = bridge.adb_shell("dumpsys battery", timeout=15)
+                    raw = bridge.adb_shell("dumpsys battery", timeout=15, serial=serial, rescue=False)
                     lines.append("--- dumpsys battery ---")
                     for line in raw.splitlines():
                         s = line.strip()
@@ -9857,7 +12554,7 @@ class FrpWindow(QMainWindow):
                 # -- dumpsys batteryproperties --
                 try:
                     raw = bridge.adb_shell(
-                        "dumpsys batteryproperties", timeout=15
+                        "dumpsys batteryproperties", timeout=15, serial=serial, rescue=False
                     )
                     lines.append("--- dumpsys batteryproperties ---")
                     for line in raw.splitlines():
@@ -9886,7 +12583,7 @@ class FrpWindow(QMainWindow):
                 try:
                     raw = bridge.adb_shell(
                         "dumpsys batterystats | grep -A2 'Estimated power use\\|Power use by\\|Uid u0a'",
-                        timeout=30,
+                        timeout=30, serial=serial, rescue=False
                     )
                     if raw.strip():
                         lines.append("--- top consumers ---")
@@ -9897,9 +12594,20 @@ class FrpWindow(QMainWindow):
                 lines.append("")
                 lines.append("Health below 80% means noticeable runtime loss; below 60%")
                 lines.append("the battery should be replaced.")
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery report stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery report: {e}")
+                emit(f"[error] battery report: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -9922,28 +12630,26 @@ class FrpWindow(QMainWindow):
             self._battery_repair_run,
         )
 
-    def _battery_repair_run(self):
-        if not _flow_start("Battery repair", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _battery_repair_run(self, device_key=None):
+        prep = self._adb_begin("Battery repair", "battery_repair", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Battery repair needs an authorized ADB device - "
-                        "enable USB debugging and tap Allow"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
-                serial = auth[0]["serial"]
-                self._ui.line.emit(f"[step] Battery repair on {serial}")
+                emit(f"[step] Battery repair on {serial}")
 
                 steps = [
                     ("reset battery statistics (cmd batterystats reset)",
@@ -9977,43 +12683,52 @@ class FrpWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=90)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=90, serial=serial, rescue=False)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
                 lines = ["", "--- verification ---"]
                 for k in ("low_power", "low_power_sticky",
                           "ble_scan_always_enabled", "wifi_scan_always_enabled"):
                     try:
                         v = bridge.adb_shell(
-                            f"settings get global {k}", timeout=12
+                            f"settings get global {k}", timeout=12, serial=serial, rescue=False
                         ).strip()
                         lines.append(f"   {k} = {v}")
                     except bridge.BridgeError:
                         lines.append(f"   {k} = (unreadable)")
                 try:
                     v = bridge.adb_shell(
-                        "settings get system screen_off_timeout", timeout=12
+                        "settings get system screen_off_timeout", timeout=12, serial=serial, rescue=False
                     ).strip()
                     lines.append(f"   screen_off_timeout = {v}")
                 except bridge.BridgeError:
                     pass
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
 
-                self._ui.line.emit(
+                emit(
                     "\nBattery repair done. Tip: discharge to ~10% then charge "
                     "to 100% without interruption to finish re-calibration."
                 )
                 self._ui.toast.emit(
                     "ok", "Battery repair", "Fixes applied - re-calibration tip shown"
                 )
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery repair stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery repair: {e}")
+                emit(f"[error] battery repair: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -10033,34 +12748,34 @@ class FrpWindow(QMainWindow):
             self._battery_load_test_run,
         )
 
-    def _battery_load_test_run(self):
-        if not _flow_start("Battery load test", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _battery_load_test_run(self, device_key=None):
+        prep = self._adb_begin("Battery load test", "battery_load_test", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             restored = False
             try:
-                devs = bridge.adb_status()
-                auth = [d for d in devs if d["state"] == "device"]
-                if not auth:
-                    self._ui.line.emit(
-                        "[warn] Load test needs an authorized ADB device"
-                    )
-                    self._ui.toast.emit(
-                        "warn", "No ADB device", "Connect + authorize the phone"
-                    )
-                    return
-                self._ui.line.emit("[step] Battery load test started")
+                emit("[step] Battery load test started")
                 self._ui.status.emit("Battery load test: stressing...")
 
                 def read():
                     try:
                         v = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/voltage_now",
-                            timeout=8,
+                            timeout=8, serial=serial, rescue=False
                         ).strip()
                         return int(v) / 1000.0 if v else None
                     except (bridge.BridgeError, ValueError):
@@ -10070,7 +12785,7 @@ class FrpWindow(QMainWindow):
                     try:
                         t = bridge.adb_shell(
                             "cat /sys/class/power_supply/battery/temp",
-                            timeout=8,
+                            timeout=8, serial=serial, rescue=False
                         ).strip()
                         return int(t) / 10.0 if t else None
                     except (bridge.BridgeError, ValueError):
@@ -10078,7 +12793,7 @@ class FrpWindow(QMainWindow):
 
                 idle_v = read()
                 idle_t = read_temp()
-                self._ui.line.emit(
+                emit(
                     f"   idle voltage : {idle_v:.3f} V  "
                     f"temp {idle_t:.1f} C" if idle_v else "   idle voltage : n/a"
                 )
@@ -10092,7 +12807,7 @@ class FrpWindow(QMainWindow):
                     "input keyevent KEYCODE_WAKEUP",
                 ):
                     try:
-                        bridge.adb_shell(cmd, timeout=10)
+                        bridge.adb_shell(cmd, timeout=10, serial=serial, rescue=False)
                     except bridge.BridgeError:
                         pass
                 restored = False  # phone is now maxed - must restore below
@@ -10100,15 +12815,21 @@ class FrpWindow(QMainWindow):
                 # CPU burn in background
                 bridge.adb_shell(
                     "nohup sh -c 'i=0; while [ $i -lt 10000000 ]; do i=$((i+1)); done' >/dev/null 2>&1 &",
-                    timeout=8,
+                    timeout=8, serial=serial, rescue=False
                 )
 
                 import time as _time
                 samples = []
                 t0 = _time.time()
                 while _time.time() - t0 < 14:
-                    if frp.cancel_requested():
-                        self._ui.line.emit("[cancelled] load test stopped by user")
+                    # Per-device cancel: this phone's scope, not the
+                    # broadcast bus, so stopping another phone's job does
+                    # not abort this sampling loop.
+                    if core.cancel_requested(key=device_key):
+                        emit("[cancelled] load test stopped by user")
+                        if flux:
+                            jobs.finish_job(flux.job_id, "CANCELLED",
+                                            "cancelled by user", "CANCELLED")
                         return
                     v = read()
                     if v:
@@ -10118,83 +12839,85 @@ class FrpWindow(QMainWindow):
                 restored = True  # handled by finally below
 
                 if not samples:
-                    self._ui.line.emit("[error] load test: no voltage samples read")
+                    emit("[error] load test: no voltage samples read")
+                    if flux:
+                        jobs.finish_job(flux.job_id, "FAILED", "no voltage samples", "NO_SAMPLES")
                     return
                 load_v = min(samples)
                 load_t = read_temp()
                 sag = (idle_v - load_v) if idle_v else None
-                self._ui.line.emit("   --- load test result ---")
-                self._ui.line.emit(
+                emit("   --- load test result ---")
+                emit(
                     f"   idle voltage : {idle_v:.3f} V" if idle_v else "   idle voltage : n/a"
                 )
-                self._ui.line.emit(
+                emit(
                     f"   min voltage under load: {load_v:.3f} V  "
                     f"temp {load_t:.1f} C" if load_t else
                     f"   min voltage under load: {load_v:.3f} V"
                 )
                 if sag is not None:
-                    self._ui.line.emit(f"   voltage sag   : {sag*1000:.0f} mV")
+                    emit(f"   voltage sag   : {sag*1000:.0f} mV")
                     if sag * 1000 > 250:
-                        self._ui.line.emit(
+                        emit(
                             "   >>> HIGH sag (>250mV): high internal resistance - "
                             "cell is weak, replace the battery"
                         )
                     elif sag * 1000 > 150:
-                        self._ui.line.emit(
+                        emit(
                             "   >>> Moderate sag (150-250mV): degraded cell, "
                             "watch for shutdowns under load"
                         )
                     else:
-                        self._ui.line.emit(
+                        emit(
                             "   Sag within normal range (<150mV): cell looks healthy"
                         )
-                self._ui.line.emit(
+                emit(
                     "   If the phone shut off during the test, that confirms a "
                     "weak cell (voltage dropped below cutoff)."
                 )
                 self._ui.status.emit("Battery load test complete")
                 self._ui.toast.emit("ok", "Load test", "Result printed to console")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] battery load test stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] battery load test: {e}")
+                emit(f"[error] battery load test: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
                 # Restore brightness even if the burn/read path raised or was
                 # cancelled - otherwise the phone is left at 100% brightness.
                 if not restored:
                     try:
                         bridge.adb_shell(
-                            "settings put system screen_brightness_mode 1", timeout=8
+                            "settings put system screen_brightness_mode 1", timeout=8,
+                            serial=serial, rescue=False
                         )
                     except bridge.BridgeError:
                         pass
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- network repair -------------------------
-    def _get_authorized_adb(self):
-        try:
-            devs = bridge.adb_status()
-            auth = [d for d in devs if d["state"] == "device"]
-            return auth[0]["serial"] if auth else None
-        except bridge.BridgeError:
-            return None
-
-    def _require_adb(self):
-        serial = self._get_authorized_adb()
-        if not serial:
-            self._ui.line.emit(
-                "[warn] Network tools need an authorized ADB device - enable "
-                "USB debugging and tap Allow"
-            )
-            self._ui.toast.emit(
-                "warn", "No ADB device", "Connect + authorize the phone"
-            )
-        return serial
-
+    # NOTE: _get_authorized_adb/_require_adb (first-authorized-device) were
+    # removed: every ADB tool now picks via _adb_begin (dialog when >1) and
+    # pins serial=. Do not reintroduce first-match ADB resolution.
     def _poll_net_live(self):
         """Live network readout on the Network page. Runs from the 3s ADB
         timer; updates the metric cards while an authorized ADB device is
-        connected, so diagnostics appear without clicking anything."""
+        connected, so diagnostics appear without clicking anything.
+
+        Gated on the Network page being VISIBLE: every tick ran adb_status
+        + 8 native ADB sessions regardless of the page, and on devices
+        whose adbd resets its USB function on our CNXN that re-enumerates
+        the phone 8x per cycle while the user is on another page."""
+        if getattr(self, "_current_section", "") != "network":
+            return
         if not hasattr(self, "net_cards"):
             return
         if self._update_net_in_progress:
@@ -10203,21 +12926,45 @@ class FrpWindow(QMainWindow):
 
         def work():
             try:
-                try:
-                    adb_devs = bridge.adb_status()
-                except bridge.BridgeError:
-                    adb_devs = []
+                # Reuse the DeviceMonitor's fresh state (<=3s old, zero extra
+                # USB I/O) instead of another native probe per tick.
+                mon = getattr(self, "_monitor", None)
+                mon_state = getattr(mon, "_last_state", None) if mon else None
+                if mon_state is not None:
+                    adb_devs = list(mon_state.get("adb") or [])
+                else:
+                    try:
+                        # Presence (see DeviceMonitor): this 3s display tick
+                        # must not natively probe.
+                        adb_devs = bridge.adb_presence_status()
+                    except bridge.BridgeError:
+                        adb_devs = []
+                # Pin the whole tick to one phone: the displayed device when
+                # authorized, else the first authorized (legacy). Per-call
+                # re-resolution could otherwise hop phones mid-tick.
                 authorized = [d for d in adb_devs if d["state"] == "device"]
                 if not authorized:
                     self._ui.ui.emit(self._net_set_offline)
                     return
                 serial = authorized[0]["serial"]
                 try:
+                    pinned = self._adb_serial_for_key(
+                        getattr(self, "_display_key", None))
+                    if pinned and any(d["serial"] == pinned for d in authorized):
+                        serial = pinned
+                except Exception:
+                    pass
+                try:
+                    # rescue=False: passive 3s poll timer - busy (system adb
+                    # server holds the interface) must fail fast, never
+                    # kill-server (the phone re-enumerates every time).
                     get = lambda prop: bridge.adb_shell(
-                        f"getprop {prop}", timeout=8
+                        f"getprop {prop}", timeout=8, rescue=False,
+                        serial=serial,
                     ).strip()
                     settings_get = lambda key: bridge.adb_shell(
-                        f"settings get global {key}", timeout=8
+                        f"settings get global {key}", timeout=8, rescue=False,
+                        serial=serial,
                     ).strip()
                     sim = get("gsm.sim.state")
                     net = get("gsm.network.type")
@@ -10243,6 +12990,8 @@ class FrpWindow(QMainWindow):
                         "dumpsys telephony.registry 2>/dev/null | grep -m1 "
                         "'mSignalStrength' | awk -F'=' '{print $2}'",
                         timeout=8,
+                        rescue=False,
+                        serial=serial,
                     ).strip()
                     vals["signal"] = sig or "unknown"
                 except bridge.BridgeError:
@@ -10269,12 +13018,25 @@ class FrpWindow(QMainWindow):
             "No authorized ADB device - connect + authorize to see live diagnostics"
         )
 
-    def _network_report(self):
+    def _network_report(self, device_key=None):
+        prep = self._adb_begin("Network report", "network_report", device_key)
+        if prep[0] is None:
+            return
+        serial, device_key, flux = prep
+
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
                 lines = [f"=== Network Report ({serial}) ==="]
                 probes = [
                     ("SIM state", "getprop gsm.sim.state"),
@@ -10290,7 +13052,7 @@ class FrpWindow(QMainWindow):
                 ]
                 for label, cmd in probes:
                     try:
-                        v = bridge.adb_shell(cmd, timeout=12).strip()
+                        v = bridge.adb_shell(cmd, timeout=12, serial=serial, rescue=False).strip()
                         if v:
                             lines.append(f"   {label:16}: {v}")
                     except (bridge.BridgeError, ValueError):
@@ -10298,7 +13060,7 @@ class FrpWindow(QMainWindow):
                 try:
                     w = bridge.adb_shell(
                         "dumpsys wifi 2>/dev/null | grep -i 'Wi-Fi is' | head -1",
-                        timeout=15,
+                        timeout=15, serial=serial, rescue=False
                     ).strip()
                     if w:
                         lines.append(f"   {'Wi-Fi status':16}: {w}")
@@ -10308,17 +13070,30 @@ class FrpWindow(QMainWindow):
                     c = bridge.adb_shell(
                         "dumpsys connectivity 2>/dev/null | grep -i "
                         "'Active default network' | head -1",
-                        timeout=15,
+                        timeout=15, serial=serial, rescue=False
                     ).strip()
                     if c:
                         lines.append(f"   {'Active net':16}: {c}")
                 except bridge.BridgeError:
                     pass
-                self._ui.line.emit("\n".join(lines))
+                emit("\n".join(lines))
                 self._ui.ui.emit(lambda: self.net_status.setText(
                     "Report printed to console"))
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] network report stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] network report: {e}")
+                emit(f"[error] network report: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
+            finally:
+                # The pre-scope version of this worker never released its
+                # run-guard lock at all; release the keyed one here.
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -10337,19 +13112,26 @@ class FrpWindow(QMainWindow):
             self._network_repair_run,
         )
 
-    def _network_repair_run(self):
-        if not _flow_start("Network repair", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _network_repair_run(self, device_key=None):
+        prep = self._adb_begin("Network repair", "network_repair", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
-                self._ui.line.emit(f"[step] Network repair on {serial}")
+                emit(f"[step] Network repair on {serial}")
                 self._ui.status.emit("Network repair: resetting radios...")
 
                 steps = [
@@ -10378,21 +13160,30 @@ class FrpWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=30, serial=serial, rescue=False)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
-                self._ui.line.emit("")
-                self._ui.line.emit("Network repair done. Re-open Settings -> "
-                                   "Connections if the phone needs a moment.")
+                emit("")
+                emit("Network repair done. Re-open Settings -> "
+                     "Connections if the phone needs a moment.")
                 self._ui.toast.emit("ok", "Network repair", "Radios reset + caches flushed")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] network repair stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] network repair: {e}")
+                emit(f"[error] network repair: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -10409,19 +13200,26 @@ class FrpWindow(QMainWindow):
             self._network_modem_reset_run,
         )
 
-    def _network_modem_reset_run(self):
-        if not _flow_start("Modem reset", destructive=False):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+    def _network_modem_reset_run(self, device_key=None):
+        prep = self._adb_begin("Modem reset", "modem_reset", device_key)
+        if prep[0] is None:
             return
+        serial, device_key, flux = prep
 
         def work():
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
             try:
-                serial = self._require_adb()
-                if not serial:
-                    return
-                self._ui.line.emit(f"[step] Modem reset on {serial}")
+                emit(f"[step] Modem reset on {serial}")
                 self._ui.status.emit("Modem reset: re-registering...")
 
                 steps = [
@@ -10440,36 +13238,45 @@ class FrpWindow(QMainWindow):
                 ]
                 for label, cmd in steps:
                     try:
-                        bridge.adb_shell(cmd, timeout=30)
-                        self._ui.line.emit(f"   [ok] {label}")
+                        bridge.adb_shell(cmd, timeout=30, serial=serial, rescue=False)
+                        emit(f"   [ok] {label}")
                     except bridge.BridgeError as e:
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
                     except Exception as e:  # noqa: BLE001
-                        self._ui.line.emit(f"   [skip] {label}: {e}")
+                        emit(f"   [skip] {label}: {e}")
 
                 try:
                     v = bridge.adb_shell(
-                        "getprop gsm.sim.state", timeout=12
+                        "getprop gsm.sim.state", timeout=12, serial=serial, rescue=False
                     ).strip()
-                    self._ui.line.emit(f"\nSIM state after reset: {v or '(unknown)'}")
+                    emit(f"\nSIM state after reset: {v or '(unknown)'}")
                 except bridge.BridgeError:
                     pass
                 self._ui.toast.emit("ok", "Modem reset", "Modem re-registering")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except bridge.BridgeCancelled as e:
+                emit(f"[cancelled] modem reset stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
-                self._ui.line.emit(f"[error] modem reset: {e}")
+                emit(f"[error] modem reset: {e}")
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
 
         threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------- run flow -------------------------------
     def _carrier_lock_status(self):
-        name = frp.FLOWS["carrier_lock_status"]().name
-        self._run_ops_flow("Carrier lock", "ADB", "carrier_lock_status", name)
+        name = core.FLOWS["carrier_lock_status"]().name
+        self._run_ops_flow("Unlock Carrier", "ADB", "carrier_lock_status", name)
 
     def _carrier_lock_mtk(self):
-        name = frp.FLOWS["carrier_lock_mtk"]().name
-        self._run_ops_flow("Carrier lock", "MTK BROM", "carrier_lock_mtk", name)
+        name = core.FLOWS["carrier_lock_mtk"]().name
+        self._run_ops_flow("Unlock Carrier", "MTK BROM", "carrier_lock_mtk", name)
 
     def _on_flash_slots(self):
         """Primary FLASH button: confirm what will be flashed, then run the
@@ -10499,7 +13306,7 @@ class FrpWindow(QMainWindow):
             "the device.",
             confirm_label="Flash now",
             on_confirm=lambda: self._run_ops_flow(
-                "Odin Flashing (Advanced)", "Download mode",
+                "Flash Firmware", "Download mode",
                 "odin_advanced_flash", "Advanced flash (AP/BL/CP/CSC + Unofficial)",
             ),
         )
@@ -10508,7 +13315,7 @@ class FrpWindow(QMainWindow):
         # Native Linux (GTK) file dialogs select the FIRST filter by default;
         # using a single comprehensive filter guarantees .img/.lz4/.bin/.pit/
         # .tar files are visible instead of the folder looking empty.
-        name_filter = "Samsung images & archives (*.img *.lz4 *.bin *.pit *.tar *.tar.md5)"
+        name_filter = "Samsung images & archives (*.img *.lz4 *.zst *.zstd *.bin *.pit *.tar *.tar.md5)"
         dlg = QFileDialog(
             self,
             f"Select {slot_name}",
@@ -10527,23 +13334,331 @@ class FrpWindow(QMainWindow):
     def _on_mode_changed(self, mode):
         pass
 
+    _last_stop = [0.0]
     def on_stop(self):
-        frp.request_cancel()
-        bridge.request_cancel()
-        self._ui.status.emit("Stopping flow ...")
-
-    def _run_ops_flow(self, job, mode, method, label):
-        """Run a Samsung Operations flow directly from its button - no
-        job/mode/method dropdowns, each operation is its own button."""
-        if not _flow_start(label, destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+        now = __import__("time").monotonic()
+        if now - self._last_stop[0] < 0.5:
             return
-        frp.clear_cancel()
-        bridge.clear_cancel()
+        self._last_stop[0] = now
+        # Device-aware STOP: one active job -> cancel that device; jobs on
+        # several devices -> picker (stop one, or all). Zero active jobs ->
+        # legacy broadcast (harmless). Previously STOP was always a
+        # broadcast: stopping one phone's flash cancelled every phone's.
+        devices_running = sorted({
+            j.device_key for j in jobs.active_jobs() if j.device_key
+        })
+        if len(devices_running) > 1:
+            target = self._pick_stop_target(devices_running)
+            if target == "__cancelled__":
+                return
+            if target == "__all__":
+                core.request_cancel()
+                bridge.request_cancel()
+                self._ui.line.emit("[cancel] Stop ALL requested — every device ...")
+            else:
+                jobs.cancel_device(target)
+                self._ui.line.emit(
+                    f"[cancel] Stop requested for {target} — other devices keep running ...")
+            return
+        if len(devices_running) == 1:
+            jobs.cancel_device(devices_running[0])
+            self._ui.line.emit(
+                f"[cancel] Stop requested for {devices_running[0]} — finishing the current USB packet ...")
+            self._ui.status.emit("Stopping …")
+            return
+        core.request_cancel()
+        bridge.request_cancel()
+        self._ui.status.emit("Stopping …")
+        try:
+            self._ui.toast.emit("warn", "Stopping", "Closing the current USB operation — device stays connected")
+        except Exception:
+            pass
+        # Instantly disable the single global STOP and all legacy stops so the user
+        # sees immediate feedback; the actual flow thread exits on its next
+        # cancel check ( ≤ one bulk timeout, typically <600 ms) without a port reset.
+        for name in ("global_stop_btn", "stop_btn", "mtk_stop_btn",
+                     "qc_stop_btn", "spd_stop_btn"):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setEnabled(False)
+        self._ui.line.emit("[cancel] Stop requested — finishing the current USB packet ...")
+
+    def _pick_from_keys(self, label, device_keys):
+        """Run-picker over explicit device keys (daemon rows when the USB
+        pick missed): 'Run on this device' / 'Cancel' — run semantics, not
+        stop semantics. Returns a device key or '__cancelled__'."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Choose device — {label}")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f"The device list could not be scanned just now.<br>Which <b>ADB device</b> should <b>{label}</b> run on?"))
+        group = QButtonGroup(dlg)
+        radios = []
+        for i, k in enumerate(device_keys):
+            rb = QRadioButton(k)
+            rb.setProperty("device_key", k)
+            group.addButton(rb, i)
+            lay.addWidget(rb)
+            radios.append(rb)
+        radios[0].setChecked(True)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("Run on this device")
+        cancel = QPushButton("Cancel")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return "__cancelled__"
+        checked = group.checkedButton()
+        if checked is None:
+            return "__cancelled__"
+        return checked.property("device_key") or "__cancelled__"
+
+    def _pick_stop_target(self, device_keys):
+        """Which running job(s) should STOP cancel? Returns a device key,
+        "__all__", or "__cancelled__" (dismissal stands — no stop)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Stop which device?")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Several devices are running operations.<br>Which one should stop?"))
+        group = QButtonGroup(dlg)
+        radios = []
+        for i, k in enumerate(device_keys):
+            jobs_on = [j for j in jobs.active_jobs(k)]
+            what = ", ".join(j.job for j in jobs_on[:2]) or "operation"
+            rb = QRadioButton(f"{k}  — {what}")
+            rb.setProperty("device_key", k)
+            group.addButton(rb, i)
+            lay.addWidget(rb)
+            radios.append(rb)
+        rb_all = QRadioButton("Stop ALL devices")
+        rb_all.setProperty("device_key", "__all__")
+        group.addButton(rb_all, len(device_keys))
+        lay.addWidget(rb_all)
+        radios[0].setChecked(True)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("Stop")
+        cancel = QPushButton("Continue all")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return "__cancelled__"
+        checked = group.checkedButton()
+        if checked is None:
+            return "__cancelled__"
+        return checked.property("device_key") or "__cancelled__"
+
+    def _choose_device(self, job, mode):
+        """Per-operation device picker. Returns a device key, None for
+        silent/legacy passthrough (0-1 candidates, or detection failure),
+        or "__cancelled__" when the user dismisses the chooser.
+        ``mode`` may be one transport name or a set of them (chip pages
+        cover several related transports)."""
+        try:
+            modes = {mode} if isinstance(mode, str) else set(mode or [])
+            rows = _devices.candidates_for_modes(modes)
+        except Exception:
+            return None
+        rows = [r for r in rows if r.get("key")]
+        if len(rows) <= 1:
+            return rows[0]["key"] if rows else None
+        # Multiple candidates: explicit choice (None would be ambiguous).
+        mode_txt = ", ".join(sorted(modes)) if modes else str(mode)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Choose device — {job} / {mode_txt}")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(f"Multiple devices match <b>{mode_txt}</b> for <b>{job}</b>.<br>Which phone should this run on?"))
+        group = QButtonGroup(dlg)
+        radios = []
+        for i, r in enumerate(rows):
+            rb = QRadioButton(f"{r.get('label', '?')}  [{', '.join(r.get('transports', []))}]")
+            rb.setProperty("device_key", r["key"])
+            group.addButton(rb, i)
+            lay.addWidget(rb)
+            radios.append(rb)
+        radios[0].setChecked(True)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        ok = QPushButton("Run on this device")
+        cancel = QPushButton("Cancel")
+        ok.clicked.connect(dlg.accept)
+        cancel.clicked.connect(dlg.reject)
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return "__cancelled__"
+        checked = group.checkedButton()
+        if checked is None:
+            return "__cancelled__"
+        return checked.property("device_key") or "__cancelled__"
+
+    def _pick_device(self, label, modes):
+        """Pick a device key, with one settle-retry on transient emptiness.
+
+        Returns the key, None (nothing detected twice), or "__cancelled__"
+        (user dismissed the chooser — never retried, the dismissal stands).
+        A re-enumerating device is invisible to a scan for 1-3 s while the
+        daemon still reports it connected; without the retry, tools refuse
+        with "no device" mid-flap while the GUI shows it connected.
+        """
+        picked = self._choose_device(label, modes)
+        if picked is None:
+            import time as _t
+            try:
+                self._ui.line.emit(
+                    f"[info] {label}: no matching device this scan "
+                    "(re-enumerating?) — settling 2.5s and retrying ...")
+            except Exception:
+                pass
+            _t.sleep(2.5)
+            picked = self._choose_device(label, modes)
+        return picked
+
+    def _gate_job_action(self, job, mode, device_key):
+        """Ask the backend whether this job may run on this device now.
+
+        Returns True to proceed. On backend rejection returns False after
+        logging + toast — the runner must NOT lock, spawn, or execute.
+        Unmapped jobs and key-less legacy runs skip the gate (True). A
+        missing bridge binary also skips (the flow itself will report it;
+        refusing with "unsupported" would mislead)."""
+        from ..core import actions as _actions
+
+        ok, last = _actions.check_job_allowed(
+            job, mode, device_key, bridge.validate_action)
+        if ok:
+            return True
+        try:
+            self._ui.line.emit(
+                f"[refused] {job} [{mode}] is not valid for this device "
+                f"right now ({device_key}): {last}"
+            )
+            self._ui.toast.emit(
+                "warn", "Unsupported for this device",
+                f"{job} cannot run on the selected device in its current state.")
+        except Exception:
+            pass
+        return False
+
+    def _gate_button(self, btn, job=None, mode=None, command=None):
+        """Register a button for capability display-gating.
+
+        ``command`` (bridge argv[0] / tool mechanism id) wins when given,
+        else the (job, mode) mapping. Registration only records metadata;
+        `_refresh_gates()` applies enablement. Safe to call during page
+        construction (no bridge I/O here).
+        """
+        try:
+            self._gated_buttons.append(
+                (weakref.ref(btn), job, mode, command, btn.toolTip()))
+        except Exception:
+            pass
+
+    def _refresh_gates(self):
+        """Enable/disable gated buttons for the displayed device.
+
+        Display-only and fail-open: resolves `bridge.actions_for()` for
+        `self._display_key` (cached per key + device-list signature) and
+        disables buttons whose backend actions are all unavailable. Any
+        failure — no key, bridge error, empty registry — leaves every
+        button enabled. Enforcement stays in the pre-execution gate.
+        """
+        try:
+            from ..core import actions as _actions_mod
+            gated = list(getattr(self, "_gated_buttons", None) or [])
+            if not gated:
+                return
+            key = getattr(self, "_display_key", None)
+            sig = getattr(self, "_last_device_list_sig", None)
+            allowed = None
+            if key:
+                cache = getattr(self, "_gate_cache", None) or {}
+                hit = cache.get(key)
+                if hit is not None and hit[0] == sig:
+                    allowed = hit[1]
+                else:
+                    try:
+                        payload = bridge.actions_for(key)
+                        allowed = [a.get("id") for a in
+                                   payload.get("actions", []) if a.get("id")]
+                    except Exception:
+                        allowed = None
+                    try:
+                        self._gate_cache = {key: (sig, allowed)}
+                    except Exception:
+                        pass
+            alive = []
+            for ref, job, mode, command, base in gated:
+                try:
+                    btn = ref()
+                except Exception:
+                    continue
+                if btn is None:
+                    continue
+                alive.append((ref, job, mode, command, base))
+                try:
+                    if allowed is None:
+                        btn.setEnabled(True)
+                    else:
+                        ok = _actions_mod.button_allowed(
+                            job=job, mode=mode, command=command,
+                            allowed_ids=allowed)
+                        btn.setEnabled(ok)
+                        btn.setToolTip(
+                            base if ok else base + "\n[BACKEND] Not available "
+                            "for the selected device in its current state.")
+                except Exception:
+                    pass
+            try:
+                self._gated_buttons = alive
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _run_ops_flow(self, job, mode, method, label, device_key=None,
+                      feature=None):
+        """Run a Samsung Operations flow directly from its button - no
+        job/mode/method dropdowns, each operation is its own button.
+        ``device_key`` pins the run to one phone (None = ambient/legacy);
+        other phones may run operations in parallel.
+        ``feature`` is the experimental feature id when the caller came
+        through the ownership overlay; only a matching per-run token sets
+        ctx['experimental_ack'] (no cross-feature bleed, no stale auth)."""
+        if device_key is None:
+            picked = self._pick_device(job, mode)
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return
+            device_key = picked
+        if not self._gate_job_action(job, mode, device_key):
+            return
+        if not _flow_start(label, destructive=True, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        # Isolated FlashJob: created once the gate passed and the per-device
+        # lock is held; the worker below drives it to a terminal state.
+        from ..core import actions as _actions_mod
+        flux = jobs.start_job(
+            device_key, job, mode, method,
+            _actions_mod.actions_for_job(job, mode) or ())
+        flux.set_state("VALIDATED")
         self._toasts.show_progress("Operation started", label)
-        if job == "Odin Flashing (Advanced)":
+        if job == "Flash Firmware":
             os.environ["ODIN4_ALLOW_UNKNOWN"] = "1" if self.allow_unknown_cb.isChecked() else "0"
             os.environ["ODIN4_REBOOT"] = "1" if self.auto_reboot_cb.isChecked() else "0"
             os.environ["ODIN4_ERASE_NV"] = "1" if self.erase_nv_cb.isChecked() else "0"
@@ -10551,7 +13666,22 @@ class FrpWindow(QMainWindow):
             os.environ["ODIN4_REDOWNLOAD"] = "1" if self.redownload_cb.isChecked() else "0"
             os.environ["ODIN4_VERBOSE"] = "1" if self.verbose_cb.isChecked() else "0"
             os.environ["ODIN4_FORCE_BL"] = "1" if self.force_bl_cb.isChecked() else "0"
+            os.environ["ODIN4_SKIP_BACKUP"] = "1" if self.skip_efs_cb.isChecked() else "0"
+            # Single-session preservation: seed cached device PIT so preflight/
+            # partition flows never burn the one Loke session on a live dump.
+            try:
+                import glob as _g
+                _pit_dir = os.path.expanduser("~/.cache/flashpilot/pit")
+                _cands = [f for f in _g.glob(os.path.join(_pit_dir, "*.pit"))
+                          if os.path.getsize(f) > 512]
+                if _cands:
+                    _best = max(_cands, key=os.path.getmtime)
+                    os.environ["PIT_FILE"] = _best
+            except Exception:
+                pass
             os.environ["VBMETA_PATCH"] = "1" if self.vbmeta_patch_cb.isChecked() else "0"
+            os.environ["FLASH_ENGINE"] = (
+                "native" if self.engine_native_cb.isChecked() else "odin4")
             # GUI-triggered Odin flows must flash ONLY the files the user
             # picked in the slots - never auto-discover in ~/Downloads.
             os.environ["ODIN4_EXACT_SLOTS"] = "1"
@@ -10584,9 +13714,11 @@ class FrpWindow(QMainWindow):
             else:
                 os.environ.pop("FLASH_SPECS", None)
             if pit:
+                # Explicit PIT file field wins.
                 os.environ["PIT_FILE"] = pit
-            else:
-                os.environ.pop("PIT_FILE", None)
+            # else: keep the cached-PIT seeded earlier - do NOT pop it, or
+            # preflight falls back to a live dump that burns the one Loke
+            # session (bulk-read timeout spam) on the next flash attempt.
 
             vbmeta = self.vbmeta_edit.text().strip()
             if vbmeta:
@@ -10616,24 +13748,64 @@ class FrpWindow(QMainWindow):
 
         def work():
             ctx = {}
+            dev_tag = f"[{device_key}] " if device_key else ""
+            job_tag = f"[{flux.job_id}] " if flux else ""
+            if device_key:
+                ctx["device_key"] = device_key
+                try:
+                    tgt = _devices.resolve_usb_target(device_key)
+                    if tgt:
+                        ctx["target"] = tgt
+                except Exception:
+                    pass
+            self._moto_unlock_provision(ctx, method)
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                # Per-job log isolation (job owns its lines) + shared console.
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            # Same feature-bound consumption as _run_job_flow: only a fresh
+            # token for this flow's feature sets the per-run ack.
             try:
-                flow = frp.flow_for(job, mode, method)
-                flow.run(ctx, self._ui.line.emit)
+                feat = feature or experimental.FLOW_FEATURE_IDS.get(method)
+                if feat and experimental.token_consume(
+                        getattr(self, "_exp_ack_once", None), feat):
+                    ctx["experimental_ack"] = True
+            except Exception:
+                pass
+            try:
+                with _devices.device_scope(device_key):
+                    flow = core.flow_for(job, mode, method)
+                    flow.run(ctx, emit)
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
-                self._ui.line.emit("Flow completed successfully")
+                emit(f"{dev_tag}Flow completed successfully")
                 self._ui.toast.emit("ok", "Operation completed", label)
-            except frp.FlowCancelled as e:
-                self._ui.line.emit(f"[cancelled] flow stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except core.FlowCancelled as e:
+                emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.finished.emit()
 
@@ -10729,6 +13901,20 @@ class FrpWindow(QMainWindow):
                     self._ui.line.emit(f"  {ln}")
         self._ui.status.emit(f"FAILED: {label} - {msg.splitlines()[0]}")
         self._ui.toast.emit("error", "Operation failed", msg.splitlines()[0])
+        # Button shake + cable shake on failure (professional 340ms / 420ms)
+        try:
+            if self.settings.value("animations", "true", type=bool):
+                from .animations import Motion
+                # shake the global STOP (visible feedback) and the scene cable if handshake/transfer
+                try:
+                    Motion.shake(self.global_stop_btn, amplitude=5)
+                except Exception:
+                    pass
+                low2 = msg.lower()
+                if any(k in low2 for k in ("handshake", "timed out", "bulk read", "bulk write", "operation timed out", "failed")):
+                    Motion.cable_shake(self.scene, amp=6, dur=420)
+        except Exception:
+            pass
         low = msg.lower()
         if any(
             k in low
@@ -10747,50 +13933,138 @@ class FrpWindow(QMainWindow):
         ):
             self._coach_no_device(mode)
 
-    def _run_job_flow(self, job, mode, method, label, stop_btn, progress, reset_ui):
+    def _moto_unlock_provision(self, ctx, method):
+        """Unlock-code provision for the Motorola token/unlock flows: the
+        UNLOCK TOKEN input on the model page flows into ctx['unlock_code']
+        (the MOTO_UNLOCK_CODE env provision is the CLI fallback)."""
+        if method not in ("moto_frp_fastboot", "fastboot_unlock"):
+            return
+        token_edit = getattr(self, "_moto_unlock_code", None)
+        if token_edit is not None:
+            code_txt = token_edit.text().strip()
+            if code_txt:
+                ctx["unlock_code"] = code_txt
+        if "unlock_code" not in ctx:
+            env_code = os.environ.get("MOTO_UNLOCK_CODE", "").strip()
+            if env_code:
+                ctx["unlock_code"] = env_code
+
+    def _run_job_flow(self, job, mode, method, label, stop_btn, progress, reset_ui,
+                        device_key=None):
         """Run one of the frp job flows (screen lock remove, MDM unlock, BROM
         info, ...) directly from the MTK / Qualcomm / SPD chip pages. The
         Samsung Operations panel exposes the same flows through its job/mode/
-        method pickers; this lets the dedicated chip pages run them too."""
-        if not _flow_start(label, destructive=True):
-            self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
-            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
+        method pickers; this lets the dedicated chip pages run them too.
+        ``device_key`` pins the run to one phone (None = ambient/legacy)."""
+        if device_key is None:
+            picked = self._pick_device(job, mode)
+            if picked == "__cancelled__":
+                self._ui.line.emit("[info] device choice cancelled.")
+                return
+            device_key = picked
+        if not self._gate_job_action(job, mode, device_key):
             return
-        frp.clear_cancel()
-        bridge.clear_cancel()
+        if not _flow_start(label, destructive=True, key=device_key):
+            self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
+            self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
+            return
+        core.clear_cancel(key=device_key)
+        bridge.clear_cancel(key=device_key)
+        from ..core import actions as _actions_mod
+        flux = jobs.start_job(
+            device_key, job, mode, method,
+            _actions_mod.actions_for_job(job, mode) or ())
+        flux.set_state("VALIDATED")
         self._toasts.show_progress("Operation started", label)
         self._ui.line.emit(f"\n>>> started: {label}")
         self._ui.status.emit(f"Running: {label}")
         stop_btn.setEnabled(True)
         progress.setVisible(True)
         progress.setValue(150)
+        # Per-device STOP: this page's stop button cancels exactly this job's
+        # device scope (not a broadcast). Replaced on the next run; cleared
+        # in the worker's finally.
+        try:
+            self._stop_job[stop_btn] = flux.job_id
+        except Exception:
+            pass
 
         def work():
             ctx = {}
+            dev_tag = f"[{device_key}] " if device_key else ""
+            if flux:
+                flux.set_state("RUNNING")
+
+            def emit(line):
+                try:
+                    if flux:
+                        flux.append_log(str(line))
+                except Exception:
+                    pass
+                self._ui.line.emit(line)
+
+            if device_key:
+                ctx["device_key"] = device_key
+                try:
+                    tgt = _devices.resolve_usb_target(device_key)
+                    if tgt:
+                        ctx["target"] = tgt
+                except Exception:
+                    pass
+            self._moto_unlock_provision(ctx, method)
+            # Consume one per-run experimental ack token for this flow's
+            # feature, if the ownership dialog just approved it. Feature-
+            # bound and single-use: one confirm authorizes one run, stale
+            # confirms expire, and no other feature's token can leak in.
             try:
-                flow = frp.flow_for(job, mode, method)
-                flow.run(ctx, self._ui.line.emit)
+                feat = experimental.FLOW_FEATURE_IDS.get(method)
+                if feat and experimental.token_consume(
+                        getattr(self, "_exp_ack_once", None), feat):
+                    ctx["experimental_ack"] = True
+            except Exception:
+                pass
+            try:
+                with _devices.device_scope(device_key):
+                    flow = core.flow_for(job, mode, method)
+                    flow.run(ctx, emit)
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
-                self._ui.line.emit("Flow completed successfully")
+                emit(f"{dev_tag}Flow completed successfully")
                 self._ui.toast.emit("ok", "Operation completed", label)
-            except frp.FlowCancelled as e:
-                self._ui.line.emit(f"[cancelled] flow stopped by user ({e})")
+                if flux:
+                    jobs.finish_job(flux.job_id, "COMPLETED")
+            except core.FlowCancelled as e:
+                emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
                 self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                if flux:
+                    jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
                 self._emit_flow_error(label, e, mode=mode)
+                if flux:
+                    state, code = jobs.classify_failure(e, device_key)
+                    jobs.finish_job(flux.job_id, state, str(e), code)
             finally:
-                _flow_end()
+                _flow_end(key=device_key)
+                try:
+                    if flux and self._stop_job.get(stop_btn) == flux.job_id:
+                        self._stop_job.pop(stop_btn, None)
+                except Exception:
+                    pass
                 self._ui.ui.emit(self._toasts.dismiss_progress)
                 self._ui.ui.emit(reset_ui)
+                self._ui.finished.emit()
 
         threading.Thread(target=work, daemon=True).start()
 
+
+
+# Backwards-compatible alias (packaging smoke test, scripts, docs)
+FrpWindow = FlashPilotWindow
 
 def _app_icon():
     """Window / taskbar icon: the packaged logo when present, else a drawn one.
@@ -10821,7 +14095,19 @@ def main():
     def _boot():
         win = FrpWindow()
         win.setWindowIcon(_app_icon())
-        win.show()
+        # Window memory: restore size/position/maximized from the last
+        # session (saved in closeEvent).
+        try:
+            st = win.settings
+            if st.value("win_maximized", False, type=bool):
+                win.showMaximized()
+            else:
+                geo = st.value("win_geometry")
+                if geo is not None:
+                    win.restoreGeometry(geo)
+                win.show()
+        except Exception:
+            win.show()
 
     QTimer.singleShot(2500, _boot)
     app.exec()

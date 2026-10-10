@@ -25,19 +25,20 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Mirrors the design tokens in qt_app.C
-_PANEL = "#0a111a"
-_CARD = "#0d1622"
-_INSET = "#070d15"
-_BORDER_HI = "#2c405e"
-_TEXT = "#e7eef8"
-_DIM = "#8fa4bd"
-_GRAD_A = "#0ea5e9"
-_GRAD_B = "#22d3ee"
-_OK = "#2dd4bf"
-_WARN = "#fbbf24"
-_ERR = "#fb7185"
-_ACCENT_HI = "#7dd3fc"
+from .theme import C as _C
+# Unified — single source, no mirror drift
+_PANEL = _C["panel"]
+_CARD = _C["card"]
+_INSET = _C["inset"]
+_BORDER_HI = _C["border_hi"]
+_TEXT = _C["text"]
+_DIM = _C["dim"]
+_GRAD_A = _C["grad_a"]
+_GRAD_B = _C["grad_b"]
+_OK = _C["ok"]
+_WARN = _C["warn"]
+_ERR = _C["err"]
+_ACCENT_HI = _C["accent_hi"]
 
 _ICON = {
     "ok": _OK,
@@ -176,6 +177,8 @@ class ToastHost(QWidget):
 
     _MARGIN = 16
     _GAP = 10
+    _MAX_STACK = 4  # oldest dismissed beyond this (a long session cannot
+                    # stack unbounded notifications)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -184,6 +187,11 @@ class ToastHost(QWidget):
         self._toasts = []
         self._progress = None
         self._progress_slot = None
+
+    def _cap_stack(self):
+        while len(self._toasts) > self._MAX_STACK:
+            oldest = self._toasts[0]
+            self.dismiss(oldest)
 
     def _relayout(self):
         parent = self.parentWidget()
@@ -211,6 +219,7 @@ class ToastHost(QWidget):
         self._relayout()
         toast = _SlideFrame(self, kind, title, detail, duration)
         self._toasts.append(toast)
+        self._cap_stack()
         self._relayout()
         return toast
 

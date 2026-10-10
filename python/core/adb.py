@@ -1,40 +1,31 @@
-import subprocess
+"""ADB helpers — thin delegates over the native Rust transport (bridge).
 
+Historically this module shelled out to the system `adb` binary directly
+(no `-s` serial pinning). All USB ADB now goes through `bridge.adb_*`
+(target-pinned, kernel-driver detach, uniform cancel/timeout).
+"""
 
-class AdbError(RuntimeError):
-    pass
+from . import bridge
 
-
-def _run(args, timeout=20):
-    proc = subprocess.run(
-        ["adb", *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return proc
+# Backwards-compat alias (was raised here before the native transport).
+AdbError = bridge.BridgeError
 
 
 def connected_serial():
-    proc = _run(["devices"])
-    for line in proc.stdout.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == "device":
-            return parts[0]
+    for d in bridge.adb_status():
+        if d.get("state") == "device":
+            return d.get("serial")
     return None
 
 
 def shell(cmd, timeout=20):
-    proc = _run(["shell", cmd], timeout=timeout)
-    if proc.returncode != 0:
-        raise AdbError(proc.stderr.strip() or proc.stdout.strip())
-    return proc.stdout.strip()
+    return bridge.adb_shell(cmd, timeout=timeout).strip()
 
 
 def getprop(name):
     try:
         return shell(f"getprop {name}").strip() or None
-    except AdbError:
+    except bridge.BridgeError:
         return None
 
 
@@ -56,5 +47,5 @@ def current_focus():
     try:
         out = shell("dumpsys window windows | grep -E 'mCurrentFocus'")
         return out.strip() or None
-    except AdbError:
+    except bridge.BridgeError:
         return None

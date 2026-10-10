@@ -982,6 +982,56 @@ pub fn spd_format_cli(
     let mut out = Vec::new();
     let step = 528usize;
 
+    // BROM-only path: if no FDL provided (user wants immediate factory reset without FDL),
+    // do raw BROM erase without loading FDLs. This matches "brom should not require a fdl file".
+    let fdl_none = fdl1.is_empty() || fdl1 == "none" || !std::path::Path::new(fdl1).exists();
+    if fdl_none {
+        let mut s = open_session(&dev)?;
+        // BROM window is 1.5-2s; retry handshake 3× with flush+delay before giving up
+        let mut ver: Option<String> = None;
+        let mut last_err: String = String::new();
+        for attempt in 1..=3 {
+            s.flush();
+            if attempt > 1 {
+                std::thread::sleep(std::time::Duration::from_millis(350));
+                eprintln!("[spd] BROM-only handshake retry {}/3", attempt);
+            }
+            match s.handshake() {
+                Ok(v) => { ver = Some(v); break; }
+                Err(e) => { last_err = e; if attempt == 3 { break; } }
+            }
+        }
+        let ver = ver.ok_or(BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(last_err)))?;
+        out.push(format!("BootROM version: {ver} (BROM-only, no FDL)"));
+        let _ = s.enable_write();
+        out.push("Erasing security / user-data regions (BROM-only)...".to_string());
+        let mut any_ok = false;
+        for (name, addr, size) in [
+            ("PS (param store)", 0x8000_0003u32, 0x1000u32),
+            ("NV (non-volatile)", 0x9000_0001u32, 0x10000u32),
+            ("FLASH (userdata raw)", 0x9000_0003u32, 0x10000u32),
+        ] {
+            match s.erase_flash(addr, size) {
+                Ok(_) => {
+                    out.push(format!("  erased {name} @0x{addr:08x}"));
+                    any_ok = true;
+                }
+                Err(e) => out.push(format!("  {name}: {e}")),
+            }
+        }
+        // Try chip UID for logging even in BROM-only
+        if let Ok(uid) = s.chip_uid() {
+            out.push(format!("Chip UID: {}", uid.trim()));
+        }
+        let _ = s.reset();
+        if any_ok {
+            out.push("Done. Device reset to normal mode (BROM-only).".to_string());
+        } else {
+            out.push("BROM-only erase had no success — provide FDL1/FDL2 for full Android userdata wipe.".to_string());
+        }
+        return Ok(out.join("\n"));
+    }
+
     let mut s = open_session(&dev)?;
     let ver = s.handshake().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("BootROM version: {ver}"));
@@ -1109,6 +1159,10 @@ pub fn spd_backup_cli(
     }
     out.push(format!("Total dumped: {dumped} bytes"));
     let _ = s.reset();
+    match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+        Ok(summary) => out.push(summary),
+        Err(e) => out.push(format!("manifest warning: {e}")),
+    }
     Ok(out.join("\n"))
 }
 
@@ -1306,6 +1360,8 @@ pub fn spd_boot_cli(
 /// load FDLs, enable write, then write each `partition=image` entry.
 /// Raw flash regions can be targeted with a hex address instead of a name
 /// (e.g. `0x80000003=ps.bin`), and special raw-region aliases are resolved.
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
 pub fn spd_flash_cli(
     target: &str,
     fdl1: &str,
@@ -1313,6 +1369,19 @@ pub fn spd_flash_cli(
     fdl2: Option<&str>,
     fdl2_addr: Option<u32>,
     entries: &[(String, String)],
+) -> Result<String> {
+    spd_flash_cli_v(target, fdl1, fdl1_addr, fdl2, fdl2_addr, entries, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reset, no read-back).
+pub fn spd_flash_cli_v(
+    target: &str,
+    fdl1: &str,
+    fdl1_addr: u32,
+    fdl2: Option<&str>,
+    fdl2_addr: Option<u32>,
+    entries: &[(String, String)],
+    verify: bool,
 ) -> Result<String> {
     if entries.is_empty() {
         return Err(BridgeError::InvalidArgument(
@@ -1409,6 +1478,46 @@ pub fn spd_flash_cli(
             })?;
         }
         out.push(format!("  '{part}' written OK"));
+        // Verify-after-write for PARTITION writes (default ON; --no-verify
+        // skips): read back via a temp file and compare. Raw-address
+        // writes (0x… / feature-phone aliases) are skipped — read_partition
+        // is name-based and cannot address those regions.
+        if verify && !part.starts_with("0x")
+            && !raw_aliases.iter().any(|(n, _)| *n == part)
+        {
+            let size = s.read_partitions().ok()
+                .and_then(|parts| {
+                    parts.iter().find(|(n, _)| n == part).map(|(_, sz)| *sz)
+                })
+                .unwrap_or(0);
+            let len = if size > 0 { data.len().min(size as usize) as u64 } else { data.len() as u64 };
+            if len > 0 {
+                let tmp_out = std::env::temp_dir().join(format!(
+                    "fp_spd_verify_{}_{}.bin", std::process::id(), part));
+                match s.read_partition(part, 0, len, &tmp_out.to_string_lossy(), 4096) {
+                    Ok(_) => match fs::read(&tmp_out) {
+                        Ok(actual) => {
+                            let n = (data.len()).min(actual.len());
+                            if let Err(e) = crate::util::verify_bytes_match(&data[..n], &actual[..n]) {
+                                let _ = fs::remove_file(&tmp_out);
+                                return Err(BridgeError::Protocol(
+                                    crate::error::ProtocolError::CommandFailed {
+                                        cmd: 0, sub: 0,
+                                        reason: format!(
+                                            "VERIFY FAILED for '{part}': {e} — the write did not stick"
+                                        ),
+                                    },
+                                ));
+                            }
+                            out.push(format!("  '{part}' verified OK"));
+                        }
+                        Err(_) => out.push(format!("  '{part}': verify read-back unreadable — skipped")),
+                    },
+                    Err(_) => out.push(format!("  '{part}': verify read-back unsupported — skipped")),
+                }
+                let _ = fs::remove_file(&tmp_out);
+            }
+        }
     }
 
     let _ = s.reset();
@@ -1931,19 +2040,7 @@ struct PacFileEntry {
     size: u32,
 }
 
-const PAC_FILE_ENTRY_SIZE: usize = 2560;
-const PAC_HEADER_SIZE: u64 = 2124;
-const PAC_FOOTER_SIZE: u64 = 3076;
 
-fn write_utf16le(buf: &mut [u8], s: &str) {
-    for (i, unit) in s.encode_utf16().enumerate() {
-        let off = i * 2;
-        if off + 1 < buf.len() {
-            buf[off] = (unit & 0xff) as u8;
-            buf[off + 1] = (unit >> 8) as u8;
-        }
-    }
-}
 
 /// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part]`
 ///
@@ -1993,7 +2090,8 @@ pub fn spd_readback_cli(
     let mut manifest = String::new();
     let mut total_bytes = 0u64;
     // Data region starts right after header + one entry-slot per file.
-    let mut cursor = PAC_HEADER_SIZE + (wanted.len() as u64) * PAC_FILE_ENTRY_SIZE as u64;
+    let mut cursor =
+        crate::pac::PAC_HEADER_SIZE as u64 + (wanted.len() as u64) * crate::pac::PAC_ENTRY_SIZE as u64;
     for (idx, (name, size)) in wanted.iter().enumerate() {
         let part_path = tmpdir.join(format!("{idx:03}_{}.bin", sanitize(name)));
         let path_str = part_path.to_string_lossy().to_string();
@@ -2027,25 +2125,15 @@ pub fn spd_readback_cli(
     let mut out = fs::File::create(out_pac).map_err(|e| format!("create {out_pac}: {e}"))?;
     use std::io::Write;
 
-    // Header (2124 bytes)
-    let mut hdr = vec![0u8; PAC_HEADER_SIZE as usize];
-    hdr[0..4].copy_from_slice(&0xD3u32.to_le_bytes());
-    hdr[4..6].copy_from_slice(&1u16.to_le_bytes());          // version
-    hdr[6..8].copy_from_slice(&2116u16.to_le_bytes());        // header size
-    let mct = b"MCT_DOWNLOAD_HEADER";
-    hdr[8..8 + mct.len()].copy_from_slice(mct);
-    // product string @0x20 (leave zeros -> tools accept blank model)
-    hdr[0x60..0x64].copy_from_slice(&(entries.len() as u32).to_le_bytes());
-    hdr[0x848..0x84c].copy_from_slice(&(total_bytes as u32).to_le_bytes());
+    // Header + file-entry slots via the shared PAC builders (byte-identical
+    // to the historical inline writer). NOTE: readback keeps its quirky
+    // doubled slot names (`{name}_{name}.img`); pack-from-folder uses plain
+    // basenames. Quirk quarantined here, not propagated.
+    let hdr = crate::pac::build_header(entries.len() as u32, total_bytes, "")
+        .map_err(|e| format!("pac header: {e}"))?;
     out.write_all(&hdr).map_err(|e| format!("write hdr: {e}"))?;
-
-    // File-entry slots
     for e in &entries {
-        let mut slot = vec![0u8; PAC_FILE_ENTRY_SIZE];
-        write_utf16le(&mut slot[..512], &format!("{}_{}.img", e.name, e.name)); // name field
-        slot[0x30C..0x310].copy_from_slice(&e.size.to_le_bytes());
-        slot[0x310..0x314].copy_from_slice(&0u32.to_le_bytes()); // is_nv = false
-        slot[0x318..0x31A].copy_from_slice(&0x5433u16.to_le_bytes()); // checksum marker
+        let slot = crate::pac::build_slot(&format!("{}_{}.img", e.name, e.name), e.size, false);
         out.write_all(&slot).map_err(|err| format!("write entry {}: {err}", e.name))?;
     }
 
@@ -2058,7 +2146,8 @@ pub fn spd_readback_cli(
     }
 
     // Footer
-    out.write_all(&vec![0u8; PAC_FOOTER_SIZE as usize]).map_err(|e| format!("write footer: {e}"))?;
+    out.write_all(&vec![0u8; crate::pac::PAC_FOOTER_SIZE])
+        .map_err(|e| format!("write footer: {e}"))?;
     out.flush().ok();
 
     let _ = fs::remove_dir_all(&tmpdir);

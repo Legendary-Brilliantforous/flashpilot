@@ -12,14 +12,21 @@ use crate::qualcomm::firehose::{FirehoseSession, FirehosePacket, FirehoseRespons
 use std::path::Path;
 use std::time::Duration;
 
-/// Resolve a CLI target ("auto", or "bus:address") to the first matching
-/// Qualcomm EDL device. "auto" picks the first EDL device on the bus.
+/// Resolve a CLI target ("auto", or "bus:address") to a Qualcomm EDL
+/// device. "auto" requires exactly one EDL device on the bus: with several
+/// attached it is ambiguous and rejected instead of silently opening a
+/// session against the wrong phone.
 fn resolve_qcom_device<'a>(devices: &'a [crate::config::DeviceInfo],
                            target: &str) -> Result<&'a crate::config::DeviceInfo> {
     let edl: Vec<&crate::config::DeviceInfo> = devices.iter()
         .filter(|d| d.vid == QCOM_VID && QCOM_EDL_PIDS.contains(&d.pid))
         .collect();
     if target == "auto" {
+        if edl.len() > 1 {
+            return Err(BridgeError::DeviceState(
+                crate::error::DeviceStateError::AmbiguousTarget { count: edl.len() },
+            ));
+        }
         edl.first()
             .copied()
             .ok_or_else(|| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
@@ -46,7 +53,8 @@ pub fn qcom_detect() -> Result<String> {
     let mut edl_devices = Vec::new();
     
     for d in &devices {
-        if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) {
+        // Broad Qualcomm detection: any 05c6 device is Qualcomm (EDL 9008, 900E, 6000 modem, etc.), not only 9008
+        if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&d.pid) || crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) || d.vid == crate::qualcomm::sahara::QCOM_VID {
             let (stage, note) = crate::qualcomm::sahara::boot_stage_for(d.pid);
             // Wire QcomDeviceInfo into the flow (type + field access as load-bearing)
             let qinfo = QcomDeviceInfo { raw_info: d.product.clone(), soc_id: None, serial_number: d.serial.clone(), model: d.product.clone() };
@@ -90,9 +98,17 @@ pub fn qcom_sahara_handshake(target: &str) -> Result<String> {
     let _ = crate::qualcomm::sahara::all_sahara_status_variants().len();
     let _ = crate::qualcomm::sahara::all_sahara_commands().len();
     let _ = crate::qualcomm::sahara::sahara_status_to_protocol_error(0, crate::qualcomm::sahara::SaharaCommand::Done);
-    let _ = session.handle_image_transfer(0, &[]);
-    let _ = session.close_session().is_ok();
-    let _ = session.reset_device().is_ok();
+    // Wire-format self-check is enforced, not advisory: a struct-layout
+    // drift fails the command loudly instead of reaching the device.
+    let transfer_layouts = session.handle_image_transfer(0, &[])?;
+    let close_ok = session.close_session().is_ok();
+    if !close_ok {
+        eprintln!("[sahara] session close reported failure");
+    }
+    // Explicit, reported hardware reset (was silently discarded before):
+    // the EDL device reboots out of download mode here, by design.
+    let reset_sent = session.reset_device().is_ok();
+    eprintln!("[sahara] device reset sent: {reset_sent}");
     let _ = crate::qualcomm::sahara::sahara_status_name(0).len();
     let _ = timeout.as_millis();
 
@@ -101,6 +117,9 @@ pub fn qcom_sahara_handshake(target: &str) -> Result<String> {
         "version": session.version,
         "mode": format!("{:?}", session.mode),
         "max_packet_size": session.max_packet_size,
+        "transfer_layouts_verified": transfer_layouts,
+        "close_ok": close_ok,
+        "reset_sent": reset_sent,
     }).to_string())
 }
 
@@ -175,7 +194,14 @@ pub fn flash_one_partition(
     firehose.program_partition(partition_name, file_path, start_sector, num_sectors)
 }
 
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
 pub fn qcom_flash_one(target: &str, partition: &str, image: &Path, start_sector: u64, num_sectors: u64) -> Result<String> {
+    qcom_flash_one_v(target, partition, image, start_sector, num_sectors, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reset, no read-back).
+pub fn qcom_flash_one_v(target: &str, partition: &str, image: &Path, start_sector: u64, num_sectors: u64, verify: bool) -> Result<String> {
     let devices = usb::collect_devices(Some(crate::qualcomm::sahara::QCOM_VID))?;
     let dev = resolve_qcom_device(&devices, target)?;
     let mut sahara = SaharaSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
@@ -183,8 +209,148 @@ pub fn qcom_flash_one(target: &str, partition: &str, image: &Path, start_sector:
     let mut firehose = FirehoseSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
     firehose.configure("emmc", Some("emmc"))?;
     flash_one_partition(&mut firehose, partition, image, start_sector, num_sectors)?;
+
+    // Verify-after-write (default ON; --no-verify skips): read back the
+    // written sectors and compare against the source image. The Firehose
+    // session is still alive — the read must happen BEFORE reset. A corrupt
+    // write must never pass silently (the earlier is_success() gap made
+    // failed writes report success; this read-back is the second line of
+    // defense).
+    let mut status = "flashed".to_string();
+    if verify {
+        let expected = std::fs::read(image).map_err(|e| {
+            BridgeError::Firmware(crate::error::FirmwareError::ImageCorrupt(format!(
+                "verify '{partition}': cannot read source image: {e}"
+            )))
+        })?;
+        if expected.is_empty() {
+            status = "flashed (source empty — verify skipped)".to_string();
+        } else {
+            // read_partition streams to a path and rounds up to whole
+            // sectors: read back only what the source needs, compare the
+            // prefix, clean the temp file.
+            let sector_size = (firehose.sector_size as u64).max(512);
+            let sectors = expected.len().div_ceil(sector_size as usize) as u64;
+            let tmp_out = std::env::temp_dir().join(format!(
+                "fp_verify_{}_{}.bin", std::process::id(), partition));
+            firehose.read_partition(partition, &tmp_out, start_sector, sectors)?;
+            let read_result = (|| -> std::result::Result<Vec<u8>, BridgeError> {
+                std::fs::read(&tmp_out).map_err(|e| {
+                    BridgeError::Io(format!("verify read-back: {e}"))
+                })
+            })();
+            let _ = std::fs::remove_file(&tmp_out);
+            let actual = read_result?;
+            let n = expected.len().min(actual.len());
+            if n < expected.len() {
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::CommandFailed {
+                        cmd: 0, sub: 0,
+                        reason: format!(
+                            "VERIFY FAILED for '{partition}': read back {n} of {} bytes — the write did not stick",
+                            expected.len()
+                        ),
+                    },
+                ));
+            }
+            crate::util::verify_bytes_match(&expected, &actual[..n]).map_err(|e| {
+                BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                    cmd: 0, sub: 0,
+                    reason: format!(
+                        "VERIFY FAILED for '{partition}': {e} — the write did not stick"
+                    ),
+                })
+            })?;
+            status = "flashed + verified".to_string();
+        }
+    }
     firehose.reset()?; // wire FirehoseSession::reset as load-bearing
-    Ok(serde_json::json!({"status":"flashed","partition":partition,"file":image.display().to_string()}).to_string())
+    Ok(serde_json::json!({"status":status,"partition":partition,"file":image.display().to_string()}).to_string())
+}
+
+/// Verify-after-write for Firehose flashes: read back each partition and
+/// compare SHA-256 against the source file. Reads only as many sectors as
+/// the file needs (not the whole partition), then compares the prefix.
+/// Returns Err listing every MISMATCH so callers fail loudly.
+pub fn qcom_verify_part_cli(target: &str, entries: &[(String, String)]) -> Result<String> {
+    use crate::util::{sha256_file, verify_bytes_match};
+    if entries.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no partition=file entries provided".to_string(),
+        ));
+    }
+    let devices = usb::collect_devices(Some(crate::qualcomm::sahara::QCOM_VID))?;
+    let dev = resolve_qcom_device(&devices, target)?;
+    let mut sahara = SaharaSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
+    sahara.switch_to_streaming()?;
+    let mut firehose = FirehoseSession::new(usb::UsbDevice::open(QCOM_VID, dev.pid, dev.bus, dev.address)?)?;
+    firehose.configure("emmc", Some("emmc"))?;
+    let table = firehose.get_partition_table()?;
+    let sector_size = firehose.sector_size.max(512) as u64;
+
+    let mut out = Vec::new();
+    let mut bad = Vec::new();
+    for (name, file) in entries {
+        let expected = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) => {
+                bad.push(format!("{name}: cannot read source file: {e}"));
+                continue;
+            }
+        };
+        if expected.is_empty() {
+            bad.push(format!("{name}: source file is empty, refusing to compare"));
+            continue;
+        }
+        let part = match table.iter().find(|p| p.name == *name) {
+            Some(p) => p,
+            None => {
+                bad.push(format!("{name}: not found in device partition table"));
+                continue;
+            }
+        };
+        let sectors = (expected.len() as u64 + sector_size - 1) / sector_size;
+        let tmp = std::env::temp_dir().join(format!(
+            "fp_qcom_verify_{}_{}.bin",
+            std::process::id(),
+            name.replace('/', "_")
+        ));
+        match firehose.read_partition(name, &tmp, part.start_sector, sectors) {
+            Ok(()) => match std::fs::read(&tmp) {
+                Ok(actual) => {
+                    let actual = &actual[..actual.len().min(expected.len())];
+                    match verify_bytes_match(&expected, actual) {
+                        Ok(()) => {
+                            let hex = sha256_file(std::path::Path::new(file))
+                                .map(|h| h[..16].to_string())
+                                .unwrap_or_else(|_| "?".to_string());
+                            out.push(format!("  MATCH '{name}' ({} bytes, sha256:{hex}...)", expected.len()));
+                        }
+                        Err(e) => bad.push(format!("{name}: MISMATCH ({e})")),
+                    }
+                }
+                Err(e) => bad.push(format!("{name}: cannot read temp file: {e}")),
+            },
+            Err(e) => bad.push(format!("{name}: read-back failed: {e}")),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+    let _ = firehose.reset();
+    for line in &out {
+        println!("{line}");
+    }
+    if bad.is_empty() {
+        Ok(format!("verify: {} partition(s) MATCH", out.len()))
+    } else {
+        for line in &bad {
+            eprintln!("{line}");
+        }
+        Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("verify failed: {}", bad.join("; ")),
+        }))
+    }
 }
 
 /// Flash firmware via Firehose using rawprogram.xml
@@ -252,6 +418,18 @@ struct PartitionOp {
     sparse: bool,
 }
 
+/// Strict sector-attribute parse: a present-but-non-numeric value is an
+/// error, never a silent 0 (a corrupt rawprogram.xml flashing at sector 0
+/// is a brick vector). Absent attributes keep their default 0 — plenty of
+/// legitimate rawprogram files omit physical_partition_number.
+fn parse_sector_attr(key: &str, value: &str) -> Result<u64> {
+    value.parse::<u64>().map_err(|_| {
+        BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+            "rawprogram.xml: non-numeric {key}={value:?}"
+        )))
+    })
+}
+
 fn parse_rawprogram_xml(xml: &str) -> Result<Vec<PartitionOp>> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -282,9 +460,11 @@ fn parse_rawprogram_xml(xml: &str) -> Result<Vec<PartitionOp>> {
                         match key.as_str() {
                             "label" => op.partition_name = value,
                             "filename" => op.filename = value,
-                            "start_sector" => op.start_sector = value.parse().unwrap_or(0),
-                            "num_partition_sectors" => op.num_sectors = value.parse().unwrap_or(0),
-                            "physical_partition_number" => op.physical_partition_number = value.parse().unwrap_or(0),
+                            "start_sector" => op.start_sector = parse_sector_attr("start_sector", &value)?,
+                            "num_partition_sectors" => op.num_sectors = parse_sector_attr("num_partition_sectors", &value)?,
+                            "physical_partition_number" => op.physical_partition_number = value.parse::<u32>().map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                                "rawprogram.xml: non-numeric physical_partition_number={value:?}"
+                            ))))?,
                             "sparse" => op.sparse = value == "true",
                             _ => {}
                         }
@@ -340,6 +520,10 @@ pub fn qcom_backup(target: &str, _programmer_path: &str, out_dir: &str) -> Resul
         }));
     }
     
+    match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+        Ok(summary) => results.push(serde_json::json!({"manifest": summary})),
+        Err(e) => results.push(serde_json::json!({"manifest_warning": e.to_string()})),
+    }
     Ok(serde_json::json!({
         "status": "backup complete",
         "partitions": results,
@@ -446,4 +630,79 @@ pub fn qcom_frp_reset(target: &str) -> Result<String> {
         "sectors": frp.num_sectors,
         "size": frp.size_bytes(),
     }).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edl_dev(bus: u8, address: u8) -> crate::config::DeviceInfo {
+        crate::config::DeviceInfo {
+            vid: QCOM_VID,
+            pid: 0x9008,
+            bus,
+            address,
+            product: None,
+            manufacturer: None,
+            serial: None,
+            interfaces: vec![],
+            is_samsung: false,
+            configs: 1,
+            active_config: 0,
+            device_class: 0,
+            bcd_usb: 0x0200,
+            bcd_device: 0x0100,
+            device_speed: 3,
+            port_numbers: String::new(),
+            max_packet_size0: 64,
+            mode: "qualcomm-edl".to_string(),
+        }
+    }
+
+    #[test]
+    fn auto_with_two_edl_devices_is_ambiguous() {
+        let devs = vec![edl_dev(1, 2), edl_dev(1, 3)];
+        let err = resolve_qcom_device(&devs, "auto").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                BridgeError::DeviceState(
+                    crate::error::DeviceStateError::AmbiguousTarget { count: 2 }
+                )
+            ),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn auto_with_one_edl_device_resolves() {
+        let devs = vec![edl_dev(1, 2)];
+        let dev = resolve_qcom_device(&devs, "auto").unwrap();
+        assert_eq!((dev.bus, dev.address), (1, 2));
+    }
+
+    #[test]
+    fn explicit_bus_addr_still_resolves_with_two_present() {
+        let devs = vec![edl_dev(1, 2), edl_dev(1, 3)];
+        let dev = resolve_qcom_device(&devs, "1:3").unwrap();
+        assert_eq!((dev.bus, dev.address), (1, 3));
+    }
+
+    #[test]
+    fn corrupt_start_sector_is_error_not_sector_zero() {
+        let xml = r#"<?xml version="1.0"?><data><program label="frp" filename="frp.img" start_sector="oops" num_partition_sectors="8"/></data>"#;
+        let err = parse_rawprogram_xml(xml).unwrap_err();
+        assert!(err.to_string().contains("start_sector"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn absent_optional_attrs_keep_defaults() {
+        let xml = r#"<?xml version="1.0"?><data><program label="frp" filename="frp.img" start_sector="100" num_partition_sectors="8"/></data>"#;
+        let ops = parse_rawprogram_xml(xml).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(
+            (ops[0].partition_name.as_str(), ops[0].start_sector, ops[0].num_sectors),
+            ("frp", 100, 8)
+        );
+    }
 }

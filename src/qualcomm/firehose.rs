@@ -154,19 +154,41 @@ impl FirehoseResponse {
             }
         }
         
+        // The <response value="ACK"|"FAIL" .../> attributes land in the flat
+        // map above. Promote the verdict fields out of it: previously `value`
+        // and `error` were hard-coded to None, so is_success() could never
+        // observe a device FAIL (failed program/erase reported as success).
+        let value = data.remove("value");
+        let more = data.remove("more");
+        let mut error = data.remove("error");
+        // A FAIL verdict without an explicit error attribute still fails:
+        // surface the log text (or a default) so callers' `{:?}` messages
+        // stay informative.
+        if error.is_none() {
+            if let Some(v) = value.as_deref() {
+                if v.eq_ignore_ascii_case("FAIL") {
+                    error = Some(
+                        log.clone()
+                            .unwrap_or_else(|| "device reported FAIL".to_string()),
+                    );
+                }
+            }
+        }
+
         Ok(Self {
             command: data.remove("command").unwrap_or_default(),
             version: data.remove("version").unwrap_or_default(),
             response: Some(data),
             log,
-            value: None,
-            more: None,
-            error: None,
+            value,
+            more,
+            error,
         })
     }
 
     pub fn is_success(&self) -> bool {
-        self.error.is_none() && self.value.as_deref() != Some("FAIL")
+        self.error.is_none()
+            && !matches!(self.value.as_deref(), Some(v) if v.eq_ignore_ascii_case("FAIL"))
     }
 
     pub fn get_value(&self, key: &str) -> Option<&String> {
@@ -240,14 +262,28 @@ impl FirehoseSession {
         }
         
         self.configured = true;
+        // Device-reported sizes drive vec![] allocations below: clamp them
+        // so a rogue 0xFFFF_FFFF can never force a multi-gigabyte allocation
+        // (allocator abort). Real programmers negotiate kilobytes; 8 MiB is
+        // already far beyond any legitimate Firehose payload.
+        const MAX_FIREHOSE_PAYLOAD: u32 = 8 * 1024 * 1024;
         if let Some(val) = resp.get_value("MaxPayloadSizeToTargetInBytes") {
-            self.max_payload_to = val.parse().unwrap_or(self.max_payload_to);
+            if let Ok(v) = val.parse::<u32>() {
+                self.max_payload_to = v.min(MAX_FIREHOSE_PAYLOAD);
+            }
         }
         if let Some(val) = resp.get_value("MaxPayloadSizeFromTargetInBytes") {
-            self.max_payload_from = val.parse().unwrap_or(self.max_payload_from);
+            if let Ok(v) = val.parse::<u32>() {
+                self.max_payload_from = v.min(MAX_FIREHOSE_PAYLOAD);
+            }
         }
         if let Some(val) = resp.get_value("SectorSizeInBytes") {
-            self.sector_size = val.parse().unwrap_or(self.sector_size);
+            if let Ok(v) = val.parse::<u32>() {
+                // Sector sizes are 512/4096 in practice; bound the absurd.
+                if v > 0 && v <= 1 * 1024 * 1024 {
+                    self.sector_size = v;
+                }
+            }
         }
         Ok(())
     }
@@ -271,7 +307,7 @@ impl FirehoseSession {
         if let Some(log) = &resp.log {
             for line in log.lines() {
                 if line.contains("<partition") {
-                    if let Some(p) = self.parse_partition_xml(line) {
+                    if let Some(p) = Self::parse_partition_xml(line) {
                         partitions.push(p);
                     }
                 }
@@ -281,29 +317,52 @@ impl FirehoseSession {
         Ok(partitions)
     }
 
-    fn parse_partition_xml(&self, xml: &str) -> Option<QcomPartition> {
+    fn parse_partition_xml(xml: &str) -> Option<QcomPartition> {
         let mut name = String::new();
         let mut start_sector = 0u64;
         let mut num_sectors = 0u64;
         let mut size = 0u64;
         let mut partition_type = String::new();
         let mut physical_partition = 0u32;
-        
+        // Fail-safe: a present-but-malformed sector number must drop the
+        // line (caller skips it), never zero-address it — flashing at
+        // sector 0 from a corrupt device log is a brick vector.
+        let mut malformed = false;
+
         for part in xml.split_whitespace() {
             if let Some((k, v)) = part.split_once('=') {
-                let v = v.trim_matches('"');
+                // Device log lines terminate the element with `/>` or `>`,
+                // which clings to the last attribute value. Strip the
+                // terminator BEFORE the quotes: `"0"/>` must become `0`,
+                // not `0"` (quote-strip first leaves the inner quote).
+                let v = v.trim_end_matches("/>").trim_end_matches('>').trim_matches('"');
                 match k {
                     "name" => name = v.to_string(),
-                    "start_sector" => start_sector = v.parse().unwrap_or(0),
-                    "num_partition_sectors" => num_sectors = v.parse().unwrap_or(0),
-                    "size_in_bytes" => size = v.parse().unwrap_or(0),
+                    "start_sector" => match v.parse() {
+                        Ok(n) => start_sector = n,
+                        Err(_) => malformed = true,
+                    },
+                    "num_partition_sectors" => match v.parse() {
+                        Ok(n) => num_sectors = n,
+                        Err(_) => malformed = true,
+                    },
+                    "size_in_bytes" => match v.parse() {
+                        Ok(n) => size = n,
+                        Err(_) => malformed = true,
+                    },
                     "type" => partition_type = v.to_string(),
-                    "physical_partition_number" => physical_partition = v.parse().unwrap_or(0),
+                    "physical_partition_number" => match v.parse() {
+                        Ok(n) => physical_partition = n,
+                        Err(_) => malformed = true,
+                    },
                     _ => {}
                 }
             }
         }
-        
+
+        if malformed {
+            return None;
+        }
         if !name.is_empty() {
             Some(QcomPartition {
                 name,
@@ -460,5 +519,54 @@ pub struct QcomPartition {
 impl QcomPartition {
     pub fn size_bytes(&self) -> u64 {
         if self.size > 0 { self.size } else { self.num_sectors * self.sector_size as u64 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fail_verdict_is_not_success() {
+        let resp = FirehoseResponse::from_xml(
+            r#"<?xml version="1.0"?><response value="FAIL" rawmode="false"/>"#,
+        )
+        .unwrap();
+        assert_eq!(resp.value.as_deref(), Some("FAIL"));
+        assert!(resp.error.is_some());
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn ack_verdict_is_success() {
+        let resp = FirehoseResponse::from_xml(
+            r#"<?xml version="1.0"?><response value="ACK" MinVersionSupported="1" Version="1" MaxPayloadSizeToTargetInBytes="8192"/>"#,
+        )
+        .unwrap();
+        assert_eq!(resp.value.as_deref(), Some("ACK"));
+        assert!(resp.is_success());
+        // Configure sizes must remain reachable through the generic map.
+        assert_eq!(
+            resp.get_value("MaxPayloadSizeToTargetInBytes").map(|s| s.as_str()),
+            Some("8192")
+        );
+    }
+
+    #[test]
+    fn explicit_error_attribute_fails() {
+        let resp = FirehoseResponse::from_xml(
+            r#"<?xml version="1.0"?><response value="ACK" error="payload too large"/>"#,
+        )
+        .unwrap();
+        assert!(!resp.is_success());
+    }
+
+    #[test]
+    fn malformed_partition_line_is_dropped_not_zeroed() {
+        let bad = r#"<partition name="frp" start_sector="oops" num_partition_sectors="8"/>"#;
+        assert!(FirehoseSession::parse_partition_xml(bad).is_none());
+        let good = r#"<partition name="frp" start_sector="100" num_partition_sectors="8" physical_partition_number="0"/>"#;
+        let p = FirehoseSession::parse_partition_xml(good).unwrap();
+        assert_eq!((p.name.as_str(), p.start_sector, p.num_sectors), ("frp", 100, 8));
     }
 }

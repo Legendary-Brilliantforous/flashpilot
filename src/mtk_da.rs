@@ -200,12 +200,29 @@ for e in &entries {
 }
 
 /// DA (Download Agent) session for partition operations
+/// Default DA-protocol write chunk (previous hardcoded behavior everywhere).
+pub const DEFAULT_PACKET_SIZE: usize = 64 * 1024;
+/// Hard bounds for configured packet sizes: smaller wastes round-trips,
+/// larger risks endpoint stalls; zero would panic chunking outright.
+pub const MIN_PACKET_SIZE: usize = 512;
+pub const MAX_PACKET_SIZE: usize = 1024 * 1024;
+
+/// Clamp a configured packet size (pure: unit-tested without USB).
+pub(crate) fn clamp_packet_size(size: usize) -> usize {
+    if size < MIN_PACKET_SIZE || size > MAX_PACKET_SIZE {
+        DEFAULT_PACKET_SIZE
+    } else {
+        size
+    }
+}
+
 pub struct DaSession {
     session: BromSession,
     da_addr: u32,
     da_len: u32,
     da_arg: u32,
     hw_code: u32,
+    packet_size: usize,
 }
 
 impl DaSession {
@@ -216,7 +233,21 @@ impl DaSession {
             da_len: 0,
             da_arg: 0,
             hw_code: 0,
+            packet_size: DEFAULT_PACKET_SIZE,
         }
+    }
+
+    /// Apply the configured MTK packet size (clamped to sane bounds; 0 or
+    /// out-of-range falls back to the default instead of panicking chunk
+    /// iteration or stalling the endpoint).
+    pub fn set_packet_size(&mut self, size: usize) {
+        let clamped = clamp_packet_size(size);
+        if clamped != size {
+            eprintln!(
+                "[mtk] packet size {size} out of range [{MIN_PACKET_SIZE}..{MAX_PACKET_SIZE}], using default {DEFAULT_PACKET_SIZE}"
+            );
+        }
+        self.packet_size = clamped;
     }
 
     pub fn da_info(&self) -> (u32, u32, u32, u32) {
@@ -332,9 +363,8 @@ impl DaSession {
         // WRITE_PARTITION (0xF2)
         self.send_cmd(0xF2, &payload, 2)?;
 
-        // Send data in chunks
-        const CHUNK: usize = 64 * 1024;
-        for chunk in file_data.chunks(CHUNK) {
+        // Send data in configured chunks (see set_packet_size).
+        for chunk in file_data.chunks(self.packet_size) {
             self.session.write(chunk)?;
             let ack = self.session.read_exact(2, Duration::from_secs(10))?;
             if ack != [0xF2, 0x00] && ack != [0x00, 0x00] {
@@ -415,9 +445,8 @@ impl DaSession {
         payload.extend_from_slice(&1u32.to_be_bytes()); // is_download = true
         self.send_cmd(0xF2, &payload, 2)?;
         let mut remaining = *size;
-        const CHUNK: usize = 64 * 1024;
         while remaining > 0 {
-            let n = std::cmp::min(CHUNK as u64, remaining) as usize;
+            let n = std::cmp::min(self.packet_size as u64, remaining) as usize;
             self.session.write(&chunk[..n])?;
             let ack = self.session.read_exact(2, Duration::from_secs(10))?;
             if ack != [0xF2, 0x00] && ack != [0x00, 0x00] {
@@ -856,6 +885,10 @@ impl DaSession {
             progress.update(done);
         }
         progress.finish();
+        match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
+            Ok(summary) => println!("{summary}"),
+            Err(e) => eprintln!("manifest warning: {e}"),
+        }
         Ok(())
     }
 }
@@ -863,15 +896,25 @@ impl DaSession {
 // Public API functions for CLI
 
 /// Resolve a target string to an MTK USB device. Accepts `bus:addr` or the
-/// special value `"auto"` (first MTK device in download mode).
+/// special value `"auto"` (the MTK device — exactly one must be present;
+/// with several attached, "auto" is ambiguous and rejected instead of
+/// silently opening a session against the wrong phone).
 pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
     let devices = usb::collect_devices(None)?;
     if target == "auto" {
-        return devices
-            .iter()
-            .find(|d| d.vid == MTK_VID)
+        let mut mtk = devices.iter().filter(|d| d.vid == MTK_VID);
+        let first = mtk
+            .next()
             .cloned()
-            .ok_or_else(|| BridgeError::InvalidArgument("no MTK device found".to_string()));
+            .ok_or_else(|| BridgeError::InvalidArgument("no MTK device found".to_string()))?;
+        if mtk.next().is_some() {
+            return Err(BridgeError::DeviceState(
+                crate::error::DeviceStateError::AmbiguousTarget {
+                    count: devices.iter().filter(|d| d.vid == MTK_VID).count(),
+                },
+            ));
+        }
+        return Ok(first);
     }
     devices
         .iter()
@@ -951,7 +994,23 @@ pub fn mtk_gpt_cli(target: &str, da_path: &str) -> Result<String> {
 /// `mtk-flash-part <target> <da> <partition=file>...` — upload DA and write
 /// each `partition=image` entry by NAME, resolving addresses from the device
 /// GPT. No scatter file required.
-pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, String)]) -> Result<String> {
+/// Python-facing API surface (the CLI calls the _v variant).
+#[allow(dead_code)]
+pub fn mtk_flash_part_cli(
+    target: &str,
+    da_path: &str,
+    entries: &[(String, String)],
+) -> Result<String> {
+    mtk_flash_part_cli_v(target, da_path, entries, true)
+}
+
+/// `verify=false` restores the legacy behavior (write + reboot, no read-back).
+pub fn mtk_flash_part_cli_v(
+    target: &str,
+    da_path: &str,
+    entries: &[(String, String)],
+    verify: bool,
+) -> Result<String> {
     if entries.is_empty() {
         return Err(BridgeError::InvalidArgument(
             "no partition=file entries provided".to_string(),
@@ -971,6 +1030,7 @@ pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, Strin
     da.upload_da(da_path)?;
 
     let mut out = Vec::new();
+    let mut written: Vec<(String, String)> = Vec::new();
     for (name, file) in entries {
         out.push(format!("Writing '{name}' from {file}..."));
         da.write_partition_by_name(name, file).map_err(|e| {
@@ -981,6 +1041,56 @@ pub fn mtk_flash_part_cli(target: &str, da_path: &str, entries: &[(String, Strin
             })
         })?;
         out.push(format!("  '{name}' written OK"));
+        written.push((name.clone(), file.clone()));
+    }
+    // Verify-after-write (default ON; --no-verify skips): read back each
+    // written partition and SHA-256 compare against the source file. A
+    // corrupt write must never pass silently — on mismatch the error is
+    // fatal and the device stays in DA mode for a re-write attempt.
+    if verify {
+        out.push("Verifying (read-back + SHA-256 compare)...".to_string());
+        for (name, file) in &written {
+            let expected = match std::fs::read(file) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(BridgeError::Firmware(
+                        crate::error::FirmwareError::ImageCorrupt(format!(
+                            "verify '{name}': cannot read source file: {e}"
+                        )),
+                    ));
+                }
+            };
+            if expected.is_empty() {
+                out.push(format!("  '{name}': source empty — skipped compare"));
+                continue;
+            }
+            match da.read_partition_bytes(name, 0, expected.len() as u64) {
+                Ok(actual) => match crate::util::verify_bytes_match(&expected, &actual) {
+                    Ok(()) => out.push(format!("  '{name}' verified OK")),
+                    Err(e) => {
+                        return Err(BridgeError::Protocol(
+                            crate::error::ProtocolError::CommandFailed {
+                                cmd: 0, sub: 0,
+                                reason: format!(
+                                    "VERIFY FAILED for '{name}': {e} — the write did not stick; device left in DA mode for a re-write attempt"
+                                ),
+                            },
+                        ));
+                    }
+                },
+                Err(e) => {
+                    return Err(BridgeError::Protocol(
+                        crate::error::ProtocolError::CommandFailed {
+                            cmd: 0, sub: 0,
+                            reason: format!(
+                                "VERIFY FAILED for '{name}' (read-back): {e} — device left in DA mode"
+                            ),
+                        },
+                    ));
+                }
+            }
+        }
+        out.push("All partitions verified.".to_string());
     }
     let _ = da.reboot(0);
     out.push("Flash complete - device rebooted to normal mode.".to_string());
@@ -1034,6 +1144,78 @@ pub fn mtk_read_part_cli(
         "Read '{partition}' ({} MB) -> {out_file} (device back in BROM)",
         size / (1024 * 1024)
     ))
+}
+
+/// `mtk-verify-part <target> <da> <partition=file>...` — verify-after-write.
+///
+/// Uploads DA once, then for each entry reads back exactly the file's byte
+/// count from the partition start and compares SHA-256 against the source
+/// file. Reports MATCH per partition; returns Err listing every MISMATCH so
+/// callers (flows, CI) fail loudly instead of shipping a bad flash.
+pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, String)]) -> Result<String> {
+    use crate::util::{sha256_file, verify_bytes_match};
+    if entries.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "no partition=file entries provided".to_string(),
+        ));
+    }
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
+    }
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+    let mut da = DaSession::new(session);
+    da.upload_da(da_path)?;
+
+    let mut out = Vec::new();
+    let mut bad = Vec::new();
+    for (name, file) in entries {
+        let expected = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) => {
+                bad.push(format!("{name}: cannot read source file: {e}"));
+                continue;
+            }
+        };
+        if expected.is_empty() {
+            bad.push(format!("{name}: source file is empty, refusing to compare"));
+            continue;
+        }
+        match da.read_partition_bytes(name, 0, expected.len() as u64) {
+            Ok(actual) => match verify_bytes_match(&expected, &actual) {
+                Ok(()) => {
+                    let hex = match sha256_file(std::path::Path::new(file)) {
+                        Ok(h) => h[..16].to_string(),
+                        Err(_) => "?".to_string(),
+                    };
+                    out.push(format!("  MATCH '{name}' ({} bytes, sha256:{hex}...)", expected.len()));
+                }
+                Err(e) => bad.push(format!("{name}: MISMATCH ({e})")),
+            },
+            Err(e) => bad.push(format!("{name}: read-back failed: {e}")),
+        }
+    }
+    let _ = da.reboot(4); // back to BROM
+    for line in &out {
+        println!("{line}");
+    }
+    if bad.is_empty() {
+        Ok(format!("verify: {} partition(s) MATCH", out.len()))
+    } else {
+        for line in &bad {
+            eprintln!("{line}");
+        }
+        Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("verify failed: {}", bad.join("; ")),
+        }))
+    }
 }
 
 /// Render an SP Flash Tool scatter file from a partition list
@@ -1194,6 +1376,144 @@ pub fn mtk_frp_bypass_gpt(target: &str, da_path: &str) -> Result<String> {
     Ok(out.join("\n"))
 }
 
+/// `mtk-frp-brom <target> <da_dir>` — FRP bypass for ANY MediaTek device via
+/// BROM with NO user-supplied DA: parses the bundled mtkclient DA containers
+/// (V5/V6, GPLv3, attributed in mtk_daloader.rs), picks the entry for the
+/// chip's dacode, uploads it (kamakiri2 first when the BROM is
+/// SBC/SLA/DAA-protected so the unsigned DA isn't blocked), then erases the
+/// lock partitions from the device GPT and reboots.
+///
+/// The mtkclient `upload_da1` flow: region[1] -> SEND_DA at m_start_addr ->
+/// JUMP_DA -> 0xC0 loader sync on the SAME connection (no re-enumeration),
+/// after which the DA speaks the LEGACY echo protocol this DaSession drives.
+pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
+    let dev = find_mtk_dev(target)?;
+    let (stage, _) = boot_stage_for(dev.pid);
+    if stage != "brom" && stage != "preloader" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader (power off, hold Vol- or Vol+ while plugging USB)",
+            stage
+        )));
+    }
+    let load = |name: &str| -> Result<Option<Vec<u8>>> {
+        let p = std::path::Path::new(da_dir).join(name);
+        if !p.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(
+            std::fs::read(&p).map_err(|e| BridgeError::Io(format!("read {name}: {e}")))?,
+        ))
+    };
+    // V5 (LEGACY protocol) first; V6 (XML) is only a fallback for chips
+    // with no V5 entry — this engine cannot drive XML-mode DAs.
+    let v5 = load("MTK_DA_V5.bin")?;
+    let v6 = load("MTK_DA_V6.bin")?;
+    if v5.is_none() && v6.is_none() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "no bundled DA containers in {da_dir} (need MTK_DA_V5.bin / MTK_DA_V6.bin)"
+        )));
+    }
+    let parse = |data: &Option<Vec<u8>>| -> Option<crate::mtk_daloader::DaContainer> {
+        data.as_ref()
+            .and_then(|d| crate::mtk_daloader::parse_container(d).ok())
+    };
+    let v5c = parse(&v5);
+    let v6c = parse(&v6);
+
+    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep)
+        .map_err(|e| e.to_string())?;
+    let chip = crate::mtk_exploit::read_chip(&session);
+    let hw = chip.hw_code;
+
+    let v5_pick = v5c.as_ref().and_then(|c| c.pick(hw));
+    let v6_pick = v6c.as_ref().and_then(|c| c.pick(hw));
+    let (entry, container, container_data) = match (&v5_pick, &v6_pick, &v5, &v6) {
+        (Some(e), _, Some(d), _) => (e, v5c.as_ref().unwrap(), d),
+        (None, Some(e), _, Some(d)) => (e, v6c.as_ref().unwrap(), d),
+        _ => {
+            let mkt = crate::mtk_daloader::marketing_dacode(hw)
+                .map(|m| format!(" (dacode {m:#06x})"))
+                .unwrap_or_default();
+            return Err(BridgeError::InvalidArgument(format!(
+                "no DA entry for hw {hw:#06x}{mkt} in the bundled containers"
+            )));
+        }
+    };
+    let (da1, da1_addr, sig_len) = container.stage1(entry, container_data)?;
+    let mut out = Vec::new();
+    out.push(format!(
+        "Bundled DA ({} container): entry hw 0x{:04x} — stage1 {} bytes @ 0x{:x}",
+        if entry.v6 { "V6/XML" } else { "V5/legacy" },
+        entry.hw_code,
+        da1.len(),
+        da1_addr
+    ));
+
+    // Protected BROM (SBC/SLA/DAA): kamakiri2 first so the unsigned bundled
+    // DA isn't blocked by the auth check (the exploit's send-pointer
+    // redirect jumps straight to the payload, bypassing verification).
+    let protected = chip
+        .target_config
+        .as_ref()
+        .map(|tc| tc.sbc || tc.sla || tc.daa)
+        .unwrap_or(false);
+    if protected {
+        let cfg = crate::mtk_exploit::chip_config(hw).ok_or_else(|| {
+            BridgeError::InvalidArgument(format!(
+                "BROM protected (SBC/SLA/DAA) and hw {hw:#06x} is not in the exploit table — cannot run kamakiri2"
+            ))
+        })?;
+        let mut k2 = crate::mtk_exploit::Kamakiri2::new(&session, cfg);
+        k2.prime();
+        k2.exploit(da1, da1_addr)
+            .map_err(crate::error::BridgeError::InvalidArgument)?;
+        out.push("BROM protected (SBC/SLA/DAA) — kamakiri2 exploit applied".to_string());
+    }
+
+    session
+        .send_da(da1_addr, da1.len(), sig_len, da1)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("SEND_DA (bundled DA stage1): {e}"),
+        }))?;
+    session.jump_da(da1_addr).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("JUMP_DA: {e}"),
+        })
+    })?;
+    // Loader sync: 0xC0 arrives on the SAME connection (no re-enum).
+    let sync = session
+        .read_exact(1, Duration::from_secs(5))
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                "loader sync: {e}"
+            )))
+        })?;
+    if sync.first() == Some(&0xC0) {
+        out.push("Loader sync (0xC0) OK — DA is live".to_string());
+    } else {
+        out.push(format!(
+            "warn: loader sync byte 0x{:02x} (expected 0xc0) — continuing",
+            sync.first().copied().unwrap_or(0)
+        ));
+    }
+
+    let da = DaSession::new(session);
+    out.push("Resolving lock partitions from the device GPT...".to_string());
+    da.frp_bypass(None, true)
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    out.push(
+        "Lock partitions cleared (frp/nvdata/metadata/persistent/protect/keystore).".to_string(),
+    );
+    let _ = da.reboot(0);
+    out.push("Device rebooted to normal mode.".to_string());
+    Ok(out.join("\n"))
+}
+
 pub fn mtk_adb_enable(target: &str, da_path: &str, scatter_path: &str) -> Result<String> {
     let ops = MtKOperations {
         enable_adb: true,
@@ -1311,7 +1631,8 @@ pub fn mtk_detect_emergency_mode() -> Result<String> {
     
     for d in devices.iter().filter(|d| d.vid == MTK_VID) {
         let (stage, _) = boot_stage_for(d.pid);
-        // Emergency mode PIDs: 0x2000 (BROM), 0x0003 (Preloader with auth bypass)
+        // Emergency mode PIDs: 0x0003 (BROM), 0x2000 (preloader) — plus
+        // 0x0001/0x0002 variants on some boards.
         // Some devices show 0x0001, 0x0002 in emergency mode
         let is_emergency = matches!(d.pid, 0x2000 | 0x0001 | 0x0002 | 0x0003);
         
@@ -1591,10 +1912,12 @@ pub fn mtk_flash_flow(
     let _ = crate::mtk::brom_mem_probe(&session);
     
     let mut da_session = DaSession::new(session);
-    // Wire OperationContext + config packet size
+    // Apply the configured MTK packet size to the DA session (previously
+    // computed and dropped — the session always wrote 64K chunks).
     let ctx = crate::config::app_config_for_operation(Some(dev.clone()));
-    let _pkt = crate::config::mtk_packet_size(&ctx.mtk);
-    eprintln!("[mtk] packet_size {ctx:?} -> {_pkt}");
+    let pkt = crate::config::mtk_packet_size(&ctx.mtk);
+    da_session.set_packet_size(pkt);
+    eprintln!("[mtk] packet size {pkt} (config: {:?})", ctx.mtk);
     da_session.upload_da(da_path)?;
 
     let scatter = ScatterFile::parse(scatter_path)?;
@@ -1843,5 +2166,17 @@ is_download: true
         std::fs::write("/tmp/test_scatter_zero.txt", content).unwrap();
         let err = ScatterFile::parse("/tmp/test_scatter_zero.txt").unwrap_err();
         assert!(err.contains("zero partition_size"), "got: {err}");
+    }
+
+    #[test]
+    fn packet_size_clamp_keeps_default_sane() {
+        assert_eq!(DEFAULT_PACKET_SIZE, 64 * 1024);
+        assert_eq!(clamp_packet_size(0), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(100), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(512), 512);
+        assert_eq!(clamp_packet_size(64 * 1024), 64 * 1024);
+        assert_eq!(clamp_packet_size(1024 * 1024), 1024 * 1024);
+        assert_eq!(clamp_packet_size(1024 * 1024 + 1), DEFAULT_PACKET_SIZE);
+        assert_eq!(clamp_packet_size(usize::MAX), DEFAULT_PACKET_SIZE);
     }
 }

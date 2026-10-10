@@ -1,0 +1,310 @@
+"""Live device identity resolver — real serial / Android ver / build from device, no fake.
+
+Priority for Android (ADB authorized → real getprop, no USB placeholder):
+  1. ADB getprop ro.serialno || ro.boot.serialno → serial (filter 012345... fake)
+     ADB serial from `adb devices` is only fallback if getprop empty.
+  2. ADB getprop ro.build.version.release + sdk → android, ro.build.display.id → build
+  3. MTP GetDeviceInfo serial_number / device_version (when ADB not authorized)
+  4. USB target device product/serial (filtered, last resort)
+
+Priority for Apple (05ac):
+  1. Lockdown via ideviceinfo -k SerialNumber/UniqueDeviceID/ProductVersion/BuildVersion
+  2. pymobiledevice3 usbmux list
+  3. USB descriptor product/serial filtered
+
+Fake filter: placeholder serials never emitted as real — show "--" instead so user knows to authorize / replug.
+Works for many devices: Samsung/MTK/QC/SPD/Android generic + Apple A9-A15.
+"""
+
+import re
+import shutil
+import subprocess
+
+FAKE_SERIALS = {
+    "0123456789abcdef",
+    "0123456789abcde",
+    "0123456789abc",
+    "0123456789ab",
+    "0123456789",
+    "1234567890abcdef",
+    "1234567890abcde",
+    "0000000000000000",
+    "000000000000000",
+    "111111111111111",
+    "abcdef0123456789",
+    "unknown",
+    "n/a",
+    "",
+}
+
+FAKE_SERIAL_RE = re.compile(r"^(0+|1+|a+b+c+d+e+f+|01234567.*|12345678.*)$", re.I)
+
+
+def _is_fake_serial(s: str) -> bool:
+    if not s:
+        return True
+    t = s.strip().lower()
+    if t in FAKE_SERIALS:
+        return True
+    # All hex same char? e.g. 0000 or FFF
+    if len(t) >= 8 and len(set(t)) == 1:
+        return True
+    # Sequential placeholder
+    if t.startswith("012345") or t.startswith("123456"):
+        return True
+    # Short serial like "abc" etc
+    if len(t) <= 4:
+        return True
+    return False
+
+
+def _adb_getprop(name: str, timeout=6, serial=None) -> str:
+    # rescue=False ALWAYS here: this helper serves poll/display paths
+    # (live identity). A busy claim must fail fast — kill-server from a
+    # poll helper re-enumerates fragile hardware (USB modems) every cycle.
+    try:
+        from . import bridge
+
+        out = bridge.adb_shell(f"getprop {name}", timeout=timeout,
+                               serial=serial, rescue=False)
+        return (out or "").strip()
+    except Exception:
+        return ""
+
+
+# Live-identity cache: the ADB getprop burst below is ~10 native sessions
+# (open + claim + CNXN each). Re-running it on every 3s poll re-enumerates
+# fragile hardware — USB cellular modems reset their USB function on our
+# session and never stabilize. Refresh on authorized-set change, else TTL.
+_LIVE_TTL = 60.0
+_LIVE_CACHE = {"probed": None, "at": 0.0, "result": None}
+
+
+def _probe_android_identity(pinned_serial):
+    """One bounded ADB identity probe for an authorized serial.
+
+    Called only on authorized-set change or TTL expiry (see
+    `get_live_identity`). Returns the identity dict, or None when nothing
+    real was learned (caller falls through to MTP/USB fallbacks).
+    """
+    out = {"serial": "", "android_ver": "", "build": "", "model": "",
+           "mfr": "", "brand": "", "sdk": ""}
+    serial_prop = (_adb_getprop("ro.serialno", serial=pinned_serial)
+                   or _adb_getprop("ro.boot.serialno", serial=pinned_serial)
+                   or _adb_getprop("sys.serialnumber", serial=pinned_serial)
+                   or "")
+    if _is_fake_serial(serial_prop):
+        serial_prop = ""
+    adb_serial = _adb_devices_serial()
+    serial = serial_prop or adb_serial
+    if serial and not _is_fake_serial(serial):
+        out["serial"] = serial
+
+    # Model / brand
+    model = _adb_getprop("ro.product.model", serial=pinned_serial)
+    mfr = _adb_getprop("ro.product.manufacturer", serial=pinned_serial)
+    brand = _adb_getprop("ro.product.brand", serial=pinned_serial)
+    if model and model.lower() != "adb":
+        out["model"] = model
+    if mfr and mfr.lower() != "adb":
+        out["mfr"] = mfr
+    if brand and brand.lower() != "adb":
+        out["brand"] = brand
+
+    # Android ver + sdk
+    rel = _adb_getprop("ro.build.version.release", serial=pinned_serial)
+    sdk = _adb_getprop("ro.build.version.sdk", serial=pinned_serial)
+    if rel:
+        out["android_ver"] = f"{rel} (API {sdk})" if sdk else rel
+        out["sdk"] = sdk
+    # Build
+    bld = (_adb_getprop("ro.build.display.id", serial=pinned_serial)
+           or _adb_getprop("ro.build.version.incremental", serial=pinned_serial)
+           or _adb_getprop("ro.build.version.security_patch", serial=pinned_serial)
+           or "")
+    if bld and bld.lower() not in ("adb", "unknown"):
+        out["build"] = bld
+    # Never leak fake — None when nothing real was learned.
+    if any([out["serial"], out["model"], out["build"], out["android_ver"]]):
+        return out
+    return None
+
+
+def _adb_devices_serial() -> str:
+    try:
+        from . import bridge
+
+        devs = bridge.adb_status()
+        auth = [d for d in devs if d.get("state") == "device"]
+        if auth:
+            cand = (auth[0].get("serial") or "").strip()
+            if cand and not _is_fake_serial(cand):
+                return cand
+        # fallback even unauthorized extra? not real, skip
+        return ""
+    except Exception:
+        return ""
+
+
+def _usb_target_serial() -> str:
+    try:
+        from .mtp import find_samsung  # noqa
+        from python.gui.qt_app import _find_target_device  # type: ignore
+
+        dev = _find_target_device()
+        if dev:
+            s = (dev.get("serial") or "").strip()
+            if s and not _is_fake_serial(s) and s.lower() != "adb":
+                return s
+    except Exception:
+        pass
+    return ""
+
+
+def _mtp_serial_and_build() -> tuple:
+    """MTP GetDeviceInfo serial_number + device_version (build hint), no ADB needed."""
+    try:
+        from . import bridge
+        from python.gui.qt_app import _find_mtp_device  # type: ignore
+
+        dev = _find_mtp_device()
+        if not dev:
+            return "", ""
+        tgt = f"{dev['vid']:04x}:{dev['pid']:04x}@{dev['bus']}:{dev['address']}"
+        info = bridge.mtp_info(tgt, timeout_ms=4000)
+        if isinstance(info, dict):
+            ser = (info.get("serial_number") or "").strip()
+            if _is_fake_serial(ser):
+                ser = ""
+            bld = (info.get("device_version") or "").strip()
+            if bld.lower() == "adb":
+                bld = ""
+            return ser, bld
+    except Exception:
+        pass
+    return "", ""
+
+
+def _apple_lockdown_info() -> dict:
+    """Native Rust usbmuxd + lockdown info (no external tools).
+
+    Uses the bridge's apple-info command (usbmuxd Listen + lockdown
+    GetValue over the port-62078 relay, unpaired: non-protected keys)."""
+    import json as _json
+    from . import bridge as _bridge
+    try:
+        out = _bridge._run(["apple-info"], timeout=15)
+        data = _json.loads(out or "{}")
+    except Exception:
+        return {}
+    lock = data.get("lockdown") or {}
+    if not isinstance(lock, dict):
+        return {}
+    # Normalize to the field names the callers read.
+    out = {}
+    for k in ("SerialNumber", "UniqueDeviceID", "ProductVersion", "BuildVersion",
+              "ProductType", "DeviceName", "ActivationState"):
+        if lock.get(k):
+            out[k] = str(lock[k])
+    return out
+
+
+def get_live_identity(pinned_serial=None) -> dict:
+    """Return real {serial, android_ver, build, model, mfr, brand} or empty strings if unavailable.
+
+    Never returns fake 01234... placeholders — caller should show "--" instead.
+
+    ``pinned_serial``: probe THIS authorized device instead of the first
+    (display paths pass the displayed device's serial — otherwise the
+    cached first-device identity overrides whatever the user selected,
+    and switching falls back to the first phone's details every cycle).
+    The cache is keyed by the probed serial, so pinned and ambient probes
+    coexist without cross-device bleed.
+    """
+    out = {"serial": "", "android_ver": "", "build": "", "model": "", "mfr": "", "brand": "", "sdk": ""}
+    # Detect Apple first (05ac) — treat separately
+    apple = {}
+    try:
+        from . import bridge
+
+        usb = bridge.detect_all()
+        has_apple = any(isinstance(d, dict) and d.get("vid") == 0x05AC for d in usb)
+        if has_apple:
+            apple = _apple_lockdown_info()
+            if apple.get("SerialNumber") and not _is_fake_serial(apple["SerialNumber"]):
+                out["serial"] = apple["SerialNumber"]
+            elif apple.get("UniqueDeviceID") and not _is_fake_serial(apple["UniqueDeviceID"]):
+                out["serial"] = apple["UniqueDeviceID"]
+            if apple.get("ProductVersion"):
+                out["android_ver"] = apple["ProductVersion"]
+                if apple.get("BuildVersion"):
+                    out["android_ver"] = f"{apple['ProductVersion']} ({apple['BuildVersion']})"
+                out["build"] = apple.get("BuildVersion", "")
+            if apple.get("ProductType"):
+                out["model"] = apple["ProductType"]
+            # Apple device present → return Apple identity even if Android adb also present (dual bus)
+            # Only return if we got something real
+            if any(out[k] for k in ("serial", "android_ver", "model")):
+                return out
+    except Exception:
+        pass
+
+    # Android path — ADB getprop is truth, not USB descriptor.
+    # Presence only (zero-touch): native verification from a poll helper
+    # re-enumerates fragile hardware every cycle (USB modems). The getprop
+    # burst below runs on authorized-set change, else at most every
+    # _LIVE_TTL seconds — model/build info does not change second to second.
+    try:
+        from . import bridge
+
+        devs = bridge.adb_presence_status()
+        auth_serials = tuple(sorted(
+            d.get("serial", "") for d in devs if d.get("state") == "device"))
+    except Exception:
+        auth_serials = ()
+
+    if auth_serials:
+        import time as _t
+
+        # Pinned (displayed) device wins when it is actually authorized;
+        # otherwise the first authorized (legacy single-device behaviour).
+        probe_target = (pinned_serial if pinned_serial in auth_serials
+                        else auth_serials[0])
+        now = _t.monotonic()
+        cached = _LIVE_CACHE["result"]
+        if (probe_target != _LIVE_CACHE["probed"]
+                or now - _LIVE_CACHE["at"] > _LIVE_TTL
+                or not cached):
+            probed = _probe_android_identity(probe_target)
+            if probed:
+                _LIVE_CACHE.update(
+                    {"probed": probe_target, "at": now, "result": probed})
+                return probed
+        elif cached:
+            return dict(cached)
+
+    # Fallback without ADB: MTP serial/build
+    ser_mtp, bld_mtp = _mtp_serial_and_build()
+    if ser_mtp and not _is_fake_serial(ser_mtp):
+        out["serial"] = ser_mtp
+    if bld_mtp and bld_mtp.lower() != "adb":
+        out["build"] = bld_mtp
+
+    # Last resort USB target (filtered)
+    if not out["serial"]:
+        us = _usb_target_serial()
+        if us and not _is_fake_serial(us):
+            out["serial"] = us
+    # Model via USB target product if still empty
+    if not out["model"]:
+        try:
+            from python.gui.qt_app import _find_target_device
+
+            dev = _find_target_device()
+            if dev:
+                prod = (dev.get("product") or "").strip()
+                if prod and prod.lower() not in ("adb", "samsung_android", "") and not _is_fake_serial(prod):
+                    out["model"] = prod
+        except Exception:
+            pass
+    return out

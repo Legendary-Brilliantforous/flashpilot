@@ -1,25 +1,33 @@
 """Shared Flow/Step primitives - single source for frp + flashing."""
-import threading
 from . import bridge
+from . import cancel as _cancel_registry
 
 
 class FlowCancelled(RuntimeError):
     """Raised when the user hits Stop while a flow is running."""
 
 
-_cancel = threading.Event()
+# Cooperative cancel lives in core/cancel.py (single registry shared with
+# bridge.py). Same-named thin wrappers here so existing imports
+# (core.py re-exports these; flows call cancel_requested()) keep working.
+def _scope_key(key):
+    return _cancel_registry._scope_key(key)
 
 
-def request_cancel():
-    _cancel.set()
+def _event(key):
+    return _cancel_registry._event(key)
 
 
-def clear_cancel():
-    _cancel.clear()
+def request_cancel(key=None):
+    return _cancel_registry.request_cancel(key)
 
 
-def cancel_requested():
-    return _cancel.is_set()
+def clear_cancel(key=None):
+    return _cancel_registry.clear_cancel(key)
+
+
+def cancel_requested(key=None):
+    return _cancel_registry.cancel_requested(key)
 
 
 class Step:

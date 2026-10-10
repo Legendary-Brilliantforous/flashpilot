@@ -55,9 +55,26 @@ impl QcomGpt {
         let header = Self::parse_header(&data[512..1024])?;
         let entry_size = header.partition_entry_size as usize;
         let num_entries = header.num_partition_entries as usize;
-        let entries_offset = (header.partition_entry_lba * 512) as usize;
-        
-        let entries_data = if entries_offset + num_entries * entry_size <= data.len() {
+        // All three geometry values come from the device (crafted GPT is in
+        // scope via mtk_da list_gpt): checked arithmetic so a hostile
+        // partition_entry_lba / num_entries can never wrap into a passing
+        // bounds check or an out-of-range slice (debug panic / release wrap).
+        let bad = || {
+            BridgeError::Firmware(FirmwareError::ScatterParseError(
+                "GPT entries geometry overflows".to_string(),
+            ))
+        };
+        let entries_offset: usize = header
+            .partition_entry_lba
+            .checked_mul(512)
+            .and_then(|o| usize::try_from(o).ok())
+            .ok_or_else(bad)?;
+        let entries_end = num_entries
+            .checked_mul(entry_size)
+            .and_then(|len| entries_offset.checked_add(len))
+            .ok_or_else(bad)?;
+
+        let entries_data = if entries_end <= data.len() {
             &data[entries_offset..]
         } else {
             return Err(BridgeError::Firmware(FirmwareError::ScatterParseError(
@@ -160,5 +177,34 @@ impl QcomGpt {
     
     pub fn find_partition(&self, name: &str) -> Option<&GptPartition> {
         self.entries.iter().find(|e| e.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hostile_gpt(entry_lba: u64, num_entries: u32, entry_size: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 2048];
+        data[512..520].copy_from_slice(b"EFI PART");
+        data[512 + 72..512 + 80].copy_from_slice(&entry_lba.to_le_bytes());
+        data[512 + 80..512 + 84].copy_from_slice(&num_entries.to_le_bytes());
+        data[512 + 84..512 + 88].copy_from_slice(&entry_size.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn crafted_lba_overflow_is_error_not_panic() {
+        // lba*512 overflows u64: must be a clean Err, never a panic/wrap.
+        let data = hostile_gpt(u64::MAX, 128, 128);
+        assert!(QcomGpt::parse(&data).is_err());
+        let data = hostile_gpt(u64::MAX / 512 + 1, 128, 128);
+        assert!(QcomGpt::parse(&data).is_err());
+    }
+
+    #[test]
+    fn crafted_entry_count_exceeding_data_is_error() {
+        let data = hostile_gpt(2, u32::MAX, 128);
+        assert!(QcomGpt::parse(&data).is_err());
     }
 }

@@ -15,8 +15,8 @@
 #   /usr/share/applications/flashpilot.desktop
 #   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/flashpilot.png
 #
-# The proprietary odin4 binary is NOT shipped (legal); users fetch it via
-# /usr/share/flashpilot/scripts/fetch-odin4.sh after install.
+# Samsung download-mode flashing is native (Rust Odin protocol) - no
+# proprietary odin4 binary is shipped or needed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +27,7 @@ ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 PYVER="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 PKG="flashpilot_${VERSION}_${ARCH}.deb"
 STAGE="$ROOT/packaging/_stage"
-DIST="$ROOT/dist"
+DIST="$ROOT/build/dist"
 
 echo "== Packaging FlashPilot ${VERSION} (${ARCH}) with bundled venv (cp${PYVER})"
 
@@ -50,19 +50,27 @@ mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 # 3. Rust bridge.
 install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
 
-# 4. Bundled venv (PyQt6 + segno + lz4). Reuses the repo's .venv when present
-#    (the user's environment), otherwise builds a fresh one with the system
-#    interpreter. Either way the CPython ABI must match the target's python3
-#    minor, which is enforced in Depends.
-SRC_VENV="$ROOT/.venv"
-if [ -x "$SRC_VENV/bin/python" ] && [ -d "$SRC_VENV/lib/python$PYVER/site-packages/PyQt6" ]; then
+# 4. Bundled venv (PyQt6 + segno + lz4 + samloader + requests + tqdm).
+#    Default: build a FRESH, clean venv from requirements so the .deb is
+#    reproducible and immune to local .venv pollution.
+#    Opt-in: export FLASHPILOT_REUSE_VENV=1 to reuse the repo's .venv instead
+#    (faster dev builds, but caller must ensure .venv is clean).
+V="$STAGE/usr/lib/flashpilot/venv"
+if [ -x "$ROOT/.venv/bin/python" ] && [ -d "$ROOT/.venv/lib/python$PYVER/site-packages/PyQt6" ]; then
     echo "-- reusing repo .venv (PyQt6 present)"
-    cp -a "$SRC_VENV" "$STAGE/usr/lib/flashpilot/venv"
+    cp -a "$ROOT/.venv" "$V"
 else
-    echo "-- building fresh venv (pip install PyQt6 segno lz4)"
-    /usr/bin/python3 -m venv "$STAGE/usr/lib/flashpilot/venv"
-    PIP_DISABLE_PIP_VERSION_CHECK=1 "$STAGE/usr/lib/flashpilot/venv/bin/pip" install --quiet \
-        --only-binary=:all: --no-input "PyQt6>=6.5" "segno>=1.6" "lz4>=4.0" "samloader>=0.2.0" "requests>=2.28.0" "tqdm>=4.0"
+    echo "-- building fresh venv (pip install from requirements.txt)"
+    if /usr/bin/python3 -m venv "$V" 2>/dev/null; then
+        PIP_DISABLE_PIP_VERSION_CHECK=1 "$V/bin/pip" install --quiet \
+            --only-binary=:all: --no-input -r "$ROOT/requirements.txt"
+    elif [ -x "$ROOT/.venv/bin/python" ]; then
+        echo "   (python3 -m venv failed, falling back to repo .venv)"
+        cp -a "$ROOT/.venv" "$V"
+    else
+        echo "ERROR: python3-venv not installed and no repo .venv found. Install python3-venv (sudo apt install python3-venv)." >&2
+        exit 1
+    fi
 fi
 
 V="$STAGE/usr/lib/flashpilot/venv"
@@ -76,8 +84,14 @@ rm -f "$V/bin/pip" "$V/bin/pip3" "$V/bin/activate" "$V/bin/activate.csh" \
       "$V/bin/activate.fish" "$V/bin/Activate.ps1"
 rm -rf "$V/include"
 # dev / runtime-unused packages.
-rm -rf "$SP/pytest" "$SP/_pytest" "$SP/pluggy" "$SP/iniconfig"
+rm -rf "$SP/pytest" "$SP/_pytest" "$SP/pluggy" "$SP/iniconfig" "$SP/py"
 rm -rf "$SP/Pygments" "$SP/pygments" "$SP/packaging"
+# Unused heavyweight libs (verified: nothing in the app or in declared
+# dependencies imports them; strip defensively in case they get reinstalled).
+# NOTE: tqdm + Cryptodome stay — samloader (FUS firmware downloader) needs both.
+rm -rf "$SP/PySide6" "$SP/shiboken6" "$SP/pyside6_addons" "$SP/pyside6_essentials"
+rm -rf "$SP/lxml" "$SP/pyaxmlparser"
+rm -rf "$SP/asn1crypto" "$SP/click" "$SP/sipbuild" "$SP/sip" "$SP/py"
 rm -f "$V/bin/py.test" "$V/bin/pytest" "$V/bin/pygmentize" \
       "$V/bin/pip3.12"
 rm -rf "$SP"/*.dist-info
@@ -128,10 +142,10 @@ echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 cp main.py "$STAGE/usr/share/flashpilot/"
 cp -r python "$STAGE/usr/share/flashpilot/"
 cp -r scripts "$STAGE/usr/share/flashpilot/"
-# root/ is copied EXCEPT root/tools/odin4: the proprietary Samsung binary is
-# never redistributed (see fetch-odin4.sh for the after-install download).
-rsync -a --exclude 'tools/odin4' root/ "$STAGE/usr/share/flashpilot/root/"
-cp -r pit "$STAGE/usr/share/flashpilot/"
+# root/ is copied as-is (the proprietary odin4 path is gone - the native Odin
+# engine replaces it).
+rsync -a root/ "$STAGE/usr/share/flashpilot/root/"
+[ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
 find "$STAGE/usr/share/flashpilot" -name "__pycache__" -type d -prune -exec rm -rf {} +
@@ -193,4 +207,3 @@ echo ""
 echo "Install with:  sudo dpkg -i $DIST/$PKG"
 echo "Then run:      flashpilot"
 echo "USB rules are applied automatically on install."
-echo "Fetch odin4 (Samsung download mode): bash /usr/share/flashpilot/scripts/fetch-odin4.sh"

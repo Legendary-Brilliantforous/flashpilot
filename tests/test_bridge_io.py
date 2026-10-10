@@ -68,3 +68,94 @@ def test_missing_bridge_raises_clear_error(monkeypatch):
     with pytest.raises(bridge.BridgeError) as exc:
         bridge._run(["detect"])
     assert "rust bridge not built" in str(exc.value)
+
+
+def test_odin_model_probes_are_serialized(monkeypatch):
+    """Concurrent odin_model calls must not overlap: overlapping probes
+    contend the same bulk interface and all fail EBUSY (regression test
+    for FUS Detect colliding with the background monitor probe)."""
+    import threading
+    import time
+
+    in_flight = 0
+    max_in_flight = 0
+    guard = threading.Lock()
+
+    def fake_run(args, timeout=40):
+        nonlocal in_flight, max_in_flight
+        assert args[0] == "odin-model"
+        with guard:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+        time.sleep(0.2)
+        with guard:
+            in_flight -= 1
+        return '{"model": "SM-A145M"}'
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    threads = [
+        threading.Thread(target=bridge.odin_model, args=("t", 5))
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert all(not t.is_alive() for t in threads)
+    assert max_in_flight == 1
+
+
+def test_odin_model_waits_for_inflight_probe(monkeypatch):
+    """A second probe must wait for (not barge into) an in-flight one:
+    hold the lock, start a probe, assert its `_run` is not entered while
+    held, then release and assert it completes."""
+    import threading
+    import time
+
+    entered = threading.Event()
+
+    def fake_run(args, timeout=40):
+        entered.set()
+        return '{"model": "SM-A145M"}'
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    assert bridge._odin_probe_lock.acquire(blocking=False)
+    try:
+        done = []
+        t = threading.Thread(
+            target=lambda: done.append(bridge.odin_model("t", 30)))
+        t.start()
+        time.sleep(1.0)
+        assert not entered.is_set(), "probe barged into a held lock"
+        assert t.is_alive()
+    finally:
+        bridge._odin_probe_lock.release()
+    t.join(timeout=30)
+    assert done == [{"model": "SM-A145M"}]
+
+
+def test_list_merged_wraps_detect_merged(monkeypatch):
+    """list_merged() shells out to `detect-merged` and parses merged rows."""
+    calls = []
+
+    def fake_run(args, timeout=30):
+        calls.append(list(args))
+        return '[{"key":"adb:R9X","label":"Samsung Galaxy · R9X","transports":["ADB"],"vid":1256,"pid":26717,"bus":1,"address":2,"serial":"R9X","is_adb":true,"adb_state":"device"}]'
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    rows = bridge.list_merged()
+    assert rows[0]["key"] == "adb:R9X"
+    assert rows[0]["transports"] == ["ADB"]
+    assert calls == [["detect-merged"]]
+
+
+def test_list_merged_passes_vid_filter(monkeypatch):
+    captured = []
+
+    def fake_run(args, timeout=30):
+        captured.append(list(args))
+        return "[]"
+
+    monkeypatch.setattr(bridge, "_run", fake_run)
+    bridge.list_merged(vid_filter=0x04E8)
+    assert captured[-1] == ["detect-merged", "--vid=04e8"]

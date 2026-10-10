@@ -1,24 +1,36 @@
 mod adb;
+mod apple;
 mod at;
 mod bulk;
 mod config;
+mod device;
+mod devices;
 mod error;
 mod hid;
 mod mtk;
 mod mtk_da;
 mod mtk_exploit;
+mod mtk_daloader;
 mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
-mod odin;
+mod sam_download;
+mod sam_errors;
+mod sam_setup;
+mod hostinfo;
 mod qualcomm;
 mod spd;
+mod fastboot;
+mod flows;
+mod imgtools;
+mod pac;
+mod sparse;
+mod fwtar;
+mod pit;
 mod usb;
 mod util;
 
 use std::process::exit;
-
-const SAMSUNG_VID: u16 = 0x04e8;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -26,6 +38,8 @@ fn main() {
         eprintln!("usage: flashpilot-bridge <command> [args...]");
         eprintln!("commands:");
         eprintln!("  detect                 list USB devices (all + Samsung filter)");
+        eprintln!("  detect-merged          filter phones + merge USB/ADB into unified rows");
+        eprintln!("  setup-check            diagnose udev rules / permissions / ModemManager / usbmuxd setup");
         eprintln!("  hid-list               list HID interfaces on Samsung devices");
         eprintln!("  hid-open <path> <out>  send hex bytes <out> to HID report, print response hex");
         eprintln!("  bulk-list              list bulk endpoints on Samsung devices");
@@ -50,6 +64,7 @@ fn main() {
         eprintln!("  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)");
         eprintln!("  mtk-flash-samsung <t> <da> <fw_dir>  flash Samsung firmware dir (AP/BL etc, no scatter, via GPT)");
         eprintln!("  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)");
+        eprintln!("  mtk-verify-part <t> <da> <part=file>...  verify-after-write: read back + SHA-256 compare");
         eprintln!("  mtk-frp-gpt <t> <da>  FRP bypass resolving lock partitions from device GPT (no scatter)");
         eprintln!("  qcom-detect            detect Qualcomm EDL devices");
         eprintln!("  spd-detect             detect Spreadtrum/UNISOC download devices");
@@ -68,20 +83,46 @@ fn main() {
         eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
         eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
         eprintln!("  qcom-flash-one <t> <part> <img> <sector> <count>  flash one partition (Path+Duration wiring)");
+        eprintln!("  qcom-verify-part <t> <part=file>...  verify-after-write: read back + SHA-256 compare");
         eprintln!("  qcom-backup <t> <prog> <out>  backup partitions via Firehose");
         eprintln!("  qcom-partitions <t>    get partition table via Firehose");
         eprintln!("  qcom-reboot <t> <mode> reboot device (normal|edl|recovery|fastboot)");
         eprintln!("  qcom-info <t>          get device info via Sahara");
         eprintln!("  config-show            show AppConfig / MtkConfig / SamsungConfig defaults (wires config types)");
+        eprintln!("  mtk-crash-brom <bus:addr>  crash PRELOADER (2000) into BootROM\n");
         eprintln!("  mtk-brom-exploit <t> <type> [payload]  direct BROM exploit dispatch (wires mtk_brom_exploit)");
         eprintln!("  mtk-detect-extended    extended MTK detect (wires mtk_detect_extended + OperationContext)");
         eprintln!("  mtk-mem-probe <t>      probe BROM memory (wires read16/write16/write32/reset_device)");
         eprintln!("  mtk-reset <t>          reset MTK device via BROM (wires reset_device)");
-        eprintln!("  adb-devices            print `adb devices -l` output as JSON");
-        eprintln!("  adb-shell <cmd>        run `adb shell <cmd>`, print stdout");
+        eprintln!("  adb-devices            native ADB scan as `adb devices -l` JSON lines");
+        eprintln!("  flow-list              JSON registry of every flow (key, label, job, mode)");
+        eprintln!("  flow-run <key> [serial] [--code C] [--partition P] [--file F]");
+        eprintln!("  adb-shell <s|-> <ms> <cmd...>  native `adb shell` on serial (or first device)");
+        eprintln!("  adb-pull <s|-> <ms> <remote> <local>  native `adb pull` via sync");
+        eprintln!("  adb-push <s|-> <ms> <local> <remote>  native `adb push` via sync");
+        eprintln!("  fastboot-devices       list USB devices exposing a fastboot interface (JSON)");
+        eprintln!("  fastboot-cmd <t> <ms> <cmd...>  run one raw fastboot command on target (getvar/oem/erase/reboot)");
+        eprintln!("  pit-parse <file>       parse Samsung PIT: header + entries JSON");
+        eprintln!("  pit-model <file>       PIT header strings JSON (no magic check)");
+        eprintln!("  pit-health <file>      PIT forensic verdict JSON (always exit 0)");
+        eprintln!("  pit-find <file> <name> find one PIT entry by name (JSON or null)");
+        eprintln!("  pit-overlaps <file>    overlap pairs (all + significant) JSON");
+        eprintln!("  pac-parse <file>       parse SPD PAC container (JSON)");
+        eprintln!("  pac-extract <file> <dir>  extract PAC payloads (JSON file list)");
+        eprintln!("  pac-pack <dir> <out> [product]  pack folder into PAC");
+        eprintln!("  boot-info <img>        Android boot image header + prop list (JSON)");
+        eprintln!("  boot-patch-adb <in> <out>  patch boot ramdisk props for ADB (JSON summary)");
+        eprintln!("  vbmeta-patch <in> <out> [flags]  set AVB flags (JSON, false when not AVB)");
         eprintln!("  usb-config <t> <idx>   set USB configuration <idx> on target");
         eprintln!("  usb-detach-kernel <t>  detach kernel drivers (cdc_acm) from all interfaces");
         eprintln!("  at-send <t> <cmd> [ms]  send AT command over CDC ACM, read reply");
+        eprintln!("  at-auto-detect        auto-detect Samsung CDC ACM diag port (no target needed)");
+        eprintln!("  at-kg-unlock <t> [ms] KG lock bypass via AT+KSTRINGB/KGLOCK sequence");
+        eprintln!("  at-fuzz <t> <p1,p2> [ms] fuzz AT prefixes (e.g. KSTRINGB,KGLOCK,DEVCONINFO)");
+        eprintln!("  at-mdm-disable <t> [ms] MDM disable via AT+MDMCONFIG");
+        eprintln!("  at-carrier-unlock <t> [ms] carrier unlock via AT+CARRIERLOCK");
+        eprintln!("  unified-flash <t> <image>  auto-detect chip VID and dispatch flash");
+        eprintln!("  ai-fingerprint <t>        AI heuristic VID/PID/interface fingerprint for clones");
         eprintln!("  mtp-info <t> [ms]      MTP GetDeviceInfo: ops/events/properties supported");
         eprintln!("  odin-connect <t>       open Odin session to Samsung device");
         eprintln!("  odin-agent <t>         long-lived Odin session (JSON lines on stdin)");
@@ -96,8 +137,18 @@ fn main() {
     }
 
     let result = match args[1].as_str() {
-        "detect" => usb::detect(Some(SAMSUNG_VID)),
+        // All VIDs (not Samsung-only): a TECNO/Moto/Qualcomm ADB phone
+        // must appear in plain `detect` too - the Samsung filter is
+        // `detect`'s caller's choice (bridge.find_samsung filters in Python).
+        "detect" => usb::detect(None),
         "detect-all" => usb::detect(None),
+        "claim-test" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge claim-test <bus:address>");
+                exit(2);
+            }
+            usb::claim_test(&args[2])
+        }
         "hid-list" => hid::list_samsung_hid(),
         "hid-open" => {
             if args.len() < 4 {
@@ -182,14 +233,25 @@ fn main() {
                     exit(2);
                 }
             }
-            mtk_da::mtk_flash_part_cli(&target, &da, &entries)
+            // Verify-after-write is ON by default; --no-verify restores the
+            // legacy write+reboot behavior (no read-back compare).
+            let verify = !args.iter().skip(4).any(|a| a == "--no-verify");
+            mtk_da::mtk_flash_part_cli_v(&target, &da, &entries, verify)
         }
         "mtk-flash-samsung" => {
             if args.len() < 5 {
                 eprintln!("usage: flashpilot-bridge mtk-flash-samsung <target> <da_file> <firmware_dir>");
                 exit(2);
+            }            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
+        }
+        "mtk-frp-brom" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge mtk-frp-brom <target> <da_dir>");
+                eprintln!("  FRP bypass for ANY MediaTek device via BROM with the bundled");
+                eprintln!("  mtkclient DA containers (V5/V6) - no user-supplied DA needed.");
+                exit(2);
             }
-            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
+            mtk_da::mtk_frp_brom_auto(&args[2], &args[3])
         }
         "mtk-read-part" => {
             if args.len() < 6 {
@@ -197,6 +259,25 @@ fn main() {
                 exit(2);
             }
             mtk_da::mtk_read_part_cli(&args[2], &args[3], &args[4], &args[5])
+        }
+        "mtk-verify-part" => {
+            // mtk-verify-part <target> <da_file> <partition=file>...
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge mtk-verify-part <target> <da_file> <partition=file>...");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let da = args[3].clone();
+            let mut entries = Vec::new();
+            for e in &args[4..] {
+                if let Some((part, file)) = e.split_once('=') {
+                    entries.push((part.to_string(), file.to_string()));
+                } else {
+                    eprintln!("usage: entry must be partition=file, got '{e}'");
+                    exit(2);
+                }
+            }
+            mtk_da::mtk_verify_part_cli(&target, &da, &entries)
         }
         "mtk-frp" => {
             if args.len() < 4 {
@@ -357,12 +438,35 @@ fn main() {
         }
         "qcom-flash-one" => {
             if args.len() < 7 {
-                eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors>");
+                eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors> [--no-verify]");
                 exit(2);
             }
-            let start: u64 = args[5].parse().unwrap_or(0);
-            let count: u64 = args[6].parse().unwrap_or(0);
-            qualcomm::qcom_flash_one(&args[2], &args[3], std::path::Path::new(&args[4]), start, count)
+            let start: u64 = args[5].parse().map_err(|_| { eprintln!("bad start_sector: {}", args[5]); exit(2); }).unwrap_or(0);
+            let count: u64 = args[6].parse().map_err(|_| { eprintln!("bad num_sectors: {}", args[6]); exit(2); }).unwrap_or(0);
+            // Verify-after-write ON by default; --no-verify restores the
+            // legacy write+reset behavior. Also: malformed sector numbers
+            // are errors, never silent zeros (a zero-sector write is a
+            // brick vector).
+            let verify = !args.iter().skip(7).any(|a| a == "--no-verify");
+            qualcomm::qcom_flash_one_v(&args[2], &args[3], std::path::Path::new(&args[4]), start, count, verify)
+        }
+        "qcom-verify-part" => {
+            // qcom-verify-part <target> <partition=file>...
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge qcom-verify-part <target> <partition=file>...");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let mut entries = Vec::new();
+            for e in &args[3..] {
+                if let Some((part, file)) = e.split_once('=') {
+                    entries.push((part.to_string(), file.to_string()));
+                } else {
+                    eprintln!("usage: entry must be partition=file, got '{e}'");
+                    exit(2);
+                }
+            }
+            qualcomm::qcom_verify_part_cli(&target, &entries)
         }
         "config-show" => {
             let ctx = config::app_config_for_operation(None);
@@ -382,6 +486,21 @@ fn main() {
             let _ = crate::config::config_cache_path(&std::path::PathBuf::from("/tmp"));
             let _ = crate::config::ensure_cache_dir(&std::path::PathBuf::from("/tmp"));
             Ok(serde_json::to_string_pretty(&summary).unwrap())
+        }
+        "mtk-crash-brom" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge mtk-crash-brom <bus:addr>");
+                exit(2);
+            }
+            let loc: Vec<&str> = args[2].split(':').collect();
+            let (bus, addr) = match (loc.first(), loc.get(1)) {
+                (Some(b), Some(a)) => match (b.parse::<u8>(), a.parse::<u8>()) {
+                    (Ok(b), Ok(a)) => (b, a),
+                    _ => { eprintln!("error: bad bus:addr"); exit(2); }
+                },
+                _ => { eprintln!("error: target must be 'bus:addr'"); exit(2); }
+            };
+            mtk_exploit::preloader_crash_to_brom(bus, addr)
         }
         "mtk-brom-exploit" => {
             if args.len() < 4 {
@@ -664,8 +783,15 @@ fn main() {
                     rest.remove(0);
                 }
             }
+            // Verify-after-write ON by default; --no-verify restores the
+            // legacy write+reset behavior. The flag is filtered out of the
+            // entries (it contains no '=' so it would die as a bad entry).
+            let verify = !args.iter().any(|a| a == "--no-verify");
             let mut entries: Vec<(String, String)> = Vec::new();
             for tok in &rest {
+                if tok == "--no-verify" {
+                    continue;
+                }
                 if let Some(eq) = tok.find('=') {
                     entries.push((tok[..eq].to_string(), tok[eq + 1..].to_string()));
                 } else {
@@ -673,12 +799,184 @@ fn main() {
                     exit(2);
                 }
             }
-            spd::spd_flash_cli(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries)
+            spd::spd_flash_cli_v(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries, verify)
         }
-        "adb-devices" => adb::devices_json(),
+        "adb-devices" => {
+            // --no-probe: zero-touch presence listing (server rows +
+            // descriptor-triple rows, never open/claim/handshake). Poll,
+            // monitor and display paths MUST use this: native probing from
+            // a poll loop re-enumerates fragile hardware (USB modems)
+            // every cycle. Verified listing (default) stays for flows and
+            // explicit operations, which verify per-command anyway.
+            if args.iter().any(|a| a == "--no-probe") {
+                adb::devices_json_no_probe()
+            } else {
+                adb::devices_json()
+            }
+        }
+        "flow-list" => flows::flow_list_cli(),
+        "flow-run" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge flow-run <key> [serial] [--code CODE] [--partition NAME]");
+                exit(2);
+            }
+            flows::flow_run_cli(&args[2], &args[3..])
+        }
         "adb-shell" => {
-            let cmd = args[2..].join(" ");
-            adb::shell(&cmd)
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge adb-shell <serial|-> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::shell_cli(&args[2], timeout_ms, &args[4..])
+        }
+        "adb-shell-server" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge adb-shell-server <serial> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::server_shell_cli(&args[2], timeout_ms, &args[4..])
+        }
+        "adb-pull" => {
+            if args.len() != 6 {
+                eprintln!("usage: flashpilot-bridge adb-pull <serial|-> <timeout_ms> <remote> <local>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::pull_cli(&args[2], timeout_ms, &args[4], &args[5])
+        }
+        "adb-push" => {
+            if args.len() != 6 {
+                eprintln!("usage: flashpilot-bridge adb-push <serial|-> <timeout_ms> <local> <remote>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            adb::push_cli(&args[2], timeout_ms, &args[4], &args[5])
+        }
+        "fastboot-devices" => fastboot::fastboot_devices_cli(),
+        "pit-parse" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-parse <pit_file>");
+                exit(2);
+            }
+            pit::parse_cli(&args[2])
+        }
+        "pit-health" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-health <pit_file>");
+                exit(2);
+            }
+            pit::health_cli(&args[2])
+        }
+        "pit-model" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-model <pit_file>");
+                exit(2);
+            }
+            pit::model_cli(&args[2])
+        }
+        "pit-find" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge pit-find <pit_file> <name>");
+                exit(2);
+            }
+            pit::find_cli(&args[2], &args[3])
+        }
+        "pit-overlaps" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pit-overlaps <pit_file>");
+                exit(2);
+            }
+            pit::overlaps_cli(&args[2])
+        }
+        "pac-parse" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge pac-parse <pac_file>");
+                exit(2);
+            }
+            pac::parse_cli(&args[2])
+        }
+        "pac-extract" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge pac-extract <pac_file> <out_dir>");
+                exit(2);
+            }
+            pac::extract_cli(&args[2], &args[3])
+        }
+        "pac-pack" => {
+            if args.len() < 4 || args.len() > 5 {
+                eprintln!("usage: flashpilot-bridge pac-pack <in_dir> <out_pac> [product]");
+                exit(2);
+            }
+            let product = args.get(4).map(|s| s.as_str()).unwrap_or("");
+            pac::pack_cli(&args[2], &args[3], product)
+        }
+        "boot-info" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge boot-info <boot_img>");
+                exit(2);
+            }
+            imgtools::boot_info_cli(&args[2])
+        }
+        "boot-patch-adb" => {
+            if args.len() != 4 {
+                eprintln!("usage: flashpilot-bridge boot-patch-adb <in.img> <out.img>");
+                exit(2);
+            }
+            imgtools::boot_patch_adb_cli(&args[2], &args[3])
+        }
+        "vbmeta-patch" => {
+            if args.len() < 4 || args.len() > 5 {
+                eprintln!("usage: flashpilot-bridge vbmeta-patch <in> <out> [flags]");
+                exit(2);
+            }
+            let flags: u32 = args
+                .get(4)
+                .map(|s| {
+                    let t = s.trim_start_matches("0x").trim_start_matches("0X");
+                    u32::from_str_radix(t, 16).unwrap_or(0x03)
+                })
+                .unwrap_or(0x03);
+            imgtools::vbmeta_patch_cli(&args[2], &args[3], flags)
+        }
+        "fastboot-cmd" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge fastboot-cmd <vid:pid@bus:addr> <timeout_ms> <cmd...>");
+                exit(2);
+            }
+            let timeout_ms: u64 = match args[3].parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("bad timeout_ms: {}", args[3]);
+                    exit(2);
+                }
+            };
+            fastboot::fastboot_cmd_cli(&args[2], timeout_ms, &args[4..])
         }
         "usb-config" => {
             if args.len() < 4 {
@@ -709,6 +1007,53 @@ fn main() {
             let timeout_ms = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3000);
             at::at_send(&args[2], &args[3], timeout_ms)
         }
+        "at-auto-detect" => at::at_auto_detect(),
+        "at-kg-unlock" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-kg-unlock <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4000);
+            at::at_kg_unlock(&args[2], timeout_ms)
+        }
+        "at-fuzz" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge at-fuzz <target> <p1,p2,...> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(2000);
+            at::at_fuzz(&args[2], &args[3], timeout_ms)
+        }
+        "at-mdm-disable" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-mdm-disable <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3500);
+            at::at_mdm_disable(&args[2], timeout_ms)
+        }
+        "at-carrier-unlock" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge at-carrier-unlock <target> [timeout_ms]");
+                exit(2);
+            }
+            let timeout_ms = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3500);
+            at::at_carrier_unlock(&args[2], timeout_ms)
+        }
+        "unified-flash" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge unified-flash <target> <image>");
+                exit(2);
+            }
+            at::unified_flash(&args[2], &args[3])
+        }
+        "ai-fingerprint" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge ai-fingerprint <target>");
+                exit(2);
+            }
+            at::ai_fingerprint(&args[2])
+        }
         "mtp-info" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge mtp-info <target> [timeout_ms]");
@@ -722,35 +1067,44 @@ fn main() {
                 eprintln!("usage: flashpilot-bridge odin-connect <target>");
                 exit(2);
             }
-            odin::odin_connect(&args[2])
+            sam_download::odin_connect(&args[2])
         }
         "odin-pit" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-pit <target> [outfile]");
                 exit(2);
             }
-            odin::odin_pit(&args[2], args.get(3).map(|s| s.as_str()))
+            sam_download::odin_pit(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-pit-mtk" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-pit-mtk <target> [outfile]");
                 exit(2);
             }
-            odin::odin_pit_mtk(&args[2], args.get(3).map(|s| s.as_str()))
+            sam_download::odin_pit_mtk(&args[2], args.get(3).map(|s| s.as_str()))
         }
         "odin-info" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge odin-info <target> <pit_file>");
                 exit(2);
             }
-            odin::odin_info(&args[2], &args[3])
+            sam_download::odin_info(&args[2], &args[3])
         }
         "odin-model" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-model <target>");
                 exit(2);
             }
-            odin::odin_model(&args[2])
+            sam_download::odin_model(&args[2])
+        }
+        "odin-flash-tar" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge odin-flash-tar <target> <tar> [--allow-unknown] [--reboot]");
+                exit(2);
+            }
+            let allow_unknown = args.iter().any(|a| a == "--allow-unknown");
+            let reboot = args.iter().any(|a| a == "--reboot");
+            sam_download::odin_flash_tar(&args[2], &args[3], allow_unknown, reboot)
         }
         "odin-flash" => {
             if args.len() < 6 {
@@ -758,21 +1112,86 @@ fn main() {
                 exit(2);
             }
             let image = &args[5];
-            odin::odin_flash_partition(&args[2], &args[3], &args[4], image)
+            sam_download::odin_flash_partition(&args[2], &args[3], &args[4], image)
         }
         "odin-send-pit" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge odin-send-pit <target> <pit_file>");
                 exit(2);
             }
-            odin::odin_send_pit(&args[2], &args[3])
+            sam_download::odin_send_pit(&args[2], &args[3])
+        }
+        "usb-claim-test" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge usb-claim-test <vid:pid@bus:addr>");
+                exit(2);
+            }
+            usb::claim_test(&args[2])
+        }
+        "verify-target" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge verify-target <vid:pid@bus:addr|bus:addr> <serial|->");
+                eprintln!("  Zero-touch identity check: the stored target must still");
+                eprintln!("  belong to the same device (serial match). A different");
+                eprintln!("  serial at the address = device replaced — never follow.");
+                exit(2);
+            }
+            usb::verify_target_identity(&args[2], &args[3])
+        }
+        "usb-reset" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge usb-reset <vid:pid@bus:addr>");
+                exit(2);
+            }
+            usb::usb_reset(&args[2])
+        }
+        "emmc-host" => hostinfo::emmc_host_cli(),
+        "setup-check" => {
+            let with_apple = args.iter().any(|a| a == "--apple");
+            sam_setup::setup_check(with_apple)
+        }
+        "apple-detect" => apple::apple_detect_cli(),
+        "apple-info" => apple::apple_info_cli(),
+        "detect-merged" => {
+            if args.len() > 3 {
+                eprintln!("usage: flashpilot-bridge detect-merged [--vid 0xXXXX]");
+                exit(2);
+            }
+            let vid_filter = args.iter().skip(2).find(|s| s.starts_with("--vid")).and_then(|s| {
+                s.strip_prefix("--vid=").or_else(|| s.strip_prefix("--vid")).and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            });
+            devices::list_devices_filtered_vid(vid_filter)
         }
         "odin-agent" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge odin-agent <target>");
                 exit(2);
             }
-            odin::odin_agent(&args[2])
+            sam_download::odin_agent(&args[2])
+        }
+        "actions-for" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge actions-for <device-key>");
+                eprintln!("  device-key: adb:<serial> | usb:<port-path> | usb:<vid>:<pid>@<bus>:<addr>");
+                exit(2);
+            }
+            device::actions_for_key(&args[2])
+        }
+        "validate-action" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge validate-action <device-key> <action-id>");
+                exit(2);
+            }
+            (|| -> crate::error::Result<String> {
+                let profile = device::profile_for_key(&args[2])?;
+                let def = device::validate_action(&profile, &args[3])?;
+                Ok(serde_json::json!({
+                    "allowed": true,
+                    "key": profile.key,
+                    "action": {"id": def.id, "display_name": def.display_name},
+                })
+                .to_string())
+            })()
         }
         "odin-flash-multi" => {
             if args.len() < 6 {
@@ -794,7 +1213,7 @@ fn main() {
                 .iter()
                 .map(|(p, f)| (p.as_str(), f.as_str()))
                 .collect();
-            odin::odin_flash_multi(&args[2], &args[3], &refs, reboot)
+            sam_download::odin_flash_multi(&args[2], &args[3], &refs, reboot)
         }
         other => {
             eprintln!("unknown command: {other}");
@@ -805,8 +1224,105 @@ fn main() {
     match result {
         Ok(out) => println!("{out}"),
         Err(e) => {
-            eprintln!("error: {e}");
+            // Device identity context: every error line names the device
+            // reference it ran against, so concurrent-device logs answer
+            // "which device did this fail on". Explicit allowlist — file
+            // paths must never be sniffed as device targets.
+            if let Some(dev) = device_arg(args.get(1).map(|s| s.as_str()).unwrap_or(""), args.get(2)) {
+                eprintln!("error: {e} [device {dev}]");
+            } else {
+                eprintln!("error: {e}");
+            }
+            // Actionable explanation: convert raw protocol/USB errors into
+            // (why, fix) pairs so users know what to do next.
+            let hint = sam_errors::render(&e.to_string());
+            if !hint.is_empty() {
+                eprintln!("{hint}");
+            }
             exit(1);
         }
+    }
+}
+
+/// `args[2]` is a device reference for these commands (target, serial or
+/// key). Returns it for error-line context. Keep in sync with the dispatch
+/// above; commands not listed get no context (safe default).
+fn device_arg(cmd: &str, arg2: Option<&String>) -> Option<String> {
+    let takes_device = matches!(
+        cmd,
+        "claim-test"
+            | "bulk-send"
+            | "bulk-session"
+            | "mtk-da-upload"
+            | "mtk-flash"
+            | "mtk-backup"
+            | "mtk-gpt"
+            | "mtk-flash-part"
+            | "mtk-flash-samsung"
+            | "mtk-read-part"
+            | "mtk-verify-part"
+            | "mtk-frp"
+            | "mtk-frp-gpt"
+            | "mtk-frp-brom"
+            | "mtk-adb-enable"
+            | "mtk-reboot"
+            | "mtk-factory"
+            | "mtk-emergency"
+            | "mtk-bypass"
+            | "mtk-dealer"
+            | "mtk-emergency-mode"
+            | "mtk-exploit"
+            | "mtk-crash-brom"
+            | "mtk-brom-exploit"
+            | "mtk-mem-probe"
+            | "mtk-reset"
+            | "qcom-sahara"
+            | "qcom-firehose"
+            | "qcom-flash"
+            | "qcom-flash-one"
+            | "qcom-verify-part"
+            | "qcom-backup"
+            | "qcom-partitions"
+            | "qcom-reboot"
+            | "qcom-info"
+            | "qcom-frp-reset"
+            | "spd-info"
+            | "spd-format"
+            | "spd-frp"
+            | "spd-backup"
+            | "spd-partitions"
+            | "spd-reset"
+            | "spd-readback"
+            | "spd-boot"
+            | "spd-flash"
+            | "adb-shell"
+            | "adb-pull"
+            | "adb-push"
+            | "fastboot-cmd"
+            | "usb-config"
+            | "usb-detach-kernel"
+            | "usb-reset"
+            | "usb-claim-test"
+            | "at-send"
+            | "at-kg-unlock"
+            | "at-mdm-disable"
+            | "at-carrier-unlock"
+            | "odin-connect"
+            | "odin-pit"
+            | "odin-pit-mtk"
+            | "odin-info"
+            | "odin-model"
+            | "odin-flash-tar"
+            | "odin-flash"
+            | "odin-send-pit"
+            | "odin-agent"
+            | "odin-flash-multi"
+            | "actions-for"
+            | "validate-action"
+    );
+    if takes_device {
+        arg2.cloned()
+    } else {
+        None
     }
 }

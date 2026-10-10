@@ -24,8 +24,8 @@ Description: Open-source FRP reset and firmware flashing toolbox
   * Bundled Python venv (PyQt6 + segno) - only the matching python3 minor is
     required, no distro Qt packages.
  .
- NOTE: the proprietary Samsung odin4 binary is not redistributed; fetch it
- after install with /usr/share/flashpilot/scripts/fetch-odin4.sh.
+ The Samsung download-mode flashing is fully native (Rust Odin protocol in
+ flashpilot-bridge) - no proprietary odin4 binary is used or shipped.
  .
  WARNING: this tool talks directly to bootloaders and can wipe data or brick a
  device. Use only on devices you own or are authorized to service.

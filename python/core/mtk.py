@@ -4,8 +4,10 @@ The Samsung A05/A06 family is powered by MediaTek SoCs. Those boot a
 proprietary MediaTek download agent that open-source Odin tools cannot talk
 to, but they also expose the classic MediaTek low-level USB modes:
 
-  BROM      (PID 0x2000)  - the first code that runs; held state
-  Preloader (PID 0x0003)  - first bootloader stage, waits for the DA
+  BROM      (PID 0x0003)  - the first code that runs; held state
+                                ("MediaTek USB Port")
+  Preloader (PID 0x2000)  - first bootloader stage, waits for the DA
+                                ("MT65xx Preloader")
   DA        (PID 0x0004)  - Download Agent running (flashing active)
 
 The rust bridge's `mtk-detect` command enumerates MediaTek USB devices
@@ -50,8 +52,8 @@ BOOT_STAGE = {
 
 # pid -> boot stage (for USB-detect entries that lack mtk-detect data).
 _PID_STAGE = {
-    0x2000: "brom",
-    0x0003: "preloader",
+    0x0003: "brom",
+    0x2000: "preloader",
     0x0004: "da",
     0x1004: "da",
     0x0a0a: "mtk-adb",
@@ -66,9 +68,13 @@ def pid_stage(pid):
 
 
 def find_mtk():
-    """Return the list of MediaTek USB device dicts (VID 0x0e8d)."""
+    """Return the list of MediaTek USB device dicts (VID 0x0e8d).
+
+    Scans the UNFILTERED bus list — bridge.detect_usb() is Samsung-filtered
+    (04e8) and would never yield MTK devices, which is why BROM/preloader
+    polling used to see '0 devices' even with a phone in BROM mode."""
     try:
-        return [d for d in bridge.detect_usb() if d.get("vid") == MTK_VID]
+        return [d for d in bridge.detect_all() if d.get("vid") == MTK_VID]
     except bridge.BridgeError:
         return []
 

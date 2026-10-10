@@ -8,17 +8,18 @@ use rusb::{Context, UsbContext};
 pub const MTK_VID: u16 = 0x0e8d;
 
 /// MediaTek boot-stage USB PIDs seen on Samsung A05/A06 (Helio G85).
-/// 0x2000 = BootROM held in "USB" state, 0x0003 = preloader,
-/// 0x0004 = Download Agent (DA) after the DA handshake.
+/// Follows mtkclient convention: 0x0003 = BootROM ("MediaTek USB Port",
+/// held state), 0x2000 = preloader ("MT65xx Preloader", first bootloader
+/// stage), 0x0004 = Download Agent (DA) after the DA handshake.
 pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
     match pid {
-        0x2000 => (
+        0x0003 => (
             "brom",
             "MediaTek BootROM (held state) - the very first code that runs. \
              This is the state used for low-level chip unlock, preloader and \
              partition reads via mtkclient.",
         ),
-        0x0003 => (
+        0x2000 => (
             "preloader",
             "MediaTek Preloader - first bootloader stage. It waits for the \
              Download Agent (DA) handshake before flashing anything.",
@@ -43,7 +44,9 @@ pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
 /// PIDs for which mtkclient's `run_handshake` starts WITHOUT the extra leading
 /// 0xA0 sync byte (the preloader and preloader-variant PIDs echo the sync
 /// sequence directly; the held BootROM wants the wake byte first).
-pub const SYNC_NO_EXTRA_BYTE: &[u16] = &[0x0003, 0xf200, 0xd1e9, 0xd1e2, 0xd1ec, 0xd1dd];
+pub const SYNC_NO_EXTRA_BYTE: &[u16] = &[
+    0x0003, 0x2000, 0x2001, 0xf200, 0xd1e9, 0xd1e2, 0xd1ec, 0xd1dd,
+];
 
 /// The BROM sync sequence. Each byte is echoed back complemented (~byte).
 pub const SYNC_BYTES: &[u8] = &[0xa0, 0x0a, 0x50, 0x05];
@@ -180,8 +183,23 @@ impl BromSession {
 
     /// Discard any stale input before a (re)attempt.
     pub fn flush(&self) {
-        let mut junk = [0u8; 64];
-        let _ = self.handle.read_bulk(self.in_ep, &mut junk, Duration::from_millis(30));
+        // Drain RX until the device is silent for a full window (stale
+        // bursts / echoed junk from earlier failed attempts otherwise
+        // poison the very first sync read).
+        let mut junk = [0u8; 512];
+        let mut quiet = 0;
+        for _ in 0..16 {
+            match self.handle.read_bulk(self.in_ep, &mut junk,
+                                        Duration::from_millis(40)) {
+                Ok(n) if n > 0 => quiet = 0,
+                _ => {
+                    quiet += 1;
+                    if quiet >= 2 {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// Echo-protocol write of `data`: the device echoes the bytes back.
@@ -425,6 +443,13 @@ impl BromSession {
                 return Err(format!("SLA send auth status 0x{status:04x}"));
             }
             let challenge_length = self.rdword()?;
+            // Device-controlled length: a malfunctioning/malicious BROM
+            // answering 0xFFFF_FFFF would force a 4 GiB allocation
+            // (allocator abort). Real SLA challenges are a few hundred
+            // bytes; reject anything implausible before allocating.
+            if challenge_length > 4096 {
+                return Err(format!("SLA challenge length implausible: {challenge_length}"));
+            }
             let challenge = self.read_exact(challenge_length as usize, Duration::from_secs(5))?;
             let response = crate::mtk_sla::generate_brom_sla_challenge(&challenge, key);
             let resplen = response.len();
@@ -498,6 +523,13 @@ impl BromSession {
             return Err(format!("brom_register_access status 0x{status:04x}"));
         }
         if mode == 0 || mode == 2 {
+            // `length` is caller-supplied but this primitive is public: cap
+            // it so a huge value can never turn into a giant allocation
+            // inside read_exact. Legitimate register reads are bytes;
+            // preloader dumps already bound themselves to 0x400000.
+            if length > 16 * 1024 * 1024 {
+                return Err(format!("brom_register_access length implausible: {length}"));
+            }
             let out = self.read_exact(length as usize, Duration::from_secs(30))?;
             if check_status {
                 let status2 = self.read_exact(2, Duration::from_secs(1))?;
@@ -561,7 +593,7 @@ impl BromSession {
 /// Best-effort BROM/preloader handshake, mirroring mtkclient `Port.run_handshake`.
 ///
 /// The sync sequence `a0 0a 50 05` is written one byte at a time; each byte is
-/// echoed back complemented (`5f f5 af fa`). A held BootROM (pid 0x2000) gets a
+/// echoed back complemented (`5f f5 af fa`). A held BootROM (pid 0x0003) gets a
 /// wake byte 0xA0 first. The handshake succeeds only if all four echoes match.
 /// Protected chips / bad entry states just never echo, which is reported, not fatal.
 pub fn brom_handshake(
@@ -588,6 +620,8 @@ pub fn brom_handshake(
     handle
         .claim_interface(iface.number)
         .map_err(|e| format!("claim interface {}: {e}", iface.number))?;
+    // give the preloader/BROM a moment after open before syncing
+    std::thread::sleep(Duration::from_millis(250));
 
     let session = BromSession {
         handle,
@@ -595,6 +629,7 @@ pub fn brom_handshake(
         in_ep,
         out_ep,
     };
+    session.flush();
     session.flush();
 
     if !SYNC_NO_EXTRA_BYTE.contains(&dev.pid) {
@@ -612,11 +647,19 @@ pub fn brom_handshake(
                 break;
             }
             match session.read_exact(1, Duration::from_millis(600)) {
-                Ok(r) if r[0] == (!b) & 0xff => {}
+                Ok(r) if r[0] == !b => {}
+                Ok(r) if r[0] == b => {
+                    last_err = format!(
+                        "device echoed our own byte 0x{:02x} verbatim - this is NOT a handshake-capable BootROM/preloader state (wrong entry mode or protected SoC). Enter true BROM (power fully off, battery out if possible, plug cable) and retry.",
+                        b
+                    );
+                    ok = false;
+                    break;
+                }
                 Ok(r) => {
                     last_err = format!(
                         "sync echo mismatch: sent 0x{b:02x}, expected 0x{:02x}, got 0x{:02x}",
-                        (!b) & 0xff,
+                        !b,
                         r[0]
                     );
                     ok = false;
@@ -842,8 +885,10 @@ mod tests {
 
     #[test]
     fn stage_mapping() {
-        assert_eq!(boot_stage_for(0x2000).0, "brom");
-        assert_eq!(boot_stage_for(0x0003).0, "preloader");
+        // mtkclient convention: 0x0003 = BootROM ("MediaTek USB Port"),
+        // 0x2000 = preloader ("MT65xx Preloader").
+        assert_eq!(boot_stage_for(0x0003).0, "brom");
+        assert_eq!(boot_stage_for(0x2000).0, "preloader");
         assert_eq!(boot_stage_for(0x0004).0, "da");
         assert_eq!(boot_stage_for(0x1004).0, "da");
         assert_eq!(boot_stage_for(0x0a0a).0, "mtk-adb");

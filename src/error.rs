@@ -67,6 +67,9 @@ pub enum FirmwareError {
     ScatterParseError(String),
     MismatchedVbmeta,
     VerificationFailed,
+    /// Firmware container itself is hostile (path traversal, absolute
+    /// members, tampered metadata) — rejected before extraction/flash.
+    ArchiveError(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +79,8 @@ pub enum AuthError {
     BootloaderLocked,
     InvalidCredentials,
     ExploitFailed(String),
+    /// ADB RSA authorization rejected (or user never tapped Allow).
+    Unauthorized(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +91,14 @@ pub enum DeviceStateError {
     NotInPreloaderMode,
     DeviceBusy,
     RebootRequired,
+    /// Unscoped target ("auto"/first-device) with several candidates: the
+    /// caller must pin an explicit serial/transport instead of letting the
+    /// backend guess. `count` is the number of matching devices.
+    AmbiguousTarget { count: usize },
+    /// A DIFFERENT device now occupies the target's bus:addr (device
+    /// replaced / re-enumerated onto a reused address). The stored
+    /// transport may not be followed — the identity must be revalidated.
+    DeviceIdentityChanged { key: String, current_serial: String },
 }
 
 impl fmt::Display for BridgeError {
@@ -154,6 +167,7 @@ impl fmt::Display for FirmwareError {
             FirmwareError::ScatterParseError(s) => write!(f, "Scatter parse error: {}", s),
             FirmwareError::MismatchedVbmeta => write!(f, "Mismatched vbmeta"),
             FirmwareError::VerificationFailed => write!(f, "Verification failed"),
+            FirmwareError::ArchiveError(s) => write!(f, "Firmware archive rejected: {}", s),
         }
     }
 }
@@ -166,6 +180,7 @@ impl fmt::Display for AuthError {
             AuthError::BootloaderLocked => write!(f, "Bootloader locked"),
             AuthError::InvalidCredentials => write!(f, "Invalid credentials"),
             AuthError::ExploitFailed(s) => write!(f, "Exploit failed: {}", s),
+            AuthError::Unauthorized(s) => write!(f, "Unauthorized: {}", s),
         }
     }
 }
@@ -179,6 +194,14 @@ impl fmt::Display for DeviceStateError {
             DeviceStateError::NotInPreloaderMode => write!(f, "Not in preloader mode"),
             DeviceStateError::DeviceBusy => write!(f, "Device busy"),
             DeviceStateError::RebootRequired => write!(f, "Reboot required"),
+            DeviceStateError::AmbiguousTarget { count } => write!(
+                f,
+                "Ambiguous target: {count} devices match — specify an explicit serial/transport"
+            ),
+            DeviceStateError::DeviceIdentityChanged { key, current_serial } => write!(
+                f,
+                "Device identity changed at the stored transport (device replaced or re-enumerated onto a reused address): {key} is now serial '{current_serial}' — revalidate before operating"
+            ),
         }
     }
 }
@@ -231,3 +254,12 @@ impl From<BridgeError> for String {
         e.to_string()
     }
 }
+
+use std::sync::atomic::{AtomicBool, Ordering};
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+
+#[allow(dead_code)]
+pub fn request_cancel() { CANCEL_FLAG.store(true, Ordering::SeqCst); }
+#[allow(dead_code)]
+pub fn clear_cancel() { CANCEL_FLAG.store(false, Ordering::SeqCst); }
+pub fn cancel_requested() -> bool { CANCEL_FLAG.load(Ordering::SeqCst) }
