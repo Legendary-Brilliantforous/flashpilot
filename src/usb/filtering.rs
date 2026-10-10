@@ -33,6 +33,7 @@ const ANDROID_GENERIC_VIDS: &[u16] = &[
     0x12D1, // Huawei
     0x22D9, // ZTE
     0x2AE5, // OnePlus
+    0x22B8, // Motorola
 ];
 
 /// Keywords in product/manufacturer that indicate a phone
@@ -193,7 +194,20 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
     let vid = usb.vid;
     let pid = usb.pid;
 
-    let has_adb_iface = usb.interfaces.iter().any(|i| i.class == 255 && i.subclass == 66);
+    // vendor(66) subclass 66: protocol 1 = ADB, protocol 3 = FASTBOOT. The
+    // blanket check conflated them — a fastboot composite (255/66/3) was
+    // labeled ADB, and the fastboot transports never surfaced.
+    let has_adb_iface = usb
+        .interfaces
+        .iter()
+        .any(|i| i.class == 255 && i.subclass == 66 && i.protocol == 1);
+    let has_fastboot_iface = usb
+        .interfaces
+        .iter()
+        .any(|i| i.class == 255 && i.subclass == 66 && i.protocol == 3);
+    if has_fastboot_iface {
+        transports.push("FASTBOOT".to_string());
+    }
     if has_adb_iface {
         transports.push("ADB".to_string());
     }
@@ -220,8 +234,13 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
             0x0004 | 0x1004 => transports.push("MTK".to_string()),
             _ => {}
         }
-    } else if vid == 0x05C6 && pid == 0x9008 {
+    } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) {
+        // The whole Sahara/EDL family: 0x9008 (EDL), 0x9006 (Diag 9006 /
+        // alt EDL), 0x900E, 0x901D, ... — one entry per mode table.
         transports.push("EDL".to_string());
+    } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) {
+        // Qualcomm diag/modem PIDs outside the EDL family (0x9091 DIAG ...).
+        transports.push("DIAG".to_string());
     } else if vid == 0x18D1 {
         transports.push("FASTBOOT".to_string());
     } else if vid == 0x1782 {
@@ -229,12 +248,17 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
     }
 
     if transports.is_empty() {
-        // Unmatched non-Samsung device (vendor-specific/diag composites,
-        // mass-storage, readers): "USB" — NOT "MTP". The MTP label made
-        // every unmatched device look like a media-transfer phone, and
-        // MTP-mode pickers then offered ops against hardware that has no
-        // MTP interface at all.
-        transports.push("USB".to_string());
+        // A device with an actual MTP/still-image interface (class 6) IS a
+        // media-transfer phone (e.g. a Tecno in normal boot 0e8d:2008).
+        // Hardware with NO MTP interface keeps the honest "USB" label
+        // (readers, diag composites, mass-storage) — the blanket MTP label
+        // used to offer MTP-mode ops against hardware that has no MTP
+        // interface at all.
+        if usb.interfaces.iter().any(|i| i.class == 6) {
+            transports.push("MTP".to_string());
+        } else {
+            transports.push("USB".to_string());
+        }
     }
 
     let mut seen = HashSet::new();
@@ -402,10 +426,24 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             0x0004 | 0x1004 => "mediatek-da".to_string(),
             _ => "mediatek".to_string(),
         },
-        0x05C6 if pid == 0x9008 => "qualcomm-edl".to_string(),
+        0x05C6 if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) => {
+            "qualcomm-edl".to_string()
+        }
+        0x05C6 if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) => {
+            "qualcomm-diag".to_string()
+        }
         0x18D1 => "fastboot".to_string(),
         0x1782 => "spd".to_string(),
         0x05AC => "apple".to_string(),
+        0x22B8 => {
+            if has_adb_iface {
+                return "motorola-adb".to_string();
+            }
+            if interfaces.iter().any(|i| i.class == 6) {
+                return "motorola-mtp".to_string();
+            }
+            "motorola".to_string()
+        }
         _ if has_adb_iface => "android-adb".to_string(),
         _ if interfaces.iter().any(|i| i.class == 6) => "android-mtp".to_string(),
         _ => "other".to_string(),
@@ -489,6 +527,61 @@ mod tests {
     }
 
     #[test]
+    fn classify_mode_qualcomm_edl_family_and_diag() {
+        // The full EDL/Sahara family (the 9008 row + alt EDL 9006 + 900E...).
+        assert_eq!(classify_mode(0x05C6, 0x9008, &[]), "qualcomm-edl");
+        assert_eq!(classify_mode(0x05C6, 0x9006, &[]), "qualcomm-edl");
+        assert_eq!(classify_mode(0x05C6, 0x900E, &[]), "qualcomm-edl");
+        // Diag PIDs outside the EDL family stay diag, not edl.
+        assert_eq!(classify_mode(0x05C6, 0x9091, &[]), "qualcomm-diag");
+        // Unknown Qualcomm PIDs fall to classify_mode's generic "other".
+        assert_eq!(classify_mode(0x05C6, 0x1234, &[]), "other");
+    }
+
+    #[test]
+    fn compute_transports_qualcomm_edl_and_diag() {
+        // 9008 → EDL; 9006/900E (Diag family) also map to the EDL transport
+        // so the EDL flows can be offered; plain DIAG pids → DIAG.
+        let adb: HashSet<String> = HashSet::new();
+        assert_eq!(
+            compute_transports(&dev(0x05C6, 0x9008, None, vec![]), &adb),
+            vec!["EDL".to_string()]
+        );
+        assert_eq!(
+            compute_transports(&dev(0x05C6, 0x9006, None, vec![]), &adb),
+            vec!["EDL".to_string()]
+        );
+        assert_eq!(
+            compute_transports(&dev(0x05C6, 0x9091, None, vec![]), &adb),
+            vec!["DIAG".to_string()]
+        );
+    }
+
+    #[test]
+    fn classify_mode_motorola() {
+        // Moto G6 `ali` MTP (no strings on some units): VID-based branch.
+        assert_eq!(classify_mode(0x22B8, 0x2E2C, &[]), "motorola");
+        // ADB composite (255/66/1).
+        assert_eq!(
+            classify_mode(
+                0x22B8,
+                0x2E80,
+                &[InterfaceInfo { number: 0, class: 255, subclass: 66, protocol: 1, endpoints: vec![] }]
+            ),
+            "motorola-adb"
+        );
+        // MTP (image class 6).
+        assert_eq!(
+            classify_mode(
+                0x22B8,
+                0x2E82,
+                &[InterfaceInfo { number: 0, class: 6, subclass: 1, protocol: 1, endpoints: vec![] }]
+            ),
+            "motorola-mtp"
+        );
+    }
+
+    #[test]
     fn merge_usb_adb_by_serial() {
         let mut usb = dev(0x04E8, 0x685D, Some("Samsung Galaxy"), vec![]);
         usb.serial = Some("R9X".to_string());
@@ -500,6 +593,28 @@ mod tests {
         assert_eq!(merged[0].key, "adb:R9X");
         assert!(merged[0].usb.is_some());
         assert!(merged[0].adb.is_some());
+    }
+
+    #[test]
+    fn compute_transports_mtk_image_iface_is_mtp_not_usb() {
+        // Regression: a Tecno in normal boot (0e8d:2008, still-image/MTP
+        // interface) matched no flashing PID and fell through to "USB".
+        let serials: HashSet<String> = HashSet::new();
+        let tecno = dev(
+            0x0E8D,
+            0x2008,
+            Some("Android ADB Interface"),
+            vec![InterfaceInfo { number: 0, class: 6, subclass: 1, protocol: 1, endpoints: vec![] }],
+        );
+        assert_eq!(compute_transports(&tecno, &serials), vec!["MTP".to_string()]);
+
+        // Hardware with no MTP interface keeps the honest "USB" label.
+        let modem = dev(0x413C, 0x818D, None, vec![]);
+        assert_eq!(compute_transports(&modem, &serials), vec!["USB".to_string()]);
+
+        // Flashing-mode PIDs keep their MTK transports.
+        let brom = dev(0x0E8D, 0x0003, None, vec![]);
+        assert_eq!(compute_transports(&brom, &serials), vec!["MTK BROM".to_string()]);
     }
 }
 #[cfg(test)]

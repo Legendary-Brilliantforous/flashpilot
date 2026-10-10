@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -65,13 +66,17 @@ _ACTION_META = {
     "tecno_device_info":     ("Device Check",     "ℹ", "Getprop dump + OEM fingerprint + lock state (TECNO Spark 10/20/10C)"),
     "tecno_enable_adb":      ("Enable ADB",       "⚙", "On-device secret code *#*#49#*#* (UMS9230) + BROM fallback (TECNO Spark 10/20/10C)"),
     "moto_frp_adb":          ("FRP Remove · ADB", "⚡", "Any Motorola/Lenovo on authorized ADB: zero frp flag + provision + disable Google/Moto setup wizards"),
-    "moto_frp_fastboot":     ("FRP Remove · FB",  "🛠", "Any Motorola/Lenovo: oem get_unlock_data → unlock code → erase frp + cache"),
-    "moto_oem_unlock_token": ("Unlock Token",     "ℹ", "Read-only: dump oem get_unlock_data and guide the Motorola unlock portal"),
+    "moto_frp_fastboot":     ("FRP Fastboot Remove", "🛠", "CVE-2016-10277 (initroot): fsg-id cmdline injection → per-device initramfs → root ADB → wipe FRP. Needs --file initramfs + --partition scratch addr"),
+    "moto_frp":              ("FRP Remove",       "⚡", "Adaptive: ADB FRP remove when ADB is enabled, else the fastboot CVE-2016-10277 chain"),
+    "frp_fake_login":        ("Fake Login · QR", "📷", "Own DPC (org.flashpilot.dpc) QR enrollment in the wizard: marks setup complete + enables ADB, then clears FRP"),
+    "frp_fake_login_testdpc": ("Fake Login · TestDPC", "📷", "TestDPC QR enrollment in the wizard, then FRP clear over ADB"),
+    "frp_fake_login_adp":     ("Fake Login · DevPolicy", "📷", "Android Device Policy QR enrollment in the wizard, then FRP clear over ADB"),
     "apple_icloud_remove": ("iCloud Remove",     "🧪", "EXPERIMENTAL — DFU/ramdisk iCloud remove (usbmuxd). Educational, own device only (at-apple-icloud-remove)."),
     "apple_icloud_add":    ("iCloud Add",        "🧪", "EXPERIMENTAL — Push activation plist via lockdownd (at-apple-icloud-add)."),
     "health":              ("Health Report",     "🧪", "EXPERIMENTAL — Device health JSON + HTML/PDF (health_report)."),
     "pac_extract":         ("PAC Extract",       "🧪", "EXPERIMENTAL — Extract SPD PAC container (pac_extract)."),
     "pac_pack":            ("PAC Pack",          "🧪", "EXPERIMENTAL — Pack folder to PAC (pac_pack)."),
+    "ofp_extract":         ("OFP Extract",       "🧪", "EXPERIMENTAL — Oppo OFP detect + plain-extract, refuses encrypted (ofp_extract)."),
     "knox_check":          ("Knox Check",        "🧪", "EXPERIMENTAL — Knox warranty/KG read (knox_check)."),
     "knox_bypass":         ("Knox Bypass",       "🧪", "EXPERIMENTAL — Knox eFuse trip (irreversible, edu)."),
     "qcn_backup":          ("QCN Backup",        "🧪", "EXPERIMENTAL — modemst1/2 backup (qcn_backup)."),
@@ -285,15 +290,19 @@ def _build_model_page(win, brand, m, back):
                 ("apple_icloud_add", "Push activation plist via lockdownd", "➕"),
             ]),
             ("DEVICE CHECK", [
-                ("info", "Lockdown / DFU device info", "ℹ"),
+                ("apple_info", "Lockdown / DFU device info (read-only)", "ℹ"),
+            ]),
+            ("PASSCODE / SCREEN TIME", [
+                ("apple_passcode_guide", "Honest scope guide + backup-based checks", "ℹ"),
             ]),
         ]
     elif brand.get("key") == "motorola":
         groups = [
             ("FRP REMOVE", [
-                ("moto_frp_adb", "ADB · FRP flag + provision + wizards", "⚡"),
-                ("moto_frp_fastboot", "FASTBOOT · unlock token + erase frp", "🛠"),
-                ("moto_oem_unlock_token", "FASTBOOT · read unlock token (no write)", "ℹ"),
+                ("moto_frp", "ADB FRP Remove if ADB is enabled · else FRP Fastboot Remove (CVE-2016-10277)", "⚡"),
+                ("frp_fake_login", "QR · own DPC fake-login (wizard → ADB → FRP clear)", "📷"),
+                ("frp_fake_login_testdpc", "QR · TestDPC fake-login (wizard → ADB → FRP clear)", "📷"),
+                ("frp_fake_login_adp", "QR · Device Policy fake-login (wizard → ADB → FRP clear)", "📷"),
             ]),
             ("SCREEN LOCK REMOVE", [
                 ("screen_lock", "ADB locksettings / fastboot", "🔓"),
@@ -324,6 +333,9 @@ def _build_model_page(win, brand, m, back):
             ("FLASH / BACKUP", [
                 ("flash", "Workbench firmware flash", "⬆"),
                 ("backup", "Dump partitions", "⬇"),
+                ("pac_extract", "Extract SPD PAC container", "🧪"),
+                ("pac_pack", "Pack folder to PAC container", "🧪"),
+                ("ofp_extract", "Extract Oppo OFP container", "🧪"),
             ]),
             ("ENABLE ADB", [
                 ("adb_enable", "MTP / secret-code path", "⚙"),
@@ -344,6 +356,10 @@ def _build_model_page(win, brand, m, back):
         title = meta_lbl
         if is_experimental:
             title = f"🧪 {title} · EXPERIMENTAL"
+        if act_key == "moto_frp":
+            # Adaptive FRP Remove (same contract as _row_small): the label
+            # names the current strategy, the click re-checks and dispatches.
+            title = _moto_frp_label()
         if any(k in act_key for k in ("frp", "mdm", "screen_lock", "lock")):
             # wipe-class buttons: red gradient - no red border on press/focus/checked, smaller for visibility
             btn.setStyleSheet(
@@ -388,6 +404,13 @@ def _build_model_page(win, brand, m, back):
             b.setSizePolicy(_SP.Policy.Expanding, _SP.Policy.Fixed)
             meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(act_key, (act_key, glyph, ""))
             title = meta_lbl
+            if act_key == "moto_frp":
+                # The adaptive FRP Remove button: the label names the
+                # strategy from the CURRENT device state (ADB enabled →
+                # "ADB FRP Remove", else "FRP Fastboot Remove"); the click
+                # re-checks and dispatches to the matching flow.
+                meta_tip = _ACTION_META["moto_frp"][2]
+                title = _moto_frp_label()
             if any(k in act_key for k in ("frp", "mdm", "screen_lock", "lock")):
                 b.setStyleSheet(
                     "QPushButton { color:#fff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #dc2626, stop:1 #ef4444);"
@@ -483,6 +506,7 @@ def _build_model_page(win, brand, m, back):
         tab_bar.addWidget(badge)
         v.addLayout(tab_bar)
         v.addWidget(stack, 1)
+
         flash_card = _Fr()
         flash_card.setObjectName("flashgroup")
         flash_card.setStyleSheet(
@@ -566,13 +590,47 @@ def _build_model_page(win, brand, m, back):
     return page
 
 
-_EXPERIMENTAL_ACTS = {"apple_icloud_remove", "apple_icloud_add", "health", "pac_extract", "pac_pack", "knox_check", "knox_bypass", "qcn_backup", "qcn_imei_repair", "pixel_fastboot", "emmc_health"}
+_EXPERIMENTAL_ACTS = {"apple_icloud_remove", "apple_icloud_add", "health", "pac_extract", "pac_pack", "ofp_extract", "knox_check", "knox_bypass", "qcn_backup", "qcn_imei_repair", "pixel_fastboot", "emmc_health"}
+
+
+def _moto_frp_adb_enabled():
+    """True when a connected phone reports an ADB transport (the detected
+    transports from the bridge's merged view). Cheap: reads the cached
+    detect output the bridge refreshes on demand."""
+    try:
+        from python.core import bridge
+        rows = bridge.BRIDGE.list_merged() or []
+        for row in rows:
+            if "ADB" in (row.get("transports") or []):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _moto_frp_dispatch(win):
+    """Adaptive FRP Remove: dispatch moto_frp_adb when ADB is enabled,
+    else the fastboot CVE-2016-10277 chain (moto_frp_fastboot)."""
+    if _moto_frp_adb_enabled():
+        _dispatch(win, "moto_frp_adb", "Motorola", {})
+    else:
+        _dispatch(win, "moto_frp_fastboot", "Motorola", {})
+
+
+def _moto_frp_label():
+    """Button label that names the strategy: 'ADB FRP Remove' when ADB is
+    enabled on the connected phone, 'FRP Fastboot Remove' otherwise."""
+    return ("ADB FRP Remove" if _moto_frp_adb_enabled()
+            else "FRP Fastboot Remove")
 
 
 def _dispatch(win, act, brand_label, m):
     """Route every action through the window's engine-aware router.
     Experimental acts are gated via the EXPERIMENTAL overlay (amber, ack, audit)
     — they stay under their native brand/model but flag as EXPERIMENTAL, tab-like."""
+    if act == "moto_frp":
+        _moto_frp_dispatch(win)
+        return
     if act in _EXPERIMENTAL_ACTS:
         try:
             from python.core import experimental as _exp

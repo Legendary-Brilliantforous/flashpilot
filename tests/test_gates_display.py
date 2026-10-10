@@ -540,6 +540,51 @@ def test_adb_begin_multi_daemon_shows_picker(win, monkeypatch):
         _flow_end(key="adb:B1")
 
 
+def test_mode_chip_mediatek_label_is_not_other():
+    """Regression: 'MEDIATEK' does not contain the substring 'MTK' - a
+    generic MTK-mode label ('MEDIATEK MODE (VID 0x0E8D PID 0x2008)') used
+    to fall all the way through to OTHER."""
+    from python.gui.qt_app import _mode_chip
+
+    label, *_ = _mode_chip("MEDIATEK MODE (VID 0x0E8D PID 0x2008)")
+    assert label == "MTK"
+    # The MTK shorthand stays MTK; BROM keeps its more specific chip.
+    label, *_ = _mode_chip("MTK (download agent)")
+    assert label == "MTK"
+    label, *_ = _mode_chip("SAMSUNG MTK BROM (held state)")
+    assert label == "BROM"
+
+
+def test_detect_mode_tecno_normal_boot_names_protocol_not_other():
+    """Regression: a Tecno in normal boot (0e8d:2008, still-image/MTP
+    interface class 6/1/1, product string 'Android ADB Interface', no ADB
+    row) used to be claimed as low-level MediaTek by the first MTK loop -
+    the badge showed OTHER. It must name the actual USB protocol."""
+    from python.gui.qt_app import _detect_mode
+
+    tecno = {
+        "vid": 0x0E8D, "pid": 0x2008, "bus": 2, "address": 8,
+        "manufacturer": "TECNO", "product": "Android ADB Interface",
+        "serial": "151923756T008654",
+        "interfaces": [{"class": 6, "subclass": 1, "protocol": 1}],
+    }
+    mode = _detect_mode([], [tecno])
+    assert "PTP" in mode or "MTP" in mode
+    assert "OTHER" not in mode
+    assert "MEDIA" not in mode
+
+    # Low-level PIDs keep their MediaTek labels.
+    assert "BROM" in _detect_mode([], [dict(tecno, pid=0x0003, interfaces=[])])
+    assert "PRELOADER" in _detect_mode([], [dict(tecno, pid=0x2000, interfaces=[])])
+    assert "DA (flashing active)" in _detect_mode(
+        [], [dict(tecno, pid=0x0004, interfaces=[])])
+
+    # A Samsung device with no recognizable interfaces still resolves via
+    # the PID table (existing behavior unchanged).
+    assert _detect_mode([{"vid": 0x04E8, "pid": 0x6860, "interfaces": []}],
+                        []) == "NORMAL BOOT / SETUP WIZARD (MTP)"
+
+
 def test_mode_chip_qualcomm_normal_is_not_mtp():
     """Regression: 'QUALCOMM DEVICE (modem / normal mode)' contains the
     substring 'normal' and used to fall through to the MTP chip - the
@@ -554,3 +599,26 @@ def test_mode_chip_qualcomm_normal_is_not_mtp():
     # ADB strings stay ADB.
     label, *_ = _mode_chip("ADB ENABLED (debug composite) - normal boot")
     assert label == "ADB"
+    # EDL keeps its own chip: "Emergency Download" contains the substring
+    # 'download' and used to fall through to the DOWNLOAD chip.
+    label, *_ = _mode_chip("EDL MODE (Qualcomm Emergency Download)")
+    assert label == "EDL"
+
+
+def test_detect_mode_qualcomm_9006_is_diag_not_generic():
+    """Regression: Qualcomm HS-USB Diagnostics (05c6:9006) is a distinct
+    mode (Moto/Qualcomm devices in Diag) - it used to fold into the
+    generic 'QUALCOMM DEVICE (modem / normal mode)' label."""
+    from python.gui.qt_app import _detect_mode
+
+    diag = {
+        "vid": 0x05C6, "pid": 0x9006, "bus": 2, "address": 9,
+        "interfaces": [{"class": 2, "subclass": 2, "protocol": 1}],
+    }
+    mode = _detect_mode([], [], [], [], [], [diag])
+    assert "DIAG" in mode
+    assert "9006" in mode
+    # A non-diag Qualcomm device keeps the generic label.
+    modem = {"vid": 0x05C6, "pid": 0x90DB, "interfaces": []}
+    assert _detect_mode([], [], [], [], [], [modem]) == \
+        "QUALCOMM DEVICE (modem / normal mode)"

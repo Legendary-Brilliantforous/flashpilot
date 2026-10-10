@@ -1502,7 +1502,7 @@ pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
         ));
     }
 
-    let mut da = DaSession::new(session);
+    let da = DaSession::new(session);
     out.push("Resolving lock partitions from the device GPT...".to_string());
     da.frp_bypass(None, true)
         .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;

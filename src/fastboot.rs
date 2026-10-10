@@ -143,7 +143,7 @@ fn open_session(target: &str) -> Result<(UsbDevice, u8, u8)> {
 /// A device-side FAIL is *not* a transport error: it is rendered as
 /// `FAILED (remote: 'reason')` with exit 0, so Python-side `FAILED`-in-output
 /// checks keep working exactly like the system binary.
-fn run_command(target: &str, cmd: &str, timeout: Duration) -> Result<String> {
+pub fn run_command(target: &str, cmd: &str, timeout: Duration) -> Result<String> {
     if cmd.is_empty() {
         return Err(BridgeError::InvalidArgument("empty fastboot command".to_string()));
     }
@@ -217,6 +217,183 @@ pub fn fastboot_devices_cli() -> Result<String> {
         }
     }
     serde_json::to_string_pretty(&out).map_err(|e| BridgeError::Io(e.to_string()))
+}
+
+/// Fastboot DATA phase: `download:<size_hex>` → image bytes → `flash:<partition>`.
+/// Standard Android fastboot flashing protocol (AOSP fastboot).
+pub fn flash_partition(
+    target: &str,
+    partition: &str,
+    image_path: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let image = std::fs::read(image_path)
+        .map_err(|e| BridgeError::Io(format!("read image {image_path}: {e}")))?;
+    if image.is_empty() {
+        return Err(BridgeError::InvalidArgument("image is empty".to_string()));
+    }
+    let (dev, ep_in, ep_out) = open_session(target)?;
+    let start = Instant::now();
+
+    // Phase 1: send `download:<size_hex>` header.
+    let size_hex = format!("{:08x}", image.len());
+    let dl_cmd = format!("download:{size_hex}");
+    if dl_cmd.len() > FB_CMD_MAX {
+        return Err(BridgeError::InvalidArgument(
+            "image too large for a single fastboot download".to_string(),
+        ));
+    }
+    dev.write_bulk(ep_out, dl_cmd.as_bytes(), timeout)?;
+    let mut buf = vec![0u8; FB_READ_BUF];
+    let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
+    match parse_packet(&buf[..n]) {
+        Reply::Data(total_hex) => {
+            let total = usize::from_str_radix(&total_hex, 16)
+                .map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("bad DATA size '{total_hex}'"),
+                )))?;
+            if total != image.len() {
+                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("DATA size mismatch: device wants {total}, image is {}", image.len()),
+                )));
+            }
+        }
+        Reply::Fail(reason) => {
+            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                format!("download refused: {reason}"),
+            )));
+        }
+        other => {
+            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                format!("expected DATA after download, got {other:?}"),
+            )));
+        }
+    }
+
+    // Phase 2: write the image bytes in bulk (64 KiB chunks).
+    let chunk_size = 64 * 1024;
+    for chunk in image.chunks(chunk_size) {
+        dev.write_bulk(ep_out, chunk, timeout)?;
+    }
+
+    // Phase 3: read the download OKAY.
+    loop {
+        let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
+        match parse_packet(&buf[..n]) {
+            Reply::Info(payload) => eprintln!("[fastboot] {payload}"),
+            Reply::Okay(_) => break,
+            Reply::Fail(reason) => {
+                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("download failed: {reason}"),
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    // Phase 4: send `flash:<partition>`.
+    let flash_cmd = format!("flash:{partition}");
+    dev.write_bulk(ep_out, flash_cmd.as_bytes(), timeout)?;
+
+    // Phase 5: collect INFO/OKAY (flashing can take a while).
+    let mut lines = Vec::new();
+    loop {
+        let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
+        match parse_packet(&buf[..n]) {
+            Reply::Info(payload) => {
+                for line in payload.lines() {
+                    lines.push(format!("(bootloader) {line}"));
+                }
+            }
+            Reply::Okay(_) => {
+                lines.push(format!("OKAY [  {:.3}s]", start.elapsed().as_secs_f64()));
+                return Ok(lines.join("\n"));
+            }
+            Reply::Fail(reason) => {
+                lines.push(format!("FAILED (remote: '{reason}')"));
+                return Ok(lines.join("\n"));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `download_to_buffer` — `download:<size>` + DATA + bulk chunks + OKAY,
+/// WITHOUT any `flash:` phase. The payload stays resident in the
+/// bootloader's download buffer at its scratch address; a later
+/// `continue`/`boot` command can consume it (the kernel-cmdline-injection
+/// strategy points `initrd=<addr>,<size>` at exactly this buffer).
+pub fn download_to_buffer(
+    target: &str,
+    image_path: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let image = std::fs::read(image_path)
+        .map_err(|e| BridgeError::Io(format!("read image {image_path}: {e}")))?;
+    if image.is_empty() {
+        return Err(BridgeError::InvalidArgument("image is empty".to_string()));
+    }
+    let (dev, ep_in, ep_out) = open_session(target)?;
+    let start = Instant::now();
+
+    let size_hex = format!("{:08x}", image.len());
+    let dl_cmd = format!("download:{size_hex}");
+    if dl_cmd.len() > FB_CMD_MAX {
+        return Err(BridgeError::InvalidArgument(
+            "payload too large for a single fastboot download".to_string(),
+        ));
+    }
+    dev.write_bulk(ep_out, dl_cmd.as_bytes(), timeout)?;
+    let mut buf = vec![0u8; FB_READ_BUF];
+    let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
+    match parse_packet(&buf[..n]) {
+        Reply::Data(total_hex) => {
+            let total = usize::from_str_radix(&total_hex, 16)
+                .map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("bad DATA size '{total_hex}'"),
+                )))?;
+            if total != image.len() {
+                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("DATA size mismatch: device wants {total}, payload is {}", image.len()),
+                )));
+            }
+        }
+        Reply::Fail(reason) => {
+            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                format!("download refused: {reason}"),
+            )));
+        }
+        other => {
+            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                format!("expected DATA after download, got {other:?}"),
+            )));
+        }
+    }
+
+    let chunk_size = 64 * 1024;
+    for chunk in image.chunks(chunk_size) {
+        dev.write_bulk(ep_out, chunk, timeout)?;
+    }
+
+    loop {
+        let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
+        match parse_packet(&buf[..n]) {
+            Reply::Info(payload) => eprintln!("[fastboot] {payload}"),
+            Reply::Okay(_) => {
+                return Ok(format!(
+                    "downloaded {} bytes to the bootloader buffer [  {:.3}s]",
+                    image.len(),
+                    start.elapsed().as_secs_f64()
+                ));
+            }
+            Reply::Fail(reason) => {
+                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
+                    format!("download failed: {reason}"),
+                )));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// `fastboot-cmd <target> <timeout_ms> <cmd...>` — run one raw command.

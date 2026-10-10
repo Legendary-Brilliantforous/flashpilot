@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.2 (badge names the USB protocol)
+
+- The mode badge no longer shows OTHER for a device that is connected:
+  'MEDIATEK' does not contain the substring 'MTK', so a generic
+  MTK-mode label ('MEDIATEK MODE (VID 0x0E8D PID 0x2008)') fell all the
+  way through to OTHER.
+- A normal-boot MediaTek/Tecno phone with an unmatched PID (0e8d:2008,
+  still-image/MTP interface, no ADB row) is no longer claimed as
+  low-level MediaTek: only flashing PIDs (BROM/preloader/DA) claim the
+  low-level label, everything else falls through to interface-based
+  protocol naming (ADB/MTP/PTP/DIAG/storage/RNDIS) across ALL device
+  lists - previously only Samsung devices were protocol-scanned.
+- Rust transports: an unmatched PID that still exposes a still-image
+  (class 6) interface reports MTP instead of USB; hardware with no MTP
+  interface keeps the honest USB label.
+- The connection label shows 'MediaTek device (normal boot)' instead of
+  'MediaTek low-level' for non-flashing PIDs.
+- Qualcomm EDL keeps its own badge chip: 'EDL MODE (Qualcomm Emergency
+  Download)' contains the substring 'download' and used to fall through
+  to the DOWNLOAD chip.
+- Qualcomm HS-USB Diagnostics (05c6:9006, e.g. Moto in Diag) is named
+  'QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)' instead of folding into
+  the generic 'QUALCOMM DEVICE' label.
+
 ## 1.3.1 (ModeBadge fix)
 
 - The device-mode badge (top bar, near Stop) follows the SELECTED

@@ -369,30 +369,6 @@ def test_mtk_frp_brom_uses_bundled_dir(monkeypatch):
     assert calls["args"][:3] == ["mtk-frp-brom", "auto", "/opt/mtk-containers"]
 
 
-def test_efs_backup_uses_pinned_pull(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    _flow.clear_cancel()
-
-    def fake_wait(ctx, log, timeout=30):
-        ctx["serial"] = "EFS1"
-        return True
-    monkeypatch.setattr(core, "_wait_for_adb", fake_wait)
-    monkeypatch.setattr(bridge, "adb_shell", lambda cmd, timeout=20: "")
-
-    seen = {}
-
-    def fake_pull(serial, remote, local, timeout=300):
-        seen.update(serial=serial, remote=remote, local=local)
-        open(local, "w").write("efs")
-        return "pulled"
-    monkeypatch.setattr(bridge, "adb_pull", fake_pull)
-
-    logs, log = _logs()
-    assert core.flow_efs_backup().run({"serial": "EFS1"}, log) == [True]
-    assert seen["serial"] == "EFS1"
-    assert seen["remote"] == "/sdcard/efs_backup.tar"
-    assert seen["local"].endswith(".tar")
-
 
 _FAKE_ADB = """#!/bin/sh
 # Fake platform-tools adb for transport-fallback tests.

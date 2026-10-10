@@ -127,28 +127,6 @@ pub fn strip_md5_trailer(path: &str) -> Result<(String, String)> {
     Ok((out_path, to_hex(&h.finalize())))
 }
 
-/// List member names of a tar archive (skips directory entries).
-pub fn tar_member_names(path: &str) -> Result<Vec<String>> {
-    let f = File::open(path).map_err(|e| BridgeError::Io(format!("{path}: {e}")))?;
-    let mut ar = Archive::new(f);
-    let mut names = Vec::new();
-    for e in ar
-        .entries()
-        .map_err(|e| BridgeError::Io(format!("tar entries {path}: {e}")))?
-    {
-        let e = e.map_err(|e| BridgeError::Io(e.to_string()))?;
-        let name = e
-            .path()
-            .map_err(|e| BridgeError::Io(e.to_string()))?
-            .to_string_lossy()
-            .to_string();
-        if !name.ends_with('/') {
-            names.push(name);
-        }
-    }
-    Ok(names)
-}
-
 /// Extract a tar archive into `out_dir` (creating directories as needed) and
 /// return extracted file paths in tar order.
 pub fn extract_tar(path: &str, out_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -333,8 +311,8 @@ mod tests {
         assert_eq!(md5, expected);
         let (plain, again) = strip_md5_trailer(&p).unwrap();
         assert_eq!(again, expected);
-        assert_eq!(tar_member_names(&plain).unwrap(), vec!["test.img"]);
         let member = extract_tar(&plain, tmp.path()).unwrap().pop().unwrap();
+        assert_eq!(member.file_name().unwrap(), "test.img");
         assert_eq!(fs::read(&member).unwrap(), b"hello firmware");
     }
 

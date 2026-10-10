@@ -390,6 +390,17 @@ def detect_all():
     return json.loads(_run(["detect-all"]))
 
 
+def flow_list():
+    """The Rust flow registry — every flow (key, label, job, mode) the app
+    supports. The engine's source of truth under the "everything except the
+    GUI in Rust" split. Returns None when the bridge is too old or absent
+    (callers fall back to the Python-mirrored registry)."""
+    try:
+        return json.loads(_run(["flow-list"]))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def list_merged(vid_filter=None, timeout=30):
     """Unified, phone-filtered USB + ADB device rows (Rust core).
 

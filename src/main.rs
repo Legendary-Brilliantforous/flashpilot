@@ -21,6 +21,7 @@ mod hostinfo;
 mod qualcomm;
 mod spd;
 mod fastboot;
+mod flows;
 mod imgtools;
 mod pac;
 mod sparse;
@@ -30,8 +31,6 @@ mod usb;
 mod util;
 
 use std::process::exit;
-
-const SAMSUNG_VID: u16 = 0x04e8;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -96,6 +95,8 @@ fn main() {
         eprintln!("  mtk-mem-probe <t>      probe BROM memory (wires read16/write16/write32/reset_device)");
         eprintln!("  mtk-reset <t>          reset MTK device via BROM (wires reset_device)");
         eprintln!("  adb-devices            native ADB scan as `adb devices -l` JSON lines");
+        eprintln!("  flow-list              JSON registry of every flow (key, label, job, mode)");
+        eprintln!("  flow-run <key> [serial] [--code C] [--partition P] [--file F]");
         eprintln!("  adb-shell <s|-> <ms> <cmd...>  native `adb shell` on serial (or first device)");
         eprintln!("  adb-pull <s|-> <ms> <remote> <local>  native `adb pull` via sync");
         eprintln!("  adb-push <s|-> <ms> <local> <remote>  native `adb push` via sync");
@@ -812,6 +813,14 @@ fn main() {
             } else {
                 adb::devices_json()
             }
+        }
+        "flow-list" => flows::flow_list_cli(),
+        "flow-run" => {
+            if args.len() < 3 {
+                eprintln!("usage: flashpilot-bridge flow-run <key> [serial] [--code CODE] [--partition NAME]");
+                exit(2);
+            }
+            flows::flow_run_cli(&args[2], &args[3..])
         }
         "adb-shell" => {
             if args.len() < 5 {

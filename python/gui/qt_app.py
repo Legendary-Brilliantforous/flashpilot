@@ -1152,6 +1152,10 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
 
     # A Qualcomm device that is NOT in EDL (e.g. a modem in normal mode).
     if qcom_devs:
+        # HS-USB Diagnostics (05c6:9006) is a distinct mode - name it, do
+        # not fold it into the generic "QUALCOMM DEVICE" label.
+        if any(d.get("pid") == 0x9006 for d in qcom_devs):
+            return "QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)"
         return "QUALCOMM DEVICE (modem / normal mode)"
 
     # The adb device STATE is the only reliable way to distinguish stock
@@ -1172,21 +1176,29 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     if "device" in adb_states:
         return "ADB ENABLED (debug composite) - normal boot"
 
+    # Interface-based protocol naming (ALL device lists, not just Samsung):
+    # a phone that fell through the mode branches above (e.g. a Tecno in
+    # PTP/MTP on the MTK VID, no ADB row) must still get its actual USB
+    # protocol named - never a bare "OTHER".
     adb = image = hid = diag = storage = ptp = rndis = False
-    for d in samsung:
-        if _has_adb_iface(d["interfaces"]):
+    all_devs = (samsung + (mtk_devs or []) + (fastboot or []) + (edl_devs or [])
+                + (qcom_devs or []) + (spd_devs or []) + (apple_devs or [])
+                + (other_android or []))
+    for d in all_devs:
+        ifaces = d.get("interfaces") or []
+        if _has_adb_iface(ifaces):
             adb = True
-        image = image or any(i["class"] == 6 for i in d["interfaces"])
-        hid = hid or any(i["class"] == 3 for i in d["interfaces"])
+        image = image or any(i["class"] == 6 for i in ifaces)
+        hid = hid or any(i["class"] == 3 for i in ifaces)
         diag = diag or any(
             i["class"] == 2 and i["subclass"] == 2 and i["protocol"] == 1
-            for i in d["interfaces"]
+            for i in ifaces
         )
-        storage = storage or any(i["class"] == 8 for i in d["interfaces"])
-        ptp = ptp or any(i["class"] == 6 and i["subclass"] == 1 for i in d["interfaces"])
+        storage = storage or any(i["class"] == 8 for i in ifaces)
+        ptp = ptp or any(i["class"] == 6 and i["subclass"] == 1 for i in ifaces)
         rndis = rndis or any(
             i["class"] == 0xEF and i["subclass"] == 4 and i["protocol"] == 1
-            for i in d["interfaces"]
+            for i in ifaces
         )
 
     # Check for EDL mode (Qualcomm emergency download)
@@ -1207,14 +1219,16 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         prod = (d.get("product") or "").lower()
         is_samsung_mtk = "samsung" in mfr or "samsung" in prod
         prefix = "SAMSUNG MTK" if is_samsung_mtk else "MEDIATEK"
+        # Only flashing-mode PIDs claim the low-level label. Any other PID
+        # (e.g. a normal-boot Tecno in PTP/MTP: 0e8d:2008, product string
+        # "Android ADB Interface") must fall through to interface-based
+        # protocol naming below - the badge names the actual USB protocol.
         if pid == 0x0003:
             return f"{prefix} BROM (held state)"
         elif pid == 0x2000:
             return f"{prefix} PRELOADER (first bootloader stage)"
-        elif pid == 0x0004:
+        elif pid in (0x0004, 0x1004):
             return f"{prefix} DA (flashing active)"
-        else:
-            return f"{prefix} MODE (VID 0x0E8D PID 0x{pid:04X})"
     
     if adb and diag and image:
         return "MTP + DIAG + ADB (combined config)"
@@ -1242,6 +1256,11 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         known = _SAMSUNG_PIDS.get(d["pid"])
         if known:
             return known
+    # Last resort for an MTK device with no recognizable protocol
+    # interface (vendor-specific modem port): name the vendor + PID
+    # instead of a bare OTHER.
+    for d in (mtk_devs or []):
+        return f"MEDIATEK MODE (VID 0x0E8D PID 0x{d.get('pid', 0) & 0xFFFF:04X})"
     return "OTHER MODE"
 
 
@@ -1255,14 +1274,20 @@ def _mode_chip(mode):
         return "ADB", C["chip_blue"], C["chip_text"], C["accent"]
     if "BROM" in m:
         return "BROM", C["err_dim"], C["err"], C["err"]
-    if "MTK" in m:
+    if "MTK" in m or "MEDIATEK" in m:
+        # "MEDIATEK" does not contain the substring "MTK" — a generic
+        # MTK-mode label ("MEDIATEK MODE (VID 0x0E8D PID 0x2008)") used to
+        # fall all the way through to OTHER.
         return "MTK", C["warn_dim"], C["warn"], C["warn"]
+    if "EDL" in m:
+        # Most specific first: "EDL MODE (Qualcomm Emergency Download)"
+        # contains the substring "Download" and used to fall through to
+        # the DOWNLOAD chip (a Samsung download-mode label).
+        return "EDL", C["err_dim"], C["err"], C["err"]
     if "DIAG" in m:
         return "DIAG/AT", C["warn_dim"], C["warn"], C["warn"]
     if "DOWNLOAD" in m:
         return "DOWNLOAD", C["err_dim"], C["err"], C["err"]
-    if "EDL" in m:
-        return "EDL", C["err_dim"], C["err"], C["err"]
     if "FASTBOOT" in m:
         return "FASTBOOT", C["warn_dim"], C["warn"], C["warn"]
     if "BOOTLOADER" in m:
@@ -3999,9 +4024,16 @@ class FlashPilotWindow(QMainWindow):
                 "tecno_enable_adb":      ("Remove FRP",          "MTP"),
                 "moto_frp_adb":          ("Remove FRP",          "ADB"),
                 "moto_frp_fastboot":     ("Remove FRP",          "FASTBOOT"),
-                "moto_oem_unlock_token": ("Read Device Info",     "FASTBOOT"),
+                "fastboot_unlock":       ("Unlock Bootloader",   "FASTBOOT"),
+                "fastboot_lock":         ("Lock Bootloader",     "FASTBOOT"),
+                "frp_fake_login":        ("Remove FRP",          "ADB"),
+                "frp_fake_login_testdpc": ("Remove FRP",        "ADB"),
+                "frp_fake_login_adp":     ("Remove FRP",        "ADB"),
                 "pac_extract":           ("Flash Firmware",      "SPD"),
                 "pac_pack":              ("Flash Firmware",      "SPD"),
+                "ofp_extract":           ("Flash Firmware",      "SPD"),
+                "apple_info":            ("Read Device Info",    "ADB"),
+                "apple_passcode_guide":  ("Read Device Info",    "ADB"),
             }.get(act)
             if job_mode:
                 self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}",
@@ -11243,7 +11275,9 @@ class FlashPilotWindow(QMainWindow):
             d = mtk_devs[0]
             pid = d.get("pid")
             stage = {0x0003: "MediaTek BROM", 0x2000: "MediaTek Preloader",
-                     0x0004: "MediaTek Download Agent"}.get(pid, "MediaTek low-level")
+                     0x0004: "MediaTek Download Agent",
+                     0x1004: "MediaTek Download Agent"}.get(
+                pid, "MediaTek device (normal boot)")
             self.orb.set_connected(True)
             self.scene.set_connected(True)
             mfr = d.get("manufacturer") or ""
@@ -13724,6 +13758,7 @@ class FlashPilotWindow(QMainWindow):
                         ctx["target"] = tgt
                 except Exception:
                     pass
+            self._moto_unlock_provision(ctx, method)
             if flux:
                 flux.set_state("RUNNING")
 
@@ -13898,6 +13933,22 @@ class FlashPilotWindow(QMainWindow):
         ):
             self._coach_no_device(mode)
 
+    def _moto_unlock_provision(self, ctx, method):
+        """Unlock-code provision for the Motorola token/unlock flows: the
+        UNLOCK TOKEN input on the model page flows into ctx['unlock_code']
+        (the MOTO_UNLOCK_CODE env provision is the CLI fallback)."""
+        if method not in ("moto_frp_fastboot", "fastboot_unlock"):
+            return
+        token_edit = getattr(self, "_moto_unlock_code", None)
+        if token_edit is not None:
+            code_txt = token_edit.text().strip()
+            if code_txt:
+                ctx["unlock_code"] = code_txt
+        if "unlock_code" not in ctx:
+            env_code = os.environ.get("MOTO_UNLOCK_CODE", "").strip()
+            if env_code:
+                ctx["unlock_code"] = env_code
+
     def _run_job_flow(self, job, mode, method, label, stop_btn, progress, reset_ui,
                         device_key=None):
         """Run one of the frp job flows (screen lock remove, MDM unlock, BROM
@@ -13961,6 +14012,7 @@ class FlashPilotWindow(QMainWindow):
                         ctx["target"] = tgt
                 except Exception:
                     pass
+            self._moto_unlock_provision(ctx, method)
             # Consume one per-run experimental ack token for this flow's
             # feature, if the ownership dialog just approved it. Feature-
             # bound and single-use: one confirm authorizes one run, stale

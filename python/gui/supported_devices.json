@@ -485,7 +485,7 @@
             "flash",
             "screen_lock"
           ],
-          "notes": "Brand-wide flows (moto_frp_adb / moto_frp_fastboot / moto_oem_unlock_token). Vendor is detected at runtime; per-model detail in operations/frp/devices/motorola/."
+          "notes": "Brand-wide flows (adaptive moto_frp / moto_frp_adb / moto_frp_fastboot CVE-2016-10277). Vendor is detected at runtime; per-model detail in operations/frp/devices/motorola/."
         },
         {
           "model": "Moto G6 (ali)",

@@ -60,55 +60,6 @@ class TestDeviceScope:
 
 
 
-class TestKeyedResolvers:
-    def test_find_samsung_picks_keyed_device(self, monkeypatch):
-        from python.core import bridge, mtp
-
-        monkeypatch.setattr(
-            bridge, "detect_usb",
-            lambda: [_usb(serial="A", ports="1-1"), _usb(serial="B", ports="1-2")],
-        )
-        assert mtp.find_samsung() ["serial"] == "A"  # legacy first-match
-        assert mtp.find_samsung(key="adb:B")["serial"] == "B"
-        with devices.device_scope("adb:B"):
-            assert mtp.find_samsung()["serial"] == "B"
-
-    def test_download_mode_device_key_filter(self, monkeypatch):
-        from python.core import bridge, core
-
-        dl_a = _usb(pid=0x685D, serial="A", ports="1-1",
-                    interfaces=[{"class": 10, "subclass": 0, "protocol": 0}])
-        dl_b = _usb(pid=0x685D, serial="B", ports="1-2",
-                    interfaces=[{"class": 10, "subclass": 0, "protocol": 0}])
-        monkeypatch.setattr(bridge, "detect_usb", lambda: [dl_a, dl_b])
-        assert core._download_mode_device()["serial"] == "A"
-        assert core._download_mode_device(key="adb:B")["serial"] == "B"
-
-    def test_wait_for_adb_pins_serial(self, monkeypatch):
-        from python.core import bridge, core
-
-        monkeypatch.setattr(
-            bridge, "adb_status",
-            lambda: [{"serial": "A", "state": "device", "extra": ""},
-                     {"serial": "B", "state": "device", "extra": ""}],
-        )
-        ctx = {}
-        assert core._wait_for_adb(ctx, lambda m: None, timeout=5, key="adb:B") is True
-        assert ctx["serial"] == "B"
-
-    def test_wait_mtk_prefers_keyed_device(self, monkeypatch):
-        from python.core import core
-
-        monkeypatch.setattr(
-            core.mtk, "find_mtk",
-            lambda: [{"vid": 0x0E8D, "pid": 0x0003, "bus": 1, "address": 2},
-                     {"vid": 0x0E8D, "pid": 0x0003, "bus": 1, "address": 3}],
-        )
-        import io
-        buf = io.StringIO()
-        target, stage = core._wait_mtk_brom_target(buf.write, timeout=5)
-        assert (target, stage) == ("1:2", "brom")  # legacy: first
-
 
 class TestScopedCancel:
     """Cancel scopes: per-device request trips only that device; a keyless

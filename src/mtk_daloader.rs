@@ -25,6 +25,9 @@
 
 use crate::error::{BridgeError, Result};
 
+// Parsed MTK DA (Download Agent) header fields. Several fields document
+// the container format without being read yet - kept for completeness.
+#[allow(dead_code)]
 pub struct EntryRegion {
     pub m_buf: u32,
     pub m_len: u32,
@@ -33,6 +36,7 @@ pub struct EntryRegion {
     pub m_sig_len: u32,
 }
 
+#[allow(dead_code)]
 pub struct DaEntry {
     pub hw_code: u16,
     pub hw_sub_code: u16,
@@ -42,6 +46,7 @@ pub struct DaEntry {
     pub regions: Vec<EntryRegion>,
 }
 
+#[allow(dead_code)]
 pub struct DaContainer {
     pub v6: bool,
     pub entries: Vec<DaEntry>,
