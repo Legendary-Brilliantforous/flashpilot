@@ -22,13 +22,15 @@ engines (MTK/SPD/Samsung/FRP/MDM).
    under `en-us.support.motorola.com/cc/productRegistration/` — no
    special headers beyond session cookies. PenangF devices use
    `fastboot oem get_key` + `/generate-oem-key`.
-   → implemented: `flow_moto_oem_unlock_token` (URL note),
-   `flow_moto_penangf_unlock`.
+   → research note only: the token flow is retired in FlashPilot
+   (`moto_oem_unlock_token` removed from the GUI and the Rust registry;
+   PenangF unlock was never implemented — no `flow_moto_penangf_unlock`
+   exists, use `flow-list` to verify before citing a flow key).
 2. **SPD BSL framing** (from the pure-Python `spd_do_handshake`):
    `~`-framed, `>HH` cmd/len + CRC-16-CCITT (XMODEM), escapes
    `}→}]`, `~→}^`, ACK 0x80 / VER 0x81 @ 115200. → in the Rust SPD core.
-3. **MTK VIDs**: 0E8D, 0FCE, 1004, 22D9, 9BB5. → implemented in
-   `python/core/mtk.py` (`MTK_OEM_VIDS`).
+3. **MTK VIDs**: 0E8D, 0FCE, 1004, 22D9, 9BB5. → partially in
+   `python/core/mtk.py` (`find_mtk()`); no `MTK_OEM_VIDS` table exists.
 4. **Valeria pattern**: transient LK swap (patched LK in → oem unlock →
    stock LK restored on every exit path). → documented only (needs
    per-device LK assets).
@@ -39,11 +41,11 @@ engines (MTK/SPD/Samsung/FRP/MDM).
    substitutes canary packages (`com.google.android.youtube`).
    → FlashPilot's own MDM flows cover this with local command sets.
 7. **Samsung DVIF download-mode read** (115200 8N1, `DVIF` query,
-   `KEY=VALUE` pairs, fields MODEL/SALES/VER/UN/...). → implemented:
-   `flow_download_mode_dvif` in `python/core/core.py`.
+   `KEY=VALUE` pairs, fields MODEL/SALES/VER/UN/...). → research note
+   only (no `flow_download_mode_dvif` exists).
 8. **Motorola factory reset** (`fb_mode_set` → erase userdata/cache/
-   `debug_token` → `fb_mode_clear`). → implemented:
-   `flow_moto_factory_reset_fb`.
+   `debug_token` → `fb_mode_clear`). → research note only (no
+   `flow_moto_factory_reset_fb` exists).
 9. **MTK model→SoC mapping** (G14→T616, G35→T760, G54→MT6855, ...).
    → implemented in `supported_devices.json` motorola entries.
 

@@ -1,16 +1,18 @@
 # operations/frp/mtk_frp/
 #
 # MediaTek FRP engine — actual implementation lives in:
-#   python/core/flows/brom.py       (DA upload, BROM/DA backup, GPT-based frp wipe)
-#   python/core/flows/screenlock.py (MTK sp_flash + meta_mode for combo screens)
-#   src/mtk_da.rs                   (DA protocol + carrier/SIM lock patch)
-#   src/mtk_exploit.rs              (kamakiri2 + BROM auth bypass)
+#   src/flows.rs registry  (mtk_download_info, mtk_brom_info,
+#                           mtk_brom_backup, mtk_combo_flash,
+#                           mtk_recovery_reset, mtk_crash_brom, mtk_verify,
+#                           mtk_auth_flash — run via `flow-run <key>`)
+#   src/mtk_da.rs          (DA protocol + carrier/SIM lock patch)
+#   src/mtk_exploit.rs     (kamakiri2 + BROM auth bypass)
+#   python/core/mtk.py     (USB helpers: find_mtk(), chip-id routing)
+#   (retired) python/core/flows/{brom,screenlock,mdm}.py (never shipped)
 #
-# Flow keys registered in python/core/flows/{brom,screenlock,mdm}.py:
-#   flow_mtk_download_info  flow_mtk_brom_info  flow_mtk_brom_backup
-#   flow_mtk_combo_flash    flow_mtk_recovery_reset
-#   flow_mtk_sp_flash       flow_mtk_meta_mode
-#   flow_mtk_frp            (thin wrapper that chains mtk-frp-gpt)
+# Bridge CLI (flashpilot-bridge):
+#   mtk-detect / mtk-da-upload / mtk-frp / mtk-bypass / mtk-brom-exploit
+#   (verify names with `flashpilot-bridge --help`; flows preferred)
 #
 # Per-chip DA/loader pairs (helio_g85, dimensity_8020, mt6765, etc.) are
 # picked automatically by python/core/mtk.py based on the chip id reported

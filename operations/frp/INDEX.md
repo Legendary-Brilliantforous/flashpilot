@@ -14,43 +14,45 @@ and what it needs.
 
 | Engine | When to use | Code | Bridge CLI |
 |---|---|---|---|
-| **Generic (ADB)** | First attempt on any phone with USB debugging on | `python/core/flows/frp.py` | `adb shell ...` via `bridge.adb_shell` |
-| **MTK BROM** | MediaTek (Helio / Dimensity / MT6765) — power off → hold Vol-/+ → plug USB | `python/core/flows/brom.py` | `mtk-detect`, `mtk-da-upload`, `mtk-frp`, `mtk-bypass` |
-| **MTK DA** | MTK BROM that survived DA upload (lock-state chips) | `python/core/flows/screenlock.py` | `mtk-frp`, `mtk-brom-backup` |
-| **Qualcomm EDL** | 9008 emergency download (Snapdragon) | `python/core/flows/frp.py` | `edl-frp`, `qcom-*` |
-| **Samsung Exynos** | A14 (Exynos 850/1330), A15/A16 — Odin download mode is flashing only, NOT for FRP | `python/core/flows/oem_odin.py` (carrier state) + `frp.py` (Samsung account-bypass) | (mostly on-device, no bridge) |
-| **Samsung MTK (A05/A06)** | A05/A06 with Helio G85 — uses MTK BROM (above) | `python/core/flows/brom.py` | `mtk-frp` |
-| **UNISOC/SPD** | 1782:4d00 FDL1+FDL2 (SC9863A, T606/UMS9230) | `python/core/flows/brom.py`, `src/spd.rs` | `spd-detect`, `spd-frp`, `spd-format`, `spd-magic-pack` |
-| **HiSilicon Kirin** | 12d1 — no open flow yet (not reverse-engineered) | (planned in `python/core/flows/`) | (none) |
+| **Generic (ADB)** | First attempt on any phone with USB debugging on | Rust flows (`adb_frp`, `frp_*` rows in `src/flows.rs`) | `flow-run adb_frp` / `adb shell ...` via `bridge.adb_shell` |
+| **MTK BROM** | MediaTek (Helio / Dimensity / MT6765) — power off → hold Vol-/+ → plug USB | Rust flows (`mtk_*` rows in `src/flows.rs`) | `flow-run mtk_brom_info` (CLI: `mtk-detect`, `mtk-da-upload`, `mtk-frp`, `mtk-bypass`) |
+| **MTK DA** | MTK BROM that survived DA upload (lock-state chips) | Rust flows (`mtk_brom_backup`, `mtk_auth_flash`) | `flow-run mtk_brom_backup` |
+| **Qualcomm EDL** | 9008 emergency download (Snapdragon) | Rust flows (`edl_*`, `qcom_*` rows) | `flow-run edl_frp` (CLI: `qcom-*`) |
+| **Samsung Exynos** | A14 (Exynos 850/1330), A15/A16 — Odin download mode is flashing only, NOT for FRP | Rust `frp_*` rows (Samsung account-bypass) | (mostly on-device, no bridge) |
+| **Samsung MTK (A05/A06)** | A05/A06 with Helio G85 — uses MTK BROM (above) | Rust flows (`mtk_brom_info`, `mtk_brom_backup`) | `flow-run mtk_brom_backup` |
+| **UNISOC/SPD** | 1782:4d00 FDL1+FDL2 (SC9863A, T606/UMS9230) | Rust flows (`spd_*` rows) + `src/spd.rs` | `flow-run spd_detect_info` (CLI: `spd-detect`, `spd-frp`, `spd-format`, `spd-magic-pack`) |
+| **HiSilicon Kirin** | 12d1 — no open flow yet (not reverse-engineered) | (none yet) | (none) |
+
+(The old `python/core/flows/*.py` engine modules never shipped; `mtk-brom-backup`
+is the `mtk_brom_backup` flow row. Verify any key with `flow-list`.)
 
 ## Flow key → function map
 
-Every flow the GUI's "FRP bypass" button can call. The keys are the
-strings in `supported_devices.json` `actions: ["frp"]` and the
-entries in `python/core/flows/frp.py`'s `FLOWS = {}` dict.
+Every flow the GUI's FRP actions can call. Keys are Rust registry rows
+(`src/flows.rs`, `flow-list` to verify); the GUI routes them by
+(job, mode) and the bridge runs them via `flow-run <key> [target]`.
 
-| Flow key | Function | Engine | What it does |
-|---|---|---|---|
-| `flow_adb_frp` | `flow_adb_frp` | Generic ADB | `settings put secure frp_done 1` + disable setup wizards + clear GMS data |
-| `flow_frp_clear_adb` | `flow_frp_clear_adb` | Generic ADB | Same as above but explicitly named "clear" |
-| `flow_frp_browser` | `flow_frp_browser` | Generic ADB | Open `chrome://settings/` on-device via intent |
-| `flow_frp_emergency` | `flow_frp_emergency` | Generic ADB | Open Settings via Emergency-call dialer (on-device) |
-| `flow_frp_settings` | `flow_frp_settings` | Generic ADB | Open Settings via notification-shade path (on-device) |
-| `flow_universal_frp_bypass` | `flow_universal_frp_bypass` | Generic ADB | Combined-method ladder |
-| `flow_at_info` | `flow_at_info` | Samsung MTP/AT | Read mode + devconinfo via AT channel (Samsung pre-Android 8) |
-| `flow_at_method` | `flow_at_control` | Samsung MTP/AT | AT+DEBUGLVC to enable ADB over the diag port |
-| `flow_download_mode_frp` | `flow_download_mode_frp` | Samsung Download mode | CSC/Combination firmware FRP remove (PIT safety contract) |
-| `flow_odin_enable_adb` | `flow_odin_enable_adb` | Samsung Download mode | Enable ADB from download mode via Odin tarball |
-| `flow_mtk_combo_flash` | `flow_mtk_combo_flash` | MTK Download | Combination firmware flash (PIT + DA) |
-| `flow_mtk_recovery_reset` | `flow_mtk_recovery_reset` | MTK Download | Recovery-mode factory reset |
-| `flow_mtk_brom_info` | `flow_mtk_brom_info` | MTK BROM | Read chip id / handshake (needed before any BROM flash) |
-| `flow_mtk_brom_backup` | `flow_mtk_brom_backup` | MTK BROM | Dump partitions via BROM DA |
-| `flow_mtk_frp` | (chain) | MTK BROM | Wipe frp + nvdata partitions via BROM (Android Q-compat) |
-| `flow_qualcomm_edl_frp` | `flow_qualcomm_edl_frp` | Qualcomm EDL | Sahara + Firehose erase (05c6:9008) |
-| `flow_qualcomm_qfil_frp` | `flow_qualcomm_qfil_frp` | Qualcomm EDL | QFIL XML variant |
-| `flow_samsung_emergency_call` | `flow_samsung_emergency_call` | Samsung MTP/AT | On-device: emergency dialer path |
-| `flow_samsung_talkback` | `flow_samsung_talkback` | Samsung MTP/AT | On-device: TalkBack path |
-| `flow_samsung_account_bypass` | `flow_samsung_account_bypass` | Samsung MTP/AT | On-device: Samsung-account side bypass |
+| Flow key | Engine | What it does |
+|---|---|---|
+| `adb_frp` | Generic ADB | `settings put secure frp 0` + disable setup wizards + clear GMS data |
+| `frp_browser` | Generic ADB | Open `chrome://settings/` on-device via intent |
+| `frp_emergency` | Generic ADB | Open Settings via Emergency-call dialer (on-device) |
+| `frp_settings` | Generic ADB | Open Settings via notification-shade path (on-device) |
+| `frp_fake_login` (+`_testdpc`, `+_adp`) | Generic ADB | QR provisioning with a device-owner DPC, then FRP clear |
+| `at_info` | Samsung MTP/AT | Read mode + devconinfo via AT channel (Samsung pre-Android 8) |
+| `at_method` | Samsung MTP/AT | AT+DEBUGLVC to enable ADB over the diag port |
+| `download_frp` | Samsung Download mode | CSC/Combination firmware FRP remove (PIT safety contract) |
+| `odin_enable_adb` | Samsung Download mode | Enable ADB from download mode via Odin tarball |
+| `mtk_combo_flash` | MTK Download | Combination firmware flash (PIT + DA) |
+| `mtk_recovery_reset` | MTK Download | Recovery-mode factory reset |
+| `mtk_brom_info` | MTK BROM | Read chip id / handshake (needed before any BROM flash) |
+| `mtk_brom_backup` | MTK BROM | Dump partitions via BROM DA |
+| `edl_frp` | Qualcomm EDL | Sahara + Firehose erase (05c6:9008) |
+| `qcom_detect_info` | Qualcomm EDL | Detect + info (read-only) |
+| `frp_qr_provision` | Generic ADB | QR provisioning (TestDPC path) |
+
+(Retired: the old `flow_*`-prefixed key names and
+`python/core/flows/*.py` never shipped — keys have no `flow_` prefix.)
 
 ## How a new per-model recipe lands here
 
@@ -81,12 +83,12 @@ entries in `python/core/flows/frp.py`'s `FLOWS = {}` dict.
 
 Earlier refactors split the god `frp.py` into per-chip files under
 `operations/frp/chips/` and per-engine files under
-`operations/frp/{mtk,qualcomm,unisoc,samsung}_frp/`. Those turned out
-to be **dead docstubs** — `FLOWS = {}`, wrong imports (`sd695.py`
-importing an MTK flow), no callers. The real per-chip dispatch is in
-`python/core/flows/brom.py` (`_mtk_fdl_base`, `chip_id` recognition, etc.).
-Those dead files were deleted; this INDEX.md is the replacement so a
-new dev knows where the engine-specific code actually lives.
+`operations/frp/{mtk,qualcomm,unisoc,samsung}_frp/`. An older revision of
+this INDEX claimed dead docstubs and a `python/core/flows/brom.py` dispatch
+— that module never shipped. The real per-chip dispatch is the Rust flow
+registry (`src/flows.rs`: `mtk_*`/`qcom_*`/`spd_*` rows, `flow-list` to
+verify); this INDEX.md is the map so a new dev knows where the
+engine-specific code actually lives.
 
 ## Why the per-engine Python shims are gone
 
