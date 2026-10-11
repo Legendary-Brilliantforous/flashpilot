@@ -24,7 +24,9 @@ pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
 
     match vid {
         0x05c6 => {
-            if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) {
+            if crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) {
+                "qualcomm-diag".to_string()
+            } else if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) {
                 "qualcomm-edl".to_string()
             } else if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) {
                 "qualcomm".to_string()
@@ -861,6 +863,10 @@ mod tests {
 
         // Qualcomm EDL (Sahara / Firehose)
         assert_eq!(mode_hint(0x05c6, 0x9008, &[]), "qualcomm-edl");
+        assert_eq!(mode_hint(0x05c6, 0x900e, &[]), "qualcomm-edl");
+        // Qualcomm DIAG composites stay diag, never EDL.
+        assert_eq!(mode_hint(0x05c6, 0x9006, &[]), "qualcomm-diag");
+        assert_eq!(mode_hint(0x05c6, 0x9026, &[]), "qualcomm-diag");
         // MediaTek BROM / preloader / DA
         assert_eq!(mode_hint(0x0e8d, 0x2000, &[]), "mediatek");
         // Samsung download-mode PIDs

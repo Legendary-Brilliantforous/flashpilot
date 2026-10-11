@@ -24,6 +24,12 @@ const KNOWN_PHONE_VIDS: &[u16] = &[
     0x05AC, // Apple
 ];
 
+/// MTK vendor IDs: the main 0x0E8D plus the OEM VIDs under which an MTK
+/// preloader/BROM re-enumerates (Sony 0x0FCE, LG 0x1004, OPPO 0x22D9,
+/// InFocus 0x9BB5). A bare stage (no interfaces, no strings) on any of
+/// these is still a phone flashing stage — never dropped.
+const MTK_OEM_VIDS: &[u16] = &[0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5];
+
 /// Generic Android vendor IDs (mirrors `ANDROID_GENERIC_VIDS`)
 const ANDROID_GENERIC_VIDS: &[u16] = &[
     0x18D1, // Google
@@ -118,6 +124,12 @@ pub fn normalize_serial(s: Option<&str>) -> String {
 /// Test if a USB device is plausibly a phone/tablet (not a hub, keyboard, etc.)
 pub fn is_phone(d: &DeviceInfo) -> bool {
     if KNOWN_PHONE_VIDS.contains(&d.vid) {
+        return true;
+    }
+
+    // MTK OEM VIDs (plus the main 0x0E8D): a bare preloader/BROM stage
+    // (no interfaces, no strings) is still captured.
+    if MTK_OEM_VIDS.contains(&d.vid) {
         return true;
     }
 
@@ -234,9 +246,13 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
             0x0004 | 0x1004 => transports.push("MTK".to_string()),
             _ => {}
         }
+    } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) {
+        // Documented/observed DIAG composites (9006, 9026) - DIAG flows,
+        // never a Sahara hello.
+        transports.push("DIAG".to_string());
     } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) {
-        // The whole Sahara/EDL family: 0x9008 (EDL), 0x9006 (Diag 9006 /
-        // alt EDL), 0x900E, 0x901D, ... — one entry per mode table.
+        // The Sahara/EDL family: 0x9008 (EDL), 0x900E, 0x901D, ... — one
+        // entry per mode table.
         transports.push("EDL".to_string());
     } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) {
         // Qualcomm diag/modem PIDs outside the EDL family (0x9091 DIAG ...).
@@ -426,6 +442,9 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             0x0004 | 0x1004 => "mediatek-da".to_string(),
             _ => "mediatek".to_string(),
         },
+        0x05C6 if crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) => {
+            "qualcomm-diag".to_string()
+        }
         0x05C6 if crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&pid) => {
             "qualcomm-edl".to_string()
         }
@@ -528,10 +547,13 @@ mod tests {
 
     #[test]
     fn classify_mode_qualcomm_edl_family_and_diag() {
-        // The full EDL/Sahara family (the 9008 row + alt EDL 9006 + 900E...).
+        // True EDL (Sahara): 9008 + 900E.
         assert_eq!(classify_mode(0x05C6, 0x9008, &[]), "qualcomm-edl");
-        assert_eq!(classify_mode(0x05C6, 0x9006, &[]), "qualcomm-edl");
         assert_eq!(classify_mode(0x05C6, 0x900E, &[]), "qualcomm-edl");
+        // Documented/observed DIAG composites stay diag, never EDL:
+        // 9006 is "HS-USB Diagnostics 9006", 9026 enumerates diag+modem+MS.
+        assert_eq!(classify_mode(0x05C6, 0x9006, &[]), "qualcomm-diag");
+        assert_eq!(classify_mode(0x05C6, 0x9026, &[]), "qualcomm-diag");
         // Diag PIDs outside the EDL family stay diag, not edl.
         assert_eq!(classify_mode(0x05C6, 0x9091, &[]), "qualcomm-diag");
         // Unknown Qualcomm PIDs fall to classify_mode's generic "other".
@@ -540,21 +562,47 @@ mod tests {
 
     #[test]
     fn compute_transports_qualcomm_edl_and_diag() {
-        // 9008 → EDL; 9006/900E (Diag family) also map to the EDL transport
-        // so the EDL flows can be offered; plain DIAG pids → DIAG.
+        // 9008/900E → EDL; 9006/9026 (Diag family) → DIAG so the DIAG
+        // flows are offered and no Sahara hello is attempted; plain DIAG
+        // pids → DIAG.
         let adb: HashSet<String> = HashSet::new();
         assert_eq!(
             compute_transports(&dev(0x05C6, 0x9008, None, vec![]), &adb),
             vec!["EDL".to_string()]
         );
         assert_eq!(
-            compute_transports(&dev(0x05C6, 0x9006, None, vec![]), &adb),
+            compute_transports(&dev(0x05C6, 0x900E, None, vec![]), &adb),
             vec!["EDL".to_string()]
+        );
+        assert_eq!(
+            compute_transports(&dev(0x05C6, 0x9006, None, vec![]), &adb),
+            vec!["DIAG".to_string()]
+        );
+        assert_eq!(
+            compute_transports(&dev(0x05C6, 0x9026, None, vec![]), &adb),
+            vec!["DIAG".to_string()]
         );
         assert_eq!(
             compute_transports(&dev(0x05C6, 0x9091, None, vec![]), &adb),
             vec!["DIAG".to_string()]
         );
+    }
+
+    #[test]
+    fn is_phone_captures_bare_flashing_stages() {
+        // TFT parity: a bare preloader/BROM/diag stage (no interfaces, no
+        // strings) on phone-chip silicon is captured, never dropped.
+        assert!(is_phone(&dev(0x0E8D, 0x2000, None, vec![]))); // MTK preloader
+        assert!(is_phone(&dev(0x0E8D, 0x0003, None, vec![]))); // MTK BROM
+        assert!(is_phone(&dev(0x1004, 0x2000, None, vec![]))); // LG MTK preloader (OEM VID)
+        assert!(is_phone(&dev(0x22B8, 0x2E80, None, vec![]))); // Motorola fastboot (bare)
+        assert!(is_phone(&dev(0x05C6, 0x9008, None, vec![]))); // EDL
+        assert!(is_phone(&dev(0x05C6, 0x9006, None, vec![]))); // Diag 9006
+        assert!(is_phone(&dev(0x1782, 0x4D00, None, vec![]))); // SPD
+        // Non-phone hardware stays out: keyboard, touchpanel, hub.
+        assert!(!is_phone(&dev(0x0461, 0x0010, None, vec![])));
+        assert!(!is_phone(&dev(0x0EEF, 0x7356, None, vec![])));
+        assert!(!is_phone(&dev(0x1D6B, 0x0002, None, vec![])));
     }
 
     #[test]

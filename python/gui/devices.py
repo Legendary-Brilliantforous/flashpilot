@@ -127,6 +127,7 @@ def _card(text, sub="", accent=None, clickable=True, **kwargs):
 
 def build_brand_page(win, key):
     """Level 2: model cards grid + nested stack to Level 3."""
+    from PyQt6.QtWidgets import QHBoxLayout as _HL
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
     brand = BRAND_BY_KEY[key]
     models = brand.get("models", [])
@@ -144,6 +145,45 @@ def build_brand_page(win, key):
     head = QLabel(f"{brand.get('icon','')}  {brand['label']} — pick a model")
     head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     outer.addWidget(head)
+
+    # TFT-style chips row: chips this brand's models actually use (from
+    # supported_devices engines). Supported chip -> clickable, navigates to
+    # its tool section. Anything else is grey + disabled with a reason
+    # tooltip — visible, never a dead popup.
+    engines = set((m.get("engine") or "").lower() for m in models)
+    chips_row = _HL()
+    chips_row.setSpacing(6)
+    for eng, clabel, glyph, section in _ENGINE_CHIPS:
+        cb = QPushButton(f"{glyph}  {clabel}")
+        cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        cb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        cb.setMinimumHeight(30)
+        if eng in engines and section:
+            cb.setToolTip(f"{brand['label']} uses {clabel} — open the {clabel} tools")
+            cb.setStyleSheet(
+                "QPushButton { color:#04121a; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+                " stop:0 #d4b78f, stop:1 #b89a6a); border:1px solid rgba(255,255,255,0.18);"
+                " border-radius:14px; padding:4px 14px; font-weight:800; font-size:11px; }"
+                " QPushButton:hover { background: #e2cfa5; }"
+                " QPushButton:focus { outline:none; }"
+            )
+            cb.clicked.connect(lambda _=False, s=section: win._on_section(s))
+        else:
+            reason = ("no tool section yet" if eng in engines
+                      else f"{brand['label']} doesn't use {clabel}")
+            cb.setEnabled(False)
+            cb.setToolTip(f"{glyph}  {clabel} — {reason}")
+            cb.setStyleSheet(
+                "QPushButton { color:#5b6b80; background:rgba(255,255,255,8);"
+                " border:1px solid rgba(255,255,255,0.06); border-radius:14px;"
+                " padding:4px 14px; font-weight:700; font-size:11px; }"
+                " QPushButton:disabled { color:#5b6b80; background:rgba(255,255,255,8);"
+                " border:1px solid rgba(255,255,255,0.06); }"
+                " QPushButton:focus { outline:none; }"
+            )
+        chips_row.addWidget(cb)
+    chips_row.addStretch(1)
+    outer.addLayout(chips_row)
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -379,6 +419,8 @@ def _build_model_page(win, brand, m, back):
         # Custom 2-line text
         btn.setText(f"  {meta_glyph}  {title}\n         {sub_label}")
         btn.setToolTip(meta_tip)
+        # Phase-1 device-first tag (see _row_small).
+        btn.setProperty("flow_act", act_key)
         btn.clicked.connect(
             lambda _=False, a=act_key, bl=brand['label'], mm=m: _dispatch(win, a, bl, mm)
         )
@@ -428,6 +470,10 @@ def _build_model_page(win, brand, m, back):
                 b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setText(f"  {meta_glyph}  {title}\n         {sub_label}")
             b.setToolTip(meta_tip)
+            # Phase-1 device-first: tag the button with its flow act so the
+            # applicability pass can dim it when the connected phone lacks
+            # the transport. Purely additive — routing is untouched.
+            b.setProperty("flow_act", act_key)
             b.clicked.connect(lambda _=False, a=act_key, bl=brand['label'], mm=m: _dispatch(win, a, bl, mm))
             return b
 
@@ -591,6 +637,162 @@ def _build_model_page(win, brand, m, back):
 
 
 _EXPERIMENTAL_ACTS = {"apple_icloud_remove", "apple_icloud_add", "health", "pac_extract", "pac_pack", "ofp_extract", "knox_check", "knox_bypass", "qcn_backup", "qcn_imei_repair", "pixel_fastboot", "emmc_health"}
+
+
+# ---------------- Phase-1 device-first: applicability --------------------
+# Registry mode -> transports a connected phone must expose for the action
+# to apply. Modes with unknown transports (Download mode, Samsung BROM)
+# map to None = always enabled (never wrongly dimmed).
+_MODE_TRANSPORTS = {
+    "ADB": {"ADB"},
+    "FASTBOOT": {"FASTBOOT"},
+    "EDL": {"EDL"},
+    "MTP": {"MTP"},
+    "MTK": {"MTK", "MTK BROM"},
+    "MTK BROM": {"MTK BROM"},
+    "SPD": {"SPD"},
+}
+
+# Short-TTL cache over bridge.list_merged (a USB rescan each call).
+_connected_cache = {"at": 0.0, "rows": []}
+_CONNECTED_TTL = 5.0
+
+
+def connected_rows():
+    """Phone rows from the last detect-merged (cached 5s, [] on error)."""
+    import time as _time
+    now = _time.monotonic()
+    if now - _connected_cache["at"] < _CONNECTED_TTL:
+        return _connected_cache["rows"]
+    rows = []
+    try:
+        from python.core import bridge as _bridge
+        rows = _bridge.list_merged() or []
+    except Exception:
+        rows = []
+    _connected_cache["at"] = now
+    _connected_cache["rows"] = rows
+    return rows
+
+
+def connected_transports():
+    """Union of transports across connected phone rows (may be empty)."""
+    have = set()
+    for row in connected_rows():
+        for t in row.get("transports") or []:
+            have.add(str(t).upper())
+    return have
+
+
+def usb_serial_ports(bus, addr):
+    """Serial ports (ttyUSB*/ttyACM*) bound to the USB bus:addr device.
+
+    TFT-style interface capture: a preloader/BROM/diag stage usually brings
+    a VCOM port alongside the libusb device. Walks /sys (stdlib only),
+    returns [] when nothing is bound or /sys is unavailable.
+    """
+    import os as _os
+    found = []
+    try:
+        base = "/sys/bus/usb/devices"
+        for entry in _os.listdir(base):
+            ep = _os.path.join(base, entry)
+            try:
+                with open(_os.path.join(ep, "busnum")) as f:
+                    eb = int(f.read().strip())
+                with open(_os.path.join(ep, "devnum")) as f:
+                    ea = int(f.read().strip())
+            except (OSError, ValueError):
+                continue
+            if eb != bus or ea != addr:
+                continue
+            for root, dirs, _files in _os.walk(ep):
+                for dd in dirs:
+                    if dd.startswith("ttyUSB") or dd.startswith("ttyACM"):
+                        if dd not in found:
+                            found.append(dd)
+                # Only the device node + its interface children matter.
+                if root != ep and ":" not in _os.path.basename(root):
+                    dirs[:] = []
+    except OSError:
+        return []
+    return sorted(found)
+
+
+def required_transports(act):
+    """Transports the act needs, from the Rust registry modes.
+
+    Returns None when unknown (non-flow acts like info/flash, unmapped
+    modes) — unknown means always enabled, never dimmed."""
+    try:
+        from python.core import core as _core
+        reg = _core._load_registry()
+    except Exception:
+        return None
+    if not reg:
+        return None
+    need = set()
+    for row in reg:
+        if row.get("key") == act:
+            mapped = _MODE_TRANSPORTS.get(row.get("mode", ""))
+            if mapped:
+                need |= mapped
+    return need or None
+
+
+_DISABLED_SUFFIX = (
+    " QPushButton:disabled { color:#5b6b80;"
+    " background:rgba(255,255,255,8); border:1px solid rgba(255,255,255,0.06); }"
+)
+
+
+def apply_applicability(root):
+    """Dim drill-down buttons the connected phone can't use.
+
+    A button dims (disabled + grey + 'Needs: X' tooltip) only when a phone
+    IS connected and the act positively requires an absent transport. With
+    no phone, or an unknown requirement, everything stays enabled.
+    Purely additive: routing and labels are untouched."""
+    if root is None:
+        return
+    have = connected_transports()
+    for btn in root.findChildren(QPushButton):
+        act = btn.property("flow_act")
+        if not act:
+            continue
+        if btn.property("flow_style") is None:
+            btn.setProperty("flow_style", btn.styleSheet())
+            btn.setProperty("flow_tip", btn.toolTip())
+        base_style = btn.property("flow_style") or ""
+        base_tip = btn.property("flow_tip") or ""
+        need = required_transports(act)
+        if have and need and not (need & have):
+            btn.setEnabled(False)
+            if _DISABLED_SUFFIX not in btn.styleSheet():
+                btn.setStyleSheet(base_style + _DISABLED_SUFFIX)
+            want = "/".join(sorted(need))
+            got = "/".join(sorted(have)) if have else "none"
+            btn.setToolTip(f"{base_tip}\nNeeds: {want} (connected: {got})")
+        else:
+            btn.setEnabled(True)
+            if btn.styleSheet() != base_style:
+                btn.setStyleSheet(base_style)
+            if btn.toolTip() != base_tip:
+                btn.setToolTip(base_tip)
+
+
+# TFT-style chip row: (engine, label, glyph, tool section). Section names
+# match the window's _section_index (tools: mtk/qc/spd, samsung hub,
+# dev_<brand> drill-down pages). None = no section exists yet.
+_ENGINE_CHIPS = [
+    ("mtk", "MTK", "▣", "mtk"),
+    ("spd", "UNISOC", "✦", "spd"),
+    ("qcom", "Qualcomm", "◈", "qc"),
+    ("odin", "Samsung", "Ⓢ", "samsung"),
+    ("apple", "Apple", "🍎", "dev_apple"),
+    ("motorola", "Motorola", "📱", "dev_motorola"),
+    ("kirin", "Kirin", "🐉", None),
+]
 
 
 def _moto_frp_adb_enabled():
