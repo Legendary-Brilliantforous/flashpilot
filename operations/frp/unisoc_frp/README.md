@@ -2,9 +2,10 @@
 #
 # UNISOC / SPD FRP engine — actual implementation lives in:
 #   src/spd.rs                       (BSL protocol: BSL_CMD_*/BSL_REP_*, FDL1/FDL2)
-#   python/core/spd_adb.py           (boot-image ADB-enable patch)
-#   python/core/flows/screenlock.py  (calls spd-format via bridge)
-#   python/core/flows/mdm.py         (BROM partition erase via spd-format)
+#   src/flows.rs registry            (spd_* rows: spd_detect_info, pac_extract/pac_pack, ofp_extract)
+#   (retired) python/core/spd_adb.py (boot-image ADB-enable patch — removed with the Python engine;
+#                                     SPD ADB-enable now goes through the workbench flash flows)
+#   (retired) python/core/flows/{screenlock,mdm}.py (never shipped; logic lives in the Rust flows)
 #
 # Bridge CLI commands (flashpilot-bridge):
 #   spd-detect            (find 1782:4d00 / 4d02 / 4e00)

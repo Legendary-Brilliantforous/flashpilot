@@ -1,8 +1,10 @@
 # mdm/ — Mobile Device Management + KnoxGuard
 MDM unlock, KG/RMM, Knox warranty.
 
-Sources: `python/core/flows/mdm.py` (52 KB), `python/core/knox.py`, `python/mdm_qr/`
+Sources: Rust flows (`src/flows.rs` registry, `flow-run` CLI): `mdm_qr`, `mdm_diagnostics`, `mdm_unlock*`, `knox_check` / `knox_bypass`
 Rust: AT+KSTRINGB / KGLOCK paths in src/at.rs
+QR generator output: `mdm_qr/` (repo root)
+(Retired: `python/core/knox.py`; `python/core/flows/mdm.py` was planned but never shipped — the MDM logic lives in the Rust flows.)
 
 Structure:
 ```

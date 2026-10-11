@@ -10,7 +10,8 @@ map and flow-key table). This directory holds:
   `unisoc_frp/`, `generic_frp/`) explaining what that engine is for and
   where the actual code lives.
 - `chips/` — placeholder for per-chip research notes. Most chips are
-  handled by the engine-level dispatch in `python/core/flows/brom.py`,
+  handled by the engine-level Rust flows (`src/flows.rs` registry:
+  `mtk_*`, `qcom_*`/`edl_*`, `spd_*` rows, run via `flow-run <key>`),
   so per-chip files are only needed when a specific chipset needs
   manual offsets or an out-of-band workaround.
 - `devices/<brand>/<model>.md` — per-device research notes (dump size,

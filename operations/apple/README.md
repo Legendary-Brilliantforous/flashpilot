@@ -11,5 +11,6 @@ apple/
   passcode_lock_remove/    — Passcode / Screen Time remove
 ```
 
-Sources: `python/core/apple.py`, `python/core/flows/apple` (planned), `src/` usb 05ac handling.
+Sources: Rust flows (`src/flows.rs` registry, `flow-run` CLI): `apple_info`, `apple_passcode_guide`, `apple_icloud_remove/add`; USB 05ac handling in `src/usb/`.
+(The old `python/core/apple.py` engine module was retired when the flows moved to Rust; `python/core/flows/apple` was planned but never shipped.)
 All lock removes live here now (not under carrier_unlock).
