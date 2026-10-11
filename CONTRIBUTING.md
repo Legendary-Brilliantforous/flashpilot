@@ -109,6 +109,25 @@ changed at once, so work through the table once and you're current.
 | *(nothing)* | `tests/test_devices.py` (new) | Multi-device + cancel-scope tests. |
 | *(nothing)* | `CHANGELOG.md` (new) | Per-release grouped changes; check it first. |
 
+### The Rust move (current architecture — the table above is history)
+
+After the split above, the engines moved to Rust and the Python side
+thinned out. Current truth:
+
+- **Flows live in `src/flows.rs`** (registry + `flow-run <key> [target]
+  [--code/--partition/--file/--dpc ...]`). `flow-list` is the source of
+  truth — verify a flow key there before citing it in docs.
+- **`python/core/core.py` is a thin shim** (~450 lines): `_RustFlow`
+  delegates to `bridge flow-run`, registry comes from the bridge with a
+  `JOBS` fallback. The 16 per-domain engine modules (`knox`, `qcn`,
+  `emmc`, `imei`, `apple`, `ofp`, `pac`, `health`, `flashing`, `spd_adb`,
+  `integrity`, `fastboot`, `usb_watch`, `compat`, `updater`, `safety`)
+  were deleted — do not reference them in new docs.
+- **GUI stays Python** (`python/gui/qt_app.py` + `devices.py`); it consumes
+  the Rust registry via `bridge.flow_list()`.
+- Old test files for removed Python flows were deleted with them; coverage
+  is the per-area suites + cargo `flows::tests`.
+
 ### API changes you must adapt to
 
 - **Resolvers take `key=None`.** `find_samsung()`, `_download_mode_device()`,

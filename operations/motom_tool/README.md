@@ -42,15 +42,15 @@ Knowledge from this tree already landed in the code:
 
 | Knowledge | Where |
 |---|---|
-| PenangF unlock (`oem get_key` → external credential → `oem key` + `flashing unlock`) | `flow_moto_penangf_unlock` in `python/core/core.py` |
-| Motorola fastboot factory reset (`oem fb_mode_set` → erase userdata/cache/**debug_token** → `oem fb_mode_clear`) | `flow_moto_factory_reset_fb` in `python/core/core.py` |
-| MTK OEM VIDs (Sony 0x0fce, LG 0x1004, OPPO 0x22d9, InFocus 0x9bb5) under which an MTK preloader/BROM re-enumerates | `MTK_OEM_VIDS` + `find_mtk()` in `python/core/mtk.py` |
-| PenangF note + unlock-data URL order (0/3/2) in the standard token flow | `flow_moto_oem_unlock_token` in `python/core/core.py` |
-| Samsung DVIF download-mode read (115200 8N1, `DVIF` query, `KEY=VALUE` pairs) | `_find_dvif_port` / `_dvif_read_info` / `flow_download_mode_dvif` in `python/core/core.py` |
+| PenangF unlock (`oem get_key` → external credential → `oem key` + `flashing unlock`) | Research note only — never implemented (no such flow; verify with `flow-list`) |
+| Motorola fastboot factory reset (`oem fb_mode_set` → erase userdata/cache/**debug_token** → `oem fb_mode_clear`) | Research note only — never implemented as a flow (factory reset runs via the `factory_reset` ADB flow / fastboot erase rows) |
+| MTK OEM VIDs (Sony 0x0fce, LG 0x1004, OPPO 0x22d9, InFocus 0x9bb5) under which an MTK preloader/BROM re-enumerates | Partially: `find_mtk()` in `python/core/mtk.py`; no `MTK_OEM_VIDS` table exists |
+| PenangF note + unlock-data URL order (0/3/2) in the standard token flow | Retired with the token flow (`moto_oem_unlock_token` removed); kept here as protocol reference |
+| Samsung DVIF download-mode read (115200 8N1, `DVIF` query, `KEY=VALUE` pairs) | Research note only — never implemented (no `dvif` code exists) |
 | MTK model→SoC mapping (G14→T616, G35→T760, G54→MT6855, ...) | `supported_devices.json` motorola entries |
 | Stock firmware mirrors (lolinet, year-based) | `operations/flashing/mediatek/README.md` |
 
-Tests: `tests/test_moto_tool_flows.py`. Not implemented (needs external
+Tests: the old `tests/test_moto_tool_flows.py` was removed; coverage lives in the per-area suites (`tests/test_frp_flow.py`, `tests/test_devices.py`, cargo `flows::tests`). Not implemented (needs external
 per-device assets or their paid server): Valeria patched/stock LK images,
 KG exploit binary, `mtk.img` reset image, SPD loader archives, unlock
 candidates, EROFS patcher, ExynosCli presets.

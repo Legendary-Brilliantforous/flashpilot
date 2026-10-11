@@ -116,14 +116,14 @@ the code is the source of truth.
 
 | Folder | What | Real code in |
 |---|---|---|
-| `operations/apple/` | Apple icloud, activation lock, MDM, passcode/lost mode remove | `python/core/apple.py`, registered in `core.FLOWS` |
+| `operations/apple/` | Apple icloud, activation lock, MDM, passcode/lost mode remove | Rust flows (`src/flows.rs`: `apple_*` rows, `flow-run` CLI) + thin `python/core/core.py` shim |
 | `operations/frp/` | FRP bypass per-engine + per-device research notes. **Start with `operations/frp/INDEX.md`**. | `python/core/core.py` (`flow_*_frp*`), FRP-only surface in `python/core/frp.py` |
 | `operations/mdm/` | MDM / device-owner unlock + per-brand device notes | `python/core/core.py` (`flow_mdm_*`) |
 | `operations/screen_unlock/` | Screen lock remove (ADB / recovery / download / comprehensive) | `python/core/core.py` (`flow_screen_lock_*`) |
 | `operations/battery/` | Battery report / repair / load test (over ADB) | `python/core/core.py` (battery flows) |
 | `operations/network/` | SIM state, DNS, radio reset | `python/core/core.py` (network flows) |
 | `operations/carrier_unlock/` | Carrier lock (Apple, MTK) | `python/core/core.py` (`flow_carrier_lock_*`) |
-| `operations/flashing/` | Per-vendor flashing guides (Samsung Odin, MTK DA, Qualcomm EDL, UNISOC SPD, PIT) | `python/core/core.py` (odin/mtk/qcom/spd flows) + `python/core/flashing.py` |
+| `operations/flashing/` | Per-vendor flashing guides (Samsung Odin, MTK DA, Qualcomm EDL, UNISOC SPD, PIT) | Rust flows (`src/flows.rs`: odin/mtk/qcom/spd rows, `flow-run` CLI) |
 | `operations/usb/` | USB enumeration and detection notes | `python/core/{usb_watch,bridge,devices}.py` |
 
 ## `build/` — gitignored runtime/build artifacts

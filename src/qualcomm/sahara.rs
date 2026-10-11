@@ -11,14 +11,20 @@ pub const QCOM_VID: u16 = 0x05c6;
 /// Common Qualcomm EDL PIDs (broad, not only 9008)
 pub const QCOM_EDL_PIDS: &[u16] = &[
     0x9008,  // Generic EDL
-    0x9006,  // Alt EDL
     0x900E,  // EDL with Sahara
     0x901D,  // EDL diag
     0x9025,  // Some Xiaomi devices
-    0x9026,  // QCOM 9008 var
     0x9046,  // QCOM EDL var
     0x9066,  // QCOM EDL var
     0x90DB,  // Some OPPO/Vivo devices
+];
+/// Qualcomm PIDs that are DIAG composites, not Sahara EDL: 0x9006 is the
+/// documented "HS-USB Diagnostics 9006" and 0x9026 enumerates as a
+/// diag+modem+mass-storage composite (observed live). They get DIAG
+/// flows, never a Sahara hello.
+pub const QCOM_DIAG_PIDS: &[u16] = &[
+    0x9006,  // HS-USB Diagnostics 9006
+    0x9026,  // Diag composite
 ];
 /// All Qualcomm PIDs that indicate Qualcomm chip (EDL + normal diag + modem)
 pub const QCOM_ALL_PIDS: &[u16] = &[

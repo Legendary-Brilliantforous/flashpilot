@@ -1,8 +1,9 @@
 # carrier_unlock/
 Carrier / SIM lock (SIM-lock / NVDATA patch).
 
-Sources: `python/core/flows/brom.py` flow_carrier_lock_*, `_mtk_simlock_patch`, `_mtk_analyze_nvdata`
-Rust: mtkDA nvdata paths, qualcomm qcn imei repair (src/qualcomm/* + python/core/qcn.py)
+Sources: Rust flows (`src/flows.rs` registry, `flow-run` CLI): `carrier_lock_status`, `carrier_lock_mtk`, `qcn_imei_repair`, `imei_repair_mtk/spd`
+Rust: mtkDA nvdata paths, qualcomm qcn imei repair (src/qualcomm/*)
+(The old `python/core/qcn.py` engine module and `python/core/flows/brom.py` were retired/never shipped; the logic lives in the Rust flows.)
 
 ```
 carrier_unlock/

@@ -480,9 +480,12 @@ class LogHighlighter:
                 fmt_accent = QTextCharFormat(); fmt_accent.setForeground(QColor(C["accent_hi"]))
                 fmt_dim = QTextCharFormat(); fmt_dim.setForeground(QColor(C["dim"]))
                 if "[odin4]" in text: hself.setFormat(0, len(text), fmt_accent)
+                elif "FAILED" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
+                elif "OKAY [" in text or text.strip().startswith("OKAY"): hself.setFormat(0, len(text), fmt_ok)
+                elif text.strip().startswith(">>>"): hself.setFormat(0, len(text), fmt_accent)
                 elif "[ok]" in text or "successful" in text.lower(): hself.setFormat(0, len(text), fmt_ok)
                 elif "[warn]" in text or "failed" in text.lower(): hself.setFormat(0, len(text), fmt_warn)
-                elif "[error]" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
+                elif "[error]" in text: hself.setFormat(0, len(text), fmt_err)
                 elif text.strip().startswith("[check]"): hself.setFormat(0, len(text), fmt_dim)
         self._hl = _HL(doc)
 
@@ -609,16 +612,17 @@ class DeviceMonitor(QObject):
                     adb_devs = self._last_adb_devs if usb else []
                 self._last_adb_devs = adb_devs
                 samsung = samsung_pre
-                mtk_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == mtk.MTK_VID]
+                mtk_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") in _MTK_VIDS]
                 fastboot = [d for d in usb if isinstance(d, dict) and _is_fastboot(d)]
                 edl_devs = [d for d in usb if isinstance(d, dict) and _is_edl(d)]
                 qcom_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x05C6]
                 spd_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x1782]
                 apple_devs = [d for d in usb if isinstance(d, dict) and _is_apple(d)]
+                motorola_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == _MOTOROLA_VID]
                 other_android = [d for d in usb if isinstance(d, dict) and _is_generic_android(d)]
                 mode = _detect_mode(samsung, mtk_devs, adb_devs, fastboot, edl_devs,
                                     qcom_devs, spd_devs, apple_devs=apple_devs,
-                                    other_android=other_android)
+                                    other_android=other_android + motorola_devs)
                 current_state = {
                     "samsung": samsung,
                     "mtk": mtk_devs,
@@ -629,6 +633,7 @@ class DeviceMonitor(QObject):
                     "qcom": qcom_devs,
                     "spd": spd_devs,
                     "apple": apple_devs,
+                    "motorola": motorola_devs,
                     "other_android": other_android,
                     "mode": mode,
                 }
@@ -949,6 +954,11 @@ def _is_edl(d):
 
 _APPLE_VID = 0x05AC
 _ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
+# MTK vendor IDs for the monitor buckets: the main 0x0E8D plus the OEM VIDs
+# under which an MTK preloader/BROM re-enumerates (a bare stage has no
+# interfaces, so VID membership is the only signal — TFT parity).
+_MTK_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
+_MOTOROLA_VID = 0x22B8
 
 
 def _is_apple(d):
@@ -2222,6 +2232,10 @@ class FlashPilotWindow(QMainWindow):
         except Exception:
             pass
         self.refresh_device()
+        try:
+            self.update_device_strip()
+        except Exception:
+            pass
         self.log_line(
             f"FlashPilot — console ready "
             f"({_time.strftime('%Y-%m-%d %H:%M:%S')})"
@@ -2467,6 +2481,80 @@ class FlashPilotWindow(QMainWindow):
         self.oem_bar = OemChipBar(oem_items, tools=tools)
         self.oem_bar.section_selected.connect(self._on_section)
         root_lay.addWidget(self.oem_bar)
+
+        # Phase-1 device-first strip: connected phone (model · mode ·
+        # transports) + manual refresh. Updates on section change and
+        # drives the drill-down dimming pass (nothing removed, nothing
+        # rerouted — non-applicable buttons only dim).
+        self._dev_strip = QFrame()
+        self._dev_strip.setObjectName("devstrip")
+        self._dev_strip.setStyleSheet(
+            f"QFrame#devstrip {{ background: rgba(16, 25, 39, 230);"
+            f" border:1px solid {C['border']}; border-radius:9px; }}"
+        )
+        _strip_lay = QHBoxLayout(self._dev_strip)
+        _strip_lay.setContentsMargins(12, 5, 8, 5)
+        _strip_lay.setSpacing(8)
+        self._dev_dot = QLabel("○")
+        self._dev_dot.setStyleSheet(f"color:{C['dim']}; font-size:15px; font-weight:800;")
+        _strip_lay.addWidget(self._dev_dot)
+        _dev_txt_col = QVBoxLayout()
+        _dev_txt_col.setContentsMargins(0, 0, 0, 0)
+        _dev_txt_col.setSpacing(0)
+        self._dev_title = QLabel("No phone detected")
+        self._dev_title.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:800;")
+        _dev_txt_col.addWidget(self._dev_title)
+        self._dev_text = QLabel("Connect a device over USB")
+        self._dev_text.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
+        _dev_txt_col.addWidget(self._dev_text)
+        _strip_lay.addLayout(_dev_txt_col, 1)
+        _strip_refresh = QPushButton("⟳")
+        _strip_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        _strip_refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        _strip_refresh.setFixedSize(26, 24)
+        _strip_refresh.setToolTip("Re-detect the connected phone")
+        _strip_refresh.setStyleSheet(
+            "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9);"
+            " border:1px solid rgba(255,255,255,0.08); border-radius:6px; font-size:12px; }"
+            " QPushButton:hover { color:#e2e8f0; border-color:rgba(255,255,255,0.22); }"
+            " QPushButton:focus { outline:none; }"
+        )
+        _strip_refresh.clicked.connect(lambda: self.update_device_strip())
+        _strip_lay.addWidget(_strip_refresh)
+        root_lay.addWidget(self._dev_strip)
+
+        # Phase-1 device-first strip: connected phone (model · mode ·
+        # transports) + a refresh that also re-runs the applicability
+        # dimming pass over the current page. Read-only; nothing is
+        # removed or re-routed.
+        self._dev_strip = QFrame()
+        self._dev_strip.setObjectName("devstrip")
+        self._dev_strip.setStyleSheet(
+            f"QFrame#devstrip {{ background: rgba(16, 25, 39, 200);"
+            f" border: 1px solid {C['border']}; border-radius: 9px; }}"
+        )
+        _dsl = QHBoxLayout(self._dev_strip)
+        _dsl.setContentsMargins(12, 5, 8, 5)
+        _dsl.setSpacing(8)
+        self._dev_dot = QLabel("○")
+        self._dev_dot.setStyleSheet(f"color:{C['dim']}; font-size:13px; font-weight:800;")
+        _dsl.addWidget(self._dev_dot)
+        self._dev_text = QLabel("No phone detected — connect a device over USB")
+        self._dev_text.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        _dsl.addWidget(self._dev_text, 1)
+        self._dev_refresh = QPushButton("⟳")
+        self._dev_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._dev_refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._dev_refresh.setToolTip("Re-detect the connected phone + dim actions it can't use")
+        self._dev_refresh.setStyleSheet(
+            f"QPushButton {{ color:{C['dim']}; background:transparent; border:none;"
+            " font-size:13px; padding:2px 8px; border-radius:6px; }"
+            f"QPushButton:hover {{ color:{C['accent_hi']}; background:rgba(255,255,255,12); }}"
+            " QPushButton:focus { outline:none; border:none; }"
+        )
+        self._dev_refresh.clicked.connect(lambda: self.update_device_strip())
+        _dsl.addWidget(self._dev_refresh)
+        root_lay.addWidget(self._dev_strip)
 
         body = QHBoxLayout()
         body.setContentsMargins(10, 4, 10, 6)
@@ -3869,6 +3957,76 @@ class FlashPilotWindow(QMainWindow):
             pass
         lay.addWidget(self.log, 1)
 
+        # ---- CMD bar: transport dropdown + command input + run ----
+        # ADB shell runs over the authorized session, Fastboot sends one
+        # raw command to the connected fastboot phone, Bridge runs a local
+        # bridge subcommand. History on Up/Down, Ctrl+Enter runs.
+        cmd_row = QHBoxLayout()
+        cmd_row.setSpacing(6)
+        self.cmd_mode = QComboBox()
+        self.cmd_mode.addItems(["ADB shell", "Fastboot", "Bridge"])
+        self.cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.cmd_mode.setFixedWidth(108)
+        self.cmd_mode.setToolTip(
+            "ADB shell: run a shell command on the authorized phone\n"
+            "Fastboot: send one raw command (e.g. getvar all)\n"
+            "Bridge: run a local flashpilot-bridge subcommand")
+        self.cmd_mode.setStyleSheet(
+            f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
+            f" border-radius:6px; padding:4px 8px; color:{C['text']}; font-size:11px; font-weight:700; }}"
+            f" QComboBox:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QComboBox:focus {{ outline:none; }}"
+            f" QComboBox QAbstractItemView {{ background:{C['card']}; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+        )
+        cmd_row.addWidget(self.cmd_mode)
+        self.cmd_input = QLineEdit()
+        self.cmd_input.setPlaceholderText("Type a command — Ctrl+Enter runs  (Up/Down: history)")
+        self.cmd_input.setStyleSheet(
+            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+            f" border-radius:6px; padding:5px 10px; color:{C['text']};"
+            f" font-family:'JetBrains Mono','Consolas',monospace; font-size:11px;"
+            f" selection-background-color:{C['accent']}; }}"
+            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+        )
+        self.cmd_input.returnPressed.connect(self._run_cmd)
+        cmd_row.addWidget(self.cmd_input, 1)
+        self._cmd_hist = []
+        self._cmd_hist_idx = 0
+        QShortcut(QKeySequence(Qt.Key.Key_Up), self.cmd_input).activated.connect(
+            lambda: self._cmd_hist_nav(-1))
+        QShortcut(QKeySequence(Qt.Key.Key_Down), self.cmd_input).activated.connect(
+            lambda: self._cmd_hist_nav(1))
+        QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._run_cmd)
+        self.cmd_run_btn = self._tool_button("Run", self._run_cmd)
+        self.cmd_run_btn.setToolTip("Run the command above (Ctrl+Enter)")
+        cmd_row.addWidget(self.cmd_run_btn)
+        lay.addLayout(cmd_row)
+
+        # quick-command chips (replace the static shortcut hints)
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(6)
+        for chip_txt, chip_mode, chip_cmd in (
+            ("adb devices", "Bridge", "adb-devices"),
+            ("fastboot devices", "Bridge", "fastboot-devices"),
+            ("getvar all", "Fastboot", "getvar all"),
+            ("detect-merged", "Bridge", "detect-merged"),
+        ):
+            chip = QPushButton(chip_txt)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            chip.setToolTip(f"Run: {chip_cmd}")
+            chip.setStyleSheet(
+                f"color:{C['dim']}; font-size:9px; font-weight:700;"
+                f" background:{C['card_hover']}; border:1px solid {C['border']};"
+                f" border-radius:6px; padding:3px 8px;"
+            )
+            chip.clicked.connect(
+                lambda _=False, m=chip_mode, c=chip_cmd: self._quick_cmd(m, c))
+            quick_row.addWidget(chip)
+        quick_row.addStretch(1)
+        lay.addLayout(quick_row)
+
         # footer: shortcut hints (collapsed into a single line for the narrow
         # right-hand console column)
         footer = QFrame()
@@ -3897,7 +4055,115 @@ class FlashPilotWindow(QMainWindow):
 
         return panel
 
+    def _quick_cmd(self, mode, cmd):
+        """Quick chip: load the command into the CMD bar and run it."""
+        try:
+            idx = {"ADB shell": 0, "Fastboot": 1, "Bridge": 2}[mode]
+            self.cmd_mode.setCurrentIndex(idx)
+            self.cmd_input.setText(cmd)
+        except Exception:
+            pass
+        self._run_cmd()
+
+    def _cmd_hist_nav(self, direction):
+        """Up/Down through the CMD history."""
+        if not getattr(self, "_cmd_hist", None):
+            return
+        idx = getattr(self, "_cmd_hist_idx", 0) + direction
+        idx = max(0, min(idx, len(self._cmd_hist)))
+        self._cmd_hist_idx = idx
+        self.cmd_input.setText(self._cmd_hist[idx] if idx < len(self._cmd_hist) else "")
+
+    def _run_cmd(self):
+        """Run the CMD bar input in a worker thread (never block the UI)."""
+        try:
+            text = self.cmd_input.text().strip()
+        except Exception:
+            return
+        if not text:
+            return
+        mode = self.cmd_mode.currentText()
+        self._cmd_hist.append(text)
+        if len(self._cmd_hist) > 100:
+            del self._cmd_hist[:-100]
+        self._cmd_hist_idx = len(self._cmd_hist)
+        self._ui.line.emit(f">>> [{mode}] {text}")
+        threading.Thread(target=self._cmd_work, args=(mode, text), daemon=True).start()
+
+    def _cmd_work(self, mode, text):
+        """Worker: ADB shell / one raw fastboot command / bridge subcommand."""
+        try:
+            if mode == "Fastboot":
+                target = None
+                try:
+                    for row in device_pages.connected_rows():
+                        if "FASTBOOT" in (row.get("transports") or []):
+                            key = row.get("key") or row.get("usb_key")
+                            try:
+                                target = _devices.resolve_usb_target(key)
+                            except Exception:
+                                target = None
+                            if target:
+                                break
+                except Exception:
+                    target = None
+                if not target:
+                    self._ui.line.emit("[warn] no fastboot phone connected")
+                    return
+                out = bridge.fastboot_cmd(target, text.split(), timeout_ms=20000)
+            elif mode == "Bridge":
+                out = bridge._run(text.split(), timeout=60)
+            else:
+                out = bridge.adb_shell(text, timeout=30)
+            for line in str(out).splitlines():
+                self._ui.line.emit(line if line.strip() else " ")
+            self._ui.line.emit("[ok] done")
+        except Exception as e:  # noqa: BLE001
+            self._ui.line.emit(f"[error] CMD failed: {e}")
+
     # ----------------------------- section switching ----------------------
+    def update_device_strip(self):
+        """Phase-1 device-first: refresh the connected-phone strip and dim
+        drill-down buttons the phone can't use. Never raises (a failed
+        detect simply shows 'no phone', everything stays enabled)."""
+        try:
+            rows = device_pages.connected_rows()
+        except Exception:
+            rows = []
+        try:
+            if not rows:
+                self._dev_dot.setText("○")
+                self._dev_dot.setStyleSheet(f"color:{C['dim']}; font-size:15px; font-weight:800;")
+                self._dev_title.setText("No phone detected")
+                self._dev_text.setText("Connect a device over USB")
+            elif len(rows) == 1:
+                r = rows[0]
+                transports = "/".join(r.get("transports") or ["?"])
+                mode = r.get("mode") or "phone"
+                self._dev_dot.setText("●")
+                self._dev_dot.setStyleSheet("color:#34d399; font-size:15px; font-weight:800;")
+                self._dev_title.setText(f"{r.get('label', mode)[:60]}")
+                self._dev_text.setText(f"{mode} · [{transports}] — only matching actions are lit")
+                try:
+                    ports = device_pages.usb_serial_ports(
+                        int(r.get("bus", 0) or 0), int(r.get("address", 0) or 0))
+                except Exception:
+                    ports = []
+                if ports:
+                    self._dev_strip.setToolTip(f"Serial ports: {', '.join(ports)}")
+                else:
+                    self._dev_strip.setToolTip("")
+            else:
+                r = rows[0]
+                transports = "/".join(r.get("transports") or ["?"])
+                self._dev_dot.setText("●")
+                self._dev_dot.setStyleSheet("color:#fbbf24; font-size:15px; font-weight:800;")
+                self._dev_title.setText(f"{len(rows)} phones connected")
+                self._dev_text.setText(f"showing {r.get('label', '')[:40]} · [{transports}]")
+            device_pages.apply_applicability(self._stack.currentWidget())
+        except Exception:
+            pass
+
     def _on_section(self, key):
         self._current_section = key
         idx = getattr(self, "_section_index", {}).get(key, 0)
@@ -3905,6 +4171,11 @@ class FlashPilotWindow(QMainWindow):
         if hasattr(self, "oem_bar"):
             self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
+        # Phase-1 device-first: the newly shown page gets the dimming pass.
+        try:
+            self.update_device_strip()
+        except Exception:
+            pass
         # Fix shrink: stacked pages hide FlowLayout's width; force relayout on show.
         try:
             w = self._stack.currentWidget()
@@ -11143,7 +11414,8 @@ class FlashPilotWindow(QMainWindow):
         self._last_spd_target = (
             f"{spd_devs[0]['bus']}:{spd_devs[0]['address']}" if spd_devs else None
         )
-        connected_any = bool(fastboot or samsung or mtk_devs or edl_devs or qcom_devs or spd_devs or apple_devs or other_android or adb_devs)
+        motorola_devs = state.get("motorola", [])
+        connected_any = bool(fastboot or samsung or mtk_devs or edl_devs or qcom_devs or spd_devs or apple_devs or motorola_devs or other_android or adb_devs)
         self._accent_strip.set_active(connected_any)
 
         # Track ADB exposure for lazy probing - don't spawn adb server at startup for non-ADB devices
@@ -11162,6 +11434,13 @@ class FlashPilotWindow(QMainWindow):
             except Exception:
                 pass
         self._last_conn = connected_any
+
+        # Phase-1 device-first: live strip + dimming on every monitor tick
+        # (cheap: the detect cache TTL absorbs the 3s poll cadence).
+        try:
+            self.update_device_strip()
+        except Exception:
+            pass
 
         # Any connected low-level/composite device gets the live animation;
         # only a truly empty bus stays disconnected.
@@ -11335,6 +11614,31 @@ class FlashPilotWindow(QMainWindow):
             if apple_fallback and apple_fallback.lower() == "adb":
                 apple_fallback = None
             self._update_device_info(True, pid, mode, fallback_model=apple_fallback)
+        elif motorola_devs:
+            d = motorola_devs[0]
+            pid = d.get("pid")
+            mfr = d.get("manufacturer") or ""
+            prod = d.get("product") or ""
+            self.orb.set_connected(True)
+            self.scene.set_connected(True)
+            vendor_display = (prod or mfr or "MOTOROLA")
+            self.scene.set_vendor(vendor_display.upper(), C["accent_hi"])
+            self._set_conn_glow(C["accent_hi"])
+            self.conn_state.setText(
+                f"{d.get('vid', 0):04x}:{pid:04x} · Motorola\n{prod or mfr}\nbus {d['bus']} · addr {d['address']}"
+            )
+            self.conn_state.setStyleSheet(
+                f"color:{C['accent_hi']}; font-size:12px; font-weight:600; background:transparent;"
+            )
+            moto_fallback = (d.get("product") or d.get("manufacturer") or "").strip() or None
+            if moto_fallback and moto_fallback.lower() == "adb":
+                moto_fallback = None
+            if moto_fallback is None and self._cached_model:
+                moto_fallback = self._cached_model
+            self._update_device_info(True, pid, mode, fallback_model=moto_fallback)
+            ov = _adb_overlay(adb_devs, d)
+            if ov:
+                self.conn_state.setText(self.conn_state.text() + ov)
         elif other_android:
             d = other_android[0]
             pid = d.get("pid")
