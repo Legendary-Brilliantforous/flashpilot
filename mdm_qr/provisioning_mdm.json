@@ -1,0 +1,10 @@
+{
+  "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE": {
+    "fp_email": "flashpilot@local"
+  },
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "org.flashpilot.dpc/.FpAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://play.google.com/store/apps/details?id=org.flashpilot.dpc",
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+  "android.app.extra.PROVISIONING_SKIP_EDUCATION_SCREENS": true,
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true
+}

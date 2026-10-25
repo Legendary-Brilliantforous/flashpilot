@@ -11,6 +11,16 @@ apple/
   passcode_lock_remove/    — Passcode / Screen Time remove
 ```
 
+Per-operation status (all lock removals are EXPERIMENTAL, ownership proof +
+audit log required; A9–A11 = checkm8 DFU ramdisk, A12+ = information only):
+
+- `icloud/` — iCloud/Activation Lock remove paths.
+- `activation_lock/` — Find My Activation Lock bypass paths.
+- `mdm/` — MDM / DEP profile removal (ABM).
+- `enterprise_remote_lock/` — enterprise/DEP remote-lock clear.
+- `lost_mode_remove/` — Find My Lost Mode clear.
+- `passcode_lock_remove/` — passcode / Screen Time removal.
+
 Sources: Rust flows (`src/flows.rs` registry, `flow-run` CLI): `apple_info`, `apple_passcode_guide`, `apple_icloud_remove/add`; USB 05ac handling in `src/usb/`.
 (The old `python/core/apple.py` engine module was retired when the flows moved to Rust; `python/core/flows/apple` was planned but never shipped.)
 All lock removes live here now (not under carrier_unlock).

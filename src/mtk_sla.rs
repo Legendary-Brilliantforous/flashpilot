@@ -8,7 +8,7 @@
 
 use num_bigint::BigUint;
 
-use crate::mtk_sla_keys::{BROM_SLA_KEYS, SlaKey};
+use crate::mtk_sla_keys::{SlaKey, BROM_SLA_KEYS};
 
 /// PKCS#1 v1.5-style block with `00 01` header, 0xFF padding and the message,
 /// then `em^e mod n`, serialized to exactly `k` bytes (mtkclient
@@ -90,7 +90,10 @@ mod tests {
 
     #[test]
     fn swap_words_swaps_pairs() {
-        assert_eq!(swap_words(&[0xAB, 0xCD, 0x01, 0x02]), vec![0xCD, 0xAB, 0x02, 0x01]);
+        assert_eq!(
+            swap_words(&[0xAB, 0xCD, 0x01, 0x02]),
+            vec![0xCD, 0xAB, 0x02, 0x01]
+        );
         // odd trailing byte is left as-is (matches mtkclient range(0,len,2))
         assert_eq!(swap_words(&[0xAB, 0xCD, 0xEF]), vec![0xCD, 0xAB, 0xEF]);
     }

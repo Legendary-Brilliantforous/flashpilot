@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
-use crate::error::{Result, BridgeError, UsbError};
+use crate::error::{BridgeError, Result, UsbError};
 use crate::usb;
 use rusb::Context;
 
@@ -51,7 +51,10 @@ fn read_string(d: &[u8], off: &mut usize) -> String {
     let end = (*off + len).min(d.len());
     let raw = &d[*off..end];
     *off = end;
-    String::from_utf8_lossy(raw).trim_matches('\0').trim().to_string()
+    String::from_utf8_lossy(raw)
+        .trim_matches('\0')
+        .trim()
+        .to_string()
 }
 
 fn read_u32_array(d: &[u8], off: &mut usize) -> Vec<u32> {
@@ -119,7 +122,9 @@ pub fn mtp_info(target: &str, timeout_ms: u64) -> Result<String> {
         None => None,
     };
 
-    let _context = Context::new().map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let _context = Context::new().map_err(|e| {
+        crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string()))
+    })?;
     let info = usb::collect_devices(Some(vid))?;
     let target_dev = info
         .iter()
@@ -189,7 +194,9 @@ pub fn mtp_info(target: &str, timeout_ms: u64) -> Result<String> {
             Err(BridgeError::Usb(UsbError::Timeout)) => {}
             Err(e) => {
                 let _ = handle.release_interface(mtp_iface.number);
-                return Err(BridgeError::InvalidArgument(format!("bulk read (session): {e}")));
+                return Err(BridgeError::InvalidArgument(format!(
+                    "bulk read (session): {e}"
+                )));
             }
         }
     }
@@ -247,14 +254,30 @@ pub fn mtp_info(target: &str, timeout_ms: u64) -> Result<String> {
     }
 
     let mut off = 0usize;
-    let standard_version = if off + 2 <= payload.len() { u16_at(&payload, off) } else { 0 };
+    let standard_version = if off + 2 <= payload.len() {
+        u16_at(&payload, off)
+    } else {
+        0
+    };
     off += 2;
-    let vendor_extension_id = if off + 4 <= payload.len() { u32_at(&payload, off) } else { 0 };
+    let vendor_extension_id = if off + 4 <= payload.len() {
+        u32_at(&payload, off)
+    } else {
+        0
+    };
     off += 4;
-    let mtp_version = if off + 2 <= payload.len() { u16_at(&payload, off) } else { 0 };
+    let mtp_version = if off + 2 <= payload.len() {
+        u16_at(&payload, off)
+    } else {
+        0
+    };
     off += 2;
     let mtp_extensions = read_string(&payload, &mut off);
-    let functional_mode = if off + 2 <= payload.len() { u16_at(&payload, off) } else { 0 };
+    let functional_mode = if off + 2 <= payload.len() {
+        u16_at(&payload, off)
+    } else {
+        0
+    };
     off += 2;
     let operations = read_u32_array(&payload, &mut off);
     let events = read_u32_array(&payload, &mut off);

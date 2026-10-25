@@ -59,12 +59,11 @@ const RSA_BYTES: usize = 256;
 
 // PKCS#1 v1.5 DigestInfo prefixes.
 const SHA256_PREFIX: &[u8] = &[
-    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
-    0x01, 0x05, 0x00, 0x04, 0x20,
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
 ];
 const SHA1_PREFIX: &[u8] = &[
-    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04,
-    0x14,
+    0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
 ];
 
 #[derive(Debug)]
@@ -167,14 +166,18 @@ impl<'a> Der<'a> {
     fn expect_seq(&mut self) -> Result<Der<'a>> {
         let (tag, body) = self.read_tlv()?;
         if tag != 0x30 {
-            return Err(BridgeError::InvalidArgument("DER expected SEQUENCE".to_string()));
+            return Err(BridgeError::InvalidArgument(
+                "DER expected SEQUENCE".to_string(),
+            ));
         }
         Ok(Der::new(body))
     }
     fn expect_int(&mut self) -> Result<Vec<u8>> {
         let (tag, body) = self.read_tlv()?;
         if tag != 0x02 {
-            return Err(BridgeError::InvalidArgument("DER expected INTEGER".to_string()));
+            return Err(BridgeError::InvalidArgument(
+                "DER expected INTEGER".to_string(),
+            ));
         }
         Ok(body.to_vec())
     }
@@ -253,15 +256,21 @@ fn parse_pkcs8(der: &[u8]) -> Result<(BigUint, BigUint, BigUint, BigUint, BigUin
     let (oid_tag, oid) = alg.read_tlv()?;
     const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
     if oid_tag != 0x06 || oid != RSA_OID {
-        return Err(BridgeError::InvalidArgument("adbkey is not an RSA key".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "adbkey is not an RSA key".to_string(),
+        ));
     }
     let (null_tag, _) = alg.read_tlv()?;
     if null_tag != 0x05 {
-        return Err(BridgeError::InvalidArgument("adbkey alg params not NULL".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "adbkey alg params not NULL".to_string(),
+        ));
     }
     let (oct_tag, inner) = outer.read_tlv()?;
     if oct_tag != 0x04 {
-        return Err(BridgeError::InvalidArgument("adbkey missing private key octets".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "adbkey missing private key octets".to_string(),
+        ));
     }
     let mut pkcs1 = Der::new(inner);
     let mut seq = pkcs1.expect_seq()?;
@@ -269,7 +278,13 @@ fn parse_pkcs8(der: &[u8]) -> Result<(BigUint, BigUint, BigUint, BigUint, BigUin
     let ints: Vec<BigUint> = (0..8)
         .map(|_| seq.expect_int().map(|b| BigUint::from_bytes_be(&b)))
         .collect::<Result<Vec<_>>>()?;
-    Ok((ints[0].clone(), ints[1].clone(), ints[2].clone(), ints[3].clone(), ints[4].clone()))
+    Ok((
+        ints[0].clone(),
+        ints[1].clone(),
+        ints[2].clone(),
+        ints[3].clone(),
+        ints[4].clone(),
+    ))
 }
 
 /// RSA components for PKCS#8 encoding.
@@ -293,7 +308,9 @@ fn encode_pkcs8(k: &RsaParts) -> Vec<u8> {
         inner.extend_from_slice(&bi(x));
     }
     let inner_seq = der_tlv(0x30, &inner);
-    let mut oid = vec![0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+    let mut oid = vec![
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+    ];
     oid.extend_from_slice(&[0x05, 0x00]);
     let alg = der_tlv(0x30, &oid);
     let mut outer = Vec::new();
@@ -338,7 +355,11 @@ impl AdbKey {
             use sha1::{Digest, Sha1};
             Sha1::digest(token).to_vec()
         };
-        let prefix = if use_sha256 { SHA256_PREFIX } else { SHA1_PREFIX };
+        let prefix = if use_sha256 {
+            SHA256_PREFIX
+        } else {
+            SHA1_PREFIX
+        };
         let k = self.k_bytes();
         let mut t = Vec::with_capacity(prefix.len() + digest.len());
         t.extend_from_slice(prefix);
@@ -416,7 +437,9 @@ impl AdbKey {
             p.extend_from_slice(&exp);
             u32::from_be_bytes([p[0], p[1], p[2], p[3]])
         } else {
-            return Err(BridgeError::InvalidArgument("adb RSA exponent too large".to_string()));
+            return Err(BridgeError::InvalidArgument(
+                "adb RSA exponent too large".to_string(),
+            ));
         };
         blob.extend_from_slice(&exp_u32.to_le_bytes());
         Ok(format!(
@@ -454,7 +477,9 @@ fn load_or_create_key() -> Result<AdbKey> {
     let d = rsa_to_nbi(privk.d());
     let primes = privk.primes();
     if primes.len() < 2 {
-        return Err(BridgeError::Internal("rsa keygen gave <2 primes".to_string()));
+        return Err(BridgeError::Internal(
+            "rsa keygen gave <2 primes".to_string(),
+        ));
     }
     let (p, q) = (rsa_to_nbi(&primes[0]), rsa_to_nbi(&primes[1]));
     let dp = &d % (&p - &one);
@@ -479,7 +504,12 @@ fn load_or_create_key() -> Result<AdbKey> {
     }
     fs::write(&path, &der).map_err(|e| BridgeError::Io(e.to_string()))?;
     let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    let pubkey = AdbKey { n: n.clone(), e: e.clone(), d: d.clone() }.pubkey_string()?;
+    let pubkey = AdbKey {
+        n: n.clone(),
+        e: e.clone(),
+        d: d.clone(),
+    }
+    .pubkey_string()?;
     let _ = fs::write(path.with_extension("pub"), format!("{pubkey}\n"));
     Ok(AdbKey { n, e, d })
 }
@@ -510,18 +540,30 @@ impl Session {
         // ADB payloads never exceed MAXDATA here; chunk by endpoint MPS.
         let _timeout = Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref()));
         self.dev
-            .write_bulk(self.ep_out, &pkt, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))
+            .write_bulk(
+                self.ep_out,
+                &pkt,
+                Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())),
+            )
             .map(|_| ())
     }
 
     fn read_msg(&self) -> Result<Msg> {
         self.check_deadline()?;
         let mut hdr = [0u8; 24];
-        self.dev.read_exact(self.ep_in, &mut hdr, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))?;
+        self.dev.read_exact(
+            self.ep_in,
+            &mut hdr,
+            Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())),
+        )?;
         let (cmd, a0, a1, len) = decode_header(&hdr)?;
         let mut payload = vec![0u8; len as usize];
         if len > 0 {
-            self.dev.read_exact(self.ep_in, &mut payload, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))?;
+            self.dev.read_exact(
+                self.ep_in,
+                &mut payload,
+                Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())),
+            )?;
             let (_, _, _, _) = decode_header(&hdr)?; // re-validated; checksum below
             let (_, got) = (len, checksum(&payload));
             let expected = u32::from_le_bytes(hdr[16..20].try_into().unwrap());
@@ -531,7 +573,12 @@ impl Session {
                 ));
             }
         }
-        Ok(Msg { cmd, arg0: a0, arg1: a1, payload })
+        Ok(Msg {
+            cmd,
+            arg0: a0,
+            arg1: a1,
+            payload,
+        })
     }
 
     /// CNXN handshake with AUTH. Returns device banner props on success.
@@ -547,7 +594,11 @@ impl Session {
             self.check_deadline()?;
             eprintln!("[adb] connect: reading reply ...");
             let m = self.read_msg()?;
-            eprintln!("[adb] connect: got 0x{:08x} (len {})", m.cmd, m.payload.len());
+            eprintln!(
+                "[adb] connect: got 0x{:08x} (len {})",
+                m.cmd,
+                m.payload.len()
+            );
             match m.cmd {
                 A_CNXN => {
                     parse_banner(&m.payload, banner);
@@ -577,9 +628,7 @@ impl Session {
                     // TOKEN replies back-to-back desyncs slow/noisy links and
                     // burns the whole deadline on transport retries.
                     if token_rounds >= 2 {
-                        std::thread::sleep(Duration::from_millis(auth_backoff_ms(
-                            token_rounds,
-                        )));
+                        std::thread::sleep(Duration::from_millis(auth_backoff_ms(token_rounds)));
                     }
                     // Alternate hashes across rounds — and keep BOTH in
                     // play: setting SHA-1 at round 2 and never going back
@@ -721,7 +770,11 @@ impl Session {
     fn sync_write_noreply(&self, local: u32, remote: u32, payload: &[u8]) {
         let raw = encode_msg(A_WRTE, local, remote, payload);
         let _timeout = Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref()));
-            let _ = self.dev.write_bulk(self.ep_out, &raw, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())));
+        let _ = self.dev.write_bulk(
+            self.ep_out,
+            &raw,
+            Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())),
+        );
     }
 
     /// `adb pull`: STAT then RECV, streaming DATA to `local_path`.
@@ -738,7 +791,9 @@ impl Session {
         }
         if id != "STAT" || data.len() < 12 {
             return Err(BridgeError::Protocol(
-                crate::error::ProtocolError::UnexpectedResponse(format!("pull: bad STAT reply {id}")),
+                crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "pull: bad STAT reply {id}"
+                )),
             ));
         }
         let size = u32::from_le_bytes(data[4..8].try_into().unwrap()) as u64;
@@ -762,7 +817,8 @@ impl Session {
             let (id, data) = self.sync_read(local, remote_id)?;
             match id.as_str() {
                 "DATA" => {
-                    f.write_all(&data).map_err(|e| BridgeError::Io(e.to_string()))?;
+                    f.write_all(&data)
+                        .map_err(|e| BridgeError::Io(e.to_string()))?;
                     got += data.len() as u64;
                 }
                 "DONE" => break,
@@ -783,8 +839,8 @@ impl Session {
 
     /// `adb push`: SEND then DATA chunks then DONE, expect OKAY.
     fn push(&mut self, local_path: &str, remote: &str) -> Result<String> {
-        let bytes =
-            fs::read(local_path).map_err(|e| BridgeError::Io(format!("push: read {local_path}: {e}")))?;
+        let bytes = fs::read(local_path)
+            .map_err(|e| BridgeError::Io(format!("push: read {local_path}: {e}")))?;
         let remote_id = self.open("sync:")?;
         let local = self.next_id - 1;
         let spec = format!("{remote},420");
@@ -800,7 +856,11 @@ impl Session {
             // read acks lazily would desync — instead write raw and drain.
             let raw = encode_msg(A_WRTE, local, remote_id, &pkt);
             self.dev
-                .write_bulk(self.ep_out, &raw, Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())))
+                .write_bulk(
+                    self.ep_out,
+                    &raw,
+                    Duration::from_secs(get_read_chunk_secs(self.ctx.as_ref())),
+                )
                 .map(|_| ())?;
             // Drain the OKAY ack for each DATA chunk.
             loop {
@@ -891,11 +951,7 @@ fn system_server_rows() -> Option<Vec<String>> {
     }
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).ok()?;
-    let len = usize::from_str_radix(
-        std::str::from_utf8(&len_buf).ok()?.trim(),
-        16,
-    )
-    .ok()?;
+    let len = usize::from_str_radix(std::str::from_utf8(&len_buf).ok()?.trim(), 16).ok()?;
     if len == 0 || len > 1024 * 1024 {
         return None;
     }
@@ -947,6 +1003,11 @@ pub fn server_state_for_serial(serial: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a system ADB server is currently listening (zero device I/O).
+pub fn system_server_available() -> bool {
+    system_server_rows().is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -1027,7 +1088,10 @@ impl ServerConn {
         stream
             .set_write_timeout(Some(timeout))
             .map_err(|e| BridgeError::Io(format!("adb server timeout setup: {e}")))?;
-        let mut conn = ServerConn { stream, deadline: Instant::now() + timeout };
+        let mut conn = ServerConn {
+            stream,
+            deadline: Instant::now() + timeout,
+        };
         server_round(&mut conn.stream, &format!("host:transport:{serial}"))?;
         server_round(&mut conn.stream, service)?;
         Ok(conn)
@@ -1114,9 +1178,10 @@ fn collect_adb() -> Result<Vec<AdbTarget>> {
     let devices = usb::collect_devices(None)?;
     let mut out = Vec::new();
     for d in &devices {
-        let has_adb = d.interfaces.iter().any(|i| {
-            i.class == ADB_CLASS && i.subclass == ADB_SUBCLASS && i.protocol == ADB_PROTO
-        });
+        let has_adb = d
+            .interfaces
+            .iter()
+            .any(|i| i.class == ADB_CLASS && i.subclass == ADB_SUBCLASS && i.protocol == ADB_PROTO);
         if !has_adb {
             continue;
         }
@@ -1172,7 +1237,11 @@ fn open_session(t: &AdbTarget, deadline: Instant) -> Result<Session> {
     // (re-enumeration at a new address -> the read dies EIO -> the probe
     // skips -> "never shows connected"). Clearing the halt unwedges it and
     // is a no-op when the endpoints are clean.
-    for ep in dev.find_bulk_endpoints(iface).map(|(i, o)| [i, o]).unwrap_or_default() {
+    for ep in dev
+        .find_bulk_endpoints(iface)
+        .map(|(i, o)| [i, o])
+        .unwrap_or_default()
+    {
         if let Err(e) = dev.clear_halt(ep) {
             eprintln!("[adb] clear_halt 0x{ep:02x}: {e}");
         }
@@ -1180,7 +1249,14 @@ fn open_session(t: &AdbTarget, deadline: Instant) -> Result<Session> {
     let (ep_in, ep_out) = dev.find_bulk_endpoints(iface).ok_or_else(|| {
         BridgeError::InvalidArgument("no bulk endpoints on ADB iface".to_string())
     })?;
-    Ok(Session { dev, ep_in, ep_out, next_id: 1, deadline, ctx: None })
+    Ok(Session {
+        dev,
+        ep_in,
+        ep_out,
+        next_id: 1,
+        deadline,
+        ctx: None,
+    })
 }
 
 fn extras(banner: &HashMap<String, String>) -> String {
@@ -1264,9 +1340,7 @@ fn presence_lines(
 /// importing the filtering module (keeps adb.rs dependency-light).
 fn normalize_serial_for_presence(s: &str) -> String {
     let s = s.trim();
-    if s.is_empty()
-        || matches!(s.to_lowercase().as_str(), "null" | "none" | "unknown" | "?")
-    {
+    if s.is_empty() || matches!(s.to_lowercase().as_str(), "null" | "none" | "unknown" | "?") {
         return String::new();
     }
     s.to_string()
@@ -1344,7 +1418,9 @@ fn pick_target(serial: &str) -> Result<AdbTarget> {
         // "the first" is a wrong-device operation. Fail loudly instead.
         if targets.len() > 1 {
             return Err(BridgeError::DeviceState(
-                crate::error::DeviceStateError::AmbiguousTarget { count: targets.len() },
+                crate::error::DeviceStateError::AmbiguousTarget {
+                    count: targets.len(),
+                },
             ));
         }
         return Ok(targets.remove(0));
@@ -1396,12 +1472,71 @@ pub fn push_cli(serial: &str, timeout_ms: u64, local: &str, remote: &str) -> Res
     sess.push(local, remote)
 }
 
+/// Run `adb -s <serial> shell <cmd>` via the host `adb` binary. Used as a
+/// fallback when the native USB transport cannot claim the interface because
+/// the system adb server (or another process) holds it.
+pub fn shell_via_host(serial: &str, timeout_ms: u64, cmd: &str) -> Result<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("adb")
+        .args(["-s", serial, "shell", cmd])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| BridgeError::Io(format!("host adb spawn failed: {e}")))?;
+
+    use std::thread;
+    let timeout = Duration::from_millis(timeout_ms);
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return Err(BridgeError::Io("host adb timed out".to_string()));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(BridgeError::Io(format!("host adb wait failed: {e}")));
+            }
+        }
+    };
+
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+
+    if !status.success() && out.trim().is_empty() {
+        // Try to surface stderr.
+        if let Some(mut se) = child.stderr.take() {
+            let mut err = String::new();
+            let _ = se.read_to_string(&mut err);
+            if !err.trim().is_empty() {
+                return Err(BridgeError::Io(format!("host adb failed: {}", err.trim())));
+            }
+        }
+        return Err(BridgeError::Io(format!("host adb exited with {status}")));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn target(serial: &str) -> AdbTarget {
-        AdbTarget { vid: 0x05C6, pid: 0x90B4, bus: 1, address: 5, serial: serial.to_string() }
+        AdbTarget {
+            vid: 0x05C6,
+            pid: 0x90B4,
+            bus: 1,
+            address: 5,
+            serial: serial.to_string(),
+        }
     }
 
     // -- system-server transport (mock daemon) ---------------------------
@@ -1411,7 +1546,9 @@ mod tests {
     /// Read one 4-hex-framed request from the client under test.
     fn mock_read_framed(stream: &mut std::net::TcpStream) -> String {
         use std::io::Read;
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let mut len_buf = [0u8; 4];
         stream.read_exact(&mut len_buf).unwrap();
         let len = usize::from_str_radix(std::str::from_utf8(&len_buf).unwrap(), 16).unwrap();
@@ -1441,7 +1578,9 @@ mod tests {
         let addr = listener.local_addr().unwrap().to_string();
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
             script(&mut stream);
         });
         addr
@@ -1460,7 +1599,8 @@ mod tests {
             stream.write_all(b"hi\n").unwrap();
             stream.shutdown(std::net::Shutdown::Write).unwrap();
         });
-        let mut conn = ServerConn::connect_at(&addr, "SER1", "shell:echo hi", Duration::from_secs(5)).unwrap();
+        let mut conn =
+            ServerConn::connect_at(&addr, "SER1", "shell:echo hi", Duration::from_secs(5)).unwrap();
         assert_eq!(conn.shell_collect().unwrap(), "hi\n");
     }
 
@@ -1470,8 +1610,8 @@ mod tests {
             assert_eq!(mock_read_framed(stream), "host:transport:GHOST");
             mock_send_fail(stream, "device offline");
         });
-        let err = ServerConn::connect_at(&addr, "GHOST", "shell:id", Duration::from_secs(5))
-            .unwrap_err();
+        let err =
+            ServerConn::connect_at(&addr, "GHOST", "shell:id", Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("offline"), "unexpected: {err}");
     }
 
@@ -1483,9 +1623,12 @@ mod tests {
             assert_eq!(mock_read_framed(stream), "shell:id");
             mock_send_fail(stream, "unauthorized");
         });
-        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
-            .unwrap_err();
-        assert!(err.to_string().contains("unauthorized"), "unexpected: {err}");
+        let err =
+            ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5)).unwrap_err();
+        assert!(
+            err.to_string().contains("unauthorized"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
@@ -1500,7 +1643,8 @@ mod tests {
             stream.write_all(b"partial").unwrap();
             stream.shutdown(std::net::Shutdown::Write).unwrap();
         });
-        let mut conn = ServerConn::connect_at(&addr, "SER1", "shell:exit 3", Duration::from_secs(5)).unwrap();
+        let mut conn =
+            ServerConn::connect_at(&addr, "SER1", "shell:exit 3", Duration::from_secs(5)).unwrap();
         assert_eq!(conn.shell_collect().unwrap(), "partial");
     }
 
@@ -1511,8 +1655,8 @@ mod tests {
             let _ = mock_read_framed(stream);
             stream.write_all(b"NOPE").unwrap();
         });
-        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
-            .unwrap_err();
+        let err =
+            ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("bad ack"), "unexpected: {err}");
     }
 
@@ -1523,8 +1667,8 @@ mod tests {
         let addr = probe.local_addr().unwrap().to_string();
         drop(probe);
         let start = Instant::now();
-        let err = ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5))
-            .unwrap_err();
+        let err =
+            ServerConn::connect_at(&addr, "SER1", "shell:id", Duration::from_secs(5)).unwrap_err();
         assert!(start.elapsed() < Duration::from_secs(5), "connect hung");
         assert!(!err.to_string().is_empty());
     }
@@ -1605,16 +1749,16 @@ mod tests {
         let dq = &d % (&q - &one);
         let two = BigUint::from(2u32);
         let qinv = q.modpow(&(&p - &two), &p);
-    let der = encode_pkcs8(&RsaParts {
-        n: &n,
-        e: &e,
-        d: &d,
-        p: &p,
-        q: &q,
-        dp: &dp,
-        dq: &dq,
-        qinv: &qinv,
-    });
+        let der = encode_pkcs8(&RsaParts {
+            n: &n,
+            e: &e,
+            d: &d,
+            p: &p,
+            q: &q,
+            dp: &dp,
+            dq: &dq,
+            qinv: &qinv,
+        });
         let (n2, e2, d2, p2, q2) = parse_pkcs8(&der).unwrap();
         assert_eq!((n, e, d, p, q), (n2, e2, d2, p2, q2));
     }
@@ -1625,11 +1769,15 @@ mod tests {
         // famously prime): n is ~511 bits so k=64 fits the DigestInfo.
         // A toy 40-bit key cannot hold EMSA-PKCS#1-v1_5 (51-byte SHA-256 T).
         let p = BigUint::parse_bytes(
-            b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F", 16)
-            .unwrap();
+            b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F",
+            16,
+        )
+        .unwrap();
         let q = BigUint::parse_bytes(
-            b"7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFED", 16)
-            .unwrap();
+            b"7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFED",
+            16,
+        )
+        .unwrap();
         let n = &p * &q;
         let e = BigUint::from(65537u32);
         let phi = (&p - BigUint::from(1u32)) * (&q - BigUint::from(1u32));
@@ -1653,7 +1801,11 @@ mod tests {
             d_i += &phi_i;
         }
         let d = BigUint::try_from(d_i).unwrap();
-        let key = AdbKey { n: n.clone(), e: e.clone(), d };
+        let key = AdbKey {
+            n: n.clone(),
+            e: e.clone(),
+            d,
+        };
         let token = b"0123456789abcdefghij";
         for sha256 in [true, false] {
             let sig = key.sign(token, sha256);
@@ -1693,9 +1845,7 @@ mod tests {
         };
         let priv_path = format!("{home}/.android/adbkey");
         let pub_path = format!("{home}/.android/adbkey.pub");
-        if !std::path::Path::new(&priv_path).exists()
-            || !std::path::Path::new(&pub_path).exists()
-        {
+        if !std::path::Path::new(&priv_path).exists() || !std::path::Path::new(&pub_path).exists() {
             return;
         }
         let raw = std::fs::read(&priv_path).unwrap();
@@ -1758,7 +1908,8 @@ mod tests {
         // host:devices-l payload: rows only (no header), whitespace-separated
         // serial/state, then " key:value" extras. Must normalize to the same
         // `SERIAL\tstate extras` contract the native probe emits.
-        let payload = "R58N123\tdevice usb:1-2 product:ali_n model:Moto_G_6 device:ali transport_id:1\n\
+        let payload =
+            "R58N123\tdevice usb:1-2 product:ali_n model:Moto_G_6 device:ali transport_id:1\n\
                        R58N999      unauthorized usb:1-3 transport_id:2\n\n\
                        List of devices attached\n";
         let rows = parse_server_rows(payload);

@@ -35,7 +35,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use crate::usb;
 
 // Protocol reference: the Heimdall project (MIT) - the reverse-engineered
@@ -153,9 +153,7 @@ fn open_and_handshake(target: &str) -> OdinResult<Device> {
             }
         }
     }
-    err(format!(
-        "{last_err} (rescue incl. USB reset attempted)"
-    ))
+    err(format!("{last_err} (rescue incl. USB reset attempted)"))
 }
 
 fn open_device(target: &str) -> OdinResult<Device> {
@@ -174,7 +172,9 @@ fn open_device(target: &str) -> OdinResult<Device> {
         .iter()
         .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
         .cloned()
-        .ok_or(OdinError("device not found (is it in download mode?)".into()))?;
+        .ok_or(OdinError(
+            "device not found (is it in download mode?)".into(),
+        ))?;
 
     // If device came up unconfigured (active_config 0, no interfaces), set config 1 and re-enumerate
     if target_dev.interfaces.is_empty() {
@@ -198,7 +198,9 @@ fn open_device(target: &str) -> OdinResult<Device> {
                 "device still unconfigured after set_config(1) - replug cable, re-enter Download Mode".into(),
             ))?;
         if target_dev.interfaces.is_empty() {
-            return Err(OdinError("no CDC data interface (device returned no endpoints after config)".into()));
+            return Err(OdinError(
+                "no CDC data interface (device returned no endpoints after config)".into(),
+            ));
         }
     }
 
@@ -239,7 +241,8 @@ fn open_device(target: &str) -> OdinResult<Device> {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
                 desc.vendor_id() == vid && desc.product_id() == target_dev.pid
-            }) && d.bus_number() == target_dev.bus && d.address() == target_dev.address
+            }) && d.bus_number() == target_dev.bus
+                && d.address() == target_dev.address
         })
         .ok_or(OdinError("device not found".into()))?
         .open()?;
@@ -263,7 +266,10 @@ fn open_device(target: &str) -> OdinResult<Device> {
     // does automatically and un-breaks those devices. Skip the call when
     // config 1 is already active - a redundant set_config can itself return
     // EBUSY on some kernels.
-    let need_config = handle.active_configuration().map(|c| c != 1).unwrap_or(true);
+    let need_config = handle
+        .active_configuration()
+        .map(|c| c != 1)
+        .unwrap_or(true);
     if need_config {
         if let Err(e) = handle.set_active_configuration(1) {
             eprintln!("[odin] set_active_configuration(1): {e}");
@@ -282,7 +288,11 @@ fn open_device(target: &str) -> OdinResult<Device> {
         }
         match handle.claim_interface(iface.number) {
             Ok(()) => {
-                return Ok(Device { handle, in_ep, out_ep });
+                return Ok(Device {
+                    handle,
+                    in_ep,
+                    out_ep,
+                });
             }
             Err(e) => {
                 last_err = format!("claim iface: {e}");
@@ -310,14 +320,18 @@ impl Device {
                     last_err = Some(e.to_string());
                     if is_transient_usb_error(&e.to_string()) {
                         eprintln!("[flash]   write retry {attempt}: {}", e.to_string().trim());
-                        std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            50 * (attempt as u64 + 1),
+                        ));
                         continue;
                     }
                     return Err(e);
                 }
             }
         }
-        Err(OdinError(last_err.unwrap_or_else(|| "bulk write failed".into())))
+        Err(OdinError(
+            last_err.unwrap_or_else(|| "bulk write failed".into()),
+        ))
     }
 
     /// Single-shot write with a short timeout - used by the handshake probe
@@ -391,7 +405,10 @@ impl Device {
                     Ok(resp) => {
                         eprintln!(
                             "[handshake] attempt {attempt}: got {:?}, retrying",
-                            resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+                            resp.iter()
+                                .map(|b| format!("{:02x}", b))
+                                .collect::<Vec<_>>()
+                                .join(" ")
                         );
                     }
                     Err(e) => {
@@ -534,9 +551,7 @@ then press Flash again - the flash resumes automatically.",
         }
         // Trim to the exact PIT length when the header is valid; otherwise
         // keep whatever arrived (caller-side parsers re-validate).
-        if pit.len() >= 8
-            && u32::from_le_bytes([pit[0], pit[1], pit[2], pit[3]]) == 0x12349876
-        {
+        if pit.len() >= 8 && u32::from_le_bytes([pit[0], pit[1], pit[2], pit[3]]) == 0x12349876 {
             let count = u32::from_le_bytes([pit[4], pit[5], pit[6], pit[7]]) as usize;
             let need = 32 + count * 132;
             if count <= 512 && pit.len() > need {
@@ -607,7 +622,8 @@ fn pick_model(clean: &str) -> String {
         let n = t.chars().count();
         if n >= 4
             && t.chars().any(|c| c.is_ascii_digit())
-            && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
             return t.to_string();
         }
@@ -628,7 +644,13 @@ pub fn odin_model(target: &str) -> Result<String> {
     if let Ok(data) = dev.request_device_type() {
         let ascii: String = data
             .iter()
-            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+            .map(|&b| {
+                if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    ' '
+                }
+            })
             .collect();
         model = pick_model(&ascii);
     }
@@ -638,7 +660,13 @@ pub fn odin_model(target: &str) -> Result<String> {
                 info_bytes = Some(data.len());
                 let ascii: String = data
                     .iter()
-                    .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+                    .map(|&b| {
+                        if (0x20..0x7f).contains(&b) {
+                            b as char
+                        } else {
+                            ' '
+                        }
+                    })
                     .collect();
                 model = pick_model(&ascii);
             }
@@ -686,10 +714,18 @@ pub fn odin_pit(target: &str, out_file: Option<&str>) -> Result<String> {
 
     if let Some(path) = out_file {
         std::fs::write(path, &pit).map_err(|e| e.to_string())?;
-        return Ok(format!("{{\"size\": {}, \"file\": \"{}\"}}", pit.len(), path));
+        return Ok(format!(
+            "{{\"size\": {}, \"file\": \"{}\"}}",
+            pit.len(),
+            path
+        ));
     }
 
-    let full = pit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
+    let full = pit
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
     Ok(format!(
         "{{\"size\": {}, \"hex\": \"{}\"}}",
         pit.len(),
@@ -711,7 +747,10 @@ pub fn odin_pit_mtk(target: &str, out_file: Option<&str>) -> Result<String> {
     let mut idle = 0u32;
     // Read until we have the full PIT or the DA goes quiet for a few packets.
     while idle < 3 && pit.len() < (32 + cap as usize * 132).min(64 * 1024) {
-        match dev.handle.read_bulk(dev.in_ep, &mut buf, Duration::from_secs(2)) {
+        match dev
+            .handle
+            .read_bulk(dev.in_ep, &mut buf, Duration::from_secs(2))
+        {
             Ok(n) => {
                 if n == 0 {
                     idle += 1;
@@ -757,7 +796,11 @@ pub fn odin_pit_mtk(target: &str, out_file: Option<&str>) -> Result<String> {
         ));
     }
 
-    let full = pit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
+    let full = pit
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("");
     Ok(format!(
         "{{\"size\": {}, \"entries\": {}, \"hex\": \"{}\"}}",
         pit.len(),
@@ -839,9 +882,9 @@ fn odin_command(
             }
         }
     }
-    Err(OdinError(
-        last_err.unwrap_or_else(|| format!("odin command 0x{cmd:02x}/0x{sub:02x} failed")),
-    ))
+    Err(OdinError(last_err.unwrap_or_else(|| {
+        format!("odin command 0x{cmd:02x}/0x{sub:02x} failed")
+    })))
 }
 
 /// True when the user asked for strict error handling (ODIN_STRICT=1).
@@ -850,7 +893,12 @@ fn odin_command(
 /// bootloader is never reported as a success.
 fn strict_mode() -> bool {
     std::env::var("ODIN_STRICT")
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -899,7 +947,13 @@ fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResul
         // (bad signature / wrong size), so treating them as "progress" would
         // report a rejected bootloader write as complete. They are fatal
         // regardless of allow_progress / strict mode.
-        if allow_progress && ack_i32 >= -7 && ack_i32 <= -2 && ack_i32 != -5 && ack_i32 != -6 && !strict_mode() {
+        if allow_progress
+            && ack_i32 >= -7
+            && ack_i32 <= -2
+            && ack_i32 != -5
+            && ack_i32 != -6
+            && !strict_mode()
+        {
             // Progress codes: -2 WP, -3 Erase, -4 Write, -5 Auth, -6 Size, -7 Ext4
             eprintln!("[debug] {context}: progress code {ack_i32}");
             return Ok(());
@@ -912,11 +966,17 @@ fn odin_fail_check(rsp: &[u8], context: &str, allow_progress: bool) -> OdinResul
             };
             eprintln!("[warn] {context}: code {ack_i32} treated as FAILURE{reason}");
         }
-        eprintln!("[debug] cmd: BOOTLOADER_FAIL rid=0x{:08x} ack=0x{:08x}", rid, ack);
+        eprintln!(
+            "[debug] cmd: BOOTLOADER_FAIL rid=0x{:08x} ack=0x{:08x}",
+            rid, ack
+        );
         return err(format!("{context}: bootloader fail response"));
     }
     if ack_i32 == -1 {
-        eprintln!("[debug] cmd: BOOTLOADER_FAIL ack=0x{:08x} rid=0x{:08x}", ack, rid);
+        eprintln!(
+            "[debug] cmd: BOOTLOADER_FAIL ack=0x{:08x} rid=0x{:08x}",
+            ack, rid
+        );
         return err(format!("{context}: bootloader fail in ack"));
     }
     Ok(())
@@ -929,7 +989,12 @@ fn begin_session_v2(dev: &Device) -> OdinResult<(u32, bool)> {
     // reject the modern 1MiB framing at EndSequence even though they advertise
     // protocol version 2. Force the legacy 128KiB path with ODIN_LEGACY=1.
     let force_legacy = std::env::var("ODIN_LEGACY")
-        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(false);
 
     let rsp = odin_command(dev, 0x64, 0x00, &0x7FFFFFFFu32.to_le_bytes(), 15)?;
@@ -1004,10 +1069,7 @@ fn send_file_part(dev: &Device, data: &[u8], expected_index: u32, timeout: u64) 
             Err(e) => {
                 last_err = Some(e.to_string());
                 if is_transient_usb_error(&e.to_string()) {
-                    eprintln!(
-                        "[flash]   ack retry {attempt}: {}",
-                        e.to_string().trim()
-                    );
+                    eprintln!("[flash]   ack retry {attempt}: {}", e.to_string().trim());
                     std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
                     continue;
                 }
@@ -1038,7 +1100,9 @@ fn send_file_part(dev: &Device, data: &[u8], expected_index: u32, timeout: u64) 
         }
         return Ok(());
     }
-    Err(OdinError(last_err.unwrap_or_else(|| "file part ack failed".into())))
+    Err(OdinError(
+        last_err.unwrap_or_else(|| "file part ack failed".into()),
+    ))
 }
 
 /// End a sequence flash (0x66/0x03) with the partition metadata payload.
@@ -1102,12 +1166,8 @@ fn end_sequence_flash(
                     let ack_i32 = ack as i32;
                     if rid == 0xFFFF_FFFF && ack_i32 == -5 {
                         // Transient "busy validating" - retryable.
-                        eprintln!(
-                            "[flash]   EndSequenceFlash ack -5 (device busy)"
-                        );
-                        last_err = Some(OdinError(
-                            "EndSequenceFlash: ack -5 (busy)".into(),
-                        ));
+                        eprintln!("[flash]   EndSequenceFlash ack -5 (device busy)");
+                        last_err = Some(OdinError("EndSequenceFlash: ack -5 (busy)".into()));
                         continue;
                     }
                 }
@@ -1194,32 +1254,27 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 let mut attempt = 0;
                 loop {
                     attempt += 1;
-                    let ok = dev
-                        .dump_pit()
-                        .map(|data| {
-                            // Cache for the session's flash commands:
-                            // always overwrite (see AGENT_PIT docs).
-                            if let Ok(mut cache) = AGENT_PIT.lock() {
-                                *cache = Some(data.clone());
-                            }
-                            let mut resp = json!({"size": data.len()});
-                            if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
-                                if !o.is_empty() {
-                                    match std::fs::write(o, &data) {
-                                        Ok(()) => resp["file"] = json!(o),
-                                        Err(e) => {
-                                            resp["write_error"] = json!(e.to_string())
-                                        }
-                                    }
+                    let ok = dev.dump_pit().map(|data| {
+                        // Cache for the session's flash commands:
+                        // always overwrite (see AGENT_PIT docs).
+                        if let Ok(mut cache) = AGENT_PIT.lock() {
+                            *cache = Some(data.clone());
+                        }
+                        let mut resp = json!({"size": data.len()});
+                        if let Some(o) = req.get("out").and_then(|x| x.as_str()) {
+                            if !o.is_empty() {
+                                match std::fs::write(o, &data) {
+                                    Ok(()) => resp["file"] = json!(o),
+                                    Err(e) => resp["write_error"] = json!(e.to_string()),
                                 }
                             }
-                            if req.get("hex").and_then(|x| x.as_bool()).unwrap_or(false) {
-                                resp["hex"] = json!(
-                                    data.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                                );
-                            }
-                            resp
-                        });
+                        }
+                        if req.get("hex").and_then(|x| x.as_bool()).unwrap_or(false) {
+                            resp["hex"] =
+                                json!(data.iter().map(|b| format!("{b:02x}")).collect::<String>());
+                        }
+                        resp
+                    });
                     match ok {
                         Ok(resp) => {
                             let _ = writeln!(out, "{resp}");
@@ -1237,8 +1292,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                                 }
                                 continue;
                             }
-                            let _ =
-                                writeln!(out, "{}", json!({"error": e.to_string()}));
+                            let _ = writeln!(out, "{}", json!({"error": e.to_string()}));
                             break;
                         }
                     }
@@ -1252,7 +1306,13 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 if let Ok(data) = dev.request_device_type() {
                     let ascii: String = data
                         .iter()
-                        .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { ' ' })
+                        .map(|&b| {
+                            if (0x20..0x7f).contains(&b) {
+                                b as char
+                            } else {
+                                ' '
+                            }
+                        })
                         .collect();
                     model = pick_model(&ascii);
                 }
@@ -1287,12 +1347,14 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 };
                 eprintln!("[agent] flashing {part} <- {file}");
                 let is_large = matches!(part, "super" | "system" | "userdata");
-                let total = std::fs::metadata(file)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let total = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
                 // Mirror odin_flash_partition: announce total bytes first.
                 if let Err(e) = set_total_bytes(&dev, total) {
-                    let _ = writeln!(out, "{}", json!({"error": e.to_string(), "partition": part}));
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        json!({"error": e.to_string(), "partition": part})
+                    );
                     let _ = out.flush();
                     continue;
                 }
@@ -1348,10 +1410,9 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     for pair in arr {
                         if let Some(pair_arr) = pair.as_array() {
                             if pair_arr.len() == 2 {
-                                if let (Some(p), Some(f)) = (
-                                    pair_arr[0].as_str(),
-                                    pair_arr[1].as_str(),
-                                ) {
+                                if let (Some(p), Some(f)) =
+                                    (pair_arr[0].as_str(), pair_arr[1].as_str())
+                                {
                                     files.push((p.to_string(), f.to_string()));
                                 }
                             }
@@ -1380,16 +1441,11 @@ pub fn odin_agent(target: &str) -> Result<String> {
                     }
                 }
                 if let Some(e) = stat_err {
-                    let _ = writeln!(
-                        out,
-                        "{}",
-                        json!({"error": e, "batch": "complete"})
-                    );
+                    let _ = writeln!(out, "{}", json!({"error": e, "batch": "complete"}));
                     let _ = out.flush();
                     continue;
                 }
-                let want_reboot =
-                    req.get("reboot").and_then(|x| x.as_bool()).unwrap_or(false);
+                let want_reboot = req.get("reboot").and_then(|x| x.as_bool()).unwrap_or(false);
 
                 eprintln!(
                     "[agent] flash-batch: {} partitions, {} bytes total",
@@ -1405,8 +1461,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                 let mut failed = None;
                 for (pos, (part, path)) in files.iter().enumerate() {
                     eprintln!("[agent] flashing {part} <- {path}");
-                    let is_large =
-                        matches!(part.as_str(), "super" | "system" | "userdata");
+                    let is_large = matches!(part.as_str(), "super" | "system" | "userdata");
                     // is_last=1 ONLY on the batch's final partition - Loke
                     // closes the flash context on is_last and the next
                     // commit then fails deterministically with -5.
@@ -1426,9 +1481,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                         session_last,
                     );
                     if result.is_err() {
-                        eprintln!(
-                            "[agent] {part} failed once - rewriting partition"
-                        );
+                        eprintln!("[agent] {part} failed once - rewriting partition");
                         std::thread::sleep(Duration::from_millis(1000));
                         result = flash_one_partition_ext(
                             &dev,
@@ -1473,11 +1526,7 @@ pub fn odin_agent(target: &str) -> Result<String> {
                             let _ = writeln!(out, "{}", json!({"rebooted": true}));
                         }
                         Err(e) => {
-                            let _ = writeln!(
-                                out,
-                                "{}",
-                                json!({"reboot_error": e.to_string()})
-                            );
+                            let _ = writeln!(out, "{}", json!({"reboot_error": e.to_string()}));
                         }
                     }
                 }
@@ -1540,11 +1589,12 @@ pub fn odin_send_pit(target: &str, pit_file: &str) -> Result<String> {
     eprintln!("[pit] verifying: re-dumping device PIT...");
     let redump = dev.dump_pit().unwrap_or_default();
     let n = pit.len().min(redump.len());
-    let verified = !redump.is_empty()
-        && redump.len() >= pit.len()
-        && pit[..n] == redump[..n];
+    let verified = !redump.is_empty() && redump.len() >= pit.len() && pit[..n] == redump[..n];
     if verified {
-        eprintln!("[pit] verification OK (re-dumped {} bytes match)", redump.len());
+        eprintln!(
+            "[pit] verification OK (re-dumped {} bytes match)",
+            redump.len()
+        );
     } else {
         eprintln!(
             "[pit] verification MISMATCH: sent {} bytes, re-dumped {} bytes",
@@ -1573,10 +1623,7 @@ fn send_pit(dev: &Device, pit: &[u8], timeout: u64) -> OdinResult<()> {
     let padded_len = pit.len().div_ceil(PAD_MULTIPLE) * PAD_MULTIPLE;
     let mut padded = vec![0u8; padded_len];
     padded[..pit.len()].copy_from_slice(pit);
-    eprintln!(
-        "[pit] sending {} bytes (padded to {padded_len})",
-        pit.len()
-    );
+    eprintln!("[pit] sending {} bytes (padded to {padded_len})", pit.len());
     let rsp = odin_command(dev, 0x65, 0x00, &[], timeout)?;
     odin_fail_check(&rsp, "PitSet", false)?;
     let rsp = odin_command(dev, 0x65, 0x02, &(padded_len as u32).to_le_bytes(), timeout)?;
@@ -1637,7 +1684,13 @@ fn find_pit_entry(
             let identifier = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]);
             let block_size = u32::from_le_bytes([entry[20], entry[21], entry[22], entry[23]]);
             let block_count = u32::from_le_bytes([entry[24], entry[25], entry[26], entry[27]]);
-            return Ok((binary_type, device_type, identifier, block_size, block_count));
+            return Ok((
+                binary_type,
+                device_type,
+                identifier,
+                block_size,
+                block_count,
+            ));
         }
     }
     Err(format!("partition '{name}' not found in PIT"))
@@ -1656,7 +1709,14 @@ fn flash_one_partition(
     large: bool,
 ) -> std::result::Result<u32, String> {
     flash_one_partition_ext(
-        dev, pit, partition, image_file, packet_size, legacy, large, true,
+        dev,
+        pit,
+        partition,
+        image_file,
+        packet_size,
+        legacy,
+        large,
+        true,
     )
 }
 
@@ -1872,8 +1932,7 @@ pub fn odin_flash_multi(
 
     let mut results = Vec::new();
     for (idx, (partition, image_file)) in files.iter().enumerate() {
-        let is_large =
-            matches!(*partition, "super" | "system" | "userdata");
+        let is_large = matches!(*partition, "super" | "system" | "userdata");
         // is_last=1 only on the session's true final partition (live-device
         // finding: per-partition is_last closes the flash context and the
         // NEXT commit fails -5).
@@ -1942,10 +2001,7 @@ pub fn odin_flash_tar(
     use std::path::PathBuf;
 
     // 1. Stage the archive: md5 check, extract, decompress, sparse expand.
-    let workdir = std::env::temp_dir().join(format!(
-        "fp_odin_tar_{}",
-        std::process::id()
-    ));
+    let workdir = std::env::temp_dir().join(format!("fp_odin_tar_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&workdir);
     let staged = fwtar::prepare_archive(tar_path, &workdir)
         .map_err(|e| format!("archive staging failed: {e}"))?;
@@ -1976,7 +2032,10 @@ pub fn odin_flash_tar(
         let archive_model: String = archive_base
             .split(['_', '-'])
             .find_map(|tok| {
-                if tok.len() >= 6 && tok.starts_with("SM") && tok[2..].chars().all(|c| c.is_ascii_alphanumeric()) {
+                if tok.len() >= 6
+                    && tok.starts_with("SM")
+                    && tok[2..].chars().all(|c| c.is_ascii_alphanumeric())
+                {
                     Some(tok.to_string())
                 } else {
                     None
@@ -2003,8 +2062,14 @@ pub fn odin_flash_tar(
             let strip = |s: &str| s.trim_start_matches("SM-").to_string();
             let pm = strip(&pit_model);
             let am = strip(&archive_model);
-            let pm_core: String = pm.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
-            let am_core: String = am.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let pm_core: String = pm
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            let am_core: String = am
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
             let models_match = pm_core.starts_with(&am_core) || am_core.starts_with(&pm_core);
             if !models_match {
                 let _ = std::fs::remove_dir_all(&workdir);
@@ -2013,7 +2078,9 @@ pub fn odin_flash_tar(
                 )
                 .into());
             }
-            eprintln!("[flash] preflight model check OK (archive={archive_model}, pit={pit_model})");
+            eprintln!(
+                "[flash] preflight model check OK (archive={archive_model}, pit={pit_model})"
+            );
         } else {
             eprintln!("[flash] preflight model check skipped (archive or PIT model unknown)");
         }
@@ -2026,7 +2093,10 @@ pub fn odin_flash_tar(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(name);
-        base.rsplit('.').nth(1).unwrap_or(base).to_string()
+        // Tar members can carry stacked extensions (`boot.img.lz4`,
+        // `system.img.ext4.lz4`). Strip every known image/container suffix so
+        // the PIT lookup sees `boot`/`system`, never `img`/`ext4`.
+        crate::pit::normalize_part_name(base)
     }
     let mut mapped: Vec<(String, PathBuf)> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();

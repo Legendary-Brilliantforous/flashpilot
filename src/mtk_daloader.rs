@@ -180,12 +180,12 @@ mod tests {
         let mut d = vec![0u8; 0x68];
         d[..9].copy_from_slice(b"MTK_DA_V5");
         d.extend_from_slice(&1u32.to_le_bytes()); // count_da @0x68
-        // entry (0xDC bytes) at 0x6C
+                                                  // entry (0xDC bytes) at 0x6C
         let mut e = vec![0u8; 0xDC];
         e[2..4].copy_from_slice(&0x6765u16.to_le_bytes()); // hw_code (dacode)
         e[6..8].copy_from_slice(&0xca00u16.to_le_bytes()); // hw_version
         e[8..10].copy_from_slice(&0xca01u16.to_le_bytes()); // sw_version
-        // entry_region_count @18 = 3
+                                                            // entry_region_count @18 = 3
         e[18..20].copy_from_slice(&3u16.to_le_bytes());
         // regions @20: 3 x 20 bytes; m_bufs point inside the container
         // (region[1] data is appended after the entry below)

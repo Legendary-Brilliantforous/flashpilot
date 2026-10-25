@@ -33,7 +33,10 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
         };
         return Some(Explanation { why, fix });
     }
-    if lower.contains("bulk read: operation timed out") || lower.contains("bulk write: operation timed out") || lower.contains("timed out") {
+    if lower.contains("bulk read: operation timed out")
+        || lower.contains("bulk write: operation timed out")
+        || lower.contains("timed out")
+    {
         return Some(Explanation {
             why: "The bootloader did not answer in time - either the phone is on the Warning screen (not yet in Download mode), a bad cable/hub dropped frames, or the cdc_acm kernel module is interfering with bulk transfers.".into(),
             fix: "Press Volume Up on the phone to enter the blue 'Downloading...' screen, use a direct motherboard USB port (no hub), and retry. If it still times out: `sudo rmmod cdc_acm` and retry.".into(),
@@ -60,7 +63,10 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
 
     // ---- Bootloader protocol classes ----
     if lower.contains("-5") || lower.contains("bootloader fail") {
-        if lower.contains("endsequence") || lower.contains("end sequence") || lower.contains("commit") {
+        if lower.contains("endsequence")
+            || lower.contains("end sequence")
+            || lower.contains("commit")
+        {
             return Some(Explanation {
                 why: "The bootloader is still validating previously written partitions (async md5hdr/secure-check) and reported 'busy' (-5) for the commit - the data itself is already written.".into(),
                 fix: "Wait a few seconds and retry the same step - FlashPilot retries with backoff automatically. Do not unplug during validation.".into(),
@@ -71,7 +77,10 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
             fix: "Verify the firmware matches your exact model (dial *#1234#), use a firmware with equal or higher binary version (SVN), and re-verify the archive checksum.".into(),
         });
     }
-    if lower.contains("secure check fail") || lower.contains("swrev") || lower.contains("anti-rollback") {
+    if lower.contains("secure check fail")
+        || lower.contains("swrev")
+        || lower.contains("anti-rollback")
+    {
         return Some(Explanation {
             why: "Samsung Anti-Rollback protection blocked the write: the device bootloader refuses software older than its current security revision.".into(),
             fix: "Flash firmware with an equal or higher binary version (SVN/revision). Downgrades are only possible up to the device's allowed rollback floor.".into(),
@@ -83,7 +92,9 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
             fix: "Re-download the firmware and do not rename the archive before flashing.".into(),
         });
     }
-    if lower.contains("pit") && (lower.contains("match") || lower.contains("not found") || lower.contains("unknown")) {
+    if lower.contains("pit")
+        && (lower.contains("match") || lower.contains("not found") || lower.contains("unknown"))
+    {
         return Some(Explanation {
             why: "An archive partition has no matching partition in the device's PIT - the firmware is probably for a different model or variant.".into(),
             fix: "Check your exact model (dial *#1234#) and use matching firmware, or pass --allow-unknown to skip unmatched entries deliberately.".into(),
@@ -101,11 +112,7 @@ pub fn explain_error(err: &str) -> Option<Explanation> {
 /// Render an explanation (or the raw error) as a user-facing hint block.
 pub fn render(err: &str) -> String {
     match explain_error(err) {
-        Some(e) => format!(
-            "\n[why] {}\n[fix] {}",
-            e.why,
-            e.fix
-        ),
+        Some(e) => format!("\n[why] {}\n[fix] {}", e.why, e.fix),
         None => String::new(),
     }
 }

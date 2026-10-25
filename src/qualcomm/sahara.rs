@@ -1,6 +1,6 @@
 //! Qualcomm Sahara Protocol - Emergency Download (EDL) Mode
 
-use crate::error::{Result, BridgeError, ProtocolError};
+use crate::error::{BridgeError, ProtocolError, Result};
 use crate::usb::UsbDevice;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -10,26 +10,25 @@ pub const QCOM_VID: u16 = 0x05c6;
 
 /// Common Qualcomm EDL PIDs (broad, not only 9008)
 pub const QCOM_EDL_PIDS: &[u16] = &[
-    0x9008,  // Generic EDL
-    0x900E,  // EDL with Sahara
-    0x901D,  // EDL diag
-    0x9025,  // Some Xiaomi devices
-    0x9046,  // QCOM EDL var
-    0x9066,  // QCOM EDL var
-    0x90DB,  // Some OPPO/Vivo devices
+    0x9008, // Generic EDL
+    0x900E, // EDL with Sahara
+    0x901D, // EDL diag
+    0x9025, // Some Xiaomi devices
+    0x9046, // QCOM EDL var
+    0x9066, // QCOM EDL var
+    0x90DB, // Some OPPO/Vivo devices
 ];
 /// Qualcomm PIDs that are DIAG composites, not Sahara EDL: 0x9006 is the
 /// documented "HS-USB Diagnostics 9006" and 0x9026 enumerates as a
 /// diag+modem+mass-storage composite (observed live). They get DIAG
 /// flows, never a Sahara hello.
 pub const QCOM_DIAG_PIDS: &[u16] = &[
-    0x9006,  // HS-USB Diagnostics 9006
-    0x9026,  // Diag composite
+    0x9006, // HS-USB Diagnostics 9006
+    0x9026, // Diag composite
 ];
 /// All Qualcomm PIDs that indicate Qualcomm chip (EDL + normal diag + modem)
 pub const QCOM_ALL_PIDS: &[u16] = &[
-    0x9008, 0x9006, 0x900E, 0x901D, 0x9025, 0x9026, 0x9046, 0x9066, 0x90DB,
-    0x9091, // DIAG
+    0x9008, 0x9006, 0x900E, 0x901D, 0x9025, 0x9026, 0x9046, 0x9066, 0x90DB, 0x9091, // DIAG
     0x903A, // Modem
     0x6000, // QCOM modem
 ];
@@ -178,9 +177,9 @@ pub fn parse_hello(buf: &[u8]) -> Result<SaharaHello> {
     let le = |off: usize| u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
     let command = le(0);
     if command != SaharaCommand::Hello as u32 {
-        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(format!(
-            "expected HELLO (0x01), got command 0x{command:08x}"
-        ))));
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+            format!("expected HELLO (0x01), got command 0x{command:08x}"),
+        )));
     }
     let version = le(4);
     if version < 2 {
@@ -192,9 +191,9 @@ pub fn parse_hello(buf: &[u8]) -> Result<SaharaHello> {
     }
     let mode = le(16);
     if mode > 4 {
-        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(format!(
-            "unknown Sahara mode: {mode}"
-        ))));
+        return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+            format!("unknown Sahara mode: {mode}"),
+        )));
     }
     let max_packet_size = le(12);
     if max_packet_size == 0 {
@@ -227,11 +226,13 @@ impl SaharaSession {
     /// Create new Sahara session from USB device
     pub fn new(mut device: UsbDevice) -> Result<Self> {
         // Find bulk endpoints
-        let (in_ep, out_ep) = device.find_bulk_endpoints(0)
-            .ok_or_else(|| BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
+        let (in_ep, out_ep) = device.find_bulk_endpoints(0).ok_or_else(|| {
+            BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
                 reason: "No bulk endpoints found".to_string(),
-            }))?;
+            })
+        })?;
 
         // Detach BEFORE claiming: auto-detach only affects future claims,
         // so claiming first leaves a kernel driver (e.g. qcserial) holding
@@ -292,27 +293,33 @@ impl SaharaSession {
     /// `parse_hello` so it is unit-testable without USB).
     fn read_hello(&mut self) -> Result<SaharaHello> {
         let mut buf = vec![0u8; 64];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         buf.truncate(n);
         parse_hello(&buf)
     }
 
     /// Send a Sahara packet
     fn send_packet<T: serde::Serialize>(&mut self, packet: &T) -> Result<()> {
-        let data = bincode::serialize(packet)
-            .map_err(|e| BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0,
+        let data = bincode::serialize(packet).map_err(|e| {
+            BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
                 reason: format!("Serialization failed: {}", e),
-            }))?;
-        
-        self.device.write_bulk(self.out_ep, &data, Duration::from_secs(5))?;
+            })
+        })?;
+
+        self.device
+            .write_bulk(self.out_ep, &data, Duration::from_secs(5))?;
         Ok(())
     }
 
     /// Read a packet of exact size
     fn read_exact(&mut self, size: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; size];
-        self.device.read_exact(self.in_ep, &mut buf, Duration::from_secs(10))?;
+        self.device
+            .read_exact(self.in_ep, &mut buf, Duration::from_secs(10))?;
         Ok(buf)
     }
 
@@ -322,10 +329,12 @@ impl SaharaSession {
             command: crate::qualcomm::sahara::SaharaCommand::Done as u32,
         };
         self.send_packet(&done)?;
-        
+
         // Read DONE_RESP
         let mut buf = vec![0u8; 8];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         // Short reads leave trailing zeros that parse as Success: require
         // the full 8-byte response before trusting the status word.
         if n < 8 {
@@ -337,7 +346,8 @@ impl SaharaSession {
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: SaharaCommand::Done as u8, sub: status as u8,
+                cmd: SaharaCommand::Done as u8,
+                sub: status as u8,
                 reason: format!("DONE failed: {}", sahara_status_name(status)),
             }));
         }
@@ -351,10 +361,12 @@ impl SaharaSession {
             mode: SaharaMode::Streaming as u32,
         };
         self.send_packet(&switch)?;
-        
+
         // Read response
         let mut buf = vec![0u8; 8];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         // Short reads leave trailing zeros that parse as Success: require
         // the full 8-byte response before trusting the status word.
         if n < 8 {
@@ -366,13 +378,69 @@ impl SaharaSession {
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: SaharaCommand::SwitchMode as u8, sub: status as u8,
+                cmd: SaharaCommand::SwitchMode as u8,
+                sub: status as u8,
                 reason: format!("Switch mode failed: {}", sahara_status_name(status)),
             }));
         }
-        
+
         self.mode = SaharaMode::Streaming;
         Ok(())
+    }
+
+    /// Upload a Firehose programmer over Sahara (the real image-transfer
+    /// loop — NOT the serialization self-check in `handle_image_transfer`).
+    ///
+    /// Kept for the general Qualcomm path (`qcom-firehose`); no current
+    /// Motorola flow uses EDL.
+    #[allow(dead_code)]
+    pub fn upload_programmer(&mut self, data: &[u8]) -> Result<usize> {
+        if data.is_empty() {
+            return Err(BridgeError::InvalidArgument(
+                "programmer image is empty".to_string(),
+            ));
+        }
+        let mut total = 0usize;
+        loop {
+            let pkt = self.read_exact(16)?;
+            let cmd = u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]);
+            if cmd == SaharaCommand::EndImageTx as u32 {
+                break;
+            }
+            if cmd != SaharaCommand::ReadData as u32 {
+                return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                    format!("expected Sahara READ_DATA/END_IMAGE_TX, got command 0x{cmd:02x}"),
+                )));
+            }
+            let image_id = u32::from_le_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]);
+            let offset = u32::from_le_bytes([pkt[8], pkt[9], pkt[10], pkt[11]]) as usize;
+            let length = u32::from_le_bytes([pkt[12], pkt[13], pkt[14], pkt[15]]) as usize;
+            let end = offset.checked_add(length).ok_or_else(|| {
+                BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                    "Sahara READ_DATA offset+length overflow".to_string(),
+                ))
+            })?;
+            if end > data.len() {
+                return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                    format!(
+                        "Sahara READ_DATA past end of programmer ({end} > {})",
+                        data.len()
+                    ),
+                )));
+            }
+            if length == 0 {
+                continue;
+            }
+            eprintln!("[sahara] READ_DATA id={image_id} offset={offset} len={length}");
+            for chunk in data[offset..end].chunks(64 * 1024) {
+                self.device
+                    .write_bulk(self.out_ep, chunk, Duration::from_secs(30))?;
+            }
+            total += length;
+        }
+        eprintln!("[sahara] END_IMAGE_TX after {total} bytes — sending DONE");
+        self.send_done()?;
+        Ok(total)
     }
 
     /// Read memory from device
@@ -384,10 +452,12 @@ impl SaharaSession {
             reserved: 0,
         };
         self.send_packet(&cmd)?;
-        
+
         // Read response header
         let mut buf = vec![0u8; 20];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(5))?;
         // A short read leaves trailing zeros, which would parse as status 0
         // (Success). Require the full header before trusting any field.
         if n < 20 {
@@ -399,13 +469,14 @@ impl SaharaSession {
         let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
         if status != SaharaStatus::Success as u32 {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: SaharaCommand::ReadMemory as u8, sub: status as u8,
+                cmd: SaharaCommand::ReadMemory as u8,
+                sub: status as u8,
                 reason: format!("Read memory failed: {}", sahara_status_name(status)),
             }));
         }
 
         let _resp_addr = u64::from_le_bytes([
-            buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]
+            buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
         ]);
         let resp_len = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
 
@@ -417,24 +488,28 @@ impl SaharaSession {
                 format!("read_memory length {resp_len} exceeds requested {length}"),
             )));
         }
-        
+
         // Read data
         let mut data = vec![0u8; resp_len as usize];
         let mut total = 0;
         while total < resp_len as usize {
-            let n = self.device.read_bulk(self.in_ep, &mut data[total..], Duration::from_secs(5))?;
-            if n == 0 { break; }
+            let n =
+                self.device
+                    .read_bulk(self.in_ep, &mut data[total..], Duration::from_secs(5))?;
+            if n == 0 {
+                break;
+            }
             total += n;
         }
         data.truncate(total);
-        
+
         Ok(data)
     }
 
     /// Get device info via memory reads
     pub fn get_device_info(&mut self) -> Result<QcomDeviceInfo> {
         let mut info = QcomDeviceInfo::default();
-        
+
         // Try to read device info from common locations
         for addr in [0x00000000, 0x00100000, 0x08000000, 0x40000000] {
             if let Ok(data) = self.read_memory(addr, 256) {
@@ -446,7 +521,7 @@ impl SaharaSession {
                 }
             }
         }
-        
+
         Ok(info)
     }
 
@@ -540,13 +615,21 @@ impl SaharaSession {
 
     pub fn reset_device(&mut self) -> Result<()> {
         let data = (SaharaCommand::Reset as u32).to_le_bytes();
-        self.device.write_bulk(self.out_ep, &data, Duration::from_millis(500))?;
+        self.device
+            .write_bulk(self.out_ep, &data, Duration::from_millis(500))?;
         let mut buf = vec![0u8; 8];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(2)).unwrap_or(0);
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(2))
+            .unwrap_or(0);
         if n >= 8 {
             let status = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
             if status != SaharaStatus::Success as u32 {
-                return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: SaharaCommand::Reset as u8, sub: status as u8, reason: sahara_status_name(status).to_string() }));
+                return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                    cmd: SaharaCommand::Reset as u8,
+                    sub: status as u8,
+                    reason: sahara_status_name(status).to_string(),
+                }));
             }
         }
         Ok(())
@@ -565,13 +648,13 @@ pub struct QcomDeviceInfo {
 pub fn detect_qcom_edl() -> Result<Vec<crate::config::DeviceInfo>> {
     let devices = crate::usb::collect_devices(Some(QCOM_VID))?;
     let mut edl_devices = Vec::new();
-    
+
     for d in devices {
         if QCOM_EDL_PIDS.contains(&d.pid) {
             edl_devices.push(d);
         }
     }
-    
+
     Ok(edl_devices)
 }
 
@@ -634,28 +717,60 @@ pub fn sahara_status_name(status: u32) -> &'static str {
 }
 
 pub fn sahara_status_to_protocol_error(status: u32, cmd: SaharaCommand) -> Option<ProtocolError> {
-    if status == SaharaStatus::Success as u32 { return None; }
-    Some(ProtocolError::CommandFailed { cmd: cmd as u8, sub: status as u8, reason: sahara_status_name(status).to_string() })
+    if status == SaharaStatus::Success as u32 {
+        return None;
+    }
+    Some(ProtocolError::CommandFailed {
+        cmd: cmd as u8,
+        sub: status as u8,
+        reason: sahara_status_name(status).to_string(),
+    })
 }
 
 pub fn all_sahara_status_variants() -> Vec<SaharaStatus> {
     vec![
-        SaharaStatus::Success, SaharaStatus::InvalidCommand, SaharaStatus::ProtocolMismatch,
-        SaharaStatus::InvalidImage, SaharaStatus::InvalidTarget, SaharaStatus::InvalidPartition,
-        SaharaStatus::InvalidSize, SaharaStatus::ImageTooLarge, SaharaStatus::WriteFailed,
-        SaharaStatus::ReadFailed, SaharaStatus::InvalidParameter, SaharaStatus::UnsupportedCommand,
-        SaharaStatus::MaxClients, SaharaStatus::InvalidClient, SaharaStatus::SecurityViolation,
-        SaharaStatus::Abort, SaharaStatus::Unknown,
+        SaharaStatus::Success,
+        SaharaStatus::InvalidCommand,
+        SaharaStatus::ProtocolMismatch,
+        SaharaStatus::InvalidImage,
+        SaharaStatus::InvalidTarget,
+        SaharaStatus::InvalidPartition,
+        SaharaStatus::InvalidSize,
+        SaharaStatus::ImageTooLarge,
+        SaharaStatus::WriteFailed,
+        SaharaStatus::ReadFailed,
+        SaharaStatus::InvalidParameter,
+        SaharaStatus::UnsupportedCommand,
+        SaharaStatus::MaxClients,
+        SaharaStatus::InvalidClient,
+        SaharaStatus::SecurityViolation,
+        SaharaStatus::Abort,
+        SaharaStatus::Unknown,
     ]
 }
 
 pub fn all_sahara_commands() -> Vec<SaharaCommand> {
     vec![
-        SaharaCommand::Hello, SaharaCommand::HelloResp, SaharaCommand::ReadData, SaharaCommand::EndImageTx,
-        SaharaCommand::Done, SaharaCommand::DoneResp, SaharaCommand::Reset, SaharaCommand::ResetResp,
-        SaharaCommand::MemoryDebug, SaharaCommand::MemoryDebugResp, SaharaCommand::ReadMemory, SaharaCommand::ReadMemoryResp,
-        SaharaCommand::ExecuteCommand, SaharaCommand::ExecuteCommandResp, SaharaCommand::ExecuteData, SaharaCommand::ExecuteDataResp,
-        SaharaCommand::SwitchMode, SaharaCommand::SwitchModeResp, SaharaCommand::ReadModem, SaharaCommand::ReadModemResp,
+        SaharaCommand::Hello,
+        SaharaCommand::HelloResp,
+        SaharaCommand::ReadData,
+        SaharaCommand::EndImageTx,
+        SaharaCommand::Done,
+        SaharaCommand::DoneResp,
+        SaharaCommand::Reset,
+        SaharaCommand::ResetResp,
+        SaharaCommand::MemoryDebug,
+        SaharaCommand::MemoryDebugResp,
+        SaharaCommand::ReadMemory,
+        SaharaCommand::ReadMemoryResp,
+        SaharaCommand::ExecuteCommand,
+        SaharaCommand::ExecuteCommandResp,
+        SaharaCommand::ExecuteData,
+        SaharaCommand::ExecuteDataResp,
+        SaharaCommand::SwitchMode,
+        SaharaCommand::SwitchModeResp,
+        SaharaCommand::ReadModem,
+        SaharaCommand::ReadModemResp,
     ]
 }
 #[cfg(test)]
@@ -680,7 +795,10 @@ mod tests {
 
     #[test]
     fn short_wrong_command_old_version_rejected() {
-        assert!(parse_hello(&[0u8; 10]).unwrap_err().to_string().contains("too short"));
+        assert!(parse_hello(&[0u8; 10])
+            .unwrap_err()
+            .to_string()
+            .contains("too short"));
         assert!(parse_hello(&hello_bytes(0x2, 2, 4096, 0))
             .unwrap_err()
             .to_string()

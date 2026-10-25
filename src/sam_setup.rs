@@ -5,7 +5,7 @@
 //! usbmuxd absent for Apple) and explains how to fix each one.
 //! Powers the `setup-check` CLI command.
 
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,11 +31,17 @@ fn read_file(path: &str) -> String {
 
 /// True if a udev rule grants access for the given vendor ID.
 fn udev_rule_for(vid: &str) -> bool {
-    for dir in ["/etc/udev/rules.d", "/usr/lib/udev/rules.d", "/lib/udev/rules.d"] {
+    for dir in [
+        "/etc/udev/rules.d",
+        "/usr/lib/udev/rules.d",
+        "/lib/udev/rules.d",
+    ] {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for e in entries.flatten() {
                 let content = read_file(&e.path().to_string_lossy());
-                if content.contains(vid) && (content.contains("MODE=") || content.contains("GROUP=")) {
+                if content.contains(vid)
+                    && (content.contains("MODE=") || content.contains("GROUP="))
+                {
                     return true;
                 }
             }
@@ -114,8 +120,7 @@ pub fn setup_check(with_apple: bool) -> Result<String> {
         .map(|o| o.status.success())
         .unwrap_or(false);
     let mm_ignored = udev_rule_for("04e8")
-        && read_file("/usr/lib/udev/rules.d/60-odin4.rules")
-            .contains("ID_MM_DEVICE_IGNORE");
+        && read_file("/usr/lib/udev/rules.d/60-odin4.rules").contains("ID_MM_DEVICE_IGNORE");
     if mm_running && !mm_ignored {
         problems.push(SetupProblem {
             issue: "modemmanager-holds-port".into(),
@@ -148,10 +153,14 @@ mod tests {
     #[test]
     fn user_in_group_parses_etc_group() {
         // plugdev exists on every Debian/Ubuntu system; root always passes.
-        assert!(user_in_group("plugdev") == (std::env::var("USER").map(|u| u == "root").unwrap_or(false) || {
-            let content = read_file("/etc/group");
-            content.lines().any(|l| l.starts_with("plugdev:"))
-        }) || user_in_group("plugdev"));
+        assert!(
+            user_in_group("plugdev")
+                == (std::env::var("USER").map(|u| u == "root").unwrap_or(false) || {
+                    let content = read_file("/etc/group");
+                    content.lines().any(|l| l.starts_with("plugdev:"))
+                })
+                || user_in_group("plugdev")
+        );
     }
 
     #[test]

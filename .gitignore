@@ -31,6 +31,10 @@ __pycache__/
 /build/mdm_qr/*.png
 /build/mdm_qr/*.json
 
+# Bundled MediaTek BROM bypass payloads (GPLv3, see payloads/mtk/README.md).
+# Re-include them despite the blanket *.bin rule above.
+!/payloads/mtk/*.bin
+
 # Proprietary tools fetched at setup time (see scripts/fetch-odin4.sh)
 /root/tools/odin4
 
@@ -42,3 +46,14 @@ __pycache__/
 
 # Built packages (local `packaging/build-deb.sh` output)
 /dist/
+
+# OpenCode local configuration (do not commit — contains API keys)
+.opencode/
+opencode.jsonc
+opencode.json
+
+# Agent instructions (local only)
+/AGENTS.md
+
+# Local vendor-payload scratch cache (downloads, unreviewed binaries)
+/.cache/

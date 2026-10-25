@@ -8,6 +8,8 @@
 #
 #   /usr/bin/flashpilot                     launcher
 #   /usr/lib/flashpilot/flashpilot-bridge    compiled Rust bridge
+#   /usr/lib/flashpilot/payloads/mtk/       MediaTek BROM payloads (GPLv3)
+#   /usr/lib/flashpilot/payloads/qcom/      Qualcomm firehose programmers + index
 #   /usr/lib/flashpilot/venv/               bundled Python venv (PyQt6 + segno)
 #   /usr/share/flashpilot/                  python/, main.py, scripts/, root/,
 #                                          pit/, docs/, LICENSE, README
@@ -49,6 +51,19 @@ mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 
 # 3. Rust bridge.
 install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
+
+# 3b. Bundled MediaTek BROM payloads (GPLv3, see payloads/mtk/README.md).
+#     resolve_payload() looks next to the binary: /usr/lib/flashpilot/payloads/mtk.
+mkdir -p "$STAGE/usr/lib/flashpilot/payloads/mtk"
+install -m 0644 payloads/mtk/*.bin "$STAGE/usr/lib/flashpilot/payloads/mtk/"
+install -m 0644 payloads/mtk/README.md "$STAGE/usr/lib/flashpilot/payloads/mtk/README.md"
+
+# 3c. Bundled Qualcomm firehose programmers (see payloads/qcom/README.md).
+#     Same lookup: <exe_dir>/payloads/qcom/{*.mbn,index.json}.
+mkdir -p "$STAGE/usr/lib/flashpilot/payloads/qcom"
+install -m 0644 payloads/qcom/*.mbn "$STAGE/usr/lib/flashpilot/payloads/qcom/"
+install -m 0644 payloads/qcom/index.json "$STAGE/usr/lib/flashpilot/payloads/qcom/index.json"
+install -m 0644 payloads/qcom/README.md "$STAGE/usr/lib/flashpilot/payloads/qcom/README.md"
 
 # 4. Bundled venv (PyQt6 + segno + lz4 + samloader + requests + tqdm).
 #    Default: build a FRESH, clean venv from requirements so the .deb is

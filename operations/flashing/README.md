@@ -10,3 +10,11 @@ flashing/
   pit/       — PIT intelligence (python/core/pit.py 636 lines, pitstore, odin4 verifier)
 ```
 Big files will be split per-feature: sam_flash.rs -> samsung/{pit.rs, odin_session.rs, vbmeta.rs, flash.rs}
+
+Per-engine capability registers (commands, prerequisites, device-page
+wiring, open gaps) live in `../device_research/feature_logic_matrix.md`;
+the MTK per-SoC tables are in `../device_research/mtk_chip_matrix.md`.
+
+Bundled payloads: `payloads/mtk` (mtkclient DA/payloads, GPLv3) and
+`payloads/qcom` (firehose programmers + SoC index). Unisoc FDL1/FDL2 are
+read out of the PAC, so no loader store is shipped.

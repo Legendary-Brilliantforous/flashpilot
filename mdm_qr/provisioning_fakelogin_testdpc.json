@@ -1,0 +1,8 @@
+{
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.afwsamples.testdpc/.DeviceAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "http://192.168.142.45:8000/testdpc.apk",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": "cBSv2cTbHGxChjhfImA2dfvHMMri7EUL2zyjXpw5Oc4=",
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+  "android.app.extra.PROVISIONING_SKIP_EDUCATION_SCREENS": true,
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true
+}

@@ -1,24 +1,30 @@
 //! USB device abstraction
 
-use crate::error::{Result, BridgeError, UsbError};
-use crate::config::{DeviceInfo, InterfaceInfo, EndpointInfo};
+use crate::config::{DeviceInfo, EndpointInfo, InterfaceInfo};
+use crate::error::{BridgeError, Result, UsbError};
 
 // Re-export types for backward compatibility
 pub type UsbDeviceInfo = DeviceInfo;
 pub type UsbInterface = InterfaceInfo;
-use rusb::{Context, DeviceHandle, UsbContext, Direction, TransferType};
-use std::time::Duration;
+use rusb::{Context, DeviceHandle, Direction, TransferType, UsbContext};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Samsung download-mode PIDs (mirrors python/core/frp.py `_ODIN_PIDS`).
 pub const SAMSUNG_ODIN_PIDS: &[u16] = &[0x6601, 0x685d, 0x68c3, 0x68ef, 0x4eee, 0x4eef];
+
+/// Samsung ADB-composite PIDs that expose ADB without an explicit
+/// 255/66/1 interface descriptor (normal-boot debug composites).
+pub const SAMSUNG_ADB_PIDS: &[u16] = &[0x685e, 0x68a3, 0x6868];
 
 /// Coarse protocol/mode hint so the GUI can label a device without keeping a
 /// VID/PID table in Python. Kept conservative: a PID that is also used by a
 /// normal-boot ADB composite (e.g. 0x685d) still reports "samsung-odin" here;
 /// the Python layer re-checks the ADB signature to disambiguate.
 pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
-    let has_adb = interfaces.iter().any(|i| i.class == 255 && i.subclass == 66 && i.protocol == 1);
+    let has_adb = interfaces
+        .iter()
+        .any(|i| i.class == 255 && i.subclass == 66 && i.protocol == 1);
     let has_mtp = interfaces.iter().any(|i| i.class == 6);
     let has_hid = interfaces.iter().any(|i| i.class == 3);
 
@@ -35,6 +41,18 @@ pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
             }
         }
         0x0e8d => "mediatek".to_string(),
+        0x0fce | 0x1004 | 0x22d9 | 0x9bb5 => "mediatek".to_string(),
+        0x1782 => "spd".to_string(),
+        0x05ac => "apple".to_string(),
+        0x22b8 => {
+            if has_adb {
+                "motorola-adb".to_string()
+            } else if has_mtp {
+                "motorola-mtp".to_string()
+            } else {
+                "motorola".to_string()
+            }
+        }
         0x04e8 => {
             if SAMSUNG_ODIN_PIDS.contains(&pid) {
                 "samsung-odin".to_string()
@@ -90,19 +108,22 @@ impl UsbDevice {
                 let desc = d.device_descriptor().ok();
                 desc.as_ref().map_or(false, |desc| {
                     desc.vendor_id() == vid && desc.product_id() == pid
-                }) && d.bus_number() == bus && d.address() == address
+                }) && d.bus_number() == bus
+                    && d.address() == address
             })
             .ok_or(BridgeError::Usb(UsbError::DeviceNotFound))?;
 
         let handle = device.open()?;
-        
+
         let device_desc = device.device_descriptor()?;
-        let config_desc = device.active_config_descriptor().ok()
+        let config_desc = device
+            .active_config_descriptor()
+            .ok()
             .or_else(|| device.config_descriptor(0).ok());
-        
+
         let mut interfaces = Vec::new();
         let mut endpoints = HashMap::new();
-        
+
         if let Some(config_desc) = config_desc {
             for interface in config_desc.interfaces() {
                 let mut iface_endpoints = Vec::new();
@@ -134,9 +155,21 @@ impl UsbDevice {
                 }
                 interfaces.push(InterfaceInfo {
                     number: interface.number(),
-                    class: interface.descriptors().next().map(|d| d.class_code()).unwrap_or(0),
-                    subclass: interface.descriptors().next().map(|d| d.sub_class_code()).unwrap_or(0),
-                    protocol: interface.descriptors().next().map(|d| d.protocol_code()).unwrap_or(0),
+                    class: interface
+                        .descriptors()
+                        .next()
+                        .map(|d| d.class_code())
+                        .unwrap_or(0),
+                    subclass: interface
+                        .descriptors()
+                        .next()
+                        .map(|d| d.sub_class_code())
+                        .unwrap_or(0),
+                    protocol: interface
+                        .descriptors()
+                        .next()
+                        .map(|d| d.protocol_code())
+                        .unwrap_or(0),
                     endpoints: iface_endpoints,
                 });
             }
@@ -211,10 +244,16 @@ impl UsbDevice {
     pub fn open_target(vid: u16, pid: u16, target: &str) -> Result<Self> {
         let parts: Vec<&str> = target.split(':').collect();
         if parts.len() != 2 {
-            return Err(BridgeError::InvalidArgument("target must be 'bus:address'".to_string()));
+            return Err(BridgeError::InvalidArgument(
+                "target must be 'bus:address'".to_string(),
+            ));
         }
-        let bus = parts[0].parse().map_err(|_| BridgeError::InvalidArgument("invalid bus".to_string()))?;
-        let address = parts[1].parse().map_err(|_| BridgeError::InvalidArgument("invalid address".to_string()))?;
+        let bus = parts[0]
+            .parse()
+            .map_err(|_| BridgeError::InvalidArgument("invalid bus".to_string()))?;
+        let address = parts[1]
+            .parse()
+            .map_err(|_| BridgeError::InvalidArgument("invalid address".to_string()))?;
         Self::open(vid, pid, bus, address)
     }
 
@@ -223,15 +262,22 @@ impl UsbDevice {
         if self.claimed_interfaces.contains(&interface_num) {
             return Ok(());
         }
-        self.handle.claim_interface(interface_num)
-            .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(format!("claim_interface {interface_num}: {e}"))))?;
+        self.handle.claim_interface(interface_num).map_err(|e| {
+            BridgeError::Usb(UsbError::TransferFailed(format!(
+                "claim_interface {interface_num}: {e}"
+            )))
+        })?;
         self.claimed_interfaces.push(interface_num);
         Ok(())
     }
 
     /// Release interface
     pub fn release_interface(&mut self, interface_num: u8) -> Result<()> {
-        if let Some(pos) = self.claimed_interfaces.iter().position(|&x| x == interface_num) {
+        if let Some(pos) = self
+            .claimed_interfaces
+            .iter()
+            .position(|&x| x == interface_num)
+        {
             self.handle.release_interface(interface_num)?;
             self.claimed_interfaces.remove(pos);
         }
@@ -312,9 +358,10 @@ impl UsbDevice {
             let need = mps.max(512) as usize;
             if buf.len() < need {
                 let mut tmp = vec![0u8; need];
-                let n = self.handle.read_bulk(endpoint, &mut tmp, timeout).map_err(
-                    |e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())),
-                )?;
+                let n = self
+                    .handle
+                    .read_bulk(endpoint, &mut tmp, timeout)
+                    .map_err(|e| BridgeError::Usb(UsbError::TransferFailed(e.to_string())))?;
                 let take = n.min(buf.len());
                 buf[..take].copy_from_slice(&tmp[..take]);
                 return Ok(take);
@@ -374,7 +421,9 @@ impl UsbDevice {
         while total < buf.len() {
             let n = self.read_bulk(endpoint, &mut buf[total..], timeout)?;
             if n == 0 {
-                return Err(BridgeError::Usb(UsbError::TransferFailed("EOF".to_string())));
+                return Err(BridgeError::Usb(UsbError::TransferFailed(
+                    "EOF".to_string(),
+                )));
             }
             total += n;
         }
@@ -385,7 +434,7 @@ impl UsbDevice {
     pub fn find_bulk_endpoints(&self, interface: u8) -> Option<(u8, u8)> {
         let mut in_ep = None;
         let mut out_ep = None;
-        
+
         for iface in &self.info.interfaces {
             if iface.number == interface {
                 for ep in &iface.endpoints {
@@ -399,7 +448,7 @@ impl UsbDevice {
                 }
             }
         }
-        
+
         match (in_ep, out_ep) {
             (Some(in_ep), Some(out_ep)) => Some((in_ep, out_ep)),
             _ => None,
@@ -421,7 +470,7 @@ impl UsbDevice {
 pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
     let context = Context::new()?;
     let mut devices = Vec::new();
-    
+
     for device in context.devices()?.iter() {
         let desc = match device.device_descriptor() {
             Ok(d) => d,
@@ -434,7 +483,7 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
                 continue;
             }
         };
-        
+
         if let Some(vid) = vid_filter {
             if desc.vendor_id() != vid {
                 continue;
@@ -446,9 +495,11 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
         // fail. Falling back to the first available config descriptor (and
         // finally to an empty interface list) keeps such devices visible to
         // detection instead of silently dropping them.
-        let config_desc = device.active_config_descriptor().ok()
+        let config_desc = device
+            .active_config_descriptor()
+            .ok()
             .or_else(|| device.config_descriptor(0).ok());
-        
+
         let mut interfaces = Vec::new();
         if let Some(config_desc) = config_desc {
             for interface in config_desc.interfaces() {
@@ -480,7 +531,7 @@ pub fn collect_devices(vid_filter: Option<u16>) -> Result<Vec<DeviceInfo>> {
                 }
             }
         }
-        
+
         // Read string descriptors (manufacturer / product / serial) so the GUI
         // can show full device info instead of just VID:PID.
         let mut product = None;
@@ -585,23 +636,37 @@ fn parse_target(target: &str) -> Result<(u8, u8)> {
     if target.contains('@') {
         let parts: Vec<&str> = target.split('@').collect();
         if parts.len() != 2 {
-            return Err(crate::error::BridgeError::InvalidArgument("invalid target format".into()));
+            return Err(crate::error::BridgeError::InvalidArgument(
+                "invalid target format".into(),
+            ));
         }
         let bus_addr = parts[1];
         let ba_parts: Vec<&str> = bus_addr.split(':').collect();
         if ba_parts.len() != 2 {
-            return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address' or 'vid:pid@bus:address'".into()));
+            return Err(crate::error::BridgeError::InvalidArgument(
+                "target must be 'bus:address' or 'vid:pid@bus:address'".into(),
+            ));
         }
-        let bus: u8 = ba_parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
-        let address: u8 = ba_parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+        let bus: u8 = ba_parts[0]
+            .parse()
+            .map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
+        let address: u8 = ba_parts[1]
+            .parse()
+            .map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
         Ok((bus, address))
     } else {
         let parts: Vec<&str> = target.split(':').collect();
         if parts.len() != 2 {
-            return Err(crate::error::BridgeError::InvalidArgument("target must be 'bus:address' or 'vid:pid@bus:address'".into()));
+            return Err(crate::error::BridgeError::InvalidArgument(
+                "target must be 'bus:address' or 'vid:pid@bus:address'".into(),
+            ));
         }
-        let bus: u8 = parts[0].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
-        let address: u8 = parts[1].parse().map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
+        let bus: u8 = parts[0]
+            .parse()
+            .map_err(|_| crate::error::BridgeError::InvalidArgument("invalid bus".into()))?;
+        let address: u8 = parts[1]
+            .parse()
+            .map_err(|_| crate::error::BridgeError::InvalidArgument("invalid address".into()))?;
         Ok((bus, address))
     }
 }
@@ -624,10 +689,12 @@ pub fn verify_target_identity(target: &str, want_serial: &str) -> Result<String>
                 crate::error::BridgeError::InvalidArgument(format!("bad target vid:pid: {target}"))
             })?;
             (
-                u16::from_str_radix(v.trim(), 16)
-                    .map_err(|_| crate::error::BridgeError::InvalidArgument(format!("bad vid: {v}")))?,
-                u16::from_str_radix(p.trim(), 16)
-                    .map_err(|_| crate::error::BridgeError::InvalidArgument(format!("bad pid: {p}")))?,
+                u16::from_str_radix(v.trim(), 16).map_err(|_| {
+                    crate::error::BridgeError::InvalidArgument(format!("bad vid: {v}"))
+                })?,
+                u16::from_str_radix(p.trim(), 16).map_err(|_| {
+                    crate::error::BridgeError::InvalidArgument(format!("bad pid: {p}"))
+                })?,
             )
         }
         None => (0, 0),
@@ -641,7 +708,9 @@ pub fn verify_target_identity(target: &str, want_serial: &str) -> Result<String>
                 && d.bus == bus
                 && d.address == address
         })
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
     let current = d.serial.clone().unwrap_or_default();
     check_serial_identity(d.vid, d.pid, bus, address, want_serial, &current)
 }
@@ -678,12 +747,15 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
         ))
     })?;
     let (bus, address) = parse_target(target)?;
-    
+
     let devices = collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.bus == bus && d.address == address)
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
-    
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
+
     let context = rusb::Context::new()?;
     let device = context
         .devices()?
@@ -692,14 +764,18 @@ pub fn set_config(target: &str, config_idx: usize) -> Result<String> {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
                 desc.vendor_id() == dev.vid && desc.product_id() == dev.pid
-            }) && d.bus_number() == bus && d.address() == address
+            }) && d.bus_number() == bus
+                && d.address() == address
         })
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
-    
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
+
     let handle = device.open()?;
-    handle.set_active_configuration(config_u8)
-        .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
-    
+    handle.set_active_configuration(config_u8).map_err(|e| {
+        crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string()))
+    })?;
+
     Ok(serde_json::json!({"status": "configuration set", "config": config_idx}).to_string())
 }
 
@@ -712,7 +788,9 @@ pub fn claim_test(target: &str) -> Result<String> {
         .devices()?
         .iter()
         .find(|d| d.bus_number() == bus && d.address() == address)
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
     let handle = device.open()?;
     let _ = handle.set_auto_detach_kernel_driver(true);
     // Claim every interface (like the real open paths do).
@@ -747,23 +825,30 @@ pub fn usb_reset(target: &str) -> Result<String> {
         .devices()?
         .iter()
         .find(|d| d.bus_number() == bus && d.address() == address)
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
     let handle = device.open()?;
-    handle
-        .reset()
-        .map_err(|e| crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(format!("usb reset: {e}"))))?;
+    handle.reset().map_err(|e| {
+        crate::error::BridgeError::Usb(crate::error::UsbError::TransferFailed(format!(
+            "usb reset: {e}"
+        )))
+    })?;
     Ok(serde_json::json!({"status": "usb reset sent", "target": target}).to_string())
 }
 
 /// Detach kernel drivers from all interfaces of a device
 pub fn detach_kernel_drivers(target: &str) -> Result<String> {
     let (bus, address) = parse_target(target)?;
-    
+
     let devices = collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.bus == bus && d.address == address)
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
-    
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
+
     let context = rusb::Context::new()?;
     let device = context
         .devices()?
@@ -772,11 +857,14 @@ pub fn detach_kernel_drivers(target: &str) -> Result<String> {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
                 desc.vendor_id() == dev.vid && desc.product_id() == dev.pid
-            }) && d.bus_number() == bus && d.address() == address
+            }) && d.bus_number() == bus
+                && d.address() == address
         })
-        .ok_or(crate::error::BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?;
-    
-let handle = device.open()?;
+        .ok_or(crate::error::BridgeError::Usb(
+            crate::error::UsbError::DeviceNotFound,
+        ))?;
+
+    let handle = device.open()?;
     let _ = handle.set_auto_detach_kernel_driver(true);
 
     // Detach the *matched* device's interfaces (not devices[0] - with several
@@ -797,7 +885,7 @@ let handle = device.open()?;
             }
         }
     }
-    
+
     Ok(serde_json::json!({"status": "kernel drivers detached", "detached": detached}).to_string())
 }
 
@@ -867,6 +955,11 @@ mod tests {
         // Qualcomm DIAG composites stay diag, never EDL.
         assert_eq!(mode_hint(0x05c6, 0x9006, &[]), "qualcomm-diag");
         assert_eq!(mode_hint(0x05c6, 0x9026, &[]), "qualcomm-diag");
+        // SPD, Apple, Motorola and MTK OEM VIDs classify without tables.
+        assert_eq!(mode_hint(0x1782, 0x4d00, &[]), "spd");
+        assert_eq!(mode_hint(0x05ac, 0x1222, &[]), "apple");
+        assert_eq!(mode_hint(0x22b8, 0x2e80, &[]), "motorola");
+        assert_eq!(mode_hint(0x1004, 0x2000, &[]), "mediatek");
         // MediaTek BROM / preloader / DA
         assert_eq!(mode_hint(0x0e8d, 0x2000, &[]), "mediatek");
         // Samsung download-mode PIDs
@@ -883,18 +976,50 @@ mod tests {
         assert_eq!(mode_hint(0x18d1, 0x4ee7, &[adb_iface(255)]), "android-adb");
         assert_eq!(mode_hint(0x1234, 0x5678, &[]), "other");
     }
+
+    #[test]
+    fn classify_mode_pixel_adb_is_not_fastboot() {
+        use crate::usb::filtering::classify_mode;
+        // Mirrors the compute_transports FASTBOOT PID gate: an ADB-mode
+        // Pixel must not read as fastboot (only 4EE0/D00D do).
+        let adb = InterfaceInfo {
+            number: 0,
+            class: 255,
+            subclass: 66,
+            protocol: 1,
+            endpoints: vec![],
+        };
+        let mtp = InterfaceInfo {
+            number: 0,
+            class: 6,
+            subclass: 1,
+            protocol: 1,
+            endpoints: vec![],
+        };
+        assert_eq!(classify_mode(0x18D1, 0x4EE0, &[]), "fastboot");
+        assert_eq!(classify_mode(0x18D1, 0xD00D, &[]), "fastboot");
+        assert_eq!(classify_mode(0x18D1, 0x4EE7, &[adb.clone()]), "android-adb");
+        assert_eq!(classify_mode(0x18D1, 0x4EE1, &[mtp]), "android-mtp");
+        assert_eq!(classify_mode(0x18D1, 0x4EE1, &[]), "google");
+        // Samsung 0x6860 (MTP) keeps its android-mtp label (the PID check
+        // runs before the ADB-interface check) — Python must key Samsung
+        // selection on VID, not on a samsung* mode prefix.
+        assert_eq!(classify_mode(0x04E8, 0x6860, &[adb]), "android-mtp");
+    }
     #[test]
     fn config_index_above_u8_is_error() {
         // set_config's u8::try_from guard: 300 used to truncate to 44.
         let err = set_config("1:2", 300).unwrap_err();
-        assert!(err.to_string().contains("out of u8 range"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("out of u8 range"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
     fn identity_changed_at_same_address_is_error() {
         // Section-32: Phone B at Phone A's old address — never follow.
-        let err =
-            check_serial_identity(0x0E8D, 0x201C, 2, 50, "AAAA1111", "BBBB2222").unwrap_err();
+        let err = check_serial_identity(0x0E8D, 0x201C, 2, 50, "AAAA1111", "BBBB2222").unwrap_err();
         assert!(
             matches!(
                 err,

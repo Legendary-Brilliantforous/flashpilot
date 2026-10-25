@@ -1,0 +1,360 @@
+{
+ "section_keys": [
+  "adb",
+  "dev_apple",
+  "dev_asus_sharp",
+  "dev_blu",
+  "dev_huawei",
+  "dev_infinix",
+  "dev_itel",
+  "dev_lava",
+  "dev_lenovo",
+  "dev_meizu",
+  "dev_motorola",
+  "dev_nokia",
+  "dev_oneplus",
+  "dev_oppo",
+  "dev_others",
+  "dev_realme",
+  "dev_tcl_zte",
+  "dev_tecno",
+  "dev_vivo",
+  "dev_wiko",
+  "dev_xiaomi",
+  "easylogin",
+  "fastboot",
+  "fus",
+  "general",
+  "mtk",
+  "qc",
+  "samsung",
+  "settings",
+  "spd"
+ ],
+ "stack_count": 30,
+ "gated_count": 418,
+ "gated_triples_sha256": "c89accef0ab188c339ca32c5a494e8d20d456d83b57c448639d8b9d665637d75",
+ "gated_unique_triples": 61,
+ "core_flows": 116,
+ "action_meta": 62,
+ "pages": {
+  "samsung": {
+   "widgets": 486,
+   "buttons": 225,
+   "acts": [
+    "_qr_generator",
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "1a51a8bdfb105f1b"
+  },
+  "dev_apple": {
+   "widgets": 63,
+   "buttons": 14,
+   "acts": [
+    "apple_icloud_add",
+    "apple_icloud_remove",
+    "apple_info",
+    "apple_passcode_guide"
+   ],
+   "btn_sha": "3b1dc5aac03bb818"
+  },
+  "dev_tecno": {
+   "widgets": 161,
+   "buttons": 74,
+   "acts": [
+    "_qr_generator",
+    "tecno_device_info",
+    "tecno_enable_adb",
+    "tecno_frp_adb",
+    "tecno_frp_brom",
+    "tecno_mdm_adb",
+    "tecno_mdm_brom",
+    "tecno_screen_lock_adb",
+    "tecno_screen_lock_brom"
+   ],
+   "btn_sha": "d638148e5f63089c"
+  },
+  "dev_infinix": {
+   "widgets": 76,
+   "buttons": 54,
+   "acts": [],
+   "btn_sha": "77cec3c5d20edf6d"
+  },
+  "dev_itel": {
+   "widgets": 115,
+   "buttons": 32,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "d55f71b47f8e3aff"
+  },
+  "dev_xiaomi": {
+   "widgets": 141,
+   "buttons": 119,
+   "acts": [],
+   "btn_sha": "779e4a25ad66b6ec"
+  },
+  "dev_oppo": {
+   "widgets": 109,
+   "buttons": 87,
+   "acts": [],
+   "btn_sha": "cc840c263cfb3c58"
+  },
+  "dev_realme": {
+   "widgets": 97,
+   "buttons": 75,
+   "acts": [],
+   "btn_sha": "0d60ea149f8dad01"
+  },
+  "dev_oneplus": {
+   "widgets": 36,
+   "buttons": 14,
+   "acts": [],
+   "btn_sha": "3f23d8739397d7ab"
+  },
+  "dev_vivo": {
+   "widgets": 99,
+   "buttons": 77,
+   "acts": [],
+   "btn_sha": "197ec075386ae542"
+  },
+  "dev_huawei": {
+   "widgets": 69,
+   "buttons": 47,
+   "acts": [],
+   "btn_sha": "b6b3afbb37d9f425"
+  },
+  "dev_motorola": {
+   "widgets": 109,
+   "buttons": 25,
+   "acts": [
+    "_qr_generator",
+    "adb_enable",
+    "backup",
+    "flash",
+    "info",
+    "moto_fb_factory_adb",
+    "moto_fb_frp",
+    "moto_frp",
+    "screen_lock"
+   ],
+   "btn_sha": "916b7f33c861e87a"
+  },
+  "dev_nokia": {
+   "widgets": 107,
+   "buttons": 23,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "e0a09bd1bf82144a"
+  },
+  "dev_tcl_zte": {
+   "widgets": 63,
+   "buttons": 41,
+   "acts": [],
+   "btn_sha": "e3ff0b1a8ddfb5fd"
+  },
+  "dev_asus_sharp": {
+   "widgets": 32,
+   "buttons": 10,
+   "acts": [],
+   "btn_sha": "1623e42e497e332a"
+  },
+  "dev_blu": {
+   "widgets": 102,
+   "buttons": 18,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "1c183037780dcf7f"
+  },
+  "dev_lava": {
+   "widgets": 107,
+   "buttons": 23,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "95c47f322dc0ffde"
+  },
+  "dev_lenovo": {
+   "widgets": 105,
+   "buttons": 21,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "78c9823571dbd484"
+  },
+  "dev_meizu": {
+   "widgets": 96,
+   "buttons": 12,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "38fd50386d263a22"
+  },
+  "dev_others": {
+   "widgets": 102,
+   "buttons": 18,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "a6286df506c2b1c3"
+  },
+  "dev_wiko": {
+   "widgets": 99,
+   "buttons": 15,
+   "acts": [
+    "adb_enable",
+    "backup",
+    "flash",
+    "frp",
+    "info",
+    "ofp_extract",
+    "pac_extract",
+    "pac_pack",
+    "screen_lock"
+   ],
+   "btn_sha": "ad3565721e6e32fb"
+  },
+  "general": {
+   "widgets": 142,
+   "buttons": 28,
+   "acts": [],
+   "btn_sha": "a325154e1f9e6a87"
+  },
+  "adb": {
+   "widgets": 20,
+   "buttons": 0,
+   "acts": [
+    "_qr_generator",
+    "adb_frp",
+    "adb_info",
+    "mdm_unlock"
+   ],
+   "btn_sha": "4f53cda18c2baa0c"
+  },
+  "fastboot": {
+   "widgets": 25,
+   "buttons": 0,
+   "acts": [
+    "fastboot_getvar",
+    "fastboot_lock",
+    "fastboot_reboot",
+    "fastboot_recovery",
+    "fastboot_unlock"
+   ],
+   "btn_sha": "4f53cda18c2baa0c"
+  },
+  "easylogin": {
+   "widgets": 19,
+   "buttons": 0,
+   "acts": [
+    "_qr_generator",
+    "frp_fake_login",
+    "frp_fake_login_adp",
+    "frp_fake_login_testdpc"
+   ],
+   "btn_sha": "4f53cda18c2baa0c"
+  },
+  "fus": {
+   "widgets": 45,
+   "buttons": 5,
+   "acts": [],
+   "btn_sha": "c5721102787ab85b"
+  },
+  "mtk": {
+   "widgets": 221,
+   "buttons": 111,
+   "acts": [
+    "_qr_generator"
+   ],
+   "btn_sha": "6698f676da27228f"
+  },
+  "qc": {
+   "widgets": 224,
+   "buttons": 117,
+   "acts": [
+    "_qr_generator"
+   ],
+   "btn_sha": "8060381eada943fb"
+  },
+  "spd": {
+   "widgets": 243,
+   "buttons": 103,
+   "acts": [
+    "_qr_generator"
+   ],
+   "btn_sha": "fe40b48df3ac24b2"
+  },
+  "settings": {
+   "widgets": 207,
+   "buttons": 12,
+   "acts": [],
+   "btn_sha": "ecbd660ba835f9ac"
+  }
+ }
+}

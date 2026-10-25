@@ -1,0 +1,7 @@
+{
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": "com.google.android.apps.work.oobconfig/.DevAdminReceiver",
+  "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": "https://play.google.com/store/apps/details?id=com.google.android.apps.work.oobconfig",
+  "android.app.extra.PROVISIONING_LEAVE_ALL_SYSTEM_APPS_ENABLED": true,
+  "android.app.extra.PROVISIONING_SKIP_EDUCATION_SCREENS": true,
+  "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": true
+}

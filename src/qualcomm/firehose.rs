@@ -1,6 +1,6 @@
 //! Qualcomm Firehose Protocol - Flashing Protocol
 
-use crate::error::{Result, BridgeError, ProtocolError};
+use crate::error::{BridgeError, ProtocolError, Result};
 use crate::usb::UsbDevice;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,23 +21,51 @@ impl FirehosePacket {
         Self { data }
     }
 
-    pub fn configure(target: &str, max_payload_from: u32, max_payload_to: u32,
-                     memory_name: Option<&str>, physical_partition: u32, verbose: bool) -> Self {
+    pub fn configure(
+        target: &str,
+        max_payload_from: u32,
+        max_payload_to: u32,
+        memory_name: Option<&str>,
+        physical_partition: u32,
+        verbose: bool,
+    ) -> Self {
         let mut data = HashMap::new();
         data.insert("command".to_string(), "configure".to_string());
         data.insert("version".to_string(), "1".to_string());
         data.insert("target".to_string(), target.to_string());
-        data.insert("MaxPayloadSizeToTargetInBytes".to_string(), max_payload_to.to_string());
-        data.insert("MaxPayloadSizeFromTargetInBytes".to_string(), max_payload_from.to_string());
-        data.insert("MemoryName".to_string(), memory_name.unwrap_or("emmc").to_string());
-        data.insert("PhysicalPartitionNumber".to_string(), physical_partition.to_string());
-        data.insert("verbose".to_string(), if verbose { "1" } else { "0" }.to_string());
+        data.insert(
+            "MaxPayloadSizeToTargetInBytes".to_string(),
+            max_payload_to.to_string(),
+        );
+        data.insert(
+            "MaxPayloadSizeFromTargetInBytes".to_string(),
+            max_payload_from.to_string(),
+        );
+        data.insert(
+            "MemoryName".to_string(),
+            memory_name.unwrap_or("emmc").to_string(),
+        );
+        data.insert(
+            "PhysicalPartitionNumber".to_string(),
+            physical_partition.to_string(),
+        );
+        data.insert(
+            "verbose".to_string(),
+            if verbose { "1" } else { "0" }.to_string(),
+        );
         Self { data }
     }
 
-    pub fn program(filename: &str, sector_size: u32, num_sectors: u64,
-                   start_sector: u64, physical_partition: u32,
-                   sparse: bool, sparse_size: Option<u64>, md5: Option<&str>) -> Self {
+    pub fn program(
+        filename: &str,
+        sector_size: u32,
+        num_sectors: u64,
+        start_sector: u64,
+        physical_partition: u32,
+        sparse: bool,
+        sparse_size: Option<u64>,
+        md5: Option<&str>,
+    ) -> Self {
         let mut data = HashMap::new();
         data.insert("command".to_string(), "program".to_string());
         data.insert("version".to_string(), "1".to_string());
@@ -45,20 +73,38 @@ impl FirehosePacket {
         data.insert("SECTOR_SIZE_IN_BYTES".to_string(), sector_size.to_string());
         data.insert("num_partition_sectors".to_string(), num_sectors.to_string());
         data.insert("start_sector".to_string(), start_sector.to_string());
-        data.insert("physical_partition_number".to_string(), physical_partition.to_string());
-        data.insert("sparse".to_string(), if sparse { "true" } else { "false" }.to_string());
-        if let Some(s) = sparse_size { data.insert("sparse_size".to_string(), s.to_string()); }
-        if let Some(m) = md5 { data.insert("md5".to_string(), m.to_string()); }
+        data.insert(
+            "physical_partition_number".to_string(),
+            physical_partition.to_string(),
+        );
+        data.insert(
+            "sparse".to_string(),
+            if sparse { "true" } else { "false" }.to_string(),
+        );
+        if let Some(s) = sparse_size {
+            data.insert("sparse_size".to_string(), s.to_string());
+        }
+        if let Some(m) = md5 {
+            data.insert("md5".to_string(), m.to_string());
+        }
         Self { data }
     }
 
-    pub fn read(start_sector: u64, num_sectors: u64, physical_partition: u32, filename: &str) -> Self {
+    pub fn read(
+        start_sector: u64,
+        num_sectors: u64,
+        physical_partition: u32,
+        filename: &str,
+    ) -> Self {
         let mut data = HashMap::new();
         data.insert("command".to_string(), "read".to_string());
         data.insert("version".to_string(), "1".to_string());
         data.insert("start_sector".to_string(), start_sector.to_string());
         data.insert("num_partition_sectors".to_string(), num_sectors.to_string());
-        data.insert("physical_partition_number".to_string(), physical_partition.to_string());
+        data.insert(
+            "physical_partition_number".to_string(),
+            physical_partition.to_string(),
+        );
         data.insert("filename".to_string(), filename.to_string());
         Self { data }
     }
@@ -69,7 +115,10 @@ impl FirehosePacket {
         data.insert("version".to_string(), "1".to_string());
         data.insert("start_sector".to_string(), start_sector.to_string());
         data.insert("num_partition_sectors".to_string(), num_sectors.to_string());
-        data.insert("physical_partition_number".to_string(), physical_partition.to_string());
+        data.insert(
+            "physical_partition_number".to_string(),
+            physical_partition.to_string(),
+        );
         Self { data }
     }
 
@@ -77,7 +126,10 @@ impl FirehosePacket {
         let mut data = HashMap::new();
         data.insert("command".to_string(), "get_partition_table".to_string());
         data.insert("version".to_string(), "1".to_string());
-        data.insert("physical_partition_number".to_string(), physical_partition.to_string());
+        data.insert(
+            "physical_partition_number".to_string(),
+            physical_partition.to_string(),
+        );
         Self { data }
     }
 
@@ -86,7 +138,9 @@ impl FirehosePacket {
         data.insert("command".to_string(), "power".to_string());
         data.insert("version".to_string(), "1".to_string());
         data.insert("value".to_string(), value.to_string());
-        if let Some(d) = delay { data.insert("delay".to_string(), d.to_string()); }
+        if let Some(d) = delay {
+            data.insert("delay".to_string(), d.to_string());
+        }
         Self { data }
     }
 
@@ -125,35 +179,63 @@ impl FirehoseResponse {
     pub fn from_xml(xml: &str) -> Result<Self> {
         use quick_xml::events::Event;
         use quick_xml::Reader;
-        
+
         let mut reader = Reader::from_str(xml);
         reader.trim_text(true);
         let mut data = HashMap::new();
-        let mut log = None;
-        
+        let mut log_entries: Vec<String> = Vec::new();
+
         loop {
             match reader.read_event() {
                 Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                    let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                    let is_log = name.eq_ignore_ascii_case("log");
                     for attr in e.attributes() {
-                        let attr = attr.map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
+                        let attr = attr.map_err(|e| {
+                            BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string()))
+                        })?;
                         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                        // Standard Firehose log lines arrive as
+                        // `<log value="..."/>`, with the payload XML-escaped.
+                        // Treat them as log text, not as a generic response
+                        // attribute (notably, do not let `value` overwrite the
+                        // response verdict).
+                        if is_log && key.eq_ignore_ascii_case("value") {
+                            let value = attr.unescape_value().map_err(|e| {
+                                BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                                    e.to_string(),
+                                ))
+                            })?;
+                            log_entries.push(value.into_owned());
+                            continue;
+                        }
                         let value = String::from_utf8_lossy(&attr.value).to_string();
                         data.insert(key, value);
                     }
                 }
                 Ok(Event::Text(e)) => {
-                    let text = e.unescape().map_err(|e| BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string())))?;
+                    let text = e.unescape().map_err(|e| {
+                        BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string()))
+                    })?;
                     if text.trim().starts_with("<log>") {
-                        log = Some(text.to_string());
+                        log_entries.push(text.to_string());
                     }
                 }
                 Ok(Event::Eof) => break,
-                Err(e) => return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(e.to_string()))),
+                Err(e) => {
+                    return Err(BridgeError::Protocol(ProtocolError::UnexpectedResponse(
+                        e.to_string(),
+                    )))
+                }
                 _ => {}
             }
         }
-        
+        let log = if log_entries.is_empty() {
+            None
+        } else {
+            Some(log_entries.join("\n"))
+        };
+
         // The <response value="ACK"|"FAIL" .../> attributes land in the flat
         // map above. Promote the verdict fields out of it: previously `value`
         // and `error` were hard-coded to None, so is_success() could never
@@ -196,6 +278,13 @@ impl FirehoseResponse {
     }
 }
 
+/// Physical partitions (LUNs) probed on an eMMC target. eMMC exposes up to
+/// four hardware partitions (boot0/boot1/user/rpmb); extra probes just log
+/// "not present" and stop.
+pub const MAX_LUNS_EMMC: u32 = 4;
+/// UFS exposes up to eight LUNs (0..7) on shipping hardware.
+pub const MAX_LUNS_UFS: u32 = 8;
+
 /// Firehose session
 pub struct FirehoseSession {
     pub device: UsbDevice,
@@ -210,10 +299,13 @@ pub struct FirehoseSession {
 
 impl FirehoseSession {
     pub fn new(mut device: UsbDevice) -> Result<Self> {
-        let (in_ep, out_ep) = device.find_bulk_endpoints(0)
-            .ok_or_else(|| BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: "No bulk endpoints".to_string(),
-            }))?;
+        let (in_ep, out_ep) = device.find_bulk_endpoints(0).ok_or_else(|| {
+            BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: "No bulk endpoints".to_string(),
+            })
+        })?;
 
         device.claim_interface(0)?;
         device.set_auto_detach_kernel_driver(true)?;
@@ -233,12 +325,13 @@ impl FirehoseSession {
     pub fn send_command(&mut self, packet: &FirehosePacket) -> Result<FirehoseResponse> {
         let xml = packet.to_xml();
         let timeout = Duration::from_secs(30);
-        self.device.write_bulk(self.out_ep, xml.as_bytes(), timeout)?;
-        
+        self.device
+            .write_bulk(self.out_ep, xml.as_bytes(), timeout)?;
+
         let mut buf = vec![0u8; 64 * 1024];
         let n = self.device.read_bulk(self.in_ep, &mut buf, timeout)?;
         buf.truncate(n);
-        
+
         let xml_str = String::from_utf8_lossy(&buf).to_string();
         FirehoseResponse::from_xml(&xml_str)
     }
@@ -251,16 +344,23 @@ impl FirehoseSession {
 
     pub fn configure(&mut self, target: &str, memory_name: Option<&str>) -> Result<()> {
         let packet = FirehosePacket::configure(
-            target, self.max_payload_from, self.max_payload_to,
-            memory_name, self.physical_partition, true);
-        
+            target,
+            self.max_payload_from,
+            self.max_payload_to,
+            memory_name,
+            self.physical_partition,
+            true,
+        );
+
         let resp = self.send_command(&packet)?;
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Configure failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("Configure failed: {:?}", resp.error),
             }));
         }
-        
+
         self.configured = true;
         // Device-reported sizes drive vec![] allocations below: clamp them
         // so a rogue 0xFFFF_FFFF can never force a multi-gigabyte allocation
@@ -288,32 +388,98 @@ impl FirehoseSession {
         Ok(())
     }
 
+    /// Partition table of the session's default LUN. The CLI always asks for
+    /// every LUN explicitly, but this stays as the session-default API.
+    #[allow(dead_code)]
     pub fn get_partition_table(&mut self) -> Result<Vec<QcomPartition>> {
-        let packet = FirehosePacket::get_partition_table(self.physical_partition);
-        let resp = self.send_command(&packet)?;
-        
-        if !resp.is_success() {
-            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Get partition table failed: {:?}", resp.error),
-            }));
-        }
-        
-        self.parse_partition_table(&resp)
+        self.get_partition_table_for_lun(self.physical_partition)
     }
 
-    fn parse_partition_table(&self, resp: &FirehoseResponse) -> Result<Vec<QcomPartition>> {
-        let mut partitions = Vec::new();
-        
-        if let Some(log) = &resp.log {
-            for line in log.lines() {
-                if line.contains("<partition") {
-                    if let Some(p) = Self::parse_partition_xml(line) {
-                        partitions.push(p);
+    pub fn get_partition_table_for_lun(
+        &mut self,
+        physical_partition: u32,
+    ) -> Result<Vec<QcomPartition>> {
+        let packet = FirehosePacket::get_partition_table(physical_partition);
+        let resp = self.send_command(&packet)?;
+
+        if !resp.is_success() {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("Get partition table failed: {:?}", resp.error),
+            }));
+        }
+
+        Self::parse_partition_table_for_lun(&resp, physical_partition)
+    }
+
+    /// Enumerate the partition table of every present LUN.
+    ///
+    /// Firehose has no "how many LUNs?" query, so each physical partition is
+    /// probed in turn. A FAIL on LUN 0 is fatal (the device is not usable);
+    /// later LUNs that are absent are logged and skipped. Two consecutive
+    /// absent LUNs end the scan (eMMC/UFS LUNs are contiguous).
+    pub fn get_partition_table_all(&mut self, max_luns: u32) -> Result<Vec<QcomPartition>> {
+        let mut all: Vec<QcomPartition> = Vec::new();
+        let mut consecutive_failures = 0u32;
+        for lun in 0..max_luns {
+            match self.get_partition_table_for_lun(lun) {
+                Ok(mut partitions) => {
+                    consecutive_failures = 0;
+                    eprintln!("[firehose] LUN {lun}: {} partition(s)", partitions.len());
+                    all.append(&mut partitions);
+                }
+                Err(e) => {
+                    if lun == 0 {
+                        return Err(e);
+                    }
+                    consecutive_failures += 1;
+                    eprintln!("[firehose] LUN {lun}: not present ({e})");
+                    if consecutive_failures >= 2 {
+                        break;
                     }
                 }
             }
         }
-        
+        Ok(all)
+    }
+
+    #[allow(dead_code)]
+    fn parse_partition_table(resp: &FirehoseResponse) -> Result<Vec<QcomPartition>> {
+        Self::parse_partition_table_for_lun(resp, 0)
+    }
+
+    /// Parse the device's `<partition .../>` log lines and attribute any line
+    /// that omits `physical_partition_number` to the LUN that was probed.
+    fn parse_partition_table_for_lun(
+        resp: &FirehoseResponse,
+        physical_partition: u32,
+    ) -> Result<Vec<QcomPartition>> {
+        let mut partitions = Vec::new();
+
+        if let Some(log) = &resp.log {
+            // A device may return one `<partition .../>` per log line or
+            // several concatenated inside one escaped log value.
+            let mut rest = log.as_str();
+            while let Some(start) = rest.find("<partition") {
+                let tail = &rest[start..];
+                let end = tail
+                    .find("/>")
+                    .map(|i| i + 2)
+                    .or_else(|| tail.find('>').map(|i| i + 1))
+                    .unwrap_or(tail.len());
+                if let Some(mut p) = Self::parse_partition_xml(&tail[..end]) {
+                    // The probed LUN is authoritative when the device omits
+                    // the attribute (else every LUN's table collapses to 0).
+                    if p.physical_partition == 0 && physical_partition != 0 {
+                        p.physical_partition = physical_partition;
+                    }
+                    partitions.push(p);
+                }
+                rest = &tail[end..];
+            }
+        }
+
         Ok(partitions)
     }
 
@@ -335,7 +501,10 @@ impl FirehoseSession {
                 // which clings to the last attribute value. Strip the
                 // terminator BEFORE the quotes: `"0"/>` must become `0`,
                 // not `0"` (quote-strip first leaves the inner quote).
-                let v = v.trim_end_matches("/>").trim_end_matches('>').trim_matches('"');
+                let v = v
+                    .trim_end_matches("/>")
+                    .trim_end_matches('>')
+                    .trim_matches('"');
                 match k {
                     "name" => name = v.to_string(),
                     "start_sector" => match v.parse() {
@@ -378,21 +547,63 @@ impl FirehoseSession {
         }
     }
 
-    pub fn program_partition(&mut self, partition_name: &str, file_path: &Path, 
-                             start_sector: u64, num_sectors: u64) -> Result<()> {
+    /// Program on the session's default LUN (explicit-LUN variant is used
+    /// by every CLI path).
+    #[allow(dead_code)]
+    pub fn program_partition(
+        &mut self,
+        partition_name: &str,
+        file_path: &Path,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        self.program_partition_for_lun(
+            partition_name,
+            file_path,
+            start_sector,
+            num_sectors,
+            self.physical_partition,
+        )
+    }
+
+    /// Program a partition on an explicit physical LUN from the device's
+    /// partition table (`physical_partition_number`).
+    pub fn program_partition_for_lun(
+        &mut self,
+        partition_name: &str,
+        file_path: &Path,
+        start_sector: u64,
+        num_sectors: u64,
+        physical_partition: u32,
+    ) -> Result<()> {
         if !file_path.exists() {
-            return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("file not found: {}", file_path.display()) }));
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("file not found: {}", file_path.display()),
+            }));
         }
         let file = std::fs::File::open(file_path)?;
         let file_size = file.metadata()?.len();
-        
+
         let packet = FirehosePacket::program(
-            partition_name, 512, num_sectors, start_sector,
-            self.physical_partition, false, None, None);
-        
+            partition_name,
+            512,
+            num_sectors,
+            start_sector,
+            physical_partition,
+            false,
+            None,
+            None,
+        );
+
         let resp = self.send_command(&packet)?;
         if !resp.is_success() {
-            return Err(BridgeError::Protocol(ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("program {:?} rejected: {:?}", partition_name, resp.error) }));
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("program {:?} rejected: {:?}", partition_name, resp.error),
+            }));
         }
         self.send_file_data(file, file_size)?;
         Ok(())
@@ -401,74 +612,210 @@ impl FirehoseSession {
     pub fn send_file_data(&mut self, mut file: std::fs::File, file_size: u64) -> Result<()> {
         let mut buffer = vec![0u8; self.max_payload_to as usize];
         let mut total_sent = 0u64;
-        let timeout = Duration::from_secs(super::super::config::default_app_config().defaults.flash_timeout_secs);
-        
+        let timeout = Duration::from_secs(
+            super::super::config::default_app_config()
+                .defaults
+                .flash_timeout_secs,
+        );
+
         use std::io::Read;
-        
+
         while total_sent < file_size {
-            let chunk_size = std::cmp::min(self.max_payload_to as usize, (file_size - total_sent) as usize);
+            let chunk_size = std::cmp::min(
+                self.max_payload_to as usize,
+                (file_size - total_sent) as usize,
+            );
             let n = file.read(&mut buffer[..chunk_size])?;
-            if n == 0 { break; }
-            
+            if n == 0 {
+                break;
+            }
+
             self.device.write_bulk(self.out_ep, &buffer[..n], timeout)?;
             total_sent += n as u64;
         }
-        
-        // Read final response
-        let mut buf = vec![0u8; 4096];
-        let n = self.device.read_bulk(self.in_ep, &mut buf, Duration::from_secs(30))?;
-        buf.truncate(n);
-        
-        let xml_str = String::from_utf8_lossy(&buf).to_string();
-        let resp = FirehoseResponse::from_xml(&xml_str)?;
-        
+
+        self.read_program_response()
+    }
+
+    /// Program an in-memory payload (e.g. the 4096-byte bootloader message
+    /// written to `misc`) onto a partition at an explicit LUN.
+    ///
+    /// The sector count is derived from the payload so the device never waits
+    /// for bytes that are not coming.
+    pub fn program_data_for_lun(
+        &mut self,
+        partition_name: &str,
+        data: &[u8],
+        start_sector: u64,
+        physical_partition: u32,
+    ) -> Result<()> {
+        if data.is_empty() {
+            return Err(BridgeError::InvalidArgument(
+                "refusing to program an empty payload".to_string(),
+            ));
+        }
+        let sector_size = if self.sector_size == 0 {
+            512
+        } else {
+            self.sector_size
+        };
+        let num_sectors = (data.len() as u64).div_ceil(sector_size as u64);
+        // Firehose expects a whole-sector payload for a non-sparse program;
+        // pad the tail with zeros rather than leaving the device waiting.
+        let padded_len = num_sectors as usize * sector_size as usize;
+        let mut payload: Vec<u8> = Vec::with_capacity(padded_len);
+        payload.extend_from_slice(data);
+        payload.resize(padded_len, 0);
+
+        let packet = FirehosePacket::program(
+            partition_name,
+            sector_size,
+            num_sectors,
+            start_sector,
+            physical_partition,
+            false,
+            None,
+            None,
+        );
+        let resp = self.send_command(&packet)?;
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("File data transfer failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("program {partition_name:?} rejected: {:?}", resp.error),
             }));
         }
-        
+
+        self.send_data(&payload)?;
         Ok(())
     }
 
-    pub fn read_partition(&mut self, partition_name: &str, output_path: &Path, 
-                          start_sector: u64, num_sectors: u64) -> Result<()> {
-        let packet = FirehosePacket::read(
-            start_sector, num_sectors, self.physical_partition, partition_name);
-        let resp = self.send_command(&packet)?;
-        
+    /// Stream raw bytes to the target, then read the terminating response.
+    pub fn send_data(&mut self, data: &[u8]) -> Result<()> {
+        let timeout = Duration::from_secs(
+            super::super::config::default_app_config()
+                .defaults
+                .flash_timeout_secs,
+        );
+        let chunk = (self.max_payload_to as usize).max(1);
+        for piece in data.chunks(chunk) {
+            self.device.write_bulk(self.out_ep, piece, timeout)?;
+        }
+        self.read_program_response()
+    }
+
+    fn read_program_response(&mut self) -> Result<()> {
+        // Read final response
+        let mut buf = vec![0u8; 4096];
+        let n = self
+            .device
+            .read_bulk(self.in_ep, &mut buf, Duration::from_secs(30))?;
+        buf.truncate(n);
+
+        let xml_str = String::from_utf8_lossy(&buf).to_string();
+        let resp = FirehoseResponse::from_xml(&xml_str)?;
+
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Read command failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("File data transfer failed: {:?}", resp.error),
             }));
         }
-        
+
+        Ok(())
+    }
+
+    /// Read on the session's default LUN (explicit-LUN variant is used by
+    /// every CLI path).
+    #[allow(dead_code)]
+    pub fn read_partition(
+        &mut self,
+        partition_name: &str,
+        output_path: &Path,
+        start_sector: u64,
+        num_sectors: u64,
+    ) -> Result<()> {
+        self.read_partition_for_lun(
+            partition_name,
+            output_path,
+            start_sector,
+            num_sectors,
+            self.physical_partition,
+        )
+    }
+
+    pub fn read_partition_for_lun(
+        &mut self,
+        partition_name: &str,
+        output_path: &Path,
+        start_sector: u64,
+        num_sectors: u64,
+        physical_partition: u32,
+    ) -> Result<()> {
+        let packet = FirehosePacket::read(
+            start_sector,
+            num_sectors,
+            physical_partition,
+            partition_name,
+        );
+        let resp = self.send_command(&packet)?;
+
+        if !resp.is_success() {
+            return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("Read command failed: {:?}", resp.error),
+            }));
+        }
+
         let mut file = std::fs::File::create(output_path)?;
         let expected_size = num_sectors * self.sector_size as u64;
         let mut total_received = 0u64;
         let mut buffer = vec![0u8; self.max_payload_from as usize];
         let timeout = Duration::from_secs(30);
-        
+
         while total_received < expected_size {
-            let chunk_size = std::cmp::min(self.max_payload_from as usize, (expected_size - total_received) as usize);
-            let n = self.device.read_bulk(self.in_ep, &mut buffer[..chunk_size], timeout)?;
-            if n == 0 { break; }
-            
+            let chunk_size = std::cmp::min(
+                self.max_payload_from as usize,
+                (expected_size - total_received) as usize,
+            );
+            let n = self
+                .device
+                .read_bulk(self.in_ep, &mut buffer[..chunk_size], timeout)?;
+            if n == 0 {
+                break;
+            }
+
             use std::io::Write;
             file.write_all(&buffer[..n])?;
             total_received += n as u64;
         }
-        
+
         Ok(())
     }
 
+    /// Erase on the session's default LUN (explicit-LUN variant is used by
+    /// every CLI path).
+    #[allow(dead_code)]
     pub fn erase_partition(&mut self, start_sector: u64, num_sectors: u64) -> Result<()> {
-        let packet = FirehosePacket::erase(start_sector, num_sectors, self.physical_partition);
+        self.erase_partition_for_lun(start_sector, num_sectors, self.physical_partition)
+    }
+
+    pub fn erase_partition_for_lun(
+        &mut self,
+        start_sector: u64,
+        num_sectors: u64,
+        physical_partition: u32,
+    ) -> Result<()> {
+        let packet = FirehosePacket::erase(start_sector, num_sectors, physical_partition);
         let resp = self.send_command(&packet)?;
-        
+
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Erase failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("Erase failed: {:?}", resp.error),
             }));
         }
         Ok(())
@@ -477,10 +824,12 @@ impl FirehoseSession {
     pub fn reboot(&mut self, mode: &str) -> Result<()> {
         let packet = FirehosePacket::power(mode, Some(100));
         let resp = self.send_command(&packet)?;
-        
+
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Power command failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("Power command failed: {:?}", resp.error),
             }));
         }
         Ok(())
@@ -489,10 +838,12 @@ impl FirehoseSession {
     pub fn reset(&mut self) -> Result<()> {
         let packet = FirehosePacket::reset();
         let resp = self.send_command(&packet)?;
-        
+
         if !resp.is_success() {
             return Err(BridgeError::Protocol(ProtocolError::CommandFailed {
-                cmd: 0, sub: 0, reason: format!("Reset failed: {:?}", resp.error),
+                cmd: 0,
+                sub: 0,
+                reason: format!("Reset failed: {:?}", resp.error),
             }));
         }
         Ok(())
@@ -500,12 +851,16 @@ impl FirehoseSession {
 
     pub fn device_info(&self) -> (u32, u32, Duration) {
         let cfg = crate::config::default_app_config();
-        (self.max_payload_to, self.sector_size, Duration::from_millis(cfg.usb.bulk_timeout_ms))
+        (
+            self.max_payload_to,
+            self.sector_size,
+            Duration::from_millis(cfg.usb.bulk_timeout_ms),
+        )
     }
 }
 
 /// Qualcomm partition information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QcomPartition {
     pub name: String,
     pub start_sector: u64,
@@ -518,7 +873,11 @@ pub struct QcomPartition {
 
 impl QcomPartition {
     pub fn size_bytes(&self) -> u64 {
-        if self.size > 0 { self.size } else { self.num_sectors * self.sector_size as u64 }
+        if self.size > 0 {
+            self.size
+        } else {
+            self.num_sectors * self.sector_size as u64
+        }
     }
 }
 
@@ -547,7 +906,8 @@ mod tests {
         assert!(resp.is_success());
         // Configure sizes must remain reachable through the generic map.
         assert_eq!(
-            resp.get_value("MaxPayloadSizeToTargetInBytes").map(|s| s.as_str()),
+            resp.get_value("MaxPayloadSizeToTargetInBytes")
+                .map(|s| s.as_str()),
             Some("8192")
         );
     }
@@ -567,6 +927,88 @@ mod tests {
         assert!(FirehoseSession::parse_partition_xml(bad).is_none());
         let good = r#"<partition name="frp" start_sector="100" num_partition_sectors="8" physical_partition_number="0"/>"#;
         let p = FirehoseSession::parse_partition_xml(good).unwrap();
-        assert_eq!((p.name.as_str(), p.start_sector, p.num_sectors), ("frp", 100, 8));
+        assert_eq!(
+            (p.name.as_str(), p.start_sector, p.num_sectors),
+            ("frp", 100, 8)
+        );
+    }
+
+    #[test]
+    fn log_value_attribute_is_parsed_and_unescaped() {
+        // Standard Firehose `<log value="..."/>` with an escaped partition
+        // element: this used to be dropped, leaving an empty table.
+        let xml = r#"<?xml version="1.0"?><data><log value="&lt;partition name=&quot;frp&quot; start_sector=&quot;100&quot; num_partition_sectors=&quot;8&quot; physical_partition_number=&quot;2&quot;/&gt;"/><response value="ACK"/></data>"#;
+        let resp = FirehoseResponse::from_xml(xml).unwrap();
+        assert_eq!(resp.value.as_deref(), Some("ACK"));
+        assert!(resp.is_success());
+        let log = resp.log.as_deref().unwrap();
+        assert!(log.contains(r#"<partition name="frp""#), "{log}");
+        let parts = FirehoseSession::parse_partition_table(&resp).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].name, "frp");
+        assert_eq!(parts[0].physical_partition, 2);
+    }
+
+    #[test]
+    fn multiple_partition_log_lines_are_all_parsed() {
+        let xml = r#"<data><log value="&lt;partition name=&quot;a&quot; start_sector=&quot;1&quot; num_partition_sectors=&quot;2&quot;/&gt;"/><log value="&lt;partition name=&quot;b&quot; start_sector=&quot;3&quot; num_partition_sectors=&quot;4&quot; physical_partition_number=&quot;1&quot;/&gt;"/><response value="ACK"/></data>"#;
+        let resp = FirehoseResponse::from_xml(xml).unwrap();
+        let parts = FirehoseSession::parse_partition_table(&resp).unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].name, "b");
+        assert_eq!(parts[1].physical_partition, 1);
+    }
+
+    #[test]
+    fn lun_is_embedded_in_program_read_erase_packets() {
+        let program = FirehosePacket::program("boot", 512, 8, 100, 3, false, None, None);
+        assert_eq!(
+            program
+                .data
+                .get("physical_partition_number")
+                .map(String::as_str),
+            Some("3")
+        );
+        let read = FirehosePacket::read(100, 8, 2, "boot");
+        assert_eq!(
+            read.data
+                .get("physical_partition_number")
+                .map(String::as_str),
+            Some("2")
+        );
+        let erase = FirehosePacket::erase(100, 8, 1);
+        assert_eq!(
+            erase
+                .data
+                .get("physical_partition_number")
+                .map(String::as_str),
+            Some("1")
+        );
+        let table = FirehosePacket::get_partition_table(4);
+        assert_eq!(
+            table
+                .data
+                .get("physical_partition_number")
+                .map(String::as_str),
+            Some("4")
+        );
+    }
+
+    #[test]
+    fn partition_table_lines_inherit_the_probed_lun() {
+        // The device often omits physical_partition_number; a per-LUN query
+        // must not collapse every table entry onto LUN 0.
+        let xml = r#"<data><log value="&lt;partition name=&quot;boot&quot; start_sector=&quot;100&quot; num_partition_sectors=&quot;8&quot;/&gt;"/><response value="ACK"/></data>"#;
+        let resp = FirehoseResponse::from_xml(xml).unwrap();
+        let lun3 = FirehoseSession::parse_partition_table_for_lun(&resp, 3).unwrap();
+        assert_eq!(lun3.len(), 1);
+        assert_eq!(lun3[0].physical_partition, 3);
+        // An explicit attribute always wins over the probed LUN.
+        let explicit = r#"<data><log value="&lt;partition name=&quot;boot&quot; start_sector=&quot;100&quot; num_partition_sectors=&quot;8&quot; physical_partition_number=&quot;1&quot;/&gt;"/><response value="ACK"/></data>"#;
+        let resp = FirehoseResponse::from_xml(explicit).unwrap();
+        assert_eq!(
+            FirehoseSession::parse_partition_table_for_lun(&resp, 3).unwrap()[0].physical_partition,
+            1
+        );
     }
 }

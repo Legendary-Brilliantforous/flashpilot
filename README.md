@@ -87,7 +87,7 @@ The Android repair world runs on closed, Windows-only commercial tools. Their pr
 A frameless, translucent, radius-card window with a live **connection banner** (computer → cable → phone scene with an animated data pulse) above a left **nav rail** and a right **console/log pane**.
 
 - **Connection bar** — live device list (one row per phone: model · serial · transports); click a row to inspect it. Operation buttons ask which phone when several match.
-- **Samsung** — TFT-style sub-tabs: `ODIN FLASH · UNLOCK · ADVANCED FLASH · INFO & TOOLS`, plus firmware slots (AP/BL/CP/CSC/USERDATA), Odin utilities, and a `KNOX — EXPERIMENTAL` collapsible.
+- **Samsung** — Samsung hub sub-tabs: `ODIN FLASH · UNLOCK · ADVANCED FLASH · INFO & TOOLS`, plus firmware slots (AP/BL/CP/CSC/USERDATA), Odin utilities, and a `KNOX — EXPERIMENTAL` collapsible.
 - **MediaTek / Qualcomm / SPD** — dedicated workbenches with native low-level tools (scatter/DA + crash-to-BROM, programmer/XML + QCN/IMEI, FDL binaries + base addresses + IMEI), each with its own `— EXPERIMENTAL` collapsible.
 - **Battery** — fuel-gauge health %, temp/voltage/current, top consumers; one-click repair.
 - **Network** — SIM state, data/Wi-Fi flags, DNS mode; radio reset & re-registration.
@@ -171,34 +171,48 @@ No decision will be made without contributor voices. Come and be one of them.
 
 ```
 flashpilot/
-├── src/                      # Rust bridge (~13k LOC)
-│   ├── main.rs               #   command-line entry (80+ commands)
-│   ├── usb.rs                #   USB enumeration / interfaces (+ port_numbers)
-│   ├── odin.rs               #   reverse-engineered Odin session protocol
+├── src/                      # Rust bridge (~13k LOC) — ALL flows live here
+│   ├── main.rs               #   command-line entry (80+ commands) + flow-run dispatch
+│   ├── flows.rs              #   THE registry: FLOWS / JOBS / MODES (flow! macro, ~280 rows)
+│   ├── usb/                  #   USB enumeration / interfaces / filtering (mod.rs + filtering.rs)
+│   ├── devices.rs            #   merged USB+ADB device rows
+│   ├── sam_download.rs       #   Samsung Download/Odin protocol (odin-* commands)
 │   ├── mtk.rs mtk_da.rs      #   MediaTek BROM/DA flashing
 │   ├── mtk_exploit.rs        #   BROM exploits (bypass/kamakiri2/crash-to-BROM)
 │   ├── mtk_sla.rs            #   MediaTek SLA key handling
 │   ├── qualcomm/             #   Sahara + Firehose + GPT (EDL)
 │   ├── spd.rs                #   Spreadtrum/UNISOC BSL protocol (+ PAC)
+│   ├── pac.rs                #   SPD PAC extract/pack
+│   ├── pit.rs                #   Samsung PIT parser
 │   ├── mtp.rs at.rs adb.rs   #   MTP, AT command, ADB plumbing
+│   ├── fastboot.rs           #   native fastboot transport
+│   ├── moto_flash.rs         #   Motorola staged fastboot FRP
+│   ├── apple.rs              #   Apple usbmuxd/lockdown
+│   ├── hid.rs bulk.rs        #   HID + bulk helpers
+│   ├── fwtar.rs sparse.rs    #   firmware tar + sparse handling
+│   ├── imgtools.rs           #   boot/vbmeta surgery
+│   ├── hostinfo.rs           #   host eMMC/UFS health
+│   ├── sam_*.rs              #   Samsung helpers (errors/setup)
 │   └── config.rs error.rs util.rs
 ├── main.py                   # app entry (venv-safe launcher → python.gui.qt_app)
 ├── python/
 │   ├── core/
-│   │   ├── core.py           #   THE registry: FLOWS / JOBS / MODES + all flows
-│   │   │                     #   (verb-first jobs; short snake_case method keys)
-│   │   ├── frp.py            #   FRP-only re-export (name == responsibility)
-│   │   ├── devices.py        #   multi-device identity: stable keys, list,
-│   │   │                     #   resolve, transport mapping, thread scope
+│   │   ├── core.py           #   thin shim: mirrors Rust FLOWS/JOBS/MODES via bridge.flow_list()
+│   │   ├── frp.py            #   FRP-only re-export surface (name == responsibility)
+│   │   ├── devices.py        #   multi-device identity: stable keys, list, resolve, transport mapping
 │   │   ├── bridge.py         #   talks to the Rust binary (+ per-key cancel)
-│   │   ├── flow.py           #   Flow/Step primitives (+ per-key cancel)
-│   │   ├── mtp.py            #   Samsung MTP/AT (multi-sequence ADB enable)
+│   │   ├── flow.py           #   Flow/Step primitives + cancellation
+│   │   ├── jobs.py           #   FlashJob lifecycle (isolated job layer)
+│   │   ├── cancel.py         #   cooperative cancellation registry
 │   │   ├── mtk.py            #   MTK PIDs/stages/chips (0003=BROM, 2000=preloader)
-│   │   ├── knox.py qcn.py imei.py emmc.py pac.py  # EXPERIMENTAL domains
-│   │   ├── experimental.py   #   per-run ack gates + audit log (Q2-B strict)
-│   │   ├── pit.py pitstore.py safety.py flashing.py fastboot.py fus.py
-│   │   └── adb.py device_info.py health.py integrity.py spd_adb.py
-│   │       updater.py usb_watch.py compat.py apple.py
+│   │   ├── mtp.py            #   Samsung MTP/AT (multi-sequence ADB enable)
+│   │   ├── pit.py pitstore.py  # Samsung PIT parser + cache
+│   │   ├── adb.py            #   ADB helpers
+│   │   ├── device_info.py    #   live device identity
+│   │   ├── actions.py        #   action helpers
+│   │   ├── experimental.py   #   per-run ack gates + audit log
+│   │   ├── fus.py            #   Samsung FUS helpers
+│   │   └── (no flows/ dir)   #   flows live in src/flows.rs; Python only delegates
 │   └── gui/
 │       ├── qt_app.py         #   the PyQt6 studio (~12k LOC)
 │       ├── devices.py        #   brand→model→action drill-down pages
@@ -224,18 +238,14 @@ flashpilot/
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — everything you need to start.
 - **Start with the [`good first issue`](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label** — curated, beginner-friendly tasks.
 - Use the **[bug report](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=bug&template=bug_report.yml)** / **[feature request](https://github.com/Legendary-Brilliantforous/flashpilot/issues/new?labels=enhancement&template=feature_request.yml)** templates.
-- **Beginner-friendly tasks** — every `flow_*` function in `python/core/core.py` is an opportunity: add a method, tune a command sequence, wire up a new device combo.
-- **No prior flashing experience required.** The flow framework (`python/core/core.py`) is dead simple — a new method is ~5 lines:
+- **Beginner-friendly tasks** — every flow row in `src/flows.rs` is an opportunity: add a `flow!(...)` line, tune a command sequence, wire up a new device combo. Python auto-discovers it via `bridge.flow_list()`.
+- **No prior flashing experience required.** The flow framework (`src/flows.rs`) is dead simple — a new method is one line:
 
-```python
-def flow_my_method():
-    return Flow("my method", [Step("do thing", lambda ctx, log: log("hi"))])
-
-FLOWS["my_method"] = flow_my_method              # short snake_case key
-JOBS["Read Device Info"]["ADB"].append("my_method")  # ...and it shows in the GUI
+```rust
+flow!("my_method", "My method", "Read Device Info", "ADB"),
 ```
 
-It appears in the GUI automatically. That's the whole contribution loop: **write a flow, ship a feature.**
+It appears in the GUI automatically. That's the whole contribution loop: **write a flow row, ship a feature.**
 - **Multi-device rule** — never grab "the" device; accept `key=None` (ambient scope) and filter by it. See `python/core/devices.py` and `CONTRIBUTING.md`.
 - **Naming rules** — jobs are verb-first (`Remove FRP`, not `FRP bypass`); flow keys are short snake_case (no `flow_` prefix in `FLOWS`); MTK PIDs are `0003`=BROM / `2000`=preloader (mtkclient convention — don't swap them).
 
@@ -257,7 +267,7 @@ This tool talks directly to bootloaders and can wipe data or brick a device if m
 - Use it only on **devices you own or are authorized to service** (repair shops servicing customer phones with consent).
 - Always read the on-screen warnings and **back up partitions** before flashing.
 - Bypassing FRP/MDM on a device you don't own may be **illegal in your jurisdiction** — you are responsible for how you use this software.
-- The project ships **no proprietary "secret sauce"** (HID unlock payloads, leaked DAs are *not* vendored) — you supply the firmware/binaries for your specific device, exactly like every commercial flashing suite.
+- FlashPilot bundles the protocol payloads operations need (MTK DA/BROM payloads, Qualcomm firehose programmers, Unisoc FDL1/FDL2, Samsung bootloaders), the same way commercial flashing suites do. Firmware images for a specific phone still come from the user or the vendor.
 
 ---
 

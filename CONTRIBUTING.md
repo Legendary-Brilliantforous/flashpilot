@@ -26,7 +26,8 @@ help.
 See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Be respectful, assume good intent,
 and keep discussions technical and helpful. This is a hobbyist-turned-serious
 project: we welcome beginners and veterans alike. Harassment, gatekeeping, or
-pushing proprietary "secret sauce" into the repo will not be tolerated.
+committing secrets/credentials will not be tolerated. Protocol payloads are
+welcome when their provenance and license are documented.
 
 ---
 
@@ -37,7 +38,8 @@ Two halves work together:
 | Layer | Location | Language | Role |
 |---|---|---|---|
 | **Core / protocol engine** | `src/` | Rust | Raw USB, all bootloader protocols (`flashpilot-bridge` CLI) |
-| **Flow orchestrator** | `python/core/core.py` | Python | `FLOWS` / `JOBS` / `MODES` registry + all flows |
+| **Flow registry** | `src/flows.rs` | Rust | `flow!` macro rows → `FLOWS` / `JOBS` / `MODES` (source of truth) |
+| **Flow shim** | `python/core/core.py` | Python | Thin `_RustFlow` wrappers + `JOBS` fallback; delegates to `bridge flow-run` |
 | **Device identity** | `python/core/devices.py` | Python | Stable keys, device list, target re-resolution, thread scope |
 | **FRP surface** | `python/core/frp.py` | Python | FRP-only re-export (name == responsibility) |
 | **GUI studio** | `python/gui/` | Python / PyQt6 | Workbench (`qt_app.py`), pages (`devices.py`), theme, animations |
@@ -184,9 +186,9 @@ thinned out. Current truth:
 5. **`src/qualcomm/`** — Sahara (EDL) handshake and Firehose sessions.
 6. **`src/spd.rs`** — Spreadtrum/UNISOC BSL: FDL download, format, FRP, backup,
    PAC extract/pack.
-7. **`python/core/core.py`** — the **heart of the GUI**. `JOBS` maps
-   `job → mode → [flow keys]`. `FLOWS` maps a flow key to a function returning a
-   `Flow` (a list of `Step`s). 13 jobs, 90+ flows, 9 modes (incl. `SPD`).
+7. **`src/flows.rs`** — the **heart of the app**. `flow!(key, label, job, mode)` rows
+   build the `FLOWS` / `JOBS` / `MODES` registry (~280 rows, 13 jobs, 9 modes incl. `SPD`).
+   `python/core/core.py` only mirrors it for GUI lookup.
 8. **`python/core/devices.py`** — multi-device identity. Stable keys
    (`adb:<serial>` → `usb:<port-path>` → volatile fallback), `list_devices()`,
    `resolve_usb_target()`, and the `device_scope()` thread-local that carries
@@ -214,30 +216,19 @@ click button
 
 ## How to add a new flow
 
-The simplest feature you can ship. Open `python/core/core.py`:
+The simplest feature you can ship. Open `src/flows.rs` and add one row:
 
-```python
-def flow_my_method():
-    return Flow(
-        "my method",                       # human-readable name
-        [
-            Step("step 1", lambda ctx, log: log("hello")),
-            Step("step 2", lambda ctx, log: bridge._run([...], timeout=60)),
-        ],
-    )
-
-FLOWS["my_method"] = flow_my_method        # short snake_case key (no flow_ prefix)
+```rust
+flow!("my_method", "My method", "Remove FRP", "ADB"),
 ```
 
-Then wire it into a job's mode in `JOBS` (jobs are verb-first):
+The key is short snake_case (no `flow_` prefix). Python auto-discovers it via
+`bridge.flow_list()` and the GUI's job/mode/method drill-down picks it up
+automatically; execution runs through `flashpilot-bridge flow-run my_method`.
 
-```python
-"Remove FRP": {
-    ...
-    "ADB": ["adb_frp", "frp_browser", "my_method"],
-    ...
-}
-```
+Then (only if new low-level protocol work is needed) add the bridge command in
+`src/<concern>.rs` + `src/main.rs`. Job/mode wiring is already in the flow row.
+
 
 That's it — the flow appears in the GUI's dropdown/sub-tab automatically and is
 also reachable from the CLI. **This is the highest-value/easiest-entry area.**

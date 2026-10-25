@@ -79,19 +79,13 @@ def _norm_serial(value):
     return s
 
 
-# Vendor VIDs that always count as phones/tablets (mirrors the GUI's
-# DeviceMonitor classification: Samsung/MTK/Qualcomm/UNISOC/Google/Apple).
-KNOWN_PHONE_VIDS = frozenset({0x04E8, 0x05C6, 0x0E8D, 0x1782, 0x18D1, 0x05AC})
-
-# Other Android vendor VIDs (same set as the GUI's _ANDROID_GENERIC_VIDS).
-ANDROID_GENERIC_VIDS = frozenset({0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5})
-
-# Product/manufacturer keywords that mark a non-vendor VID as a phone.
-_PHONE_NAME_KEYWORDS = (
-    "android", "phone", "tecno", "infinix", "itel", "xiaomi", "redmi",
-    "oppo", "vivo", "oneplus", "realme", "pixel", "nexus", "motorola",
-    "lenovo", "huawei", "honor", "asus", "transsion", "spark", "smartphone",
-)
+# Classification lives in Rust now (src/usb/filtering.rs: is_phone,
+# MTK_OEM_VIDS, ANDROID_GENERIC_VIDS). The sets below are retired and
+# kept only as documentation — do not branch on them; group merged rows
+# by their Rust-assigned mode/transports instead.
+# Retired: KNOWN_PHONE_VIDS = {0x04E8, 0x05C6, 0x0E8D, 0x1782, 0x18D1, 0x05AC}
+# Retired: ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
+# Retired: _PHONE_NAME_KEYWORDS = (android/phone/tecno/… brand keywords)
 
 
 def device_key(d):
@@ -192,27 +186,20 @@ def candidates_for_modes(modes):
 def resolve_usb_target(key):
     """Fresh ``vid:pid@bus:addr`` target string for a stored device ``key``.
 
-    Returns None when the device is not currently on USB (e.g. an ADB-only
-    row, or the phone re-enumerated away). ADB-keyed rows resolve via the
-    merged USB dict when the same phone exposes both.
+    Resolved authoritatively by the Rust bridge (fresh re-scan every
+    call). Returns None when the device is not currently on USB (e.g.
+    an ADB-only row, or the phone re-enumerated away).
     """
     if not key:
         return None
     from . import bridge as _bridge
 
     try:
-        usb_devs = _bridge.detect_all()
+        out = _bridge._run(["resolve-transport", key], timeout=15)
     except Exception:
         return None
-    if not isinstance(usb_devs, list):
-        return None
-    for d in usb_devs:
-        if isinstance(d, dict) and device_key(d) == key:
-            try:
-                return f"{int(d['vid']):04x}:{int(d['pid']):04x}@{d['bus']}:{d['address']}"
-            except (KeyError, TypeError, ValueError):
-                return None
-    return None
+    text = (out or "").strip()
+    return text or None
 
 
 def find_usb(key=None):

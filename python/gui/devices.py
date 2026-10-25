@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .widgets.action_row import ActionRow
+
 
 _DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "supported_devices.json")
@@ -67,10 +69,42 @@ _ACTION_META = {
     "tecno_enable_adb":      ("Enable ADB",       "⚙", "On-device secret code *#*#49#*#* (UMS9230) + BROM fallback (TECNO Spark 10/20/10C)"),
     "moto_frp_adb":          ("FRP Remove · ADB", "⚡", "Any Motorola/Lenovo on authorized ADB: zero frp flag + provision + disable Google/Moto setup wizards"),
     "moto_frp_fastboot":     ("FRP Fastboot Remove", "🛠", "CVE-2016-10277 (initroot): fsg-id cmdline injection → per-device initramfs → root ADB → wipe FRP. Needs --file initramfs + --partition scratch addr"),
+    "moto_edl_adb":          ("(retired — no EDL on this model)", "🚫", "Retired stub: this model has no EDL path; use moto_fb_frp (fastboot staged) instead"),
+    "moto_fb_frp":           ("Fastboot Staged FRP", "🛠", "Signed stock flash (MD5-verified) → reboot → up to 3 cycles acting per mode seen → ADB wipe when authorized. Needs --firmware-dir"),
+    "moto_fb_factory_adb":   ("Factory-Mode ADB Cycle", "🔁", "Moto-M shape: oem fb_mode_set → reboot → act per mode seen (x3) → wipe over authorized ADB → fb_mode_clear restore"),
     "moto_frp":              ("FRP Remove",       "⚡", "Adaptive: ADB FRP remove when ADB is enabled, else the fastboot CVE-2016-10277 chain"),
-    "frp_fake_login":        ("Fake Login · QR", "📷", "Own DPC (org.flashpilot.dpc) QR enrollment in the wizard: marks setup complete + enables ADB, then clears FRP"),
-    "frp_fake_login_testdpc": ("Fake Login · TestDPC", "📷", "TestDPC QR enrollment in the wizard, then FRP clear over ADB"),
-    "frp_fake_login_adp":     ("Fake Login · DevPolicy", "📷", "Android Device Policy QR enrollment in the wizard, then FRP clear over ADB"),
+    "frp_fake_login":        ("Easy Login · FlashPilot DPC", "🧩", "Own DPC (org.flashpilot.dpc) QR enrollment in the wizard: marks setup complete + enables ADB, then clears FRP"),
+    "frp_fake_login_testdpc": ("Easy Login · TestDPC", "🧪", "TestDPC QR enrollment in the wizard, then FRP clear over ADB"),
+    "frp_fake_login_adp":     ("Easy Login · Device Policy", "🏢", "Android Device Policy QR enrollment in the wizard, then FRP clear over ADB"),
+    # Router act (not a flow): opens the QR window. TestDPC is the default
+    # QR; Google Device Policy + FlashPilot are the two optional ones.
+    "_qr_generator":         ("QR Provision", "📷", "MDM device-owner QR enrollment — TestDPC by default, with Google Device Policy / FlashPilot optional"),
+    # ---- ADB hub (generic, non-brand flows; brand flows stay per-device)
+    "adb_frp":               ("FRP Remove · ADB", "⚡", "Zero frp flag + provision + disable setup wizards over authorized ADB"),
+    "frp_browser":           ("FRP Browser", "🌐", "On-device browser path to account removal"),
+    "frp_emergency":         ("FRP Emergency Call", "📞", "Emergency-dialer path to Settings"),
+    "frp_settings":          ("FRP Settings", "⚙", "Notification-shade path to Settings"),
+    "frp_qr_provision":      ("FRP QR Provision", "📷", "TestDPC QR provisioning, then FRP clear"),
+    "adb_info":              ("ADB Read Info", "ℹ", "Full getprop dump + fingerprint over ADB"),
+    "repair_settings":       ("Repair Settings", "🛠", "Re-enable Settings/SystemUI when disabled"),
+    "fix_adb_auth":          ("Fix ADB Auth", "🔑", "Re-seed ADB keys / authorization state"),
+    "factory_reset":         ("Factory Reset", "🧹", "Wipe userdata via recovery (authorized ADB)"),
+    "reboot_bootloader":     ("Reboot Bootloader", "🔃", "Reboot the phone to bootloader from ADB"),
+    "reboot_edl":            ("Reboot EDL", "🔃", "Reboot the phone to EDL 9008 from ADB"),
+    "reboot_normal":         ("Reboot System", "🔃", "Reboot the phone to Android from ADB"),
+    "reboot_recovery":       ("Reboot Recovery", "🔃", "Reboot the phone to recovery from ADB"),
+    "recovery":              ("Recovery", "🔃", "Boot to recovery"),
+    "screen_lock_remove":    ("Screen Lock Remove", "🔓", "Remove screen lock over ADB"),
+    "screen_lock_locksettings": ("Screen Lock · locksettings", "🔓", "locksettings clear (Android 8/9, no credential)"),
+    "screen_lock_comprehensive": ("Screen Lock · Comprehensive", "🔓", "Multi-method screen-lock removal"),
+    "screen_lock_recovery":  ("Screen Lock · Recovery", "🔓", "Screen-lock removal via recovery"),
+    "mdm_qr":                ("MDM QR", "📷", "Device-owner provisioning QR generator"),
+    "mdm_diagnostics":       ("MDM Diagnostics", "ℹ", "Read-only MDM/device-owner state"),
+    "mdm_unlock":            ("MDM Unlock", "🔓", "Remove device owner / MDM"),
+    "mdm_unlock_comprehensive": ("MDM Unlock · Full", "🔓", "Comprehensive MDM removal"),
+    "enable_adb":            ("Enable ADB", "⚙", "ADB-enable helpers"),
+    "emmc_raw":              ("eMMC Raw Read", "💾", "Raw eMMC reads (EXPERIMENTAL)"),
+    "setup_wizard":          ("Setup Wizard", "🧙", "Force-complete the setup wizard over ADB"),
     "apple_icloud_remove": ("iCloud Remove",     "🧪", "EXPERIMENTAL — DFU/ramdisk iCloud remove (usbmuxd). Educational, own device only (at-apple-icloud-remove)."),
     "apple_icloud_add":    ("iCloud Add",        "🧪", "EXPERIMENTAL — Push activation plist via lockdownd (at-apple-icloud-add)."),
     "health":              ("Health Report",     "🧪", "EXPERIMENTAL — Device health JSON + HTML/PDF (health_report)."),
@@ -84,6 +118,38 @@ _ACTION_META = {
     "pixel_fastboot":      ("Pixel Fastboot",    "🧪", "EXPERIMENTAL — Pixel factory/unlock (fastboot)."),
     "emmc_health":         ("eMMC Health",       "🧪", "EXPERIMENTAL — eMMC/UFS health read."),
 }
+
+
+# Display-only engine hints for the small mode chip on a model-board action
+# card. The board's group tuples carry no mode (their act keys are frozen, so
+# a tuple may not grow a field), therefore the chip is derived from the
+# per-brand sub-label the row already shows: the segment before the first
+# " · " is matched against these keywords and handed to ``_mode_chip``, which
+# owns the badge's wording + tokens. Purely cosmetic — routing, the act key
+# and the click surface never read it.
+_ROW_MODE_HINTS = (
+    ("ADB", "ADB"),
+    ("BROM", "BROM"),
+    ("SPD", "SPD"),
+    ("FASTBOOT", "FASTBOOT"),
+    ("EDL", "EDL"),
+    ("MTP", "MTP"),
+    ("RECOVERY", "RECOVERY"),
+)
+
+
+def _row_mode_chip(sub_label):
+    """The ``(label, bg, fg, border)`` engine chip for a row, or ``None``.
+
+    Returns ``None`` (no chip) when the row's sub-label names no transport it
+    maps cleanly onto — better an absent chip than a misleading one."""
+    head = (sub_label or "").split(" · ")[0].upper()
+    for needle, mode in _ROW_MODE_HINTS:
+        if needle in head:
+            from .common import _mode_chip
+
+            return _mode_chip(mode)
+    return None
 
 
 def nav_entries():
@@ -126,30 +192,23 @@ def _card(text, sub="", accent=None, clickable=True, **kwargs):
 
 
 def build_brand_page(win, key):
-    """Level 2: model cards grid + nested stack to Level 3."""
-    from PyQt6.QtWidgets import QHBoxLayout as _HL
+    """Level 2: split view — chip row on top, vertical
+    supported-devices list LEFT, selected model's actions RIGHT."""
+    from PyQt6.QtWidgets import QHBoxLayout as _HL, QVBoxLayout as _VL, \
+        QScrollArea as _SA, QSizePolicy as _SP
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
     brand = BRAND_BY_KEY[key]
     models = brand.get("models", [])
 
-    stack = QStackedWidget()
-    stack.setStyleSheet("background: transparent;")
-
-    # --- grid page ---
-    grid_page = QWidget()
-    grid_page.setStyleSheet("background: transparent;")
-    outer = QVBoxLayout(grid_page)
+    page = QWidget()
+    page.setStyleSheet("background: transparent;")
+    outer = _VL(page)
     outer.setContentsMargins(10, 8, 10, 8)
     outer.setSpacing(6)
 
-    head = QLabel(f"{brand.get('icon','')}  {brand['label']} — pick a model")
-    head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
-    outer.addWidget(head)
-
-    # TFT-style chips row: chips this brand's models actually use (from
-    # supported_devices engines). Supported chip -> clickable, navigates to
-    # its tool section. Anything else is grey + disabled with a reason
-    # tooltip — visible, never a dead popup.
+    # Chip row: chips this brand's models actually use.
+    # Supported chip -> clickable, navigates to its tool section; the
+    # rest are grey + disabled with a reason tooltip — never dead popups.
     engines = set((m.get("engine") or "").lower() for m in models)
     chips_row = _HL()
     chips_row.setSpacing(6)
@@ -185,85 +244,125 @@ def build_brand_page(win, key):
     chips_row.addStretch(1)
     outer.addLayout(chips_row)
 
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setStyleSheet("QScrollArea { background: transparent; }")
-    host = QWidget()
-    host.setStyleSheet("background: transparent;")
-    grid = QGridLayout(host)
-    grid.setContentsMargins(0, 0, 0, 0)
-    grid.setSpacing(8)
+    # --- split view: vertical supported-devices list LEFT, selected
+    # model's actions RIGHT. ---
+    split = _HL()
+    split.setSpacing(10)
+
+    # LEFT: vertical model list, compact rows (fixed width, never stretch).
+    list_col = QWidget()
+    list_col.setStyleSheet("background: transparent;")
+    # Expanding vertically so the column owns the split row's full height and
+    # its inner lscroll takes the rest (many models later -> scroll, not grow).
+    list_col.setSizePolicy(_SP.Policy.Preferred, _SP.Policy.Expanding)
+    lv = QVBoxLayout(list_col)
+    lv.setContentsMargins(0, 0, 0, 0)
+    lv.setSpacing(6)
+    lhead = QLabel("SUPPORTED DEVICES")
+    lhead.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:800; letter-spacing:1px;")
+    lv.addWidget(lhead)
+    lscroll = QScrollArea()
+    lscroll.setWidgetResizable(True)
+    lscroll.setFrameShape(QFrame.Shape.NoFrame)
+    lscroll.setFixedWidth(250)
+    lscroll.setStyleSheet("QScrollArea { background: transparent; }")
+    lhost = QWidget()
+    lhost.setStyleSheet("background: transparent;")
+    lv2 = QVBoxLayout(lhost)
+    lv2.setContentsMargins(0, 0, 0, 0)
+    lv2.setSpacing(6)
+    model_buttons = []
+
+    def _open_model(m, page_stack):
+        # No fade-in here: the design system's Motion.fade is a deliberate
+        # no-op on Linux (a QGraphicsOpacityEffect on a shadowed window both
+        # broke the drop shadow and, on the model page, stuck at opacity 0.0
+        # / rendered the board offset). Show the page immediately.
+        page = _build_model_page(win, brand, m, back=None)
+        if page_stack.indexOf(page) < 0:
+            page_stack.addWidget(page)
+        page_stack.setCurrentWidget(page)
 
     for i, m in enumerate(models):
         researched = m.get("status") == "researched"
-        chip_badge = f"{m.get('chip','?')}  ·  {m.get('engine','?').upper()}"
-        status_txt = "✓ researched — instant actions" if researched else "… planned — help us research"
-        sub = f"{chip_badge}\n{status_txt}"
-        card = _card(m["model"], sub,
-                     accent=C["ok"] if researched else C["mute"],
-                     clickable=True,
-                     status=m.get("status", ""))
-        card.setToolTip(m.get("notes") or "")
-        r, c = divmod(i, 3)
-        grid.addWidget(card, r, c)
+        eng = (m.get("engine") or "?").upper()
+        mb = QPushButton(("✓ " if researched else "… ") + m["model"])
+        mb.setCursor(Qt.CursorShape.PointingHandCursor)
+        mb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        mb.setFixedHeight(34)
+        mb.setToolTip(f"{m.get('chip','?')} · {eng}\n{m.get('notes') or ''}")
+        mb.setStyleSheet(
+            ("QPushButton { color:#e2e8f0; background:rgba(255,255,255,10);"
+             " border:1px solid rgba(255,255,255,0.10); border-left:3px solid %s;"
+             " border-radius:8px; padding:0 10px; text-align:left; font-size:11px; font-weight:700; }"
+             "QPushButton:hover { background:rgba(255,255,255,18); border:1px solid rgba(255,255,255,0.22);"
+             " border-left:3px solid %s; }"
+             "QPushButton:focus { outline:none; }") %
+            (C["ok"] if researched else C["mute"],
+             C["accent_hi"] if researched else C["mute"])
+        )
+        mb.clicked.connect(lambda _=False, mm=m: _open_model(mm, right_stack))
+        mb.setProperty("researched", researched)
+        model_buttons.append(mb)
+        lv2.addWidget(mb)
+    lv2.addStretch(1)
+    lscroll.setWidget(lhost)
+    lv.addWidget(lscroll, 1)
+    split.addWidget(list_col, 0)
 
-    grid.setColumnStretch(0, 1)
-    grid.setColumnStretch(1, 1)
-    grid.setColumnStretch(2, 1)
-    grid.setRowStretch(len(models) // 3 + 1, 1)
-    scroll.setWidget(host)
-    outer.addWidget(scroll, 1)
-    stack.addWidget(grid_page)
+    # RIGHT: lazily-built model action pages (stack; first model shown).
+    right_stack = QStackedWidget()
+    right_stack.setStyleSheet("background: transparent;")
+    # Fill the split row's full height so the current model page's inner
+    # _scroll gets the real height and scrolls its own (longer) content.
+    right_stack.setSizePolicy(_SP.Policy.Preferred, _SP.Policy.Expanding)
+    if models:
+        _open_model(models[0], right_stack)
+    split.addWidget(right_stack, 1)
+    # Give the split row ALL the leftover height. The trailing addStretch(1)
+    # that used to sit here competed with the split's stretch 1, so the two
+    # panes were handed only ~half the page and a dead band was left below.
+    outer.addLayout(split, 1)
 
-    # keep one model-page instance per model, created lazily on first click
-    def open_model(m):
-        page = _build_model_page(win, brand, m, back=lambda: stack.setCurrentIndex(0))
-        from PyQt6.QtWidgets import QGraphicsOpacityEffect
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-        eff = QGraphicsOpacityEffect(page)
-        page.setGraphicsEffect(eff)
-        anim = QPropertyAnimation(eff, b"opacity")
-        anim.setDuration(160)
-        anim.setStartValue(0.0)
-        anim.setEndValue(1.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
-        win._active_page_anim = anim
-        stack.addWidget(page)
-        stack.setCurrentWidget(page)
-
-    # bind cards to the lazy builder
-    for i in range(grid.count()):
-        card = grid.itemAt(i).widget()
-        m = models[i]
-        card.mousePressEvent = lambda e, mm=m, op=open_model: op(mm)
-
-    win._device_stacks[key] = stack
-    return stack
+    win._device_stacks[key] = page
+    return page
 
 
 def _build_model_page(win, brand, m, back):
     """Level 3: per-model action board, grouped by job (FRP / MDM / Screen Lock /
     Device Check / Enable ADB / Flash) — each with ADB and BROM sub-actions."""
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
-    from PyQt6.QtWidgets import QVBoxLayout as _VL, QHBoxLayout as _HL, QLabel as _Lbl, QFrame as _Fr, QGridLayout as _GL, QSizePolicy as _SP
+    from PyQt6.QtWidgets import QVBoxLayout as _VL, QHBoxLayout as _HL, QLabel as _Lbl, QFrame as _Fr
+    from .theme import SPACE as _SPC, RADIUS as _RAD
     page = QWidget()
     page.setStyleSheet("background: transparent;")
-    v = _VL(page)
-    v.setContentsMargins(10, 8, 10, 8)
-    v.setSpacing(8)
+    _outer = _VL(page)
+    _outer.setContentsMargins(0, 0, 0, 0)
+    _outer.setSpacing(0)
+    _scroll = QScrollArea()
+    _scroll.setWidgetResizable(True)
+    _scroll.setFrameShape(QFrame.Shape.NoFrame)
+    _scroll.setStyleSheet("QScrollArea { background: transparent; }")
+    _host = QWidget()
+    _host.setStyleSheet("background: transparent;")
+    v = _VL(_host)
+    v.setContentsMargins(_SPC["md"], _SPC["sm"], _SPC["md"], _SPC["sm"])
+    # 16px between group cards, 8px between the cards inside one group.
+    v.setSpacing(_SPC["lg"])
 
     top = _HL()
-    back_btn = QPushButton("← Back")
-    back_btn.setStyleSheet(_btn_ghost())
-    back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    back_btn.setFixedWidth(90)
-    back_btn.clicked.connect(lambda: back())
-    top.addWidget(back_btn)
+    if back is not None:
+        back_btn = QPushButton("← Back")
+        back_btn.setStyleSheet(_btn_ghost())
+        back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_btn.setFixedWidth(90)
+        back_btn.clicked.connect(lambda: back())
+        top.addWidget(back_btn)
     title = _Lbl(f"{brand['label']} · {m['model']}")
+    title.setWordWrap(True)
     title.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     top.addWidget(title, 1)
+    v.addLayout(top)
     brand_key = brand.get("key", "")
     badge_bg, badge_fg, left_border = "#d4b78f", "#04121a", "#d4b78f"
     if brand_key == "apple":
@@ -275,13 +374,15 @@ def _build_model_page(win, brand, m, back):
     elif brand_key == "tecno":
         badge_bg, badge_fg, left_border = "#f59e0b", "#04121a", "#f59e0b"
 
+    # Chip badge on its own line: beside the title it stole width and
+    # clipped both (the motorola G6 chip string is long).
     chip_lbl = _Lbl(f"{m.get('chip','')}   engine: {m.get('engine','—').upper()}")
+    chip_lbl.setWordWrap(True)
     chip_lbl.setStyleSheet(
         f"color:{badge_fg}; background:{badge_bg}; border-radius:8px;"
         " padding:4px 12px; font-size:11px; font-weight:800; font-family:'Consolas', 'Monaco', monospace;"
     )
-    top.addWidget(chip_lbl)
-    v.addLayout(top)
+    v.addWidget(chip_lbl)
 
     notes = m.get("notes") or ""
     if notes:
@@ -299,6 +400,8 @@ def _build_model_page(win, brand, m, back):
         empty.setStyleSheet(f"color:{C['mute']}; font-size:12px;")
         v.addWidget(empty)
         v.addStretch(1)
+        _scroll.setWidget(_host)
+        _outer.addWidget(_scroll)
         return page
 
     # Job groups — per-brand (tecno keeps reverse-engineered flows, others use generic wired flows).
@@ -309,6 +412,7 @@ def _build_model_page(win, brand, m, back):
                 ("tecno_frp_brom", "BROM · SPD userdata wipe", "🛠"),
             ]),
             ("MDM REMOVE", [
+                ("_qr_generator", "QR Provision · TestDPC / Google / FlashPilot", "📷"),
                 ("tecno_mdm_adb", "ADB · dpm + Transsion OEM sweep", "👤"),
                 ("tecno_mdm_brom", "BROM · SPD userdata wipe", "🛠"),
             ]),
@@ -339,10 +443,10 @@ def _build_model_page(win, brand, m, back):
     elif brand.get("key") == "motorola":
         groups = [
             ("FRP REMOVE", [
-                ("moto_frp", "ADB FRP Remove if ADB is enabled · else FRP Fastboot Remove (CVE-2016-10277)", "⚡"),
-                ("frp_fake_login", "QR · own DPC fake-login (wizard → ADB → FRP clear)", "📷"),
-                ("frp_fake_login_testdpc", "QR · TestDPC fake-login (wizard → ADB → FRP clear)", "📷"),
-                ("frp_fake_login_adp", "QR · Device Policy fake-login (wizard → ADB → FRP clear)", "📷"),
+                ("moto_frp", "Adaptive: ADB remove · staged flash if firmware set · else CVE-2016-10277", "⚡"),
+                ("moto_fb_frp", "Fastboot · signed flash + reboot cycles → ADB tap → wipe", "🛠"),
+                ("moto_fb_factory_adb", "Factory-mode · fb_mode_set + reboot cycles → ADB tap → wipe", "🔁"),
+                ("_qr_generator", "QR Provision · TestDPC / Google / FlashPilot (setup wizard)", "📷"),
             ]),
             ("SCREEN LOCK REMOVE", [
                 ("screen_lock", "ADB locksettings / fastboot", "🔓"),
@@ -383,216 +487,66 @@ def _build_model_page(win, brand, m, back):
         ]
 
     def _row(act_key, sub_label, glyph, parent):
-        btn = QPushButton()
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setMinimumHeight(44)
-        btn.setMinimumWidth(180)
-        btn.setSizePolicy(_SP.Policy.Expanding, _SP.Policy.Fixed)
-        # Compose label: glyph + meta label + sub label (2 lines)
+        # A full-width ActionRow card (icon tile + title + one-line elided
+        # description + mode chip + chevron). It is a class, not a wrapping
+        # QFrame with a monkeypatched mousePressEvent: the labels elide rather
+        # than wrap, so a long flow label can never force the board wider than
+        # its pane, and the row stays one tall, deliberate card down the page.
         meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(
             act_key, (act_key, glyph, ""))
-        is_experimental = act_key in _EXPERIMENTAL_ACTS
         title = meta_lbl
-        if is_experimental:
+        if act_key in _EXPERIMENTAL_ACTS:
             title = f"🧪 {title} · EXPERIMENTAL"
         if act_key == "moto_frp":
-            # Adaptive FRP Remove (same contract as _row_small): the label
-            # names the current strategy, the click re-checks and dispatches.
+            # Adaptive FRP Remove: the label names the current strategy,
+            # the click re-checks and dispatches to the matching flow.
             title = _moto_frp_label()
-        if any(k in act_key for k in ("frp", "mdm", "screen_lock", "lock")):
-            # wipe-class buttons: red gradient - no red border on press/focus/checked, smaller for visibility
-            btn.setStyleSheet(
-                "QPushButton { color:#fff; background:"
-                " qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #dc2626, stop:1 #ef4444);"
-                " border:none; border-radius:8px; padding:6px 12px; font-weight:700; font-size:10px; }"
-                " QPushButton:hover { background: #ef4444; border:none; }"
-                " QPushButton:pressed { background: #b91c1c; border:none; }"
-                " QPushButton:focus { outline:none; border:none; }"
-                " QPushButton:checked { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #dc2626, stop:1 #ef4444); border:none; }"
-            )
-        else:
-            s = _btn_primary()
-            s = s.replace("font-size: 12px;", "font-size: 10px;").replace("padding: 8px 18px;", "padding: 6px 12px;").replace("border-radius: 9px;", "border-radius: 8px;")
-            s += " QPushButton:focus { outline:none; border:1px solid rgba(255,255,255,0.08); } QPushButton:pressed { border:1px solid rgba(255,255,255,0.08); } QPushButton:checked { border:1px solid rgba(255,255,255,0.08); } QPushButton:checked:focus { border:1px solid rgba(255,255,255,0.08); }"
-            btn.setStyleSheet(s)
-        # Custom 2-line text
-        btn.setText(f"  {meta_glyph}  {title}\n         {sub_label}")
-        btn.setToolTip(meta_tip)
-        # Phase-1 device-first tag (see _row_small).
-        btn.setProperty("flow_act", act_key)
-        btn.clicked.connect(
-            lambda _=False, a=act_key, bl=brand['label'], mm=m: _dispatch(win, a, bl, mm)
+        is_wipe = any(k in act_key for k in ("frp", "mdm", "screen_lock", "lock"))
+        accent = C["err"] if is_wipe else C["accent_hi"]
+        row = ActionRow(
+            title=title,
+            icon=meta_glyph or glyph,
+            description=sub_label,
+            accent=accent,
+            tooltip=meta_tip or sub_label,
+            chip=_row_mode_chip(sub_label),
+            parent=parent,
         )
-        return btn
+        # Device-first tag: apply_applicability fades QFrame tiles that need
+        # an absent transport (see the tile branch there).
+        row.setProperty("flow_act", act_key)
+        row.setProperty("flow_tip", meta_tip or sub_label)
 
-    # --- Horizontal layout: FRP REMOVE horizontal + rest as tabs (all researched, Spark 10C was pilot, Motorola and Apple devices) ---
-    is_horizontal = m.get("status") == "researched" or brand.get("key") in ("motorola", "apple")
-    if is_horizontal:
-        from PyQt6.QtWidgets import QStackedWidget as _Stk
-        tab_bar = _HL()
-        tab_bar.setSpacing(6)
-        tab_bar.setContentsMargins(0, 6, 0, 6)
-        stack = _Stk()
-        stack.setStyleSheet("background: transparent;")
-        tab_btns = []
-        # Spark 10C: smaller text + no focus border (user reported too large + red border on click)
-        def _row_small(act_key, sub_label, glyph, parent):
-            b = QPushButton()
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            b.setMinimumHeight(44)
-            b.setMinimumWidth(220)
-            b.setSizePolicy(_SP.Policy.Expanding, _SP.Policy.Fixed)
-            meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(act_key, (act_key, glyph, ""))
-            title = meta_lbl
-            if act_key == "moto_frp":
-                # The adaptive FRP Remove button: the label names the
-                # strategy from the CURRENT device state (ADB enabled →
-                # "ADB FRP Remove", else "FRP Fastboot Remove"); the click
-                # re-checks and dispatches to the matching flow.
-                meta_tip = _ACTION_META["moto_frp"][2]
-                title = _moto_frp_label()
-            if any(k in act_key for k in ("frp", "mdm", "screen_lock", "lock")):
-                b.setStyleSheet(
-                    "QPushButton { color:#fff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #dc2626, stop:1 #ef4444);"
-                    " border:none; border-radius:8px; padding:6px 12px; font-weight:700; font-size:10px; }"
-                    " QPushButton:hover { background: #ef4444; border:none; }"
-                    " QPushButton:pressed { background: #b91c1c; border:none; }"
-                    " QPushButton:focus { outline:none; border:none; }"
-                )
-            else:
-                # use primary but smaller
-                s = _btn_primary()
-                s = s.replace("font-size: 12px;", "font-size: 10px;").replace("padding: 8px 18px;", "padding: 6px 12px;").replace("border-radius: 9px;", "border-radius: 8px;")
-                s += " QPushButton:focus { outline:none; }"
-                b.setStyleSheet(s)
-                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            b.setText(f"  {meta_glyph}  {title}\n         {sub_label}")
-            b.setToolTip(meta_tip)
-            # Phase-1 device-first: tag the button with its flow act so the
-            # applicability pass can dim it when the connected phone lacks
-            # the transport. Purely additive — routing is untouched.
-            b.setProperty("flow_act", act_key)
-            b.clicked.connect(lambda _=False, a=act_key, bl=brand['label'], mm=m: _dispatch(win, a, bl, mm))
-            return b
-
-        for idx, (group_title, sub_actions) in enumerate(groups):
-            btn = QPushButton(group_title)
-            btn.setCheckable(True)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setFixedHeight(28)
-            btn.setSizePolicy(_SP.Policy.Expanding, _SP.Policy.Fixed)
-            f = btn.font(); f.setPixelSize(10); f.setBold(True); btn.setFont(f)
-            btn.setStyleSheet(
-                "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9); border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:0 14px; font-size:10px; }"
-                "QPushButton:hover { color:#e2e8f0; border-color:rgba(255,255,255,0.22); background:rgba(255,255,255,20); }"
-                "QPushButton:checked { color:#04121a; background:qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #d4b78f, stop:1 #b89a6a); border: 1px solid rgba(255,255,255,0.18); }"
-                "QPushButton:focus { outline:none; border:1px solid rgba(255,255,255,0.08); }"
-                "QPushButton:checked:focus { border: 1px solid rgba(255,255,255,0.18); outline:none; }"
-                "QPushButton:pressed { background:rgba(255,255,255,20); border:1px solid rgba(255,255,255,0.08); }"
-            )
-            if idx == 0:
-                btn.setChecked(True)
-            tab_bar.addWidget(btn)
-            tab_btns.append(btn)
-            page_card = _Fr()
-            page_card.setStyleSheet(
-                f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
-                f" border:1px solid rgba(255,255,255,0.14); border-left:3px solid {left_border}; border-radius:10px; }}"
-            )
-            cl = _VL(page_card)
-            cl.setContentsMargins(12, 12, 12, 12)
-            cl.setSpacing(8)
-            for act_key, sub_label, glyph in sub_actions:
-                cl.addWidget(_row_small(act_key, sub_label, glyph, page_card))
-            wrap = QWidget()
-            wrap.setStyleSheet("background: transparent;")
-            wl = _VL(wrap)
-            wl.setContentsMargins(0,0,0,0)
-            wl.addWidget(page_card)
-            wl.addStretch(1)
-            stack.addWidget(wrap)
-        def _on_tab(idx):
-            for i, b in enumerate(tab_btns):
-                b.setChecked(i == idx)
-            stack.setCurrentIndex(idx)
-            try:
-                w = stack.currentWidget()
-                if w:
-                    from PyQt6.QtWidgets import QGraphicsOpacityEffect
-                    from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-                    eff = QGraphicsOpacityEffect(w)
-                    w.setGraphicsEffect(eff)
-                    anim = QPropertyAnimation(eff, b"opacity")
-                    anim.setDuration(140)
-                    anim.setStartValue(0.2)
-                    anim.setEndValue(1.0)
-                    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-                    anim.start(QPropertyAnimation.DeletionPolicy.KeepWhenStopped)
-                    win._active_tab_anim = anim
-                    for child in w.findChildren(QFrame):
-                        lay = child.layout()
-                        if lay and hasattr(lay, "invalidate"):
-                            lay.invalidate()
-                    w.updateGeometry()
-            except Exception:
-                pass
-        for i, b in enumerate(tab_btns):
-            b.clicked.connect(lambda _=False, ix=i: _on_tab(ix))
-        tab_bar.addStretch(1)
-        badge_txt = f"{m.get('chip','')[:22]} · {m.get('model','').upper()}"
-        badge = _Lbl(badge_txt)
-        badge.setStyleSheet(
-            f"color:{badge_fg}; background:{badge_bg}; border-radius:8px;"
-            " padding:4px 10px; font-size:10px; font-weight:800; letter-spacing:0.6px; font-family:'Consolas', 'Monaco', monospace;"
-        )
-        badge.setToolTip(m.get("notes","")[:120])
-        tab_bar.addWidget(badge)
-        v.addLayout(tab_bar)
-        v.addWidget(stack, 1)
-
-        flash_card = _Fr()
-        flash_card.setObjectName("flashgroup")
-        flash_card.setStyleSheet(
-            f"QFrame#flashgroup {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border:1px solid {C['border']}; border-left:3px solid #f59e0b; border-radius:10px; }}"
-        )
-        fl = _VL(flash_card)
-        fl.setContentsMargins(12, 10, 12, 10)
-        fl.setSpacing(6)
-        fh = _Lbl("FLASH FIRMWARE")
-        fh.setStyleSheet(f"color:#fbbf24; font-size:11px; font-weight:800; letter-spacing:1px;")
-        fl.addWidget(fh)
-        fb = QPushButton("  ⬆  Open Flash workbench (SPD tab)")
-        fb.setCursor(Qt.CursorShape.PointingHandCursor)
-        fb.setStyleSheet(
-            "QPushButton { color:#fff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #d97706, stop:1 #f59e0b); border:none; border-radius:9px; padding:10px 14px; font-weight:800; font-size:12px; }"
-            " QPushButton:hover { background: #f59e0b; }"
-        )
-        fb.clicked.connect(lambda: win._on_section(m.get("engine", "spd") if m.get("engine") in ("spd", "mtk") else "spd"))
-        fl.addWidget(fb)
-        v.addWidget(flash_card)
-        v.addStretch(1)
-        return page
+        def _go(r=row, a=act_key):
+            if r.property("flow_dimmed"):
+                return
+            _dispatch(win, a, brand['label'], m)
+        row.activated.connect(_go)
+        return row
 
     for group_title, sub_actions in groups:
-        # Section card
+        # Section card — a container with the brand's left edge; its header
+        # carries the job's action count (`FRP REMOVE · 4`), the same
+        # name + count language the flow browser's job headers use.
         card = _Fr()
         card.setObjectName("modelgroup")
         card.setStyleSheet(
             f"QFrame#modelgroup {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            " stop:0 #122a4a, stop:1 #0a1529);"
-            f" border: 1px solid rgba(255,255,255,0.14); border-left: 3px solid {left_border};"
-            " border-radius: 10px; }"
+            f" stop:0 {C['panel']}, stop:1 {C['inset']});"
+            f" border: 1px solid {C['sel_border']};"
+            f" border-left: 3px solid {left_border};"
+            f" border-radius: {_RAD['lg']}px; }}"
         )
         cl = _VL(card)
-        cl.setContentsMargins(12, 10, 12, 10)
-        cl.setSpacing(6)
-        head = _Lbl(group_title)
+        cl.setContentsMargins(_SPC["md"], _SPC["md"], _SPC["md"], _SPC["md"])
+        cl.setSpacing(_SPC["sm"])
+        head = _Lbl(
+            f'<span style="color:{C["accent_hi"]};">{group_title}</span>'
+            f'<span style="color:{C["dim"]};"> · {len(sub_actions)}</span>'
+        )
+        head.setTextFormat(Qt.TextFormat.RichText)
         head.setStyleSheet(
-            f"color:{C['accent_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;"
+            f"font-size:11px; font-weight:800; letter-spacing:1px;"
         )
         cl.addWidget(head)
         for act_key, sub_label, glyph in sub_actions:
@@ -605,16 +559,17 @@ def _build_model_page(win, brand, m, back):
     flash_card.setObjectName("flashgroup")
     flash_card.setStyleSheet(
         f"QFrame#flashgroup {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        f" stop:0 {C['card']}, stop:1 {C['inset']});"
-        f" border: 1px solid {C['border']}; border-left: 3px solid #f59e0b;"
-        f" border-radius: 10px; }}"
+        f" stop:0 {C['panel']}, stop:1 {C['inset']});"
+        f" border: 1px solid {C['sel_border']};"
+        f" border-left: 3px solid {C['experimental']};"
+        f" border-radius: {_RAD['lg']}px; }}"
     )
     fl = _VL(flash_card)
-    fl.setContentsMargins(12, 10, 12, 10)
-    fl.setSpacing(6)
+    fl.setContentsMargins(_SPC["md"], _SPC["md"], _SPC["md"], _SPC["md"])
+    fl.setSpacing(_SPC["sm"])
     fh = _Lbl("FLASH FIRMWARE")
     fh.setStyleSheet(
-        f"color:#fbbf24; font-size:11px; font-weight:800; letter-spacing:1px;"
+        f"color:{C['experimental_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;"
     )
     fl.addWidget(fh)
     fb = QPushButton("  ⬆  Open Flash workbench (SPD/MTK tab)")
@@ -633,6 +588,8 @@ def _build_model_page(win, brand, m, back):
     v.addWidget(flash_card)
 
     v.addStretch(1)
+    _scroll.setWidget(_host)
+    _outer.addWidget(_scroll)
     return page
 
 
@@ -654,25 +611,77 @@ _MODE_TRANSPORTS = {
 }
 
 # Short-TTL cache over bridge.list_merged (a USB rescan each call).
+# Guarded by a lock: concurrent scans must not let an older result
+# overwrite a newer one.
+import threading as _threading
+
 _connected_cache = {"at": 0.0, "rows": []}
+_connected_lock = _threading.Lock()
 _CONNECTED_TTL = 5.0
 
 
+def invalidate_connected_cache():
+    """Force the next connected_rows() to rescan (manual refresh)."""
+    _connected_cache["at"] = 0.0
+
+
 def connected_rows():
-    """Phone rows from the last detect-merged (cached 5s, [] on error)."""
+    """Phone rows from the last detect-merged (cached 5s, [] on error).
+
+    The lock is held through the scan: concurrent callers serialize and
+    a stale result can never overwrite a newer one."""
     import time as _time
-    now = _time.monotonic()
-    if now - _connected_cache["at"] < _CONNECTED_TTL:
-        return _connected_cache["rows"]
-    rows = []
-    try:
-        from python.core import bridge as _bridge
-        rows = _bridge.list_merged() or []
-    except Exception:
+    with _connected_lock:
+        now = _time.monotonic()
+        if now - _connected_cache["at"] < _CONNECTED_TTL:
+            return list(_connected_cache["rows"])
         rows = []
-    _connected_cache["at"] = now
-    _connected_cache["rows"] = rows
-    return rows
+        try:
+            from python.core import bridge as _bridge
+            rows = _bridge.list_merged() or []
+        except Exception:
+            rows = []
+        _connected_cache["at"] = _time.monotonic()
+        _connected_cache["rows"] = rows
+        return list(rows)
+
+
+_BUCKET_KEYS = ("samsung", "mtk", "fastboot", "edl", "qcom", "spd",
+                 "apple", "motorola", "other")
+
+
+def buckets_from_rows(rows):
+    """Group merged device rows into monitor buckets WITHOUT VID tables.
+
+    Buckets derive purely from the Rust-assigned mode/transports — the
+    single source of truth. Precedence mirrors the display order
+    (fastboot first). ADB rows are passed through separately by callers.
+    """
+    buckets = {k: [] for k in _BUCKET_KEYS}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        mode = (r.get("mode") or "").lower()
+        transports = set(str(t).upper() for t in (r.get("transports") or []))
+        if "FASTBOOT" in transports:
+            buckets["fastboot"].append(r)
+        elif mode == "qualcomm-edl":
+            buckets["edl"].append(r)
+        elif mode.startswith("mediatek"):
+            buckets["mtk"].append(r)
+        elif mode in ("qualcomm", "qualcomm-diag"):
+            buckets["qcom"].append(r)
+        elif mode == "spd":
+            buckets["spd"].append(r)
+        elif mode == "apple":
+            buckets["apple"].append(r)
+        elif mode.startswith("motorola"):
+            buckets["motorola"].append(r)
+        elif mode.startswith("samsung"):
+            buckets["samsung"].append(r)
+        else:
+            buckets["other"].append(r)
+    return buckets
 
 
 def connected_transports():
@@ -687,7 +696,7 @@ def connected_transports():
 def usb_serial_ports(bus, addr):
     """Serial ports (ttyUSB*/ttyACM*) bound to the USB bus:addr device.
 
-    TFT-style interface capture: a preloader/BROM/diag stage usually brings
+    Interface capture: a preloader/BROM/diag stage usually brings
     a VCOM port alongside the libusb device. Walks /sys (stdlib only),
     returns [] when nothing is bound or /sys is unavailable.
     """
@@ -719,11 +728,37 @@ def usb_serial_ports(bus, addr):
     return sorted(found)
 
 
+# Actions the dimming pass must never dim: QR provisioning flows CREATE
+# the ADB session (dimming them on a wizard MTP phone blocks the entry
+# path), and the QR generator needs no device at all.
+_QR_ENTRY_ACTS = {"frp_fake_login", "frp_fake_login_testdpc",
+                  "frp_fake_login_adp",
+                  "frp_qr_provision", "mdm_qr", "_qr_generator"}
+
+# Router-level drill-down acts (not flow keys): transports they can use.
+# None = adapts at click time (moto_frp) or guidance-level (the rest).
+_ROUTER_ACTS = {
+    "moto_frp": None,
+    "info": None,
+    "flash": None,
+    "backup": None,
+    "adb_enable": None,
+    "kg_unlock": None,
+    "frp": {"ADB", "FASTBOOT", "EDL", "MTP"},
+    "screen_lock": {"ADB", "FASTBOOT", "EDL", "MTP"},
+}
+
+
 def required_transports(act):
     """Transports the act needs, from the Rust registry modes.
 
-    Returns None when unknown (non-flow acts like info/flash, unmapped
-    modes) — unknown means always enabled, never dimmed."""
+    Returns None when unknown (router/guidance acts, QR entry flows that
+    create the session, unmapped modes like Download mode) — unknown means
+    always enabled, never dimmed."""
+    if act in _QR_ENTRY_ACTS:
+        return None
+    if act in _ROUTER_ACTS:
+        return _ROUTER_ACTS[act]
     try:
         from python.core import core as _core
         reg = _core._load_registry()
@@ -737,6 +772,10 @@ def required_transports(act):
             mapped = _MODE_TRANSPORTS.get(row.get("mode", ""))
             if mapped:
                 need |= mapped
+            else:
+                # A mode we cannot map (e.g. Download mode): the requirement
+                # is unknown, so the action stays enabled.
+                return None
     return need or None
 
 
@@ -747,13 +786,33 @@ _DISABLED_SUFFIX = (
 
 
 def apply_applicability(root):
-    """Dim drill-down buttons the connected phone can't use.
+    """Dim actions the connected phone can't use (buttons and hub tiles).
 
-    A button dims (disabled + grey + 'Needs: X' tooltip) only when a phone
-    IS connected and the act positively requires an absent transport. With
-    no phone, or an unknown requirement, everything stays enabled.
+    An item dims only when exactly ONE phone is connected and its act
+    positively requires an absent transport. Buttons disable + grey;
+    tiles fade via opacity + ignore clicks. With no phone, several
+    phones, or an unknown requirement, everything stays enabled.
     Purely additive: routing and labels are untouched."""
     if root is None:
+        return
+    from PyQt6.QtWidgets import QGraphicsOpacityEffect as _OPE
+    rows = connected_rows()
+    if len(rows) != 1:
+        # Zero or several phones: restore everything enabled.
+        for btn in root.findChildren(QPushButton):
+            if not btn.property("flow_act"):
+                continue
+            if btn.property("flow_style") is not None:
+                btn.setEnabled(True)
+                btn.setStyleSheet(btn.property("flow_style") or "")
+                btn.setToolTip(btn.property("flow_tip") or "")
+        for tile in root.findChildren(QFrame):
+            if not tile.property("flow_act"):
+                continue
+            tile.setGraphicsEffect(None)
+            tile.setProperty("flow_dimmed", False)
+            if tile.property("flow_tip") is not None:
+                tile.setToolTip(tile.property("flow_tip") or "")
         return
     have = connected_transports()
     for btn in root.findChildren(QPushButton):
@@ -779,9 +838,28 @@ def apply_applicability(root):
                 btn.setStyleSheet(base_style)
             if btn.toolTip() != base_tip:
                 btn.setToolTip(base_tip)
+    for tile in root.findChildren(QFrame):
+        act = tile.property("flow_act")
+        if not act:
+            continue
+        base_tip = tile.property("flow_tip") or tile.toolTip()
+        need = required_transports(act)
+        if have and need and not (need & have):
+            eff = _OPE(tile)
+            eff.setOpacity(0.4)
+            tile.setGraphicsEffect(eff)
+            tile.setProperty("flow_dimmed", True)
+            want = "/".join(sorted(need))
+            got = "/".join(sorted(have)) if have else "none"
+            tile.setToolTip(f"{base_tip}\nNeeds: {want} (connected: {got})")
+        else:
+            tile.setGraphicsEffect(None)
+            tile.setProperty("flow_dimmed", False)
+            if tile.toolTip() != base_tip:
+                tile.setToolTip(base_tip)
 
 
-# TFT-style chip row: (engine, label, glyph, tool section). Section names
+# Chip row: (engine, label, glyph, tool section). Section names
 # match the window's _section_index (tools: mtk/qc/spd, samsung hub,
 # dev_<brand> drill-down pages). None = no section exists yet.
 _ENGINE_CHIPS = [
@@ -795,13 +873,339 @@ _ENGINE_CHIPS = [
 ]
 
 
+def build_adb_hub_page(win):
+    """ADB hub: three graphical tiles — ADB Remove FRP, ADB Remove MDM,
+    ADB Info. Fixed-size cards in a left-aligned row (they never stretch
+    to fill the area). Brand/chip-specific ADB flows stay on their device
+    pages — each flow has exactly one home."""
+    from PyQt6.QtWidgets import (QVBoxLayout as _VL, QHBoxLayout as _HL,
+                                 QLabel as _Lbl, QWidget as _W,
+                                 QFrame as _Fr,
+                                 QGraphicsOpacityEffect as _OPE)
+    C, _btn_ghost, _btn_primary, _btn_danger = _tok()
+    page = _W()
+    page.setStyleSheet("background: transparent;")
+    v = _VL(page)
+    v.setContentsMargins(10, 8, 10, 8)
+    v.setSpacing(10)
+    head = _Lbl("🔌  ADB Hub")
+    head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
+    v.addWidget(head)
+    sub = _Lbl("Brand-specific ADB actions live on their device pages.")
+    sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+    sub.setWordWrap(True)
+    v.addWidget(sub)
+
+    row = _HL()
+    row.setSpacing(12)
+    for act_key, glyph, title, sub_label in (
+        ("adb_frp", "⚡", "ADB Remove FRP", "Zero frp flag\n+ wizards"),
+        ("mdm_unlock", "🔓", "ADB Remove MDM", "Remove device\nowner"),
+        ("adb_info", "ℹ", "ADB Info", "getprop dump\n+ fingerprint"),
+    ):
+        meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(act_key, (title, glyph, ""))
+        tile = _Fr()
+        tile.setFixedSize(170, 150)
+        tile.setCursor(Qt.CursorShape.PointingHandCursor)
+        tile.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border:1px solid {C['border']}; border-left:3px solid {C['accent_hi']};"
+            " border-radius:12px; }"
+            f"QFrame:hover {{ border:1px solid {C['accent_hi']};"
+            f" border-left:3px solid {C['accent_hi']}; background:{C['card_hover']}; }}"
+        )
+        tl = _VL(tile)
+        tl.setContentsMargins(8, 10, 8, 10)
+        tl.setSpacing(2)
+        icon = _Lbl(meta_glyph or glyph)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        icon.setStyleSheet("font-size:44px; background:transparent; border:none;")
+        tl.addWidget(icon)
+        name = _Lbl(meta_lbl or title)
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name.setWordWrap(True)
+        name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        name.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:800; background:transparent; border:none;")
+        tl.addWidget(name)
+        hint = _Lbl(sub_label)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        hint.setStyleSheet(f"color:{C['dim']}; font-size:10px; background:transparent; border:none;")
+        tl.addWidget(hint)
+        tile.setToolTip(meta_tip or sub_label)
+        tile.setProperty("flow_act", act_key)
+        tile.setProperty("flow_tip", meta_tip or sub_label)
+
+        def _go(_e=None, a=act_key, t=tile):
+            if t.property("flow_dimmed"):
+                return
+            _dispatch(win, a, "ADB", {})
+        tile.mousePressEvent = _go
+        row.addWidget(tile)
+    row.addStretch(1)
+    v.addLayout(row)
+
+    # QR provisioning row: a single "QR Provision" entry that opens the QR
+    # window (TestDPC by default; Google Device Policy + FlashPilot are the
+    # two optional QRs in its dropdown). QR provisioning creates the ADB
+    # session, so it is exempt from transport dimming (see _QR_ENTRY_ACTS).
+    qr_head = _Lbl("QR PROVISIONING (setup wizard)")
+    qr_head.setStyleSheet(f"color:{C['mute']}; font-size:11px; font-weight:800; letter-spacing:1px;")
+    v.addWidget(qr_head)
+    qr_row = _HL()
+    qr_row.setSpacing(12)
+    meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(
+        "_qr_generator", ("QR Provision", "📷", ""))
+    tile = _Fr()
+    tile.setFixedSize(210, 150)
+    tile.setCursor(Qt.CursorShape.PointingHandCursor)
+    tile.setStyleSheet(
+        f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        f" stop:0 {C['card']}, stop:1 {C['inset']});"
+        f" border:1px solid {C['border']}; border-left:3px solid {C['accent_hi']};"
+        " border-radius:12px; }"
+        f"QFrame:hover {{ border:1px solid {C['accent_hi']};"
+        f" border-left:3px solid {C['accent_hi']}; background:{C['card_hover']}; }}"
+    )
+    tl = _VL(tile)
+    tl.setContentsMargins(8, 10, 8, 10)
+    tl.setSpacing(2)
+    icon = _Lbl(meta_glyph)
+    icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    icon.setStyleSheet("font-size:44px; background:transparent; border:none;")
+    tl.addWidget(icon)
+    name = _Lbl(meta_lbl)
+    name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    name.setWordWrap(True)
+    name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    name.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:800; background:transparent; border:none;")
+    tl.addWidget(name)
+    hint = _Lbl("TestDPC (default)\n+ Google · FlashPilot")
+    hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    hint.setWordWrap(True)
+    hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    hint.setStyleSheet(f"color:{C['dim']}; font-size:10px; background:transparent; border:none;")
+    tl.addWidget(hint)
+    tile.setToolTip(meta_tip or "Device-owner QR provisioning")
+    tile.setProperty("flow_act", "_qr_generator")
+    tile.setProperty("flow_tip", meta_tip or "Device-owner QR provisioning")
+
+    def _go(_e=None, t=tile):
+        if t.property("flow_dimmed"):
+            return
+        _dispatch(win, "_qr_generator", "ADB", {})
+    tile.mousePressEvent = _go
+    qr_row.addWidget(tile)
+    qr_row.addStretch(1)
+    v.addLayout(qr_row)
+    v.addStretch(1)
+    return page
+
+
+def build_fastboot_hub_page(win):
+    """Fastboot hub: BL Unlock / BL Relock / Reboot / Recovery / Info tiles.
+
+    Mirrors the ADB hub (fixed-size cards in a left-aligned row). The
+    unlock-code field feeds win._moto_unlock_code so the Unlock tile's
+    flow gets its --code. Per-device fastboot flows (moto_frp_fastboot)
+    stay on their device pages."""
+    from PyQt6.QtWidgets import (QVBoxLayout as _VL, QHBoxLayout as _HL,
+                                 QLabel as _Lbl, QWidget as _W,
+                                 QFrame as _Fr, QLineEdit as _LE)
+    C, _btn_ghost, _btn_primary, _btn_danger = _tok()
+    page = _W()
+    page.setStyleSheet("background: transparent;")
+    v = _VL(page)
+    v.setContentsMargins(10, 8, 10, 8)
+    v.setSpacing(10)
+    head = _Lbl("⚡  Fastboot Hub")
+    head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
+    v.addWidget(head)
+    sub = _Lbl("Bootloader actions for any fastboot phone. Per-device fastboot flows stay on their device pages.")
+    sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+    sub.setWordWrap(True)
+    v.addWidget(sub)
+
+    code_row = _HL()
+    code_row.setSpacing(8)
+    code_lbl = _Lbl("Unlock code")
+    code_lbl.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:700;")
+    code_row.addWidget(code_lbl)
+    code_edit = _LE()
+    code_edit.setPlaceholderText("20-char code (BL Unlock only)")
+    code_edit.setMinimumHeight(30)
+    code_edit.setStyleSheet(
+        f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']};"
+        " border-radius: 6px; padding: 5px 10px; color: #e2e8f0;"
+        " font-family:'Consolas', 'Monaco', monospace; font-size: 12px;"
+        " letter-spacing: 1px; }"
+    )
+    code_row.addWidget(code_edit, 1)
+    v.addLayout(code_row)
+    try:
+        win._moto_unlock_code = code_edit
+    except Exception:
+        pass
+
+    from PyQt6.QtWidgets import QSizePolicy as _SP2
+    lst = _VL()
+    lst.setSpacing(12)
+    for act_key, glyph, title, sub_label in (
+        ("fastboot_unlock", "🔓", "BL Unlock", "oem unlock + code"),
+        ("fastboot_lock", "🔒", "BL Relock", "flashing lock"),
+        ("fastboot_reboot", "🔃", "Reboot", "reboot to system"),
+        ("fastboot_recovery", "🔃", "Recovery", "reboot to recovery"),
+        ("fastboot_getvar", "ℹ", "Fastboot Info", "getvar all"),
+    ):
+        meta_lbl, meta_glyph, meta_tip = _ACTION_META.get(act_key, (title, glyph, ""))
+        tile = _Fr()
+        tile.setMinimumHeight(64)
+        tile.setFixedWidth(220)
+        tile.setSizePolicy(_SP2.Policy.Fixed, _SP2.Policy.Fixed)
+        tile.setCursor(Qt.CursorShape.PointingHandCursor)
+        tile.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border:1px solid {C['border']}; border-left:3px solid {C['accent_hi']};"
+            " border-radius:12px; }"
+            f"QFrame:hover {{ border:1px solid {C['accent_hi']};"
+            f" border-left:3px solid {C['accent_hi']}; background:{C['card_hover']}; }}"
+        )
+        tl = _HL(tile)
+        tl.setContentsMargins(12, 8, 12, 8)
+        tl.setSpacing(12)
+        icon = _Lbl(meta_glyph or glyph)
+        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        icon.setStyleSheet("font-size:32px; background:transparent; border:none;")
+        tl.addWidget(icon)
+        txt = _VL()
+        txt.setContentsMargins(0, 0, 0, 0)
+        txt.setSpacing(2)
+        name = _Lbl(meta_lbl or title)
+        name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        name.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800; background:transparent; border:none;")
+        txt.addWidget(name)
+        hint = _Lbl(sub_label)
+        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        hint.setStyleSheet(f"color:{C['dim']}; font-size:11px; background:transparent; border:none;")
+        txt.addWidget(hint)
+        tl.addLayout(txt, 1)
+        tile.setToolTip(meta_tip or sub_label)
+        tile.setProperty("flow_act", act_key)
+        tile.setProperty("flow_tip", meta_tip or sub_label)
+
+        def _go(_e=None, a=act_key, t=tile):
+            if t.property("flow_dimmed"):
+                return
+            _dispatch(win, a, "Fastboot", {})
+        tile.mousePressEvent = _go
+        lst.addWidget(tile)
+    v.addLayout(lst)
+    v.addStretch(1)
+    return page
+
+
+def build_easylogin_hub_page(win):
+    """Easy Login hub: the three DPC provisioning choices + MDM QR, one
+    tile each. Scanned in the setup wizard; enrollment ends the wizard
+    before the FRP gate. Own page (Transports ▸ Easy Login) and linked
+    from the MDM area."""
+    from PyQt6.QtWidgets import QSizePolicy as _SP2
+    C, _btn_ghost, _btn_primary, _btn_danger = _tok()
+    page = QWidget()
+    page.setStyleSheet("background: transparent;")
+    v = QVBoxLayout(page)
+    v.setContentsMargins(10, 8, 10, 8)
+    v.setSpacing(10)
+    head = QLabel("📷  Easy Login — QR provisioning")
+    head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
+    v.addWidget(head)
+    sub = QLabel(
+        "Scan in the setup wizard (tap the Welcome screen 6 times fast): the DPC\n"
+        "enrolls as device owner, the wizard ends before the FRP gate, then FRP clears over ADB.")
+    sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+    sub.setWordWrap(True)
+    v.addWidget(sub)
+
+    def _tile(act_key, glyph, title, sub_label, tip):
+        t = QFrame()
+        t.setMinimumHeight(64)
+        t.setSizePolicy(_SP2.Policy.Expanding, _SP2.Policy.Fixed)
+        t.setCursor(Qt.CursorShape.PointingHandCursor)
+        t.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            f" stop:0 {C['card']}, stop:1 {C['inset']});"
+            f" border:1px solid {C['border']}; border-left:3px solid {C['accent_hi']};"
+            " border-radius:12px; }"
+            f"QFrame:hover {{ border:1px solid {C['accent_hi']};"
+            f" border-left:3px solid {C['accent_hi']}; background:{C['card_hover']}; }}"
+        )
+        tl = QHBoxLayout(t)
+        tl.setContentsMargins(12, 8, 12, 8)
+        tl.setSpacing(12)
+        icon = QLabel(glyph)
+        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        icon.setStyleSheet("font-size:32px; background:transparent; border:none;")
+        tl.addWidget(icon)
+        txt = QVBoxLayout()
+        txt.setContentsMargins(0, 0, 0, 0)
+        txt.setSpacing(2)
+        name = QLabel(title)
+        name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        name.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800; background:transparent; border:none;")
+        txt.addWidget(name)
+        hint = QLabel(sub_label)
+        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        hint.setStyleSheet(f"color:{C['dim']}; font-size:11px; background:transparent; border:none;")
+        txt.addWidget(hint)
+        tl.addLayout(txt, 1)
+        meta = _ACTION_META.get(act_key)
+        t.setToolTip((meta[2] if meta else "") or tip)
+        t.setProperty("flow_act", act_key)
+        t.setProperty("flow_tip", (meta[2] if meta else "") or tip)
+
+        def _go(_e=None, a=act_key, tt=t):
+            if tt.property("flow_dimmed"):
+                return
+            _dispatch(win, a, "Easy Login", {})
+        t.mousePressEvent = _go
+        return t
+
+    lst = QVBoxLayout()
+    lst.setSpacing(12)
+    lst.addWidget(_tile(
+        "frp_fake_login", "🧩", "Easy Login · FlashPilot DPC",
+        "Our own app — completes setup + enables ADB by itself",
+        "Needs the APK built (android/FlashPilotDPC/build.sh); warns honestly if missing."))
+    lst.addWidget(_tile(
+        "frp_fake_login_testdpc", "🧪", "Easy Login · TestDPC",
+        "Google's sample DPC — local APK or Play Store",
+        "Downloads from this PC when served, else the Play Store."))
+    lst.addWidget(_tile(
+        "frp_fake_login_adp", "🏢", "Easy Login · Device Policy",
+        "Android Device Policy — Play Store download",
+        "Google's production DPC (oobconfig); needs Play Store reachability."))
+    lst.addWidget(_tile(
+        "_qr_generator", "📷", "QR Provision",
+        "Device-owner QR — TestDPC (default) + Google / FlashPilot",
+        "Opens the QR window: TestDPC is shown; the dropdown offers the "
+        "two optional DPCs (Google Device Policy, FlashPilot)."))
+    v.addLayout(lst)
+    v.addStretch(1)
+    return page
+
+
 def _moto_frp_adb_enabled():
     """True when a connected phone reports an ADB transport (the detected
     transports from the bridge's merged view). Cheap: reads the cached
     detect output the bridge refreshes on demand."""
     try:
         from python.core import bridge
-        rows = bridge.BRIDGE.list_merged() or []
+        rows = bridge.list_merged() or []
         for row in rows:
             if "ADB" in (row.get("transports") or []):
                 return True
@@ -810,20 +1214,47 @@ def _moto_frp_adb_enabled():
     return False
 
 
-def _moto_frp_dispatch(win):
-    """Adaptive FRP Remove: dispatch moto_frp_adb when ADB is enabled,
-    else the fastboot CVE-2016-10277 chain (moto_frp_fastboot)."""
+def _moto_fw_dir():
+    """Staged-flash firmware dir (signed stock FW with flashfile.xml).
+
+    Only MOTO_FW_DIR counts — the Rust flow reads the same env itself,
+    so the GUI check and the flow can never disagree."""
+    import os as _os
+    d = _os.environ.get("MOTO_FW_DIR", "").strip()
+    if d and _os.path.isdir(d) and _os.path.isfile(_os.path.join(d, "flashfile.xml")):
+        return d
+    return ""
+
+
+def _moto_frp_choice():
+    """(act, label, reason): ADB → moto_frp_adb; fastboot + staged
+    firmware → moto_fb_frp; fastboot without firmware → CVE chain."""
     if _moto_frp_adb_enabled():
-        _dispatch(win, "moto_frp_adb", "Motorola", {})
-    else:
-        _dispatch(win, "moto_frp_fastboot", "Motorola", {})
+        return ("moto_frp_adb", "ADB FRP Remove", "")
+    fw = _moto_fw_dir()
+    if fw:
+        return ("moto_fb_frp", "Fastboot Staged FRP",
+                f"signed firmware found at {fw}")
+    return ("moto_frp_fastboot", "FRP Fastboot Remove",
+            "no staged firmware (MOTO_FW_DIR) — CVE-2016-10277 chain")
+
+
+def _moto_frp_dispatch(win):
+    """Adaptive FRP Remove: dispatch by live state (see _moto_frp_choice).
+    The reason is toasted so the choice is never a mystery."""
+    act, _label, reason = _moto_frp_choice()
+    if reason and hasattr(win, "_toasts"):
+        try:
+            win._toasts.show_info("FRP strategy", reason)
+        except Exception:
+            pass
+    _dispatch(win, act, "Motorola", {})
 
 
 def _moto_frp_label():
-    """Button label that names the strategy: 'ADB FRP Remove' when ADB is
-    enabled on the connected phone, 'FRP Fastboot Remove' otherwise."""
-    return ("ADB FRP Remove" if _moto_frp_adb_enabled()
-            else "FRP Fastboot Remove")
+    """Button label that names the strategy from the CURRENT device state."""
+    _act, label, _reason = _moto_frp_choice()
+    return label
 
 
 def _dispatch(win, act, brand_label, m):
@@ -832,6 +1263,9 @@ def _dispatch(win, act, brand_label, m):
     — they stay under their native brand/model but flag as EXPERIMENTAL, tab-like."""
     if act == "moto_frp":
         _moto_frp_dispatch(win)
+        return
+    if act == "_qr_generator":
+        win._open_qr_generator()
         return
     if act in _EXPERIMENTAL_ACTS:
         try:
@@ -847,7 +1281,7 @@ def _dispatch(win, act, brand_label, m):
 
             # Use the window's experimental overlay if available, else direct
             if hasattr(win, "_confirm_experimental_overlay"):
-                win._confirm_experimental_overlay(feat, title, warn, confirm_label="I Accept — Run", on_confirm=_go, chip="wipe")
+                win._confirm_experimental_overlay(feat, title, warn, act, confirm_label="I Accept — Run", on_confirm=_go, chip="wipe")
             else:
                 _go()
             return

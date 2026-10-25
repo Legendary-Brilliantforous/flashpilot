@@ -8,6 +8,7 @@ This module provides:
   - Helpers the GUI needs
 """
 
+import collections
 import json
 import os
 import threading
@@ -29,6 +30,31 @@ MODES = ["ADB", "MTP", "Download mode", "Samsung BROM", "MTK", "MTK BROM", "FAST
 
 _registry = None
 _registry_lock = threading.Lock()
+
+
+class FlowFailed(RuntimeError):
+    """Raised when a flow exits non-zero (or its transcript reports failure).
+
+    The GUI treats a returned ``flow.run()`` as success, so a non-zero
+    bridge exit MUST raise instead of returning quietly. The message carries
+    the exit code plus a tail of the transcript so the failure is actionable
+    on its own.
+    """
+
+    def __init__(self, key, exit_code=None, tail=None, reason=None):
+        self.key = key
+        self.exit_code = exit_code
+        self.tail = list(tail or [])
+        self.code = "FLOW_FAILED"
+        if reason:
+            msg = reason
+        elif exit_code is not None:
+            msg = f"flow '{key}' failed (bridge exit code {exit_code})"
+        else:
+            msg = f"flow '{key}' failed"
+        if self.tail:
+            msg += "\n[bridge log tail]\n" + "\n".join(self.tail)
+        super().__init__(msg)
 
 
 def _load_registry():
@@ -78,15 +104,23 @@ class _RustFlow:
         """Execute via bridge flow-run. The transcript streams to stdout."""
         key = self.key
         serial = ""
+        target = ""
         if isinstance(ctx, dict):
+            # GUI pins ctx["target"] (vid:pid@bus:addr); legacy callers use
+            # ctx["serial"]. Either rides as the positional target so flows
+            # never silently fall back to first-match polling.
+            target = ctx.get("target", "") or ""
             serial = ctx.get("serial", "") or ""
         import subprocess
         import queue as _queue
         args = ["flow-run", key]
-        if serial:
+        if target:
+            args.append(target)
+        elif serial:
             args.append(serial)
         # Optional provisions the runner supplies: the unlock code (the
-        # Motorola token), a partition and a file-path override.
+        # Motorola token), a partition, a file path, a firmware dir
+        # (moto_fb_frp staged flash) and a DPC choice (frp_fake_login*).
         if isinstance(ctx, dict):
             code = (ctx.get("unlock_code") or ctx.get("code") or "").strip()
             if code:
@@ -97,6 +131,12 @@ class _RustFlow:
             file_path = (ctx.get("file") or "").strip()
             if file_path:
                 args += ["--file", file_path]
+            fw_dir = (ctx.get("firmware_dir") or "").strip()
+            if fw_dir:
+                args += ["--firmware-dir", fw_dir]
+            dpc = (ctx.get("dpc") or "").strip()
+            if dpc:
+                args += ["--dpc", dpc]
         proc = subprocess.Popen(
             [bridge.BRIDGE] + args,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -113,6 +153,9 @@ class _RustFlow:
         # `for line in stdout` loop would never reach the cancel check.
         # The queue poll keeps the loop responsive to the STOP button.
         lines_q = _queue.Queue()
+        # Last transcript lines: a non-zero exit must report why it failed,
+        # not just that it did.
+        tail = collections.deque(maxlen=12)
 
         def _reader():
             try:
@@ -153,6 +196,7 @@ class _RustFlow:
                     path = text.split("qr (svg):", 1)[1].strip()
                     if path:
                         qr_files.append(path)
+                tail.append(text)
                 log(text)
             proc.wait()
         finally:
@@ -163,7 +207,13 @@ class _RustFlow:
         if qr_files and isinstance(ctx, dict):
             ctx["mdm_qr_pngs"] = qr_files
         if proc.returncode != 0 and cancel_requested():
+            # Cancellation keeps its existing behavior: the STOP button is
+            # not a flow failure.
             raise FlowCancelled("cancelled")
+        if proc.returncode != 0:
+            # Truthful reporting: a non-zero bridge exit is a failure. The
+            # GUI must never show a green "completed" toast for this.
+            raise FlowFailed(key, exit_code=proc.returncode, tail=list(tail))
 
 
 # Build FLOWS from the Rust registry
@@ -205,6 +255,8 @@ _flow_objs["fastboot_frp"] = _RustFlow("fastboot_frp", "fastboot FRP bypass")
 _flow_objs["fastboot_unlock"] = _RustFlow("fastboot_unlock", "fastboot unlock bootloader")
 _flow_objs["fastboot_wipe"] = _RustFlow("fastboot_wipe", "fastboot wipe userdata")
 _flow_objs["moto_frp_fastboot"] = _RustFlow("moto_frp_fastboot", "Motorola FRP remove (fastboot · CVE-2016-10277)")
+_flow_objs["moto_fb_frp"] = _RustFlow("moto_fb_frp", "Motorola fastboot staged FRP (flash + reboot cycles)")
+_flow_objs["moto_fb_factory_adb"] = _RustFlow("moto_fb_factory_adb", "Motorola factory-bootmode ADB cycle")
 _flow_objs["edl_auto"] = _RustFlow("edl_auto", "edl_auto")
 _flow_objs["edl_frp"] = _RustFlow("edl_frp", "edl_frp")
 _flow_objs["edl_enable_adb"] = _RustFlow("edl_enable_adb", "edl_enable_adb")
@@ -297,12 +349,12 @@ JOBS = {
         "SPD": ["ofp_extract", "pac_extract", "pac_pack", "pac_extract", "pac_pack"],
     },
     "Remove FRP": {
-        "ADB": ["adb_frp", "frp_qr_provision", "frp_fake_login", "frp_fake_login_testdpc", "frp_fake_login_adp", "frp_alliance", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide", "moto_frp_adb", "factory_reset", "setup_wizard", "moto_frp_adb", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide", "frp_qr_provision", "frp_alliance"],
+        "ADB": ["adb_frp", "frp_alliance", "frp_browser", "frp_emergency", "frp_settings", "huawei_frp_guide", "moto_frp_adb", "factory_reset", "setup_wizard"],
         "MTP": ["at_method", "enable_adb", "test_mode", "test_mode"],
         "Download mode": ["download_frp", "odin_enable_adb", "download_frp", "odin_enable_adb"],
         "Samsung BROM": ["download_frp", "odin_enable_adb"],
         "MTK": ["mtk_combo_flash", "mtk_combo_flash"],
-        "FASTBOOT": ["fastboot_frp", "fastboot_unlock", "fastboot_wipe", "moto_frp_fastboot"],
+        "FASTBOOT": ["fastboot_frp", "fastboot_unlock", "fastboot_wipe", "moto_frp_fastboot", "moto_fb_frp"],
         "EDL": ["edl_auto", "edl_frp", "edl_enable_adb", "edl_detect", "qcom_verify", "edl_auto", "edl_frp", "edl_enable_adb"],
     },
     "Remove Screen Lock": {
@@ -354,7 +406,7 @@ JOBS = {
         "MTK BROM": ["carrier_lock_mtk", "carrier_lock_mtk"],
     },
     "Remove MDM": {
-        "ADB": ["mdm_diagnostics", "mdm_unlock", "mdm_unlock_comprehensive", "mdm_unlock_recovery", "mdm_unlock_recovery_wipe", "mdm_qr", "mdm_qr", "mdm_diagnostics", "mdm_unlock", "mdm_unlock_comprehensive"],
+        "ADB": ["mdm_diagnostics", "mdm_unlock", "mdm_unlock_comprehensive"],
         "MTP": ["enable_adb", "test_mode"],
         "FASTBOOT": ["fastboot_wipe", "fastboot_frp"],
         "Download mode": ["mdm_unlock_recovery", "mdm_unlock_recovery_wipe"],
@@ -408,7 +460,10 @@ def methods_for(job, mode):
 
 
 def flow_for(job, mode, method):
-    return FLOWS[method]()
+    try:
+        return FLOWS[method]()
+    except KeyError:
+        raise ValueError(f"unknown flow: {method}")
 
 
 def list_methods():

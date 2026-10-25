@@ -289,14 +289,12 @@ def test_monitor_backs_off_after_dry_native_probes(monkeypatch):
     from python.gui.qt_app import DeviceMonitor
 
     calls = {"n": 0}
-    fake_dev = {
-        "vid": 0x18D1, "pid": 0x4EE7, "bus": 1, "address": 2,
-        "interfaces": [{"class": 255, "subclass": 66, "protocol": 1,
-                        "endpoints": []}],
-        "is_samsung": False, "product": "Pixel", "manufacturer": "Google",
-        "serial": "SER1", "mode": "android-adb",
+    fake_row = {
+        "key": "18d1:4ee7@1:2", "label": "Pixel", "vid": 0x18D1,
+        "pid": 0x4EE7, "bus": 1, "address": 2, "transports": ["ADB"],
+        "mode": "android-adb", "serial": "SER1",
     }
-    monkeypatch.setattr(bridge, "detect_all", lambda: [fake_dev])
+    monkeypatch.setattr(bridge, "list_merged", lambda *a, **k: [fake_row])
     monkeypatch.setattr(bridge, "list_samsung_hid", lambda: "[]")
 
     def fake_status():
@@ -593,3 +591,75 @@ class TestServerTransportDelegate:
         monkeypatch.setattr(bridge, "_run", fake_run)
         assert bridge.adb_shell("getprop foo") == "native-ok"
         assert "adb-shell-server" not in seen["cmds"]
+
+
+class TestSelectedAdbPrecheck:
+    """The Devices FRP route must check the SELECTED phone only, without
+    blocking the GUI for the ~50s `adb_status()` worst case."""
+
+    @staticmethod
+    def _win(key):
+        from python.gui.qt_app import FlashPilotWindow
+
+        class _Win:
+            _adb_serial_for_key = FlashPilotWindow._adb_serial_for_key
+
+            def __init__(self, display_key):
+                self._display_key = display_key
+
+        return FlashPilotWindow, _Win(key)
+
+    def test_uses_selected_serial_not_any_authorized(self, monkeypatch):
+        monkeypatch.setattr(bridge, "adb_presence_status", lambda: [
+            {"serial": "AAA", "state": "device", "extra": ""},
+            {"serial": "BBB", "state": "device", "extra": ""},
+        ])
+        win_cls, win = self._win("adb:AAA")
+        assert win_cls._adb_ready_for_key(win, timeout=0.5) is True
+
+        # The selected key has no row: an unrelated authorized phone (BBB)
+        # must NOT satisfy the check (the old any(state == "device") did).
+        win_cls, win = self._win("adb:CCC")
+        assert win_cls._adb_ready_for_key(win, timeout=0.5) is False
+
+    def test_unknown_state_is_inconclusive(self, monkeypatch):
+        monkeypatch.setattr(bridge, "adb_presence_status", lambda: [
+            {"serial": "AAA", "state": "unknown", "extra": ""},
+        ])
+        win_cls, win = self._win("adb:AAA")
+        assert win_cls._adb_ready_for_key(win, timeout=0.5) is False
+
+    def test_resolves_non_adb_key_through_merged_rows(self, monkeypatch):
+        monkeypatch.setattr(
+            _dev, "candidates_for_modes",
+            lambda modes: [{"key": "usb:1:2", "adb": {"serial": "AAA"}}],
+        )
+        monkeypatch.setattr(bridge, "adb_presence_status", lambda: [
+            {"serial": "AAA", "state": "device", "extra": ""},
+        ])
+        win_cls, win = self._win("usb:1:2")
+        assert win_cls._adb_ready_for_key(win, timeout=0.5) is True
+
+    def test_no_serial_never_probes(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(_dev, "candidates_for_modes", lambda modes: [])
+        monkeypatch.setattr(
+            bridge, "adb_presence_status",
+            lambda: calls.append(1) or [],
+        )
+        win_cls, win = self._win("usb:9:9")
+        assert win_cls._adb_ready_for_key(win, timeout=0.5) is False
+        assert calls == []
+
+    def test_bounded_wait_returns_false_when_inconclusive(self, monkeypatch):
+        import time
+
+        def slow_presence():
+            time.sleep(0.5)
+            return [{"serial": "AAA", "state": "device", "extra": ""}]
+
+        monkeypatch.setattr(bridge, "adb_presence_status", slow_presence)
+        win_cls, win = self._win("adb:AAA")
+        started = time.monotonic()
+        assert win_cls._adb_ready_for_key(win, timeout=0.05) is False
+        assert time.monotonic() - started < 0.4

@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::time::Duration;
 
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use crate::usb;
 use rusb::{Context, UsbContext};
 
@@ -34,10 +34,7 @@ pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
             "MediaTek ADB/Android composite - the phone is booted to Android, \
              not in a low-level mode.",
         ),
-        _ => (
-            "other",
-            "MediaTek USB device (unspecified boot stage)",
-        ),
+        _ => ("other", "MediaTek USB device (unspecified boot stage)"),
     }
 }
 
@@ -93,9 +90,7 @@ pub struct MtkDeviceInfo {
     pub note: String,
 }
 
-pub fn find_bulk<'a>(
-    dev: &'a usb::UsbDeviceInfo,
-) -> Option<(&'a usb::UsbInterface, u8, u8)> {
+pub fn find_bulk<'a>(dev: &'a usb::UsbDeviceInfo) -> Option<(&'a usb::UsbInterface, u8, u8)> {
     for iface in &dev.interfaces {
         let in_ep = iface
             .endpoints
@@ -176,7 +171,10 @@ impl BromSession {
         self.write(&[cmd])?;
         let r = self.read_exact(1, Duration::from_secs(1))?;
         if r[0] != cmd {
-            return Err(format!("cmd echo mismatch: sent 0x{cmd:02x}, got 0x{:02x}", r[0]));
+            return Err(format!(
+                "cmd echo mismatch: sent 0x{cmd:02x}, got 0x{:02x}",
+                r[0]
+            ));
         }
         self.read_exact(resp, Duration::from_secs(2))
     }
@@ -189,8 +187,10 @@ impl BromSession {
         let mut junk = [0u8; 512];
         let mut quiet = 0;
         for _ in 0..16 {
-            match self.handle.read_bulk(self.in_ep, &mut junk,
-                                        Duration::from_millis(40)) {
+            match self
+                .handle
+                .read_bulk(self.in_ep, &mut junk, Duration::from_millis(40))
+            {
                 Ok(n) if n > 0 => quiet = 0,
                 _ => {
                     quiet += 1;
@@ -361,8 +361,8 @@ impl BromSession {
     }
 
     /// mtkclient `prepare_data`: `data[:maxsize] + sigdata`, padded so that
-/// `data + sigdata` is even, XOR-folded over 16-bit little-endian words (an
-/// odd trailing byte is XOR'd in as-is). Matches mtk_preloader.py exactly.
+    /// `data + sigdata` is even, XOR-folded over 16-bit little-endian words (an
+    /// odd trailing byte is XOR'd in as-is). Matches mtk_preloader.py exactly.
     pub fn prepare_data(data: &[u8], sigdata: &[u8], maxsize: usize) -> (u16, Vec<u8>) {
         let mut out = Vec::with_capacity(data.len() + sigdata.len() + 1);
         out.extend_from_slice(&data[..data.len().min(maxsize)]);
@@ -392,7 +392,12 @@ impl BromSession {
         }
         device == 0
             && std::env::var("MTK_ALLOW_ZERO_CHECKSUM")
-                .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+                .map(|v| {
+                    matches!(
+                        v.trim().to_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
                 .unwrap_or(false)
     }
 
@@ -448,7 +453,9 @@ impl BromSession {
             // (allocator abort). Real SLA challenges are a few hundred
             // bytes; reject anything implausible before allocating.
             if challenge_length > 4096 {
-                return Err(format!("SLA challenge length implausible: {challenge_length}"));
+                return Err(format!(
+                    "SLA challenge length implausible: {challenge_length}"
+                ));
             }
             let challenge = self.read_exact(challenge_length as usize, Duration::from_secs(5))?;
             let response = crate::mtk_sla::generate_brom_sla_challenge(&challenge, key);
@@ -475,7 +482,13 @@ impl BromSession {
     /// Real BROM SEND_DA (0xD7). `dadata` is the full DA including its
     /// trailing signature of `sig_len` bytes. Handles the 0x1D0D "SLA
     /// required" reply inline (mtkclient `send_da`).
-    pub fn send_da(&self, address: u32, size: usize, sig_len: usize, dadata: &[u8]) -> std::result::Result<(), String> {
+    pub fn send_da(
+        &self,
+        address: u32,
+        size: usize,
+        sig_len: usize,
+        dadata: &[u8],
+    ) -> std::result::Result<(), String> {
         let body_end = dadata.len().saturating_sub(sig_len);
         let (gen_chksum, data) = Self::prepare_data(&dadata[..body_end], &dadata[body_end..], size);
         self.echo(0xD7)?;
@@ -509,7 +522,10 @@ impl BromSession {
         self.write(&[0xDA])?;
         let e = self.read_exact(1, Duration::from_secs(1))?;
         if e[0] != 0xDA {
-            return Err(format!("brom_register_access cmd echo mismatch 0x{:02x}", e[0]));
+            return Err(format!(
+                "brom_register_access cmd echo mismatch 0x{:02x}",
+                e[0]
+            ));
         }
         self.echo_dword(mode as u32)?;
         self.echo_dword(address)?;
@@ -552,7 +568,9 @@ impl BromSession {
                 let status2 = self.read_exact(2, Duration::from_secs(2))?;
                 let status2 = u16::from_le_bytes([status2[0], status2[1]]);
                 if status2 != 0 {
-                    return Err(format!("brom_register_access write status2 0x{status2:04x}"));
+                    return Err(format!(
+                        "brom_register_access write status2 0x{status2:04x}"
+                    ));
                 }
             }
             Ok(Vec::new())
@@ -602,7 +620,8 @@ pub fn brom_handshake(
     in_ep: u8,
     out_ep: u8,
 ) -> Result<BromSession> {
-    let context = Context::new().map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let context = Context::new()
+        .map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     let handle = context
         .devices()?
         .iter()
@@ -610,11 +629,10 @@ pub fn brom_handshake(
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
                 desc.vendor_id() == MTK_VID && desc.product_id() == dev.pid
-            }) && d.bus_number() == dev.bus && d.address() == dev.address
+            }) && d.bus_number() == dev.bus
+                && d.address() == dev.address
         })
-        .ok_or_else(|| {
-            BridgeError::Usb(crate::error::UsbError::DeviceNotFound)
-        })?
+        .ok_or_else(|| BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?
         .open()?;
     let _ = handle.set_auto_detach_kernel_driver(true);
     handle
@@ -659,8 +677,7 @@ pub fn brom_handshake(
                 Ok(r) => {
                     last_err = format!(
                         "sync echo mismatch: sent 0x{b:02x}, expected 0x{:02x}, got 0x{:02x}",
-                        !b,
-                        r[0]
+                        !b, r[0]
                     );
                     ok = false;
                     break;
@@ -858,24 +875,31 @@ pub fn brom_mem_probe(session: &BromSession) -> Result<String> {
     }
     // get_target_config exercised load-bearing
     match session.get_target_config() {
-        Ok(tc) => out.push(format!("target_config raw=0x{:08x} sla={} daa={}", tc.raw, tc.sla, tc.daa)),
+        Ok(tc) => out.push(format!(
+            "target_config raw=0x{:08x} sla={} daa={}",
+            tc.raw, tc.sla, tc.daa
+        )),
         Err(e) => out.push(format!("get_target_config fail: {e}")),
     }
     // reset_device is wired as load-bearing note (we don't actually reset in probe)
-    let _ : fn(&BromSession) = BromSession::reset_device;
+    let _: fn(&BromSession) = BromSession::reset_device;
     Ok(serde_json::json!({"mem_probe": out}).to_string())
 }
 
 pub fn mtk_reset_device_cli(target: &str) -> Result<String> {
     let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
-    let dev = devices.iter().find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+    let dev = devices
+        .iter()
+        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))?;
     if let Some((iface, in_ep, out_ep)) = find_bulk(dev) {
         let sess = brom_handshake(dev, iface, in_ep, out_ep)?;
         sess.reset_device();
         Ok(serde_json::json!({"status":"reset sent","target":target}).to_string())
     } else {
-        Err(BridgeError::InvalidArgument("no bulk endpoints".to_string()))
+        Err(BridgeError::InvalidArgument(
+            "no bulk endpoints".to_string(),
+        ))
     }
 }
 

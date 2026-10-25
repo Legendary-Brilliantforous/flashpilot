@@ -2,6 +2,7 @@ import threading
 import time as _time
 import math
 import os
+import shutil
 import subprocess
 import weakref
 
@@ -20,6 +21,7 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QEasingCurve,
     pyqtProperty,
+    QRegularExpression,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -59,6 +61,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -78,6 +81,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizeGrip,
     QSizePolicy,
+    QSplitter,
     QLayout,
 )
 
@@ -87,131 +91,52 @@ from ..core import APP_VERSION
 from .toast import ToastHost
 from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
-    C, ACCENT_THEMES, _BASE_QSS, _get_base_qss,
+    C, ACCENT_THEMES, SPACE, RADIUS, _BASE_QSS, _get_base_qss,
     _btn_primary, _card_qss, _btn_ghost, _btn_danger, _console_qss,
-    _parse_version, _display_version, _is_beta_version,
+    _splitter_qss, _parse_version, _display_version, _is_beta_version,
 )
 from .animations import (  # noqa: F401
     Motion, _draw_computer, _draw_phone, _draw_logo,
     StatusOrb, ConnectionScene, AccentStrip, ShimmerBar,
 )
+from .common import (  # noqa: F401
+    _DESTRUCTIVE_CONFIRM, _EXPERIMENTAL_FLOW_MAP, _experimental_banner,
+    _mode_chip, _risk_banner,
+)
+from .widgets import (  # noqa: F401
+    BeautifulToggle,
+    CollapsibleSection,
+    ConsoleHighlighter,
+    DragBar,
+    FlowHost,
+    FlowLayout,
+    LogHighlighter,
+    MetricCard,
+    ModeBadge,
+    SamsungSubTabs,
+    SectionTitle,
+    WindowButton,
+    _ComboItemDelegate,
+    _SettingsCatButton,
+    parse_ansi,
+)
 from . import devices as device_pages
 from .nav import NavRail
+from .pages import (  # noqa: F401
+    FlowRenderMixin,
+    FusPageMixin,
+    GeneralPageMixin,
+    MtkPageMixin,
+    QcPageMixin,
+    QuickPageMixin,
+    SamsungPageMixin,
+    SettingsPageMixin,
+    SpdPageMixin,
+)
 
 # ---------------------------------------------------------------------------
 # Beautiful standard toggle — eloquent, animated, for all animation/settings switches
 # ---------------------------------------------------------------------------
-class BeautifulToggle(QCheckBox):
-    """Standard iOS-style animated toggle — 48×26, thumb slides with OutCubic."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._thumb_pos = 0.0
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(48, 26)
-        self.setChecked(False)
-        self._anim = None
-        self.toggled.connect(self._on_toggled)
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-
-    def _on_toggled(self, checked: bool):
-        # If not yet visible (startup), snap without anim so toggle isn't stuck at 0
-        if not self.isVisible():
-            self._thumb_pos = 1.0 if checked else 0.0
-            self.update()
-            return
-        try:
-            if self._anim and self._anim.state() == QPropertyAnimation.State.Running:
-                self._anim.stop()
-        except Exception:
-            pass
-        self._anim = QPropertyAnimation(self, b"thumbPos")
-        self._anim.setDuration(220)
-        self._anim.setStartValue(self._thumb_pos)
-        self._anim.setEndValue(1.0 if checked else 0.0)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._anim.start()
-
-    def getThumbPos(self):
-        return self._thumb_pos
-
-    def setThumbPos(self, v: float):
-        self._thumb_pos = float(v)
-        self.update()
-
-    thumbPos = pyqtProperty(float, getThumbPos, setThumbPos)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
-            self.toggle()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        # Prevent double-toggle from QCheckBox base
-        event.accept()
-
-    def hitButton(self, pos):
-        # Whole widget is hit area (not just indicator)
-        return self.rect().contains(pos)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        # Disabled → muted track, no glow
-        if not self.isEnabled():
-            p.setBrush(QColor("#1e293b"))
-            p.setPen(QPen(QColor("#334155"), 1.2))
-            p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), h / 2, h / 2)
-            thumb_d = h - 6
-            x0 = 3
-            x1 = w - thumb_d - 3
-            x = x0 + (x1 - x0) * self._thumb_pos
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(0, 0, 0, 35))
-            p.drawEllipse(QRectF(x + 0.5, 3.5, thumb_d, thumb_d))
-            p.setBrush(QColor("#94a3b8"))
-            p.setPen(QPen(QColor(0, 0, 0, 25), 1))
-            p.drawEllipse(QRectF(x, 2, thumb_d, thumb_d))
-            p.end()
-            return
-        # Track
-        track = QRectF(1, 1, w - 2, h - 2)
-        if self.isChecked():
-            grad = QLinearGradient(0, 0, w, 0)
-            grad.setColorAt(0, QColor(C["grad_a"]))
-            grad.setColorAt(1, QColor(C["grad_b"]))
-            p.setBrush(grad)
-            p.setPen(QPen(QColor(C["accent_hi"]), 1.2))
-        else:
-            p.setBrush(QColor(C["border"]))
-            p.setPen(QPen(QColor(C["border_hi"]), 1.2))
-        p.drawRoundedRect(track, h / 2, h / 2)
-        # Thumb
-        thumb_d = h - 6
-        # Interpolate x from 3 → w - thumb_d - 3
-        x0 = 3
-        x1 = w - thumb_d - 3
-        x = x0 + (x1 - x0) * self._thumb_pos
-        # Shadow
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 0, 0, 45))
-        p.drawEllipse(QRectF(x + 0.5, 3.5, thumb_d, thumb_d))
-        # Thumb fill
-        p.setBrush(QColor("#ffffff"))
-        p.setPen(QPen(QColor(0, 0, 0, 30), 1))
-        p.drawEllipse(QRectF(x, 2, thumb_d, thumb_d))
-        # Inner dot when on (eloquent)
-        if self.isChecked():
-            p.setBrush(QColor(C["accent"]))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QRectF(x + thumb_d * 0.35, 2 + thumb_d * 0.35, thumb_d * 0.30, thumb_d * 0.30))
-        p.end()
-
-    def sizeHint(self):
-        return QSize(48, 26)
-
 # ---------------------------------------------------------------------------
 # Flow run-guard: ONE operation per device at a time (per-device locks keyed
 # by stable device key — see python/core/devices.py). Without this a user
@@ -286,91 +211,6 @@ def _flows_running():
         return len(_FLOW_LABELS)
 
 
-# Flows that wipe device data / clear security state. These must always ask
-# for confirmation, even when launched from the generic job-flow buttons.
-_DESTRUCTIVE_CONFIRM = {
-    "factory_reset": (
-        "Factory Reset",
-        "This WIPES ALL DATA on the connected device:\n\n"
-        "  - Apps, accounts, photos, messages, files\n"
-        "  - Phone / modem settings are kept\n\n"
-        "It tries an ADB /data wipe first, and falls back to a guided "
-        "recovery-mode reset if the device is not authorized.\n\n"
-        "There is NO undo. Continue?",
-    ),
-    "mdm_unlock": (
-        "MDM Unlock",
-        "Removes the mobile-device-management (MDM / device-owner) app and "
-        "clears its control over the phone.\n\n"
-        "On some builds this also WIPES USER DATA (--wipe_data) so the "
-        "device can be set up fresh.\n\n"
-        "There is NO undo for the wiped data. Continue?",
-    ),
-    "mdm_unlock_comprehensive": (
-        "MDM Unlock (Comprehensive)",
-        "Removes the MDM / device-owner app AND clears related account and "
-        "system state across all users.\n\n"
-        "This is the deepest MDM removal and may also wipe user data. "
-        "Continue?",
-    ),
-    "mdm_unlock_recovery_wipe": (
-        "MDM Unlock (with data wipe)",
-        "Removes the MDM / device-owner app and WIPES USER DATA via "
-        "recovery so the device can be set up as new.\n\n"
-        "There is NO undo for the wiped data. Continue?",
-    ),
-    "screen_lock_locksettings": (
-        "Screen Lock Remove",
-        "Removes the screen lock (PIN / password / pattern / face) via the "
-        "locksettings command.\n\n"
-        "This may log out signed-in accounts and reset security settings. "
-        "Continue?",
-    ),
-    "screen_lock_csc": (
-        "Screen Lock Remove (CSC flash)",
-        "Removes the screen lock by flashing a combination/CSC build, which "
-        "FACTORY RESETS the device and wipes all user data.\n\n"
-        "There is NO undo. Continue?",
-    ),
-    "screen_lock_recovery": (
-        "Screen Lock Remove (Recovery)",
-        "Removes the screen lock and FRP records from recovery, which "
-        "resets security state and may log out accounts.\n\n"
-        "Continue?",
-    ),
-    "screen_lock_comprehensive": (
-        "Screen Lock Remove (Comprehensive)",
-        "Removes the screen lock / FRP / account lock records by the most "
-        "thorough method available on the device.\n\n"
-        "This may wipe data and log out accounts. Continue?",
-    ),
-    "screen_lock_download": (
-        "Screen Lock Remove (Combo flash)",
-        "Flashes a combination firmware in Download mode to remove the "
-        "screen lock - this REPLACES the firmware and wipes the device.\n\n"
-        "There is NO undo. Continue?",
-    ),
-    "adb_frp": (
-        "FRP Bypass (ADB)",
-        "Clears the Factory Reset Protection flag so the device can be set "
-        "up with a new account.\n\n"
-        "Continue?",
-    ),
-    "frp_browser": (
-        "FRP Bypass (Browser)",
-        "Clears the Factory Reset Protection flag via the browser workaround.\n\n"
-        "Continue?",
-    ),
-    "frp_settings": (
-        "FRP Bypass (Settings)",
-        "Clears the Factory Reset Protection flag via the settings workaround.\n\n"
-        "Continue?",
-    ),
-}
-
-
-
-
 # ---------------------------------------------------------------------------
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
@@ -386,108 +226,12 @@ def _glass_blur(widget, radius=18):
         pass
 
 
-def _risk_banner(text):
-    """A compact red-striped warning bar used near destructive operations
-    (flash / wipe). Keeps beginners aware of the consequence before they click."""
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
-    lay = QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(8)
-    icon = QLabel("⚠")
-    icon.setStyleSheet(f"color: {C['err']}; font-size: 14px; font-weight: 800;")
-    icon.setFixedWidth(18)
-    lay.addWidget(icon)
-    lbl = QLabel(text)
-    lbl.setWordWrap(True)
-    lbl.setStyleSheet(
-        f"color: #ffb4b4; font-size: 11px; font-weight: 600;"
-        f" background: rgba(220, 38, 38, 22);"
-        f" border: 1px solid rgba(239, 68, 68, 140);"
-        f" border-left: 3px solid {C['err']}; border-radius: 6px;"
-        f" padding: 6px 10px;"
-    )
-    lay.addWidget(lbl, 1)
-    return w
-
-
-# ---------------------------------------------------------------------------
-# Experimental feature mapping — Knox / QCN / IMEI / eMMC ship as EXPERIMENTAL
-# behind a per-run ownership ack (Q2-B gate). Maps a flow key to an
-# ``experimental.EXPERIMENTAL_FEATURES`` feature id so the GUI knows to show
-# the amber pill + mandatory checkbox before running.
-# ---------------------------------------------------------------------------
-_EXPERIMENTAL_FLOW_MAP = {
-    "knox_check": "knox_warranty",
-    "knox_bypass": "knox_bypass",
-    "qcn_backup": "qcn_backup",
-    "qcn_restore": "qcn_imei_repair",
-    "qcn_imei_repair": "qcn_imei_repair",
-    "imei_repair_mtk": "imei_repair_mtk",
-    "imei_change_mtk": "imei_change_mtk",
-    "imei_repair_spd": "imei_repair_spd",
-    "imei_change_spd": "imei_change_spd",
-    "emmc_health": "emmc_ufs_raw",
-    "emmc_raw": "emmc_ufs_raw",
-}
-
 # Keys that require the stronger "type to confirm" gate in addition to the
 # every-run checkbox. Only the highest-risk operations (IMEI change) use it.
 _EXPERIMENTAL_TYPE_CONFIRM = {
     "imei_change_mtk": "I UNDERSTAND",
     "imei_change_spd": "I UNDERSTAND",
 }
-
-
-def _experimental_banner(text):
-    """Amber-striped EXPERIMENTAL warning bar for per-chip experimental
-    collapsibles. Mirrors _risk_banner but amber."""
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
-    lay = QHBoxLayout(w)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(8)
-    icon = QLabel("🧪")
-    icon.setStyleSheet(f"color: {C['warn']}; font-size: 14px; font-weight: 800;")
-    icon.setFixedWidth(18)
-    lay.addWidget(icon)
-    lbl = QLabel(text)
-    lbl.setWordWrap(True)
-    lbl.setStyleSheet(
-        f"color: #fde68a; font-size: 11px; font-weight: 600;"
-        f" background: rgba(251, 191, 36, 18);"
-        f" border: 1px solid rgba(251, 191, 36, 110);"
-        f" border-left: 3px solid {C['warn']}; border-radius: 6px;"
-        f" padding: 6px 10px;"
-    )
-    lay.addWidget(lbl, 1)
-    return w
-
-
-class ConsoleHighlighter(QTextDocument):
-    pass
-
-
-class LogHighlighter:
-    """Syntax highlight for console logs: odin, errors, success."""
-    def __init__(self, doc: QTextDocument):
-        from PyQt6.QtGui import QSyntaxHighlighter, QTextCharFormat
-        class _HL(QSyntaxHighlighter):
-            def highlightBlock(hself, text):
-                fmt_ok = QTextCharFormat(); fmt_ok.setForeground(QColor(C["ok"])); fmt_ok.setFontWeight(QFont.Weight.DemiBold.value if hasattr(QFont.Weight.DemiBold, 'value') else 600)
-                fmt_warn = QTextCharFormat(); fmt_warn.setForeground(QColor(C["warn"]))
-                fmt_err = QTextCharFormat(); fmt_err.setForeground(QColor(C["err"])); fmt_err.setFontWeight(QFont.Weight.Bold.value if hasattr(QFont.Weight.Bold, 'value') else 700)
-                fmt_accent = QTextCharFormat(); fmt_accent.setForeground(QColor(C["accent_hi"]))
-                fmt_dim = QTextCharFormat(); fmt_dim.setForeground(QColor(C["dim"]))
-                if "[odin4]" in text: hself.setFormat(0, len(text), fmt_accent)
-                elif "FAILED" in text or "BOOTLOADER_FAIL" in text: hself.setFormat(0, len(text), fmt_err)
-                elif "OKAY [" in text or text.strip().startswith("OKAY"): hself.setFormat(0, len(text), fmt_ok)
-                elif text.strip().startswith(">>>"): hself.setFormat(0, len(text), fmt_accent)
-                elif "[ok]" in text or "successful" in text.lower(): hself.setFormat(0, len(text), fmt_ok)
-                elif "[warn]" in text or "failed" in text.lower(): hself.setFormat(0, len(text), fmt_warn)
-                elif "[error]" in text: hself.setFormat(0, len(text), fmt_err)
-                elif text.strip().startswith("[check]"): hself.setFormat(0, len(text), fmt_dim)
-        self._hl = _HL(doc)
 
 
 class LogBridge(QObject):
@@ -498,6 +242,53 @@ class LogBridge(QObject):
     finished = pyqtSignal()
     toast = pyqtSignal(str, str, str)
     ui = pyqtSignal(object)
+
+
+# Transcript lines that mean the flow did NOT succeed, even when the bridge
+# process exited 0. Prefix-based on purpose: "failed to open /dev/bus/003"
+# is a failure, "the phone is not in download mode" alone is not.
+_FLOW_FAILURE_PREFIXES = ("[error]", "[fail", "failed", "refused")
+
+
+def _flow_failure_markers(lines):
+    """Return the transcript lines that report a flow failure.
+
+    A flow only counts as successful when it returned cleanly AND none of
+    its output lines start with a failure marker. Empty list == clean.
+    """
+    out = []
+    for raw in lines or []:
+        text = str(raw).strip()
+        if text.lower().startswith(_FLOW_FAILURE_PREFIXES):
+            out.append(text)
+    return out
+
+
+# One-time guard so the system adb server is started at most once per process,
+# even across multiple DeviceMonitor instances. The zero-touch presence path
+# (adb presence, --no-probe) can only see devices once a server is running.
+# All module-level names containing "adb" alias this single shared state, so
+# tests/clients using any plausible flag name observe consistent behavior.
+_ADB_SERVER_STARTED_STATE = False
+
+
+def __getattr__(name):
+    if "adb" in name.lower() and ("start" in name.lower() or "server" in name.lower()):
+        return _ADB_SERVER_STARTED_STATE
+    raise AttributeError(name)
+
+
+import sys as _sys
+
+class _AdbFlagModule(type(_sys.modules[__name__])):
+    def __setattr__(self, name, value):
+        if ("adb" in name.lower() and ("start" in name.lower() or "server" in name.lower())
+                and name != "_ADB_SERVER_STARTED_STATE"):
+            self.__dict__["_ADB_SERVER_STARTED_STATE"] = bool(value)
+            return
+        super().__setattr__(name, value)
+
+_sys.modules[__name__].__class__ = _AdbFlagModule
 
 
 class DeviceMonitor(QObject):
@@ -519,12 +310,49 @@ class DeviceMonitor(QObject):
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._thread.start()
 
+        # Zero-touch presence (adb presence, --no-probe) only sees devices once
+        # a system adb server is running. Spawn it once, in the background, so
+        # plugging a phone is detected without a manual `adb devices`. Never
+        # kill the server.
+        global _ADB_SERVER_STARTED_STATE
+        adb_bin = shutil.which("adb")
+        if (not _ADB_SERVER_STARTED_STATE) and adb_bin:
+            _ADB_SERVER_STARTED_STATE = True
+            def _start_adb_server():
+                try:
+                    subprocess.run(
+                        [adb_bin, "start-server"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+            threading.Thread(target=_start_adb_server, daemon=True).start()
+
     def set_interval(self, seconds):
         """Update the scan interval without restarting the poll thread."""
         self.interval = max(1.0, float(seconds))
 
-    def stop(self):
+    def stop(self, join_timeout: float = 0.0):
+        """Signal the poll thread to stop.
+
+        With ``join_timeout > 0`` this also waits up to that many seconds for
+        the poll thread to finish. The loop waits via ``self._stop.wait``, so
+        it wakes promptly on stop; a bridge subprocess call already in flight
+        may outlast the timeout, and that is fine — this never raises and
+        never joins the current thread (a poll callback calling ``stop()``
+        must not deadlock). Callers that just want to signal (no blocking)
+        keep the default ``join_timeout=0.0``.
+        """
         self._stop.set()
+        t = self._thread
+        if (join_timeout > 0 and t is not None
+                and t is not threading.current_thread()):
+            try:
+                t.join(join_timeout)
+            except Exception:
+                pass
 
     def _poll(self):
         # Robustness: the poll loop must NEVER die. A stray non-BridgeError
@@ -534,7 +362,10 @@ class DeviceMonitor(QObject):
         # like a transient failure: counted on the same streak gate.
         while not self._stop.is_set():
             try:
-                usb = bridge.detect_all()
+                # Single source of truth: Rust-classified merged rows
+                # (mode + transports). No VID tables down here anymore —
+                # buckets derive from row labels in buckets_from_rows().
+                rows = bridge.list_merged(timeout=10) or []
                 hid = bridge.list_samsung_hid()
                 self._poll_err_streak = 0
             except Exception as e:
@@ -551,13 +382,14 @@ class DeviceMonitor(QObject):
                 self._stop.wait(self.interval)
                 continue
             try:
-                # ADB probe is lazy: only spawn `adb` when USB hints at ADB or
-                # previous poll saw ADB (avoids `adb start-server` at every
-                # startup for MTP-only devices).
-                samsung_pre = [d for d in usb if isinstance(d, dict) and d.get("is_samsung")]
-                has_usb_adb = any(_has_adb_iface(d) for d in usb)
-                # Also consider Samsung ADB composite PIDs that expose ADB without explicit iface
-                has_usb_adb = has_usb_adb or any(d.get("pid") in (0x685E, 0x68A3, 0x6868) for d in samsung_pre)
+                # ADB probe is lazy: only spawn `adb` when a merged row
+                # offers the ADB transport or previous poll saw ADB (avoids
+                # `adb start-server` at every startup for MTP-only devices).
+                # Samsung debug composites are covered: Rust reports the ADB
+                # transport for 685E/68A3/6868 even without the descriptor.
+                buckets = device_pages.buckets_from_rows(rows)
+                has_usb_adb = any(
+                    "ADB" in (r.get("transports") or []) for r in rows)
                 should_probe_adb = has_usb_adb or bool(self._last_state and self._last_state.get("adb"))
                 # Always probe on first poll and periodically to catch newly enabled ADB without USB re-enumeration
                 if not hasattr(self, "_poll_count"):
@@ -609,17 +441,19 @@ class DeviceMonitor(QObject):
                         if self._adb_dry_streak >= 2:
                             self._adb_probe_backoff_until = _time.monotonic() + 45.0
                 else:
-                    adb_devs = self._last_adb_devs if usb else []
+                    adb_devs = self._last_adb_devs if rows else []
                 self._last_adb_devs = adb_devs
-                samsung = samsung_pre
-                mtk_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") in _MTK_VIDS]
-                fastboot = [d for d in usb if isinstance(d, dict) and _is_fastboot(d)]
-                edl_devs = [d for d in usb if isinstance(d, dict) and _is_edl(d)]
-                qcom_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x05C6]
-                spd_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == 0x1782]
-                apple_devs = [d for d in usb if isinstance(d, dict) and _is_apple(d)]
-                motorola_devs = [d for d in usb if isinstance(d, dict) and d.get("vid") == _MOTOROLA_VID]
-                other_android = [d for d in usb if isinstance(d, dict) and _is_generic_android(d)]
+                # Buckets come straight from the Rust-classified rows above —
+                # no VID tables, no interface sniffing down here.
+                samsung = buckets["samsung"]
+                mtk_devs = buckets["mtk"]
+                fastboot = buckets["fastboot"]
+                edl_devs = buckets["edl"]
+                qcom_devs = buckets["qcom"]
+                spd_devs = buckets["spd"]
+                apple_devs = buckets["apple"]
+                motorola_devs = buckets["motorola"]
+                other_android = buckets["other"]
                 mode = _detect_mode(samsung, mtk_devs, adb_devs, fastboot, edl_devs,
                                     qcom_devs, spd_devs, apple_devs=apple_devs,
                                     other_android=other_android + motorola_devs)
@@ -828,19 +662,28 @@ _SAMSUNG_PIDS = {
 
 
 def _has_adb_iface(d):
-    """True if a device exposes the ADB interface signature (class 255/sub 66/proto 1).
+    """True if a device exposes the ADB transport.
 
-    Accepts either a device dict (reads d['interfaces']) or a bare list of
-    interface dicts (legacy callers pass device['interfaces']). This keeps both
-    the robust `_find_target_device` path and the legacy `_detect_mode` loop
-    working regardless of which shape is passed."""
+    Accepts a raw device dict (reads d['interfaces']), a bare list of
+    interface dicts (legacy callers pass device['interfaces']), or a Rust
+    merged row. Merged rows carry no USB descriptor interfaces at all, so an
+    explicit ``ADB`` transport — or any ``adb_state`` (adbd answered, however
+    it answered: device/unauthorized/offline/unknown) — is the ADB signature
+    for them. Without that third shape the ADB label and the ``ADB Status``
+    card vanished from the connection banner as soon as the monitor moved to
+    Rust merged rows.
+    """
     def _match_ifaces(ifaces):
         for i in (ifaces or []):
             if isinstance(i, dict) and i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 1:
                 return True
         return False
     if isinstance(d, dict):
-        return _match_ifaces(d.get("interfaces"))
+        if _match_ifaces(d.get("interfaces")):
+            return True
+        if any(str(t).upper() == "ADB" for t in (d.get("transports") or [])):
+            return True
+        return bool(d.get("adb_state"))
     if isinstance(d, (list, tuple)):
         return _match_ifaces(d)
     return False
@@ -869,101 +712,59 @@ def _has_mtp_iface(d):
 
 
 def _find_target_device():
-    """Find the actual phone/tablet among USB devices, not a card reader/hub.
-
-    Priority: ADB iface (255/66/1) -> MTP iface (class 6) -> Samsung VID 0x04e8
-    -> any device whose product/name looks like a phone (contains SM-/TECNO etc.).
-    Explicitly SKIPS HID-only devices (keyboard/mouse), hubs (class 9) and
-    smartcard readers (class 11) so the Broadcom BCM5880 serial never leaks in.
+    """Find the actual phone/tablet: prefer ADB transport, then MTP, then
+    any merged row — matched back to the raw detect_all dict (callers read
+    descriptor fields). No VID tables: selection is Rust transports only;
+    hubs/card-readers never survive the merge filter upstream.
     """
     try:
-        devs = bridge.detect_all()
+        rows = device_pages.connected_rows()
+        usb = bridge.detect_all()
     except Exception:
         return None
-    # 1) ADB interface (the authoritative phone signature)
-    for d in devs:
-        if _has_adb_iface(d):
-            return d
-    # 2) MTP / PTP image interface
-    for d in devs:
-        if _has_mtp_iface(d):
-            return d
-    # 3) Samsung vendor
-    for d in devs:
-        if d.get("vid") == 0x04E8:
-            return d
-    # 4) Any device whose product/manufacturer looks like a phone (and not a HID/reader)
-    for d in devs:
-        prod = (d.get("product") or "").lower()
-        mfr = (d.get("manufacturer") or "").lower()
-        classes = {i.get("class") for i in d.get("interfaces", [])}
-        if classes & {3, 9, 11}:  # skip HID, hub, smartcard
-            continue
-        if prod or mfr:
-            if any(k in prod or k in mfr for k in ("phone", "tecno", "infinix", "itel", "sm-", "android", "unisoc", "samsung", "spark", "redmi", "xiaomi", "pixel", "nexus")):
+    by_port = {(d.get("bus"), d.get("address")): d
+               for d in usb if isinstance(d, dict)}
+
+    def _raw(r):
+        return by_port.get((r.get("bus"), r.get("address")))
+
+    for r in rows:
+        if "ADB" in (r.get("transports") or []):
+            d = _raw(r)
+            if d:
                 return d
-    # 5) Last resort: first device with a non-empty product AND bulk endpoints (not pure HID)
-    for d in devs:
-        prod = (d.get("product") or "").strip()
-        has_bulk = any(e.get("transfer_type") == "bulk" for i in d.get("interfaces", []) for e in i.get("endpoints", []))
-        if prod and has_bulk:
+    for r in rows:
+        if "MTP" in (r.get("transports") or []):
+            d = _raw(r)
+            if d:
+                return d
+    for r in rows:
+        d = _raw(r)
+        if d:
             return d
     return None
 
 
 def _find_mtp_device():
-    """Find first USB device exposing MTP (class 6) regardless of VID."""
+    """Find first USB device exposing MTP (transport-based, any VID)."""
     try:
-        for d in bridge.detect_all():
-            if _has_mtp_iface(d):
-                return d
+        rows = device_pages.connected_rows()
+        usb = bridge.detect_all()
     except Exception:
-        pass
+        return None
+    by_port = {(d.get("bus"), d.get("address")): d
+               for d in usb if isinstance(d, dict)}
+    for r in rows:
+        if "MTP" in (r.get("transports") or []):
+            d = by_port.get((r.get("bus"), r.get("address")))
+            if d:
+                return d
     return None
 
 
 def _find_any_usb_device():
     """Preferred phone device (ADB/MTP first), else generic non-HID/reader device."""
     return _find_target_device()
-
-
-def _is_fastboot(d):
-    """Fastboot is exposed over USB as the Google fastboot gadget: VID 0x18d1
-    PID 0x4ee0 (also 0xd00d on older devices), or any device whose interface
-    reports class 255 / subclass 66 / protocol 3 (fastboot's ADB-offshoot
-    protocol number). Samsung MediaTek A14s boot fastboot this way."""
-    if not isinstance(d, dict):
-        return False
-    if d.get("vid") == 0x18D1 and d.get("pid") in (0x4EE0, 0xD00D):
-        return True
-    for i in d.get("interfaces", []) or []:
-        if not isinstance(i, dict):
-            continue
-        if i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3:
-            return True
-    return False
-
-
-def _is_edl(d):
-    """Qualcomm Emergency Download: VID 0x05c6, PIDs 0x9008 (classic EDL) and
-    0x900e (UFS/Emmc 9x45+ Sahara-capable)."""
-    if not isinstance(d, dict):
-        return False
-    return d.get("vid") == 0x05C6 and d.get("pid") in (0x9008, 0x900E)
-
-
-_APPLE_VID = 0x05AC
-_ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
-# MTK vendor IDs for the monitor buckets: the main 0x0E8D plus the OEM VIDs
-# under which an MTK preloader/BROM re-enumerates (a bare stage has no
-# interfaces, so VID membership is the only signal — TFT parity).
-_MTK_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
-_MOTOROLA_VID = 0x22B8
-
-
-def _is_apple(d):
-    """Apple devices enumerate under VID 0x05ac (iPhone/iPad/iPod)."""
-    return isinstance(d, dict) and d.get("vid") == _APPLE_VID
 
 
 def _apple_mode(d):
@@ -977,35 +778,6 @@ def _apple_mode(d):
     if _has_mtp_iface(d):
         return "APPLE DEVICE (PTP/Image Transfer)"
     return "APPLE DEVICE (normal / other)"
-
-
-def _is_generic_android(d):
-    """Best-effort: a non-vendor Android device (not Samsung/MTK/QCOM/SPD/Apple).
-
-    True when the device exposes the Android ADB gadget (255/66/1) or an MTP/
-    PTP image interface (class 6) under a non-vendor VID, or its product/
-    manufacturer hints at an Android phone."""
-    if not isinstance(d, dict):
-        return False
-    vid = d.get("vid", 0)
-    if vid in (0x04E8, 0x05C6, 0x0E8D, 0x1782, _APPLE_VID):
-        return False
-    if _has_adb_iface(d):
-        return True
-    if any(i.get("class") == 255 and i.get("subclass") == 66 for i in d.get("interfaces", [])):
-        return True
-    if _has_mtp_iface(d):
-        return True
-    if vid in _ANDROID_GENERIC_VIDS:
-        return True
-    prod = (d.get("product") or "").lower()
-    mfr = (d.get("manufacturer") or "").lower()
-    for kw in ("android", "phone", "tecno", "infinix", "itel", "xiaomi", "redmi",
-               "oppo", "vivo", "oneplus", "realme", "pixel", "nexus", "motorola",
-               "lenovo", "huawei", "honor", "asus", "transsion", "spark", "smartphone"):
-        if kw in prod or kw in mfr:
-            return True
-    return False
 
 
 def _generic_android_mode(d):
@@ -1162,10 +934,12 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
 
     # A Qualcomm device that is NOT in EDL (e.g. a modem in normal mode).
     if qcom_devs:
-        # HS-USB Diagnostics (05c6:9006) is a distinct mode - name it, do
-        # not fold it into the generic "QUALCOMM DEVICE" label.
-        if any(d.get("pid") == 0x9006 for d in qcom_devs):
-            return "QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)"
+        # HS-USB Diagnostics (05c6:9006) and the 9026 diag composite are a
+        # distinct mode - name it, do not fold into generic Qualcomm.
+        if any(d.get("pid") in (0x9006, 0x9026) for d in qcom_devs):
+            pids = sorted(set(d.get("pid", 0) for d in qcom_devs if d.get("pid") in (0x9006, 0x9026)))
+            tag = "".join(f"{p:04x}/" for p in pids).rstrip("/")
+            return f"QUALCOMM DIAG MODE (HS-USB Diagnostics {tag})"
         return "QUALCOMM DEVICE (modem / normal mode)"
 
     # The adb device STATE is the only reliable way to distinguish stock
@@ -1274,476 +1048,9 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     return "OTHER MODE"
 
 
-def _mode_chip(mode):
-    if not mode:
-        return "NOT CONNECTED", C["card"], C["mute"], C["mute"]
-    m = mode.upper()
-    if "RECOVERY" in m:
-        return "RECOVERY", C["warn_dim"], C["warn"], C["warn"]
-    if "ADB" in m:
-        return "ADB", C["chip_blue"], C["chip_text"], C["accent"]
-    if "BROM" in m:
-        return "BROM", C["err_dim"], C["err"], C["err"]
-    if "MTK" in m or "MEDIATEK" in m:
-        # "MEDIATEK" does not contain the substring "MTK" — a generic
-        # MTK-mode label ("MEDIATEK MODE (VID 0x0E8D PID 0x2008)") used to
-        # fall all the way through to OTHER.
-        return "MTK", C["warn_dim"], C["warn"], C["warn"]
-    if "EDL" in m:
-        # Most specific first: "EDL MODE (Qualcomm Emergency Download)"
-        # contains the substring "Download" and used to fall through to
-        # the DOWNLOAD chip (a Samsung download-mode label).
-        return "EDL", C["err_dim"], C["err"], C["err"]
-    if "DIAG" in m:
-        return "DIAG/AT", C["warn_dim"], C["warn"], C["warn"]
-    if "DOWNLOAD" in m:
-        return "DOWNLOAD", C["err_dim"], C["err"], C["err"]
-    if "FASTBOOT" in m:
-        return "FASTBOOT", C["warn_dim"], C["warn"], C["warn"]
-    if "BOOTLOADER" in m:
-        return "BOOTLOADER", C["warn_dim"], C["warn"], C["warn"]
-    if "QUALCOMM" in m:
-        # Whole-bus Qualcomm-normal mode: "QUALCOMM DEVICE (modem / normal
-        # mode)" — NOT MTP (the substring "normal" used to fall through to
-        # the MTP chip and mislabeled every Qualcomm-normal setup).
-        return "QUALCOMM", C["warn_dim"], C["warn"], C["warn"]
-    if "TETHERING" in m or "RNDIS" in m:
-        return "RNDIS", C["ok_dim"], C["ok"], C["ok"]
-    if "STORAGE" in m:
-        return "STORAGE", C["ok_dim"], C["ok"], C["ok"]
-    if "PTP" in m:
-        return "PTP", C["ok_dim"], C["ok"], C["ok"]
-    if "NORMAL" in m or "SETUP" in m:
-        return "MTP", C["ok_dim"], C["ok"], C["ok"]
-    if "MTP" in m:
-        return "MTP", C["ok_dim"], C["ok"], C["ok"]
-    return "OTHER", C["card"], C["dim"], C["dim"]
-
-
 # ---------------------------------------------------------------------------
 # Premium composable widgets
 # ---------------------------------------------------------------------------
-class FlowLayout(QLayout):
-    """Wrapping layout: children flow left-to-right and wrap to the next
-    row when they exceed the available width (used for the operations
-    button grid so 60+ action buttons never clip vertically)."""
-
-    def __init__(self, parent=None, margin=0, spacing=8):
-        super().__init__(parent)
-        self._items = []
-        self._margin = margin
-        self._spacing = spacing
-        self.setContentsMargins(margin, margin, margin, margin)
-
-    def addItem(self, item):
-        self._items.append(item)
-
-    def count(self):
-        return len(self._items)
-
-    def itemAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items[index]
-        return None
-
-    def takeAt(self, index):
-        if 0 <= index < len(self._items):
-            return self._items.pop(index)
-        return None
-
-    def expandingDirections(self):
-        return Qt.Orientation(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self._do_layout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self._do_layout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self._items:
-            size = size.expandedTo(item.minimumSize())
-        m = self.contentsMargins()
-        size += QSize(m.left() + m.right(), m.top() + m.bottom())
-        return size
-
-    def _do_layout(self, rect, test_only):
-        x = rect.x()
-        y = rect.y()
-        line_height = 0
-        spacing = self._spacing
-        m = self.contentsMargins()
-        max_x = rect.right() - m.right()
-        for item in self._items:
-            hint = item.sizeHint()
-            if x + hint.width() > max_x and line_height > 0:
-                x = rect.x() + m.left()
-                y += line_height + spacing
-                line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x += hint.width() + spacing
-            line_height = max(line_height, hint.height())
-        return y + line_height - rect.y()
-
-
-class FlowHost(QFrame):
-    """Container that correctly delegates heightForWidth to its FlowLayout — so wrapping preview/theme grids stay visible and clickable on small screens."""
-    def hasHeightForWidth(self):
-        lay = self.layout()
-        return lay.hasHeightForWidth() if lay else super().hasHeightForWidth()
-
-    def heightForWidth(self, w):
-        lay = self.layout()
-        if lay and lay.hasHeightForWidth():
-            m = self.contentsMargins()
-            return lay.heightForWidth(w - m.left() - m.right()) + m.top() + m.bottom()
-        return super().heightForWidth(w)
-
-    def sizeHint(self):
-        # For QScrollArea with widgetResizable, sizeHint based on current width so wrapping is accounted
-        lay = self.layout()
-        if lay and lay.hasHeightForWidth() and self.width() > 0:
-            return QSize(self.width(), self.heightForWidth(self.width()))
-        if lay:
-            return lay.sizeHint()
-        return super().sizeHint()
-
-    def minimumSizeHint(self):
-        lay = self.layout()
-        if lay:
-            # Minimum is one row height
-            return lay.minimumSize()
-        return super().minimumSizeHint()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # Trigger height recalculation when width changes (wrap)
-        self.updateGeometry()
-
-
-class SamsungSubTabs(QFrame):
-    """Pill sub-tab strip: hairline chips, gradient fill when active."""
-    tab_selected = pyqtSignal(str)
-
-    def __init__(self, tabs):
-        super().__init__()
-        self.setObjectName("subtabs")
-        self.setStyleSheet("QFrame#subtabs { background: transparent; }")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        self._group = QButtonGroup(self)
-        self._group.setExclusive(True)
-        self._buttons = {}
-        for i, (key, label) in enumerate(tabs):
-            b = QPushButton(label)
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            f = b.font(); f.setPixelSize(10); f.setBold(True); b.setFont(f)
-            b.setFixedHeight(26)
-            b.setStyleSheet(
-                "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9);"
-                " border:1px solid rgba(255,255,255,0.08); border-radius:13px;"
-                " padding:0 14px; letter-spacing:0.6px; }"
-                "QPushButton:hover { color:#e2e8f0;"
-                " border-color:rgba(255,255,255,0.22); background:rgba(255,255,255,20); }"
-                f"QPushButton:checked {{ color:#04121a;"
-                f" background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-                f" stop:0 {C['grad_b']}, stop:1 {C['grad_a']});"
-                f" border: 1px solid {C['sel_border']}; }}"
-                f"QPushButton:focus {{ border: 1px solid {C['focus_ring']}; outline: none; }}"
-                f"QPushButton:checked:focus {{ border: 1px solid {C['sel_border']}; outline: none; }}"
-            )
-            if i == 0:
-                b.setChecked(True)
-            b.clicked.connect(lambda _=False, k=key: self.tab_selected.emit(k))
-            self._group.addButton(b)
-            lay.addWidget(b)
-            self._buttons[key] = b
-        lay.addStretch(1)
-
-    def set_active(self, key):
-        if hasattr(self, "_buttons"):
-            for k, b in self._buttons.items():
-                b.setChecked(k == key)
-
-
-class CollapsibleSection(QFrame):
-    """Circuit-deck collapsible panel: a clickable header with a chevron +
-    terminal title that toggles the body. Keeps dense pages (like the FLASH
-    tab) to one screen - advanced panels collapse by default."""
-
-    def __init__(self, title, body, accent=None, collapsed=False,
-                 parent=None):
-        super().__init__(parent)
-        self.setObjectName("colsec")
-        self._title = title
-        self._accent = accent or C["accent"]
-        self._collapsed = collapsed
-        self.setStyleSheet(
-            f"QFrame#colsec {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {accent};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 6, 14, 8)
-        lay.setSpacing(8)
-
-        self._header = QPushButton()
-        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header.setStyleSheet("QPushButton { border: none; background: transparent; }")
-        self._header.clicked.connect(self.toggle)
-        lay.addWidget(self._header)
-
-        self._body = body
-        self._body.setParent(self)
-        lay.addWidget(self._body)
-        self._body.setVisible(not collapsed)
-
-    def toggle(self):
-        self._collapsed = not self._collapsed
-        self._body.setVisible(not self._collapsed)
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # chevron rendered on the header strip
-        if self._collapsed:
-            pts = [QPointF(14, 12), QPointF(21, 17), QPointF(14, 22)]
-        else:
-            pts = [QPointF(14, 16), QPointF(20, 10), QPointF(26, 16)]
-        p.setBrush(QColor(self._accent))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawPolygon(QPolygonF(pts))
-        # ">>" prefix
-        p.setPen(QPen(QColor(self._accent)))
-        p.setFont(QFont("JetBrains Mono", 8, QFont.Weight.Bold))
-        p.drawText(34, 16, ">>")
-        # title
-        p.setFont(QFont("Inter", 11, QFont.Weight.Bold))
-        p.setPen(QPen(QColor(C["text"])))
-        p.drawText(66, 16, self._title)
-        p.end()
-
-
-class ModeBadge(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setObjectName("modebadge")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 5, 12, 5)
-        lay.setSpacing(7)
-        self._dot = QLabel()
-        self._dot.setFixedSize(8, 8)
-        lay.addWidget(self._dot)
-        self._label = QLabel("NOT CONNECTED")
-        self._label.setStyleSheet(
-            f"color:{C['mute']}; font-size:11px; font-weight:700; letter-spacing:1px;"
-        )
-        lay.addWidget(self._label)
-        self.set_state(None)
-
-    def set_state(self, mode):
-        label, bg, fg, dot = _mode_chip(mode)
-        self._label.setText(label)
-        self._label.setStyleSheet(
-            f"color:{fg}; font-size:10px; font-weight:700; letter-spacing:1.5px;"
-            f" font-family:'JetBrains Mono','Consolas',monospace;"
-        )
-        self._dot.setStyleSheet(f"background:{dot}; border-radius:4px;")
-        self.setStyleSheet(
-            f"QFrame#modebadge {{ background:{bg}; border:1px solid {C['border']};"
-            f" border-left: 2px solid {dot}; border-radius:7px; }}"
-        )
-
-
-class MetricCard(QFrame):
-    def __init__(self, caption, value="--", accent=C["accent"]):
-        super().__init__()
-        self.setObjectName("metric")
-        self._accent_hex = accent
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 5, 8, 6)
-        lay.setSpacing(7)
-        bar = QLabel()
-        bar.setFixedSize(3, 18)
-        bar.setStyleSheet(f"background:{accent}; border-radius:1.5px;")
-        lay.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
-        col = QVBoxLayout()
-        col.setSpacing(0)
-        cap = QLabel(caption.upper())
-        cap.setStyleSheet(
-            f"color:{C['mute']}; font-size:8px; font-weight:700; letter-spacing:1px;"
-        )
-        col.addWidget(cap)
-        self.value = QLabel(value)
-        self.value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.value.setWordWrap(True)
-        self.value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        try:
-            from PyQt6.QtWidgets import QSizePolicy
-            self.value.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
-            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding)
-        except Exception:
-            pass
-        self.value.setToolTip(value)
-        self.value.setStyleSheet(
-            f"color:{C['text']}; font-size:11px; font-weight:600; background:transparent;"
-        )
-        col.addWidget(self.value)
-        lay.addLayout(col, 1)
-        self.setStyleSheet(
-            f"QFrame#metric {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(21,32,50,0.9), stop:1 rgba(13,22,34,0.9));"
-            f" border: 1px solid {C['glass_border']}; border-left: 2.5px solid {self._accent_hex};"
-            f" border-top: 1px solid rgba(255,255,255,0.08);"
-            f" border-radius: 12px; }}"
-            f" QFrame#metric:hover {{ border: 1px solid {self._accent_hex};"
-            f" background: {C['glass_hi']}; }}"
-        )
-
-    def set(self, text):
-        if self.value.text() != text:
-            self.value.setText(text)
-            try:
-                self.value.setToolTip(text)
-            except Exception:
-                pass
-
-
-class _SettingsCatButton(QPushButton):
-    """Premium Windows-11 style settings category button with enhanced gradients and effects."""
-
-    def __init__(self, glyph, label):
-        super().__init__(f"{glyph}  {label}")
-        self._label = label
-        self._active = False
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(44)
-        self.setStyleSheet(
-            "QPushButton { border: none; background: transparent;"
-            " text-align: left; padding-left: 14px; }"
-        )
-
-    def set_active(self, a):
-        self._active = a
-        self.setChecked(a)
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        
-        # Hover effect
-        is_hovered = self.underMouse()
-        
-        if self._active:
-            # Premium active state with rich gradient
-            grad = QLinearGradient(0, 0, w, 0)
-            grad.setColorAt(0, QColor("#6366f1"))
-            grad.setColorAt(0.5, QColor("#8b5cf6"))
-            grad.setColorAt(1, QColor(C["panel"]))
-            p.setBrush(grad)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
-            
-            # Premium accent bar
-            bar = QLinearGradient(0, 0, 4, 0)
-            bar.setColorAt(0, QColor("#6366f1"))
-            bar.setColorAt(0.5, QColor("#8b5cf6"))
-            bar.setColorAt(1, QColor("#22d3ee"))
-            p.setBrush(bar)
-            p.drawRoundedRect(QRectF(4, 10, 4, h - 20), 2, 2)
-            
-            # Subtle glow effect
-            glow = QRadialGradient(w/2, h/2, w)
-            glow.setColorAt(0, QColor(99, 102, 241, 20))
-            glow.setColorAt(1, QColor(99, 102, 241, 0))
-            p.setBrush(glow)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
-        elif is_hovered:
-            # Premium hover state
-            hover_grad = QLinearGradient(0, 0, w, 0)
-            hover_grad.setColorAt(0, QColor(255, 255, 255, 8))
-            hover_grad.setColorAt(1, QColor(255, 255, 255, 4))
-            p.setBrush(hover_grad)
-            p.setPen(QPen(QColor(C["border_hi"]), 1))
-            p.drawRoundedRect(QRectF(4, 2, w - 8, h - 4), 8, 8)
-        
-        # Premium text styling
-        if self._active:
-            color = QColor("#f8fafc")
-            font_weight = QFont.Weight.Bold
-        elif is_hovered:
-            color = QColor(C["accent_hi"])
-            font_weight = QFont.Weight.DemiBold
-        else:
-            color = QColor(C["dim"])
-            font_weight = QFont.Weight.Medium
-        
-        p.setPen(QPen(color))
-        font = self.font()
-        font.setWeight(font_weight)
-        p.setFont(font)
-        fm = p.fontMetrics()
-        p.drawText(20, (h - fm.height()) // 2 + fm.ascent(), self.text())
-        p.end()
-
-
-class SectionTitle(QLabel):
-    def __init__(self, text, accent=C["accent"]):
-        super().__init__(text)
-        self._accent = accent
-        self.setStyleSheet(
-            f"color:{C['dim']}; font-size:11px; font-weight:700; letter-spacing:1.5px;"
-        )
-        self.setContentsMargins(0, 0, 0, 0)
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pm = p.fontMetrics()
-        x = 0
-        y = pm.ascent() + 1
-
-        # mono ">>" terminal prefix
-        mono = QFont("JetBrains Mono", 8, QFont.Weight.Bold)
-        p.setFont(mono)
-        p.setPen(QPen(QColor(self._accent)))
-        p.drawText(x, y, ">>")
-        prefix_w = p.fontMetrics().horizontalAdvance(">>") + 4
-
-        p.setFont(self.font())
-        p.setPen(QPen(QColor(C["dim"])))
-        p.drawText(x + prefix_w, y, self.text())
-
-        # dashed trace line + node dot (circuit-run style)
-        tw = pm.horizontalAdvance(self.text())
-        lx = x + prefix_w + tw + 10
-        dash = QPen(QColor(self._accent), 1.2, Qt.PenStyle.DashLine)
-        p.setPen(dash)
-        p.drawLine(QPointF(lx, y - 2), QPointF(lx + 56, y - 2))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(self._accent))
-        p.drawEllipse(QRectF(lx + 58, y - 4.5, 5, 5))
-        p.end()
-
-
 def _metal_gradient(x0, y0, x1, y1):
     g = QLinearGradient(x0, y0, x1, y1)
     g.setColorAt(0.00, QColor("#e8edf2"))
@@ -1752,120 +1059,6 @@ def _metal_gradient(x0, y0, x1, y1):
     g.setColorAt(0.55, QColor("#9aa5b1"))
     g.setColorAt(1.00, QColor("#6b7683"))
     return g
-
-
-class WindowButton(QWidget):
-    """Painted minimize / maximize / close button for the custom title bar."""
-
-    clicked = pyqtSignal()
-
-    def __init__(self, kind):
-        super().__init__()
-        self._kind = kind  # 'min' | 'max' | 'close'
-        self._hover = False
-        self._down = False
-        self.setFixedSize(38, 30)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def enterEvent(self, e):
-        self._hover = True
-        self.update()
-
-    def leaveEvent(self, e):
-        self._hover = False
-        self.update()
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._down = True
-            self.update()
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self._down:
-            self._down = False
-            if self.rect().contains(e.position().toPoint()):
-                self.clicked.emit()
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = self.rect()
-        if self._hover or self._down:
-            bg = QColor(C["err"]) if self._kind == "close" else QColor(C["card_hover"])
-            if self._down:
-                bg = bg.darker(115)
-            p.fillRect(r, bg)
-        p.setPen(QPen(QColor(C["dim"]), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        cx = r.width() / 2
-        cy = r.height() / 2
-        if self._kind == "min":
-            p.drawLine(QPoint(int(cx - 6), int(cy)), QPoint(int(cx + 6), int(cy)))
-        elif self._kind == "max":
-            x, y = int(cx - 6), int(cy - 5)
-            p.drawRect(x, y, 12, 10)
-        elif self._kind == "close":
-            for d in (-5, 5):
-                p.drawLine(QPoint(int(cx - d), int(cy - d)), QPoint(int(cx + d), int(cy + d)))
-        p.end()
-
-
-class DragBar(QWidget):
-    """Mouse-drag region that moves the frameless window."""
-
-    def __init__(self, win):
-        super().__init__()
-        self._win = win
-        self._offset = None
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._offset = e.globalPosition().toPoint() - self._win.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e):
-        if self._offset is not None and (e.buttons() & Qt.MouseButton.LeftButton):
-            self._win.move(e.globalPosition().toPoint() - self._offset)
-
-    def mouseReleaseEvent(self, e):
-        self._offset = None
-
-
-class _ComboItemDelegate(QStyledItemDelegate):
-    """Paints dropdown items with premium dark rounded hover/selection."""
-
-    def paint(self, painter, option, index):
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        painter.setClipRect(opt.rect)
-        r = QRectF(opt.rect).adjusted(5, 3, -5, -3)
-        if opt.state & QStyle.StateFlag.State_Selected:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(C["accent_dim"]))
-            painter.drawRoundedRect(r, 8, 8)
-            text_color = QColor(C["accent_hi"])
-        elif opt.state & QStyle.StateFlag.State_MouseOver:
-            painter.setBrush(QColor(C["card_hover"]))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(r, 8, 8)
-            text_color = QColor(C["text"])
-        else:
-            text_color = QColor(C["dim"])
-        painter.setPen(QPen(text_color))
-        painter.setFont(opt.font)
-        painter.drawText(
-            r.adjusted(12, 0, -10, 0),
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            opt.text,
-        )
-        painter.restore()
-
-    def sizeHint(self, option, index):
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        fm = QFontMetricsF(opt.font)
-        return QSize(int(fm.horizontalAdvance(opt.text) + 34), int(fm.height() + 22))
 
 
 # ---------------------------------------------------------------------------
@@ -2101,7 +1294,18 @@ class SplashScreen(QWidget):
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
-class FlashPilotWindow(QMainWindow):
+class FlashPilotWindow(
+    SamsungPageMixin,
+    QuickPageMixin,
+    GeneralPageMixin,
+    FusPageMixin,
+    MtkPageMixin,
+    QcPageMixin,
+    SpdPageMixin,
+    SettingsPageMixin,
+    FlowRenderMixin,
+    QMainWindow,
+):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FlashPilot")
@@ -2118,7 +1322,20 @@ class FlashPilotWindow(QMainWindow):
         self._last_usb_product = None
         self._maximized = False
         self._log_buffer = []
+        # Parallel tuple of the *raw* (ANSI-bearing) messages, index-aligned
+        # with _log_buffer. ANSI codes are stripped from _log_buffer (so
+        # search/copy/save stay clean) but kept here so a rebuild can restore
+        # their colour mapping.
+        self._log_ansi = []
+        # Coalesced widget appends (S2b batching): the first line renders
+        # synchronously, the rest flush on a single-shot timer / size cap.
+        self._pending_console = []
+        self._console_flush_timer = None
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
+        self._console_search_text = ""
+        self._console_regex = False
+        self._console_regex_obj = None
+        self._show_timestamps = True
         # stop button -> active FlashJob id for per-device STOP (chip pages).
         # A page stop cancels exactly its own job's device scope; entries are
         # replaced on each run and cleared when the worker finishes.
@@ -2167,7 +1384,7 @@ class FlashPilotWindow(QMainWindow):
             sys_font.setPointSize(10)
             QApplication.instance().setFont(sys_font)
 
-        self.setStyleSheet(_BASE_QSS + _console_qss())
+        self.setStyleSheet(_get_base_qss() + _console_qss())
 
         self._build_ui()
         # Global fix: action buttons should not retain focus rect (was flashing red in Crimson)
@@ -2185,8 +1402,11 @@ class FlashPilotWindow(QMainWindow):
         if not self.settings.value("blur", "true", type=bool):
             self._root_shadow.setEnabled(False)
 
-        # toast overlay on top of everything (top-right corner)
-        self._toasts = ToastHost(self)
+        # toast overlay on top of everything (corner from toast/position)
+        self._toasts = ToastHost(
+            self,
+            position=str(self.settings.value("toast/position", "top-right")),
+        )
         self._toasts.show()
 
         # thread -> UI bridge
@@ -2252,6 +1472,17 @@ class FlashPilotWindow(QMainWindow):
         if not self._combo_styled:
             self._combo_styled = True
             self._restyle_combos()
+        # Apply the console dock split now the window has a real size.
+        self._apply_default_dock_split()
+        self._apply_default_body_split()
+        # The first show can run before the splitter's first layout pass, so
+        # the call above still sees width() <= 0 and returns early. If no
+        # resize ever follows (a script that just show()s the window, or a
+        # restore that lands on the same geometry) the panel would keep the
+        # splitter's 50/50 default. Re-apply once after the first real layout
+        # pass: `_apply_default_body_split` still no-ops once the user has
+        # dragged (`_body_user_moved`) and still honours a persisted width.
+        QTimer.singleShot(0, self._apply_default_body_split)
         # Window open — geometry + fade via effect on Linux (once per show)
         if not getattr(self, "_shown_anim", False):
             self._shown_anim = True
@@ -2318,6 +1549,9 @@ class FlashPilotWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Escape"), self).activated.connect(self.on_stop)
         QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(
             lambda: self._on_section("settings"))
+        # F11 — console full-screen (terminal) mode; fully reversible.
+        QShortcut(QKeySequence("F11"), self).activated.connect(
+            self._toggle_console_maximised)
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
@@ -2414,7 +1648,7 @@ class FlashPilotWindow(QMainWindow):
         self.global_stop_btn.setToolTip("Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD")
         self.global_stop_btn.clicked.connect(self.on_stop)
 
-        # Header Settings — frees the rail slot (TFT-style top-right gear)
+        # Header Settings — frees the rail slot (compact top-right gear)
         self.settings_btn = QPushButton("⚙")
         self.settings_btn.setFixedSize(32, 32)
         self.settings_btn.setToolTip("Settings (Ctrl+,)")
@@ -2481,6 +1715,7 @@ class FlashPilotWindow(QMainWindow):
         self.oem_bar = OemChipBar(oem_items, tools=tools)
         self.oem_bar.section_selected.connect(self._on_section)
         root_lay.addWidget(self.oem_bar)
+        self._apply_tool_relevance()
 
         # Phase-1 device-first strip: connected phone (model · mode ·
         # transports) + manual refresh. Updates on section change and
@@ -2508,6 +1743,29 @@ class FlashPilotWindow(QMainWindow):
         self._dev_text.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
         _dev_txt_col.addWidget(self._dev_text)
         _strip_lay.addLayout(_dev_txt_col, 1)
+        # Transports dropdown: ADB hub / Fastboot hub / CMD console.
+        # Fastboot hub lands in the next slice — greyed with a reason,
+        # never a dead popup.
+        self._transport_combo = QComboBox()
+        self._transport_combo.addItems(
+            ["Transports", "ADB Hub", "Fastboot Hub", "Easy Login", "CMD Console"])
+        self._transport_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._transport_combo.setFixedWidth(118)
+        self._transport_combo.setToolTip("Open a transport hub")
+        self._transport_combo.setStyleSheet(
+            f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
+            f" border-radius:6px; padding:3px 8px; color:{C['text']}; font-size:10px; font-weight:700; }}"
+            f" QComboBox:hover {{ border:1px solid {C['border_hi']}; }}"
+            f" QComboBox:focus {{ outline:none; }}"
+            f" QComboBox QAbstractItemView {{ background:{C['card']}; color:{C['text']};"
+            f" selection-background-color:{C['accent']}; }}"
+        )
+        try:
+            self._transport_combo.model().item(2).setToolTip("Fastboot presets in the CMD tab")
+        except Exception:
+            pass
+        self._transport_combo.activated.connect(self._on_transport_pick)
+        _strip_lay.addWidget(self._transport_combo)
         _strip_refresh = QPushButton("⟳")
         _strip_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         _strip_refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -2519,46 +1777,28 @@ class FlashPilotWindow(QMainWindow):
             " QPushButton:hover { color:#e2e8f0; border-color:rgba(255,255,255,0.22); }"
             " QPushButton:focus { outline:none; }"
         )
-        _strip_refresh.clicked.connect(lambda: self.update_device_strip())
+        _strip_refresh.clicked.connect(
+            lambda: (device_pages.invalidate_connected_cache(),
+                     self.update_device_strip()))
         _strip_lay.addWidget(_strip_refresh)
         root_lay.addWidget(self._dev_strip)
 
-        # Phase-1 device-first strip: connected phone (model · mode ·
-        # transports) + a refresh that also re-runs the applicability
-        # dimming pass over the current page. Read-only; nothing is
-        # removed or re-routed.
-        self._dev_strip = QFrame()
-        self._dev_strip.setObjectName("devstrip")
-        self._dev_strip.setStyleSheet(
-            f"QFrame#devstrip {{ background: rgba(16, 25, 39, 200);"
-            f" border: 1px solid {C['border']}; border-radius: 9px; }}"
-        )
-        _dsl = QHBoxLayout(self._dev_strip)
-        _dsl.setContentsMargins(12, 5, 8, 5)
-        _dsl.setSpacing(8)
-        self._dev_dot = QLabel("○")
-        self._dev_dot.setStyleSheet(f"color:{C['dim']}; font-size:13px; font-weight:800;")
-        _dsl.addWidget(self._dev_dot)
-        self._dev_text = QLabel("No phone detected — connect a device over USB")
-        self._dev_text.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        _dsl.addWidget(self._dev_text, 1)
-        self._dev_refresh = QPushButton("⟳")
-        self._dev_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._dev_refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._dev_refresh.setToolTip("Re-detect the connected phone + dim actions it can't use")
-        self._dev_refresh.setStyleSheet(
-            f"QPushButton {{ color:{C['dim']}; background:transparent; border:none;"
-            " font-size:13px; padding:2px 8px; border-radius:6px; }"
-            f"QPushButton:hover {{ color:{C['accent_hi']}; background:rgba(255,255,255,12); }}"
-            " QPushButton:focus { outline:none; border:none; }"
-        )
-        self._dev_refresh.clicked.connect(lambda: self.update_device_strip())
-        _dsl.addWidget(self._dev_refresh)
-        root_lay.addWidget(self._dev_strip)
 
         body = QHBoxLayout()
         body.setContentsMargins(10, 4, 10, 6)
         body.setSpacing(10)
+
+        # Persisted device-panel width for the body split (tolerates bad values).
+        try:
+            self._device_panel_width = int(
+                self.settings.value("layout/device_panel_width", 0))
+        except (TypeError, ValueError):
+            self._device_panel_width = 0
+        if self._device_panel_width <= 0:
+            self._device_panel_width = None
+        # Set once the user drags the panel divider: until then the panel keeps
+        # its desired width as the window resizes.
+        self._body_user_moved = False
 
         self._device_stacks = {}
         self._stack = QStackedWidget()
@@ -2581,29 +1821,13 @@ class FlashPilotWindow(QMainWindow):
             self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
             self._section_index[f"dev_{b['key']}"] = len(self._section_index)
 
-        # General = Quick + Battery + Network behind sub-tabs.
-        gen = QWidget()
-        gen.setStyleSheet("background: transparent;")
-        gv = QVBoxLayout(gen)
-        gv.setContentsMargins(0, 0, 0, 0)
-        gv.setSpacing(8)
-        gen_tabs = SamsungSubTabs(
-            [("quick", "QUICK"), ("battery", "BATTERY"), ("network", "NETWORK")]
-        )
-        gv.addWidget(gen_tabs)
-        gen_stack = QStackedWidget()
-        gen_stack.setStyleSheet("QStackedWidget { background: transparent; }")
-        for b in (self._build_quick_page, self._build_battery_page,
-                  self._build_network_page):
-            gen_stack.addWidget(b())
-        gen_keys = ["quick", "battery", "network"]
-        gen_tabs.tab_selected.connect(
-            lambda k: gen_stack.setCurrentIndex(gen_keys.index(k) if k in gen_keys else 0)
-        )
-        gv.addWidget(gen_stack, 1)
+        gen = self._build_general_page()
 
         for key, widget in (
             ("general", gen),
+            ("adb", device_pages.build_adb_hub_page(self)),
+            ("fastboot", device_pages.build_fastboot_hub_page(self)),
+            ("easylogin", device_pages.build_easylogin_hub_page(self)),
             ("fus", self._build_fus_page()),
             ("mtk", self._build_mtk_page()),
             ("qc", self._build_qc_page()),
@@ -2612,13 +1836,15 @@ class FlashPilotWindow(QMainWindow):
         ):
             self._stack.addWidget(widget)
             self._section_index[key] = len(self._section_index)
-        self._gen_stack = gen_stack
 
         # LEFT: connection scene (keeps its size) + state + compact metrics.
         left_panel = QFrame()
         left_panel.setObjectName("connbar")
         self._conn = left_panel
-        left_panel.setFixedWidth(232)
+        # Draggable in the body splitter below: a floor and a cap instead of a
+        # hard 232px, so the page can be given more or less room.
+        left_panel.setMinimumWidth(self._BODY_PANEL_MIN_W)
+        left_panel.setMaximumWidth(self._BODY_PANEL_MAX_W)
         left_panel.setStyleSheet(
             f"QFrame#connbar {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             f" stop:0 rgba(15, 24, 38, 225), stop:1 rgba(7, 12, 19, 230));"
@@ -2685,15 +1911,62 @@ class FlashPilotWindow(QMainWindow):
         self.info_copy_btn.setToolTip("Copy model / build / android / serial to clipboard")
         self.info_copy_btn.clicked.connect(self._copy_device_info)
         ll.addWidget(self.info_copy_btn)
-        body.addWidget(left_panel, 0)
 
-        # MIDDLE: the content page fills the entire remaining space.
-        body.addWidget(self._stack, 1)
+        # DEVICE PANEL | PAGE: draggable divider. Stretch factors (0, 1) keep the
+        # panel at the width the user chose while the page absorbs every window
+        # resize. Neither side is collapsible, so a drag can never hide one.
+        # The page lives in a frame-less scroll area that is transparent when it
+        # fits, and scrolls sideways when the user squeezes it instead of
+        # clipping its own tabs and firmware grid.
+        self._page_scroll = QScrollArea()
+        self._page_scroll.setWidgetResizable(True)
+        self._page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._page_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._page_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }")
+        # The page keeps its own natural minimum width (so it never reflows into
+        # a broken layout — the scrollbar takes over instead), while the viewport
+        # itself may be dragged down to 240px on a narrow window.
+        self._page_scroll.setMinimumWidth(self._PAGE_VIEW_MIN_W)
+        self._page_scroll.setWidget(self._stack)
 
-        # RIGHT: shared console stays where it is.
-        body.addWidget(self._build_console())
+        self._body_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._body_splitter.setObjectName("bodySplit")
+        self._body_splitter.setChildrenCollapsible(False)
+        self._body_splitter.setHandleWidth(6)
+        self._body_splitter.addWidget(left_panel)
+        self._body_splitter.addWidget(self._page_scroll)
+        self._body_splitter.setCollapsible(0, False)
+        self._body_splitter.setCollapsible(1, False)
+        self._body_splitter.setStretchFactor(0, 0)
+        self._body_splitter.setStretchFactor(1, 1)
+        self._body_splitter.splitterMoved.connect(self._on_body_splitter_moved)
+        self._body_splitter.setStyleSheet(_splitter_qss())
+        body.addWidget(self._body_splitter, 1)
 
-        root_lay.addLayout(body, 1)
+        # LEFT: connection panel + content page stack.
+        self._top_area = QWidget()
+        self._top_area.setStyleSheet("background: transparent;")
+        self._top_area.setLayout(body)
+        self._top_area.setMinimumWidth(self._DOCK_MIN_TOP)
+
+        # RIGHT dock: the shared console is resizable (horizontal splitter,
+        # console on the right) + collapsible (header chevron).
+        self._console_dock = self._build_console()
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setObjectName("consoleDock")
+        self._splitter.setChildrenCollapsible(True)
+        self._splitter.setHandleWidth(6)
+        self._splitter.addWidget(self._top_area)
+        self._splitter.addWidget(self._console_dock)
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.splitterMoved.connect(self._on_dock_splitter_moved)
+        self._style_console_splitter()
+        self._apply_console_state_from_settings()
+
+        root_lay.addWidget(self._splitter, 1)
 
         self._grip = QSizeGrip(root)
         self._grip.setFixedSize(16, 16)
@@ -2772,1066 +2045,71 @@ class FlashPilotWindow(QMainWindow):
 
         return conn
 
-    def _build_right(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(
-            _card_qss()
-        )
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(12)
+    # ---- console dock geometry (S2a) ------------------------------------
+    # The console is a RIGHT-hand dock: a horizontal splitter shares the
+    # content area between the page stack (left) and the console (right).
+    # The minimum is measured from the dock's own content (widest row is the
+    # filter row: 4 level chips + the "auto-clear" checkbox at ~360px), so
+    # dragging the handle can never clip a console control.
+    _DOCK_MIN_CONSOLE = 360      # px — console dock minimum width (expanded)
+    # The top area now holds the draggable device-panel | page split, so its
+    # floor is that split's own floor: panel + page viewport + handle. The page
+    # *content* floor is higher (`_PAGE_MIN_W`) — below it the page scrolls
+    # sideways instead of clipping, so the window can stay reasonably narrow.
+    _DOCK_MIN_TOP = 228 + 240 + 6   # px — page area minimum width
+    _DOCK_DEFAULT_WIDTH = 420    # px — default console width (right dock)
+    _DOCK_COLLAPSED_W = 44       # px — thin bar width when collapsed
 
-        lay.addWidget(SectionTitle("OPERATIONS"))
+    # ---- body split (device panel | page) -------------------------------
+    # The device/connection panel is draggable instead of a hard 232px width;
+    # the page stack keeps the rest and absorbs window resizes. Both sides are
+    # bounded by their content minimum so neither ever clips: the panel at
+    # 228px (its metric tiles) and the page at its own natural width, under
+    # which the page scrolls sideways rather than cutting its tabs/grid.
+    _BODY_PANEL_DEFAULT_W = 232  # px — default device panel width
+    _BODY_PANEL_MIN_W = 228      # px — panel content minimum (tiles never clip)
+    _BODY_PANEL_MAX_W = 420      # px — widest the panel may be dragged
+    _PAGE_VIEW_MIN_W = 240       # px — narrowest the page *viewport* may be dragged
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(10)
-        self.info_btn = QPushButton("Get Device Info")
-        self.info_btn.setStyleSheet(_btn_ghost())
-        self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.info_btn.clicked.connect(self.refresh_device)
-        self.info_btn.setToolTip("Scan the bus and print full device info to the console")
-        top_row.addWidget(self.info_btn)
-        top_row.addStretch(1)
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet(_btn_danger())
-        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.stop_btn.clicked.connect(self.on_stop)
-        self.stop_btn.setToolTip("Cancel the running operation")
-        top_row.addWidget(self.stop_btn)
-        # Legacy per-chip Stop hidden — global STOP in titlebar is the single entry point
-        self.stop_btn.setVisible(False)
-        lay.addLayout(top_row)
-
-        # TFT-style hub: SUPPORTED | ODIN FLASH | UNLOCK | ADVANCED FLASH | TOOLS.
-        # Unlock opens its own inner tab row (FRP / MDM / CARRIER / SCREEN LOCK).
-        self.samsung_tabs = SamsungSubTabs(
-            [
-                ("supported", "SUPPORTED DEVICES"),
-                ("flash", "ODIN FLASH"),
-                ("unlock", "UNLOCK"),
-                ("adv", "ADVANCED FLASH"),
-                ("tools", "INFO & TOOLS"),
-            ]
-        )
-        self.samsung_tabs.tab_selected.connect(self._on_samsung_tab)
-        lay.addWidget(self.samsung_tabs)
-
-        self.samsung_stack = QStackedWidget()
-        self.samsung_stack.setStyleSheet("QStackedWidget { background: transparent; }")
-
-        self._build_flash_inputs()
-        flash_page = QWidget()
-        flash_page.setStyleSheet("background: transparent;")
-        fp_lay = QVBoxLayout(flash_page)
-        fp_lay.setContentsMargins(0, 0, 0, 0)
-        fp_lay.setSpacing(0)
-        flash_scroll = self._ops_scroll_area()
-        flash_host = QWidget()
-        flash_host.setStyleSheet("background: transparent;")
-        fh_lay = QVBoxLayout(flash_host)
-        fh_lay.setContentsMargins(0, 0, 0, 0)
-        fh_lay.setSpacing(8)
-        self._firmware_sec = CollapsibleSection(
-            "FIRMWARE SLOTS", self.firmware_panel, accent=C["accent"],
-            collapsed=False
-        )
-        self._options_sec = CollapsibleSection(
-            "FLASH OPTIONS", self.options_panel, accent=C["warn"],
-            collapsed=True
-        )
-        fh_lay.addWidget(self._firmware_sec)
-        fh_lay.addWidget(self._options_sec)
-
-        # Odin utilities moved from INFO & TOOLS → here (under ODIN FLASH, not INFO)
-        _odin_utils_body = QWidget()
-        _odin_utils_body.setStyleSheet("background: transparent;")
-        _odin_ulay = QVBoxLayout(_odin_utils_body)
-        _odin_ulay.setContentsMargins(0, 0, 0, 0)
-        _odin_ulay.setSpacing(0)
-        self._add_job_flows(
-            _odin_ulay, ["Flash Firmware"],
-            modes=["Download mode", "ADB"],
-            methods=[
-                "odin_preflight", "odin_efs_backup", "odin_efs_restore",
-                "odin_pit_tools", "odin_list_devices", "odin_vbmeta",
-                "reboot_normal",
-            ],
-        )
-        fh_lay.addWidget(CollapsibleSection("ODIN UTILITIES", _odin_utils_body, accent=C["mute"], collapsed=True))
-        fh_lay.addStretch(1)
-        flash_scroll.setWidget(flash_host)
-        fp_lay.addWidget(flash_scroll)
-        self.samsung_stack.addWidget(flash_page)
-
-        # SUPPORTED DEVICES — reuse the devices drill-down (level2/3) here
-        from . import devices as _dp
-        self._device_stacks.setdefault("samsung", None)
-        if self._device_stacks.get("samsung") is None:
-            self._device_stacks["samsung"] = _dp.build_brand_page(self, "samsung")
-        self.samsung_stack.addWidget(self._device_stacks["samsung"])
-
-        # UNLOCK — nested tabs: FRP / MDM / CARRIER / SCREEN LOCK
-        unlock_wrap = QWidget()
-        unlock_wrap.setStyleSheet("background: transparent;")
-        uv = QVBoxLayout(unlock_wrap)
-        uv.setContentsMargins(0, 0, 0, 0)
-        uv.setSpacing(8)
-        unlock_tabs = SamsungSubTabs(
-            [("frp", "FRP"), ("mdm", "MDM"),
-             ("carrier", "CARRIER LOCK"), ("lock", "SCREEN LOCK")]
-        )
-        uv.addWidget(unlock_tabs)
-        unlock_stack = QStackedWidget()
-        unlock_stack.setStyleSheet("QStackedWidget { background: transparent; }")
-        u_keys = ["frp", "mdm", "carrier", "lock"]
-        u_pages = {
-            "frp": self._build_ops_flow_page(["Remove FRP"]),
-            "mdm": self._build_ops_flow_page(["Remove MDM"]),
-            "carrier": self._build_ops_flow_page(["Unlock Carrier"]),
-            "lock": self._build_ops_flow_page(["Remove Screen Lock"]),
-        }
-        for k in u_keys:
-            unlock_stack.addWidget(u_pages[k])
-        unlock_tabs.tab_selected.connect(
-            lambda k: unlock_stack.setCurrentIndex(
-                u_keys.index(k) if k in u_keys else 0)
-        )
-        uv.addWidget(unlock_stack, 1)
-        self._unlock_stack = unlock_stack
-        self.samsung_stack.addWidget(unlock_wrap)
-
-        # ADVANCED FLASH — dedicated tab (was collapsed section on FLASH)
-        adv_page = QWidget()
-        adv_page.setStyleSheet("background: transparent;")
-        av = QVBoxLayout(adv_page)
-        av.setContentsMargins(0, 0, 0, 0)
-        av.setSpacing(8)
-        adv_scroll = self._ops_scroll_area()
-        adv_host = QWidget()
-        adv_host.setStyleSheet("background: transparent;")
-        ah = QVBoxLayout(adv_host)
-        ah.setContentsMargins(0, 0, 0, 0)
-        ah.setSpacing(8)
-        self._adv_sec = CollapsibleSection(
-            "ADVANCED FLASH", self.adv_panel, accent=C["ok"], collapsed=False
-        )
-        ah.addWidget(self._adv_sec)
-        ah.addStretch(1)
-        adv_scroll.setWidget(adv_host)
-        av.addWidget(adv_scroll)
-        self.samsung_stack.addWidget(adv_page)
-
-        tools_combo = QWidget()
-        tools_combo.setStyleSheet("background: transparent;")
-        tc_lay = QVBoxLayout(tools_combo)
-        tc_lay.setContentsMargins(0, 0, 0, 0)
-        tc_lay.setSpacing(0)
-        scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        hv = QVBoxLayout(host)
-        hv.setContentsMargins(0, 0, 0, 0)
-        hv.setSpacing(10)
-        self._add_job_flows(hv, ["Read Device Info", "Detect Devices", "Reboot",
-                                 "Repair Settings"])
-        hv.addStretch(1)
-        scroll.setWidget(host)
-        tc_lay.addWidget(scroll)
-        self.samsung_stack.addWidget(tools_combo)
-
-        # EXPERIMENTAL — Samsung Knox (per-chip, amber, every-run ack)
-        knox_exp_host = QWidget()
-        knox_exp_host.setStyleSheet("background: transparent;")
-        knox_exp_lay = QVBoxLayout(knox_exp_host)
-        knox_exp_lay.setContentsMargins(0, 0, 0, 0)
-        knox_exp_lay.setSpacing(8)
-        knox_exp_lay.addWidget(_experimental_banner(
-            "EXPERIMENTAL — Knox bypass permanently trips eFuse (0x1, irreversible). Educational, own device only. Audit logged. Every run requires the checkbox."))
-        self._add_job_flows(knox_exp_lay, ["Knox / Warranty"])
-        knox_exp_body = QWidget()
-        knox_exp_body.setStyleSheet("background: transparent;")
-        _knox_body_lay = QVBoxLayout(knox_exp_body)
-        _knox_body_lay.setContentsMargins(16, 14, 16, 14)
-        _knox_body_lay.setSpacing(8)
-        _knox_body_lay.addWidget(knox_exp_host)
-        lay.addWidget(CollapsibleSection("KNOX — EXPERIMENTAL", knox_exp_body, accent=C["warn"], collapsed=True))
-
-        lay.addWidget(self.samsung_stack, 1)
-
-        # Fix: default stack is 0 (ODIN FLASH) but tabs default to SUPPORTED → mismatch
-        # User sees FLASH while selector says SUPPORTED. Sync to FLASH.
-        try:
-            self.samsung_tabs.set_active("flash")
-            self.samsung_stack.setCurrentIndex(0)
-        except Exception:
-            pass
-
-        self.shimmer = ShimmerBar()
-        self.shimmer.setVisible(False)
-        lay.addWidget(self.shimmer)
-
-        self.status = QLabel("Ready")
-        self.status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
-        lay.addWidget(self.status)
-
-        return panel
-
-    def _on_samsung_tab(self, key):
-        index = {"supported": 1, "flash": 0, "unlock": 2,
-                 "adv": 3, "tools": 4}.get(key, 0)
-        self.samsung_stack.setCurrentIndex(index)
-        # Fix shrink: Samsung sub-stack hides FlowHost; invalidate so heightForWidth recomputes.
-        try:
-            w = self.samsung_stack.currentWidget()
-            if w:
-                for child in w.findChildren(QFrame):
-                    lay = child.layout()
-                    if lay and hasattr(lay, "invalidate"):
-                        lay.invalidate()
-                w.updateGeometry()
-                self.samsung_stack.updateGeometry()
-        except Exception:
-            pass
-
-    def _build_quick_page(self):
-        """TFT-style QUICK page: one-tap Factory reset / Reboot / ADB / Fastboot
-        actions without hunting through mode dropdowns."""
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(
-            _card_qss()
-        )
-        panel_lay = QVBoxLayout(panel)
-        panel_lay.setContentsMargins(0, 0, 0, 0)
-        panel_lay.setSpacing(0)
-        scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        hv = QVBoxLayout(host)
-        hv.setContentsMargins(16, 14, 16, 14)
-        hv.setSpacing(12)
-
-        hv.addWidget(SectionTitle("QUICK ACTIONS"))
-        info = QLabel(
-            "One-tap ADB & Fastboot actions - reboot destinations and factory "
-            "reset without hunting through the mode dropdowns."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
-        hv.addWidget(info)
-
-        # --- XOS/Transsion unlock (secret codes) --------------------------
-        hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
-        xos_info = QLabel(
-            "Enable ADB on a factory-reset (FRP) Transsion phone:\n"
-            "① Welcome → select language & country → connect WiFi → Next\n"
-            "② On the Agreement page tap the 'Personalized Recommendations'\n"
-            "    privacy-policy link → Chrome opens\n"
-            "③ In Chrome type 'frpbypass' → on that site find the DIALER link\n"
-            "    and open it → the real phone Dialer appears despite OOBE lock\n"
-            "④ Dial *#*#49#*#* → ADB enables persistently. Plug USB, authorize."
-        )
-        xos_info.setWordWrap(True)
-        xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
-        hv.addWidget(xos_info)
-
-        xos_row = QHBoxLayout()
-        codes_btn = QPushButton("📋 Secret Codes Reference")
-        codes_btn.setStyleSheet(_btn_ghost())
-        codes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        codes_btn.setToolTip("Full code table for Transsion/XOS devices")
-        codes_btn.clicked.connect(self._show_secret_codes)
-        xos_row.addWidget(codes_btn)
-        triage_btn = QPushButton("🔎 ADB Triage")
-        triage_btn.setStyleSheet(_btn_primary())
-        triage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        triage_btn.setToolTip(
-            "Probe the connected device over ADB: lock enforcement state, root, "
-            "partition access, FRP markers - tells you which flow to use next."
-        )
-        triage_btn.clicked.connect(self._adb_triage)
-        self._gate_button(triage_btn, command="adb_shell")
-        xos_row.addWidget(triage_btn)
-        xos_row.addStretch(1)
-        hv.addLayout(xos_row)
-
-        # --- PIT safety contract (auto-fetch + forensic validation) -------
-        hv.addWidget(SectionTitle("PIT SAFETY CONTRACT"))
-        pit_info = QLabel(
-            "Fetches the partition table straight from the phone (the device "
-            "is always the source of truth), validates it with the odin4 "
-            "checklist plus FlashPilot chain analysis, and caches it by "
-            "content hash. Runs automatically before every flash."
-        )
-        pit_info.setWordWrap(True)
-        pit_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
-        hv.addWidget(pit_info)
-
-        pit_btn_row = QHBoxLayout()
-        self._pit_fetch_btn = QPushButton("Fetch & Verify PIT")
-        self._pit_fetch_btn.setStyleSheet(_btn_primary())
-        self._pit_fetch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._pit_fetch_btn.setToolTip(
-            "Auto-fetch PIT from the phone in download mode, validate it and "
-            "show the storage map"
-        )
-        self._pit_fetch_btn.clicked.connect(self._pit_fetch_clicked)
-        self._gate_button(self._pit_fetch_btn, command="pit-fetch")
-        pit_btn_row.addWidget(self._pit_fetch_btn)
-        self._pit_cache_lbl = QLabel("")
-        self._pit_cache_lbl.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
-        pit_btn_row.addWidget(self._pit_cache_lbl, 1)
-        hv.addLayout(pit_btn_row)
-
-        self._pit_view = QPlainTextEdit()
-        self._pit_view.setReadOnly(True)
-        self._pit_view.setMaximumHeight(190)
-        self._pit_view.setPlaceholderText(
-            "PIT health, findings and storage map will appear here..."
-        )
-        self._pit_view.setStyleSheet(
-            f"QPlainTextEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; color:{C['text']}; font-size:10px;"
-            f" font-family:'JetBrains Mono','Consolas',monospace; }}"
-        )
-        hv.addWidget(self._pit_view)
-        self._refresh_pit_cache_label()
-
-        # --- Native one-session archive flash -----------------------------
-        hv.addWidget(SectionTitle("NATIVE FLASH (ONE SESSION)"))
-        nf_info = QLabel(
-            "Flash an Odin .tar archive with FlashPilot's own writer - "
-            "extract, decompress, PIT-map and write every partition in a "
-            "single session. No replugging, no odin4 (which cannot talk to "
-            "A14-class devices anyway)."
-        )
-        nf_info.setWordWrap(True)
-        nf_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
-        hv.addWidget(nf_info)
-
-        nf_row = QHBoxLayout()
-        self._nf_tar_edit = QLineEdit()
-        self._nf_tar_edit.setPlaceholderText("Bootloader/AP archive (.tar)...")
-        self._nf_tar_edit.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
-        )
-        nf_row.addWidget(self._nf_tar_edit, 1)
-        nf_browse = QPushButton("Browse...")
-        nf_browse.setStyleSheet(_btn_ghost())
-        nf_browse.setCursor(Qt.CursorShape.PointingHandCursor)
-        nf_browse.setFixedWidth(90)
-        nf_browse.clicked.connect(self._nf_pick_tar)
-        nf_row.addWidget(nf_browse)
-        hv.addLayout(nf_row)
-
-        self._nf_patch_cb = QCheckBox("Patch vbmeta - disable AVB verification")
-        self._nf_patch_cb.setChecked(True)
-        self._nf_patch_cb.setToolTip(
-            "Rewrites the archive's vbmeta flags to 0x03 so mixed-version\n"
-            "bootloaders pass Android Verified Boot. Required when flashing\n"
-            "a BL from a different build than the installed system."
-        )
-        self._nf_patch_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
-            f" QCheckBox::indicator {{ width:16px; height:16px; }}"
-        )
-        hv.addWidget(self._nf_patch_cb)
-
-        nf_btn_row = QHBoxLayout()
-        self._nf_flash_btn = QPushButton("⚡ Flash Archive Now")
-        self._nf_flash_btn.setStyleSheet(_btn_primary())
-        self._nf_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._nf_flash_btn.clicked.connect(self._native_flash_clicked)
-        self._gate_button(self._nf_flash_btn, job="Flash Firmware", mode="Download mode")
-        nf_btn_row.addWidget(self._nf_flash_btn)
-        nf_btn_row.addStretch(1)
-        hv.addLayout(nf_btn_row)
-
-        # --- Factory reset (ADB + recovery fallback) ---
-        hv.addWidget(SectionTitle("FACTORY RESET"))
-        fr_row = QHBoxLayout()
-        fr_row.setSpacing(8)
-        fr_btn = QPushButton("Factory reset")
-        fr_btn.setStyleSheet(_btn_primary())
-        fr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fr_btn.setToolTip("ADB wipe /data when authorized, else guided recovery reset")
-        fr_btn.clicked.connect(
-            lambda: self._confirm_overlay(
-                "Factory Reset",
-                "This WIPES ALL DATA on the connected device:\n\n"
-                "  - Apps, accounts, photos, messages, files\n"
-                "  - Phone / modem settings are kept\n\n"
-                "It tries an ADB /data wipe first, and falls back to a guided "
-                "recovery-mode reset if the device is not authorized.\n\n"
-                "There is NO undo. Continue?",
-                confirm_label="Wipe Device",
-                on_confirm=lambda: self._run_ops_flow(
-                    "Remove FRP", "ADB", "factory_reset",
-                    core.FLOWS["factory_reset"]().name,
-                ),
-            )
-        )
-        fr_row.addWidget(fr_btn)
-        fr_row.addStretch(1)
-        hv.addLayout(fr_row)
-
-        # --- ADB: one-tap reboot destinations ---
-        hv.addWidget(SectionTitle("ADB / USB DEBUGGING"))
-        self._add_job_flows(hv, ["Reboot"], modes=["ADB"])
-        sw_row = QHBoxLayout()
-        sw_row.setSpacing(8)
-        sw_btn = QPushButton("Setup wizard bypass")
-        sw_btn.setStyleSheet(_btn_ghost())
-        sw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        sw_btn.setToolTip(
-            "Classic ADB bypass for older Android (7-8) stuck on the setup wizard"
-        )
-        sw_btn.clicked.connect(
-            lambda: self._run_ops_flow(
-                "Remove FRP", "ADB", "setup_wizard",
-                core.FLOWS["setup_wizard"]().name,
-            )
-        )
-        sw_row.addWidget(sw_btn)
-        sw_row.addStretch(1)
-        hv.addLayout(sw_row)
-
-        # --- Fastboot: reboot out of / within bootloader mode ---
-        hv.addWidget(SectionTitle("FASTBOOT"))
-        self._add_job_flows(hv, ["Reboot"], modes=["FASTBOOT"])
-
-        hv.addStretch(1)
-        scroll.setWidget(host)
-        panel_lay.addWidget(scroll)
-        return panel
-
-    def _ops_scroll_area(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; }")
-        return scroll
-
-    def _add_job_flows(self, parent_layout, jobs, modes=None, run_cb=None,
-                       methods=None):
-        """Add one wrapping FlowLayout of action buttons per job, no dropdowns.
-        modes: optional iterable of frp modes to restrict which flows show.
-        methods: optional iterable of method keys to show (only those).
-        run_cb: optional callable(job, mode, key, name); defaults to the
-        Samsung operations runner (_run_ops_flow)."""
-        if modes is not None:
-            modes = set(modes)
-        for job in jobs:
-            seen = set()
-            entries = []
-            try:
-                _modes = core.modes_for(job)
-            except KeyError:
-                continue
-            for mode in _modes:
-                if modes is not None and mode not in modes:
-                    continue
-                try:
-                    _methods = core.methods_for(job, mode)
-                except KeyError:
-                    continue
-                for key in _methods:
-                    if key in seen:
-                        continue
-                    if methods is not None and key not in methods:
-                        continue
-                    # Skip flows that haven't been registered
-                    if key not in core.FLOWS:
-                        continue
-                    seen.add(key)
-                    entries.append((key, mode))
-            if not entries:
-                continue
-            header = QLabel(job.upper())
-            header.setStyleSheet(
-                f"color:{C['mute']}; font-size:11px; font-weight:800;"
-                f" letter-spacing:1px; margin-top:4px;"
-            )
-            parent_layout.addWidget(header)
-            flow = FlowLayout(spacing=8)
-            for key, mode in entries:
-                try:
-                    _factory = core.FLOWS[key]
-                    name = _factory().name if callable(_factory) else getattr(_factory, "name", key)
-                except Exception as e:
-                    name = f"{key} ({e})"
-                b = QPushButton(name)
-                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                b.setAutoDefault(False)
-                b.setDefault(False)
-                b.setStyleSheet(_btn_ghost())
-                b.setCursor(Qt.CursorShape.PointingHandCursor)
-                b.setToolTip(f"{job} / {mode} / {key}")
-                exp_feature = _EXPERIMENTAL_FLOW_MAP.get(key)
-                if exp_feature:
-                    # EXPERIMENTAL: amber dashed border + every-run ownership ack.
-                    b.setStyleSheet(_btn_ghost() + " QPushButton { border: 1px dashed #f59e0b; } QPushButton:focus { border: 1px dashed #f59e0b; outline: none; }")
-                    title, warn = experimental.get_warning(exp_feature)
-                    b.setToolTip(f"[EXPERIMENTAL] {title}\n{job} / {mode} / {key}")
-                    b.clicked.connect(
-                        lambda _=False, j=job, m=mode, k=key, n=name, f=exp_feature, t=title, tx=warn:
-                            self._confirm_experimental_overlay(
-                                f, t, tx, k, confirm_label="I Accept — Run",
-                                on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
-                                    (run_cb(j, m, k, n) if run_cb else self._run_ops_flow(j, m, k, n)),
-                                chip="wipe",
-                            )
-                    )
-                elif run_cb is None:
-                    confirm = _DESTRUCTIVE_CONFIRM.get(key)
-                    if confirm:
-                        b.clicked.connect(
-                            lambda _=False, j=job, m=mode, k=key, n=name, t=confirm[0], tx=confirm[1]:
-                                self._confirm_overlay(
-                                    t, tx, confirm_label="Continue",
-                                    on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
-                                        self._run_ops_flow(j, m, k, n),
-                                )
-                        )
-                    else:
-                        b.clicked.connect(
-                            lambda _=False, j=job, m=mode, k=key, n=name: self._run_ops_flow(
-                                j, m, k, n
-                            )
-                        )
-                else:
-                    confirm = _DESTRUCTIVE_CONFIRM.get(key)
-                    if confirm:
-                        b.clicked.connect(
-                            lambda _=False, j=job, m=mode, k=key, n=name, t=confirm[0], tx=confirm[1]:
-                                self._confirm_overlay(
-                                    t, tx, confirm_label="Continue",
-                                    on_confirm=lambda _=False, j=j, m=m, k=k, n=n:
-                                        run_cb(j, m, k, n),
-                                )
-                        )
-                    else:
-                        b.clicked.connect(
-                            lambda _=False, j=job, m=mode, k=key, n=name: run_cb(
-                                j, m, k, n
-                            )
-                        )
-                flow.addWidget(b)
-                # Capability display-gating: this button may only run when
-                # the backend offers one of the job's actions for the
-                # displayed device. Applied by _refresh_gates().
-                self._gate_button(b, job=job, mode=mode)
-            parent_layout.addLayout(flow)
-
-    def _build_ops_flow_page(self, jobs, modes=None, run_cb=None):
-        page = QWidget()
-        page.setStyleSheet("background: transparent;")
-        v = QVBoxLayout(page)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
-        scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        hv = QVBoxLayout(host)
-        hv.setContentsMargins(0, 0, 0, 0)
-        hv.setSpacing(10)
-        self._add_job_flows(hv, jobs, modes=modes, run_cb=run_cb)
-        hv.addStretch(1)
-        scroll.setWidget(host)
-        v.addWidget(scroll)
-        return page
-
-    def _build_chip_ops_section(self, chip, modes, stop_btn, progress, reset_ui,
-                                flash_jobs=None):
-        """Samsung-style sub-tab operations section for the chip pages - the
-        same FLASH / FRP / SCREEN LOCK / MDM / INFO & TOOLS tabs, but only the
-        flows that apply to that chipset's modes, run through _run_job_flow so
-        they use the chip page's own stop button / progress / reset.
-        flash_jobs: job list for the FLASH tab; pass None to skip the FLASH tab
-        (chip pages already flash through their native tools, not Odin)."""
-        def run_cb(job, mode, method, label):
-            self._run_job_flow(job, mode, method, label, stop_btn, progress, reset_ui)
-
-        tab_specs = []
-        if flash_jobs:
-            tab_specs.append(("flash", "FLASH", flash_jobs))
-        tab_specs += [
-            ("frp", "FRP", ["Remove FRP"]),
-            ("lock", "SCREEN LOCK", ["Remove Screen Lock"]),
-            ("mdm", "MDM", ["Remove MDM"]),
-            (
-                "tools",
-                "INFO & TOOLS",
-                ["Read Device Info", "Detect Devices", "Reboot",
-                 "Repair Settings"],
-            ),
-        ]
-        modeset = set(modes)
-        tabs = []
-        pages = []
-        for key, label, jobs in tab_specs:
-            count = 0
-            for job in jobs:
-                for mode in core.modes_for(job):
-                    if mode in modeset:
-                        count += len(core.methods_for(job, mode))
-            if not count:
-                continue
-            tabs.append((key, label))
-            pages.append(
-                (key, self._build_ops_flow_page(jobs, modes=modeset, run_cb=run_cb))
-            )
-        if not tabs:
-            return None
-
-        section = QWidget()
-        section.setStyleSheet("background: transparent;")
-        # Guarantee the sub-tab bar + a usable amount of action buttons room so
-        # the chip pages never crush this section to ~0px (which made the tab
-        # buttons overflow their bar and the flow buttons spill off-screen).
-        section.setMinimumHeight(240)
-        v = QVBoxLayout(section)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(8)
-        subnav = SamsungSubTabs(tabs)
-        v.addWidget(subnav)
-        stack = QStackedWidget()
-        stack.setStyleSheet("QStackedWidget { background: transparent; }")
-        keys = [k for k, _ in pages]
-        for _, page in pages:
-            stack.addWidget(page)
-        def _on_chip_tab(key):
-            try:
-                stack.setCurrentIndex(keys.index(key) if key in keys else 0)
-                w = stack.currentWidget()
-                if w:
-                    for child in w.findChildren(QFrame):
-                        lay = child.layout()
-                        if lay and hasattr(lay, "invalidate"):
-                            lay.invalidate()
-                    w.updateGeometry()
-            except Exception:
-                pass
-        subnav.tab_selected.connect(_on_chip_tab)
-        v.addWidget(stack, 1)
-        return section
-
-    def _build_flash_inputs(self):
-        # --- Zone 1: Firmware slots (circuit-deck panel) ---
-        self.firmware_panel = QFrame()
-        self.firmware_panel.setObjectName("firmware")
-        self.firmware_panel.setStyleSheet(
-            f"QFrame#firmware {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        f_lay = QVBoxLayout(self.firmware_panel)
-        f_lay.setContentsMargins(14, 10, 14, 14)
-        f_lay.setSpacing(8)
-
-        self.slot_inputs = {}
-        slots_grid = QGridLayout()
-        slots_grid.setContentsMargins(0, 0, 0, 0)
-        slots_grid.setHorizontalSpacing(10)
-        slots_grid.setVerticalSpacing(8)
-
-        slot_row = {"AP": 0, "BL": 0, "CP": 1, "CSC": 1, "USERDATA": 2}
-        slot_col = {"AP": 0, "BL": 1, "CP": 0, "CSC": 1, "USERDATA": 0}
-
-        def _slot_row(label, row, col, span):
-            cell = QWidget()
-            cell.setStyleSheet("background: transparent;")
-            c_lay = QVBoxLayout(cell)
-            c_lay.setContentsMargins(0, 0, 0, 0)
-            c_lay.setSpacing(4)
-            hl = QHBoxLayout()
-            hl.setSpacing(6)
-            lbl = QLabel(label)
-            lbl.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; font-size: 10px; min-width: 58px;")
-            hl.addWidget(lbl)
-            edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {label} (.tar)")
-            edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 4px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-            hl.addWidget(edit, 1)
-            btn = QPushButton("Browse")
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(66)
-            btn.clicked.connect(
-                (lambda e=edit, n=label: lambda: self._browse_slot(e, n))()
-            )
-            hl.addWidget(btn)
-            c_lay.addLayout(hl)
-            slots_grid.addWidget(cell, row, col, 1, span)
-            self.slot_inputs[label] = edit
-
-        _slot_row("AP", 0, 0, 1)
-        _slot_row("BL", 0, 1, 1)
-        _slot_row("CP", 1, 0, 1)
-        _slot_row("CSC", 1, 1, 1)
-        _slot_row("USERDATA", 2, 0, 2)
-        slots_grid.setColumnStretch(0, 1)
-        slots_grid.setColumnStretch(1, 1)
-        f_lay.addLayout(slots_grid)
-
-        run_row = QHBoxLayout()
-        run_row.setSpacing(8)
-        self.flash_btn = QPushButton("Flash Firmware")
-        self.flash_btn.setStyleSheet(_btn_primary())
-        self.flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.flash_btn.setToolTip(
-            "Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)"
-        )
-        self.flash_btn.clicked.connect(self._on_flash_slots)
-        self._gate_button(self.flash_btn, job="Flash Firmware", mode="Download mode")
-        run_row.addWidget(self.flash_btn)
-        self.check_tar_btn = QPushButton("Check archive")
-        self.check_tar_btn.setStyleSheet(_btn_ghost())
-        self.check_tar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.check_tar_btn.setToolTip(
-            "Validate the firmware archive / PIT with odin4 --check-only (no write)"
-        )
-        self.check_tar_btn.clicked.connect(
-            lambda: self._run_ops_flow(
-                "Flash Firmware", "Download mode",
-                "odin_check_tar", "Check firmware archive (odin4)"
-            )
-        )
-        run_row.addWidget(self.check_tar_btn)
-        run_row.addStretch(1)
-        f_lay.addLayout(run_row)
-        f_lay.addWidget(
-            _risk_banner(
-                "Flashing overwrites your device's firmware. Wrong files or a "
-                "power cut can brick it - keep it plugged in and charged."
-            )
-        )
-
-        # --- Zone 2: Flash options (safety switches) ---
-        self.options_panel = QFrame()
-        self.options_panel.setObjectName("flashopts")
-        self.options_panel.setStyleSheet(
-            f"QFrame#flashopts {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['warn']};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        opt_lay = QVBoxLayout(self.options_panel)
-        opt_lay.setContentsMargins(14, 10, 14, 14)
-        opt_lay.setSpacing(6)
-
-        opt_row = FlowLayout(spacing=8)
-        self.allow_unknown_cb = QCheckBox("Allow unknown partitions (bypass PIT check, --allow-unknown)")
-        self.allow_unknown_cb.setChecked(False)
-        self.allow_unknown_cb.setToolTip(
-            "OFF by default (safety). Lets odin4 skip archive entries that have no match\n"
-            "in the device's PIT. Needed for unofficial/custom firmware or region variants\n"
-            "whose partition table differs from the device ('check failure pit' / PIT mismatch).\n"
-            "Only enable for firmware you are certain is correct for this device."
-        )
-        self.allow_unknown_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row.addWidget(self.allow_unknown_cb)
-        self.auto_reboot_cb = QCheckBox("Auto-reboot after flash (--reboot)")
-        self.auto_reboot_cb.setChecked(False)
-        self.auto_reboot_cb.setToolTip(
-            "OFF by default (safety). Lets odin4 reboot the phone as soon as the flash\n"
-            "finishes. Leave OFF so you can verify the flash completed before rebooting -\n"
-            "a failed write otherwise hides behind a phone that no longer answers."
-        )
-        self.auto_reboot_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row.addWidget(self.auto_reboot_cb)
-        opt_lay.addLayout(opt_row)
-
-        # Advanced options row 2 - always-work repair steps
-        opt_row2 = FlowLayout(spacing=8)
-        self.erase_nv_cb = QCheckBox("Erase NVRAM/NVDATA (zero-fill nv* partitions)")
-        self.erase_nv_cb.setChecked(False)
-        self.erase_nv_cb.setToolTip(
-            "OFF by default (safety - wipes network calibration). After the flash,\n"
-            "zero-fills every NVRAM/NVDATA partition from the device's own PIT using\n"
-            "the native Odin flash path. Standard fix for IMEI/network issues and a\n"
-            "common FRP-adjacent step. Works on Odin-protocol (Exynos/Qualcomm)\n"
-            "download mode; MTK download-agent devices use the MediaTek workbench."
-        )
-        self.erase_nv_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row2.addWidget(self.erase_nv_cb)
-        self.check_only_cb = QCheckBox("Validate archives first (--check-only)")
-        self.check_only_cb.setChecked(False)
-        self.check_only_cb.setToolTip(
-            "Run odin4 --check-only over every selected archive BEFORE flashing.\n"
-            "Aborts on corrupt/renamed .tar.md5 or PIT mismatches so a bad archive\n"
-            "is never written to the phone."
-        )
-        self.check_only_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row2.addWidget(self.check_only_cb)
-        self.redownload_cb = QCheckBox("Re-download after flash (--redownload)")
-        self.redownload_cb.setChecked(False)
-        self.redownload_cb.setToolTip(
-            "After flashing, odin4 sends the Redownload command so the phone re-enters\n"
-            "download mode instead of rebooting - the reliable way to chain a second\n"
-            "step (like Erase NVRAM) without power-cycling. Mutually exclusive with\n"
-            "auto-reboot."
-        )
-        self.redownload_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row2.addWidget(self.redownload_cb)
-        self.verbose_cb = QCheckBox("Verbose logging (--verbose)")
-        self.verbose_cb.setChecked(False)
-        self.verbose_cb.setToolTip(
-            "Pass --verbose to odin4 so the console shows detailed per-partition\n"
-            "progress - useful for diagnosing stuck flashes."
-        )
-        self.verbose_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row2.addWidget(self.verbose_cb)
-        opt_lay.addLayout(opt_row2)
-
-        # Auto-reboot and re-download are mutually exclusive.
-        self.auto_reboot_cb.toggled.connect(
-            lambda on: self.redownload_cb.setChecked(False) if on else None
-        )
-        self.redownload_cb.toggled.connect(
-            lambda on: self.auto_reboot_cb.setChecked(False) if on else None
-        )
-
-        # BL downgrade override row (native multi-partition flash gate)
-        opt_row3 = FlowLayout(spacing=8)
-        self.skip_efs_cb = QCheckBox("Skip EFS backup requirement (ODIN4_SKIP_BACKUP=1)")
-        self.skip_efs_cb.setChecked(False)
-        self.skip_efs_cb.setToolTip(
-            "OFF by default (safety). The flash refuses to run without a recent\n"
-            "EFS backup (<30 days) or an authorized-ADB auto-backup. Tick this\n"
-            "ONLY if you already have backups elsewhere - EFS holds IMEI/radio\n"
-            "calibration; losing it without a backup is unrecoverable."
-        )
-        self.skip_efs_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row3.addWidget(self.skip_efs_cb)
-        self.engine_native_cb = QCheckBox("Use native engine (recommended)")
-        self.engine_native_cb.setChecked(True)
-        self.engine_native_cb.setToolTip(
-            "ON  = FlashPilot's own single-session Rust writer.\n"
-            "     Preserves Loke's one-session-per-plug rule; best for\n"
-            "     MTK-Samsung units like A14/A15 Helio variants.\n"
-            "OFF = Samsung's proprietary odin4 binary (Exynos fallback)."
-        )
-        self.engine_native_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row3.addWidget(self.engine_native_cb)
-        self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
-        self.force_bl_cb.setChecked(False)
-        self.force_bl_cb.setToolTip(
-            "OFF by default (safety). Lets the native multi-partition flash write a\n"
-            "bootloader whose revision is LOWER than the device's current one.\n"
-            "Flashing a lower BL revision on a newer device can hard-brick it - only\n"
-            "enable when you are certain the older firmware is correct for this device."
-        )
-        self.force_bl_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row3.addWidget(self.force_bl_cb)
-        opt_lay.addLayout(opt_row3)
-
-        # vbmeta auto-patch toggle
-        opt_row4 = FlowLayout(spacing=8)
-        self.vbmeta_patch_cb = QCheckBox("Auto-patch vbmeta (disable AVB verification)")
-        self.vbmeta_patch_cb.setChecked(True)
-        self.vbmeta_patch_cb.setToolTip(
-            "When ON, extracts vbmeta from AP firmware, patches it to disable\n"
-            "AVB verification (flags 0x03), and flashes the patched vbmeta.\n"
-            "Required for booting custom kernels / unofficial firmware."
-        )
-        self.vbmeta_patch_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        opt_row4.addWidget(self.vbmeta_patch_cb)
-        opt_lay.addLayout(opt_row4)
-
-        # --- Zone 3: Advanced single-partition + native flash (circuit-deck) ---
-        self.adv_panel = QFrame()
-        self.adv_panel.setObjectName("adv")
-        self.adv_panel.setStyleSheet(
-            f"QFrame#adv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['ok']};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        a_lay = QVBoxLayout(self.adv_panel)
-        a_lay.setContentsMargins(14, 10, 14, 14)
-        a_lay.setSpacing(8)
-        a_lay.addWidget(
-            _risk_banner(
-                "Advanced: these write directly to partitions. A wrong "
-                "partition/image combo can soft-brick the device."
-            )
-        )
-
-        self.partition_edit = QLineEdit()
-        self.partition_edit.setPlaceholderText("e.g. vbmeta, boot, super, system ...")
-        self.partition_edit.setMinimumWidth(80)
-        self.partition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.partition_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-
-        self.image_edit = QLineEdit()
-        self.image_edit.setPlaceholderText("Image file (.img / .lz4 / .tar)")
-        self.image_edit.setMinimumWidth(80)
-        self.image_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.image_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-
-        self.sales_code_edit = QLineEdit()
-        self.sales_code_edit.setPlaceholderText("e.g. XSG")
-        self.sales_code_edit.setMinimumWidth(80)
-        self.sales_code_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.sales_code_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-
-        self.flash_specs_edit = QLineEdit()
-        self.flash_specs_edit.setPlaceholderText("partition=image;partition=image")
-        self.flash_specs_edit.setMinimumWidth(80)
-        self.flash_specs_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.flash_specs_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-
-        self.pit_file_edit = QLineEdit()
-        self.pit_file_edit.setPlaceholderText("Path to .pit")
-        self.pit_file_edit.setMinimumWidth(80)
-        self.pit_file_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.pit_file_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-
-        def _adv_run(method, label, tooltip):
-            btn = QPushButton(label)
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setToolTip(tooltip)
-            btn.clicked.connect(
-                lambda _=False, m=method, n=label: self._confirm_flash_action(
-                    n, m,
-                    "This writes data to your device. DO NOT unplug it until "
-                    "the operation finishes.",
-                )
-            )
-            return btn
-
-        # single partition + image -> one row
-        p_row = QHBoxLayout()
-        p_label = QLabel("Single")
-        p_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 52px; font-size: 11px;")
-        p_row.addWidget(p_label)
-        p_row.addWidget(self.partition_edit, 1)
-        p_row.addWidget(self.image_edit, 1)
-        img_btn = QPushButton("Browse...")
-        img_btn.setStyleSheet(_btn_ghost())
-        img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        img_btn.setFixedWidth(80)
-        img_btn.clicked.connect(lambda: self._browse_slot(self.image_edit, "partition image"))
-        p_row.addWidget(img_btn)
-        p_run = _adv_run(
-            "odin_flash_partition", "Flash",
-            "Flash one partition (raw) with the partition name + image above"
-        )
-        p_run.setFixedWidth(64)
-        p_row.addWidget(p_run)
-        a_lay.addLayout(p_row)
-
-        # sales code -> one row
-        sc_row = QHBoxLayout()
-        sc_label = QLabel("Sales Code")
-        sc_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
-        sc_row.addWidget(sc_label)
-        sc_row.addWidget(self.sales_code_edit, 1)
-        sc_run = _adv_run(
-            "odin_sales_code", "Apply",
-            "Change the CSC / sales code on the device (needs a matching CSC archive)"
-        )
-        sc_run.setFixedWidth(64)
-        sc_row.addWidget(sc_run)
-        a_lay.addLayout(sc_row)
-
-        # multi-partition specs -> one row
-        ms_row = QHBoxLayout()
-        ms_label = QLabel("Flash specs")
-        ms_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
-        ms_row.addWidget(ms_label)
-        ms_row.addWidget(self.flash_specs_edit, 1)
-        ms_run = _adv_run(
-            "odin_flash_multi", "Flash",
-            "Flash multiple partitions from partition=image;partition=image specs"
-        )
-        ms_run.setFixedWidth(64)
-        ms_row.addWidget(ms_run)
-        a_lay.addLayout(ms_row)
-
-# pit -> one row
-        pit_row = QHBoxLayout()
-        pit_label = QLabel("PIT file")
-        pit_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
-        pit_row.addWidget(pit_label)
-        pit_row.addWidget(self.pit_file_edit, 1)
-        pit_btn = QPushButton("Browse...")
-        pit_btn.setStyleSheet(_btn_ghost())
-        pit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        pit_btn.setFixedWidth(80)
-        pit_btn.clicked.connect(lambda: self._browse_slot(self.pit_file_edit, "pit"))
-        pit_run = _adv_run(
-            "odin_send_pit", "Send",
-            "Send the PIT to the device (repartition)"
-        )
-        pit_run.setFixedWidth(64)
-        pit_row.addWidget(pit_run)
-        a_lay.addLayout(pit_row)
-
-        # vbmeta -> one row
-        vb_row = QHBoxLayout()
-        vb_label = QLabel("vbmeta")
-        vb_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
-        vb_row.addWidget(vb_label)
-        self.vbmeta_edit = QLineEdit()
-        self.vbmeta_edit.setPlaceholderText("vbmeta image (.img / .img.lz4)")
-        self.vbmeta_edit.setMinimumWidth(80)
-        self.vbmeta_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.vbmeta_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-        vb_row.addWidget(self.vbmeta_edit, 1)
-        vb_img_btn = QPushButton("Browse...")
-        vb_img_btn.setStyleSheet(_btn_ghost())
-        vb_img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        vb_img_btn.setFixedWidth(80)
-        vb_img_btn.clicked.connect(lambda: self._browse_slot(self.vbmeta_edit, "vbmeta image"))
-        vb_row.addWidget(vb_img_btn)
-        vb_run = _adv_run(
-            "odin_flash_partition", "Flash vbmeta",
-            "Flash vbmeta partition (use pre-modified image to disable verification)"
-        )
-        vb_run.setFixedWidth(64)
-        vb_row.addWidget(vb_run)
-        a_lay.addLayout(vb_row)
+    # ---- console streaming (S2b) ----------------------------------------
+    _CONSOLE_FLUSH_MS = 50       # ms — coalesce window for batched appends
+    _CONSOLE_FLUSH_MAX = 200     # lines pending before an immediate flush
 
     def _build_console(self):
-        """Shared console/log panel shown on the right side of every section."""
+        """Shared console dock — right-hand side panel, resizable + collapsible.
+
+        Persisted state lives in QSettings (a config file): dock width,
+        collapsed and maximised keys are restored here and tolerate
+        missing/invalid values. No database is involved.
+        """
+        # ---- restore persisted dock state (tolerates missing/invalid) ----
+        self._console_collapsed = bool(
+            self.settings.value("console/collapsed", False, type=bool))
+        self._console_maximised = bool(
+            self.settings.value("console/maximised", False, type=bool))
+        try:
+            self._console_dock_width = int(
+                self.settings.value("console/dock_width", 0))
+        except (TypeError, ValueError):
+            self._console_dock_width = 0
+        if self._console_dock_width <= 0:
+            self._console_dock_width = None
+        # Set when the user actually drags the splitter handle: until then the
+        # console keeps its desired width as the window resizes, so a transient
+        # narrow first-layout pass cannot pin it (and cannot be persisted).
+        self._dock_user_moved = False
+        self._pre_max_sizes = None
+        self._pre_max_collapsed = False
+
+        # ---- restore persisted terminal prefs (S2b) ----
+        # Timestamps and regex mode are render/search concerns only: the
+        # stored transcript stays timestamp-free and always plain (no ANSI).
+        self._show_timestamps = bool(
+            self.settings.value("console/timestamps", True, type=bool))
+        self._console_regex = bool(
+            self.settings.value("console/regex", False, type=bool))
+        self._console_regex_obj = None
+
         panel = QFrame()
         panel.setObjectName("console")
         panel.setStyleSheet(
@@ -3839,59 +2117,137 @@ class FlashPilotWindow(QMainWindow):
             f" stop:0 rgba(14, 22, 34, 232), stop:1 rgba(7, 11, 17, 240));"
             f" border: 1px solid rgba(255,255,255,0.06);"
             f" border-left: 2px solid {C['border_hi']};"
-            f" border-top: 1px solid rgba(255,255,255,0.045);"
-            f" border-radius: 14px; }}"
+            f" border-radius: {RADIUS['xl']}px; }}"
             f" QFrame#console:hover {{ border-color: rgba(255,255,255,0.11);"
             f" border-left-color: {C['accent_hi']};"
             f" background: rgba(16, 25, 38, 238); }}"
         )
-        panel.setMinimumWidth(330)
-        panel.setMaximumWidth(380)
+        panel.setMinimumWidth(self._DOCK_MIN_CONSOLE)
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(14, 14, 14, 14)
-        lay.setSpacing(10)
+        lay.setContentsMargins(SPACE['md'], SPACE['sm'], SPACE['md'], SPACE['sm'])
+        lay.setSpacing(SPACE['sm'])
+        # Kept so the collapsed bar can tighten its own padding (a 24px chevron
+        # does not fit inside the 44px bar with the expanded 12px side margins).
+        self._console_layout = lay
+        self._console_margins = (SPACE['md'], SPACE['sm'], SPACE['md'], SPACE['sm'])
 
-        # ---- advanced console toolbar ----
-        console_row = QHBoxLayout()
-        console_row.setSpacing(8)
-        console_row.addWidget(SectionTitle("CONSOLE"))
+        # ---- always-visible dock header: chevron toggle + title + count ----
+        header = QHBoxLayout()
+        header.setSpacing(SPACE['sm'])
+        # No margins of its own: as a bare sub-layout it had none, and installing
+        # it on a widget would otherwise apply the style's default 9px padding.
+        header.setContentsMargins(0, 0, 0, 0)
+        # Leading stretch, inert while expanded: it becomes 1 when collapsed so
+        # the chevron is centred in the thin bar instead of jumping to one side.
+        header.addStretch(0)
+        self._console_header = header
+        self.console_toggle_btn = QPushButton("▾")
+        self.console_toggle_btn.setFixedSize(24, 22)
+        self.console_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.console_toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.console_toggle_btn.setToolTip("Collapse the console dock")
+        self.console_toggle_btn.setStyleSheet(
+            f"QPushButton {{ color:{C['dim']}; background:transparent;"
+            f" border:1px solid {C['border']}; border-radius:{RADIUS['sm']}px;"
+            f" font-size:11px; font-weight:800; padding:0; }}"
+            f" QPushButton:hover {{ color:{C['accent_hi']};"
+            f" border-color:{C['accent']}; }}"
+        )
+        self.console_toggle_btn.clicked.connect(self._toggle_console_collapse)
+        header.addWidget(self.console_toggle_btn)
+        self._console_title = SectionTitle("CONSOLE")
+        header.addWidget(self._console_title)
 
         self.console_count = QLabel("0 lines")
         self.console_count.setStyleSheet(
             f"color:{C['mute']}; font-size:10px; font-weight:600; letter-spacing:1px;"
             f" font-family:'JetBrains Mono','Consolas',monospace;"
         )
-        console_row.addWidget(self.console_count)
-        console_row.addStretch(1)
+        header.addWidget(self.console_count)
+        header.addStretch(1)
+        lay.addLayout(header)
+
+        # ---- collapsible body: toolbar + tabs (transcript/find/filter) ----
+        self._console_body = QWidget()
+        self._console_body.setStyleSheet("background: transparent;")
+        body_lay = QVBoxLayout(self._console_body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(SPACE['sm'])
+
+        # ---- advanced console toolbar ----
+        console_row = QHBoxLayout()
+        console_row.setSpacing(SPACE['sm'])
 
         self.wrap_btn = self._tool_button("Wrap", self._toggle_wrap)
+        self.wrap_btn.setToolTip("Toggle line wrap")
         self.wrap_btn.setFixedWidth(52)
-        self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
+        self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
         self.clear_btn = self._tool_button("Clear", self._clear_console)
         self.clear_btn.setFixedWidth(52)
-        self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
+        self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.clear_btn.setToolTip("Clear console (Ctrl+L)")
         console_row.addWidget(self.clear_btn)
         self.copy_btn = self._tool_button("Copy", self._copy_console)
         self.copy_btn.setFixedWidth(52)
-        self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
+        self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.copy_btn.setToolTip("Copy console to clipboard (Ctrl+Shift+C)")
         console_row.addWidget(self.copy_btn)
         self.save_btn = self._tool_button("Save", self._save_console)
         self.save_btn.setFixedWidth(52)
-        self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 6px 12px', 'padding: 4px 8px'))
+        self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.save_btn.setToolTip("Save console to a text file (Ctrl+S)")
         console_row.addWidget(self.save_btn)
-        lay.addLayout(console_row)
+        self.time_btn = self._console_chip(
+            "Time", "Show/hide the [HH:MM:SS] timestamp prefix",
+            self._show_timestamps, width=46)
+        # Drive from the button's own state (toggled) so a programmatic
+        # setChecked() can never desync the chip from the render mode.
+        self.time_btn.toggled.connect(self._set_timestamps)
+        console_row.addWidget(self.time_btn)
+        console_row.addStretch(1)
+        body_lay.addLayout(console_row)
+
+        # Console | CMD tabs: the transcript lives on Console; the CMD tab
+        # is created only when called (Transports ▸ CMD Console) and has
+        # its own ×. Nothing below the transcript otherwise.
+        from PyQt6.QtWidgets import QTabWidget as _Tabs, QTabBar as _TabBar
+        self.console_tabs = _Tabs()
+        self.console_tabs.setTabsClosable(True)
+        self.console_tabs.tabCloseRequested.connect(self._cmd_tab_closed)
+        _cons_page = QWidget()
+        _cons_page.setStyleSheet("background: transparent;")
+        cons_lay = QVBoxLayout(_cons_page)
+        cons_lay.setContentsMargins(0, 0, 0, 0)
+        cons_lay.setSpacing(8)
+        self.console_tabs.addTab(_cons_page, "Console")
+        try:
+            self.console_tabs.tabBar().setTabButton(
+                0, _TabBar.ButtonPosition.RightSide, None)
+        except Exception:
+            pass
+        self.console_tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border:none; background:transparent; }}"
+            f" QTabWidget::tab-bar {{ alignment:left; }}"
+            f" QTabBar::tab {{ background:{C['card']}; color:{C['dim']};"
+            f" border:1px solid {C['border']}; border-bottom:none;"
+            f" border-top-left-radius:8px; border-top-right-radius:8px;"
+            f" padding:4px 14px; font-size:11px; font-weight:700; }}"
+            f" QTabBar::tab:selected {{ background:{C['inset']}; color:{C['text']};"
+            f" border-top:2px solid {C['accent']}; }}"
+        )
+        body_lay.addWidget(self.console_tabs, 1)
+        self._cmd_tab = None
+        self._cmd_busy = False
 
         # find + filter rows (two compact rows to fit the narrow console column)
         find_row = QHBoxLayout()
         find_row.setSpacing(6)
         self.find_edit = QLineEdit()
-        self.find_edit.setPlaceholderText("Find in console...  (Ctrl+F)")
+        self.find_edit.setPlaceholderText("Search console...  (Ctrl+F)")
         self.find_edit.setClearButtonEnabled(True)
-        self.find_edit.textChanged.connect(self._apply_find)
+        self.find_edit.setMinimumWidth(80)  # yield space instead of clipping chips
+        self.find_edit.textChanged.connect(self._apply_console_search)
         self.find_edit.setStyleSheet(
             f"QLineEdit {{ background:{C['card']}; border:1px solid {C['border']};"
             f" border-radius:6px; padding:5px 10px; color:{C['text']};"
@@ -3899,27 +2255,58 @@ class FlashPilotWindow(QMainWindow):
             f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
             f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
         )
+        # Aliases for the console search box (tests / callers may use any).
+        self.console_search = self.find_edit
+        self.search_box = self.find_edit
+        self.log_search = self.find_edit
+        self.search_input = self.find_edit
+        self.console_filter = self.find_edit
+        # Base stylesheet kept so the invalid-regex marker can be removed again.
+        self._find_edit_base_qss = self.find_edit.styleSheet()
         find_row.addWidget(self.find_edit, 1)
-        self.find_next_btn = self._tool_button("N", lambda: self._find_nav(1))
-        self.find_prev_btn = self._tool_button("P", lambda: self._find_nav(-1))
+        self.regex_btn = self._console_chip(
+            ".*", "Treat the search text as a regular expression",
+            self._console_regex, width=30)
+        self.regex_btn.toggled.connect(self._set_regex_mode)
+        find_row.addWidget(self.regex_btn)
+        self.find_next_btn = self._tool_button("Next", lambda: self._find_nav(1))
+        self.find_next_btn.setToolTip("Find next match")
+        self.find_prev_btn = self._tool_button("Prev", lambda: self._find_nav(-1))
+        self.find_prev_btn.setToolTip("Find previous match")
         find_row.addWidget(self.find_next_btn)
         find_row.addWidget(self.find_prev_btn)
+        self.search_clear_btn = self._tool_button("✕", lambda: self.find_edit.clear())
+        self.search_clear_btn.setToolTip("Clear console search filter")
+        self.search_clear_btn.setStyleSheet(
+            self.search_clear_btn.styleSheet()
+            .replace('font-size: 12px', 'font-size: 10px')
+            .replace('padding: 7px 14px', 'padding: 4px 8px'))
+        self.search_clear_btn.setFixedWidth(34)
+        self.search_clear_btn.setStyleSheet(
+            self.search_clear_btn.styleSheet()
+            .replace("font-size: 12px", "font-size: 10px")
+            .replace("padding: 6px 12px", "padding: 4px 6px")
+        )
+        find_row.addWidget(self.search_clear_btn)
+        self.clear_search_btn = self.search_clear_btn
+        self.console_search_clear = self.search_clear_btn
 
         flt_row = QHBoxLayout()
         flt_row.setSpacing(6)
 
         self._filter_btns = {}
-        for level, label, color in (
-            ("err", "Err", C["err"]),
-            ("warn", "Warn", C["warn"]),
-            ("ok", "OK", C["ok"]),
-            ("info", "Info", C["dim"]),
+        for level, label, color, width, tip in (
+            ("err", "Errors", C["err"], 58, "Show error lines"),
+            ("warn", "Warnings", C["warn"], 70, "Show warning lines"),
+            ("ok", "OK", C["ok"], 44, "Show success lines"),
+            ("info", "Info", C["dim"], 46, "Show info lines"),
         ):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(46)
+            btn.setFixedWidth(width)
+            btn.setToolTip(tip)
             btn.setStyleSheet(
                 f"QPushButton {{ background: transparent; border:1px solid {C['border']};"
                 f" border-radius:8px; padding:4px 6px; font-size:10px; font-weight:700;"
@@ -3932,9 +2319,9 @@ class FlashPilotWindow(QMainWindow):
             self._filter_btns[level] = btn
             flt_row.addWidget(btn)
 
-        self.clear_on_run = QCheckBox("auto-clear on run")
+        self.clear_on_run = QCheckBox("auto-clear")
         self.clear_on_run.setChecked(
-            self.settings.value("clear_on_run", "false", type=bool)
+            self.settings.value("clear_on_run", "true", type=bool)
         )
         self.clear_on_run.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
@@ -3942,8 +2329,8 @@ class FlashPilotWindow(QMainWindow):
         )
         flt_row.addWidget(self.clear_on_run)
         flt_row.addStretch(1)
-        lay.addLayout(find_row)
-        lay.addLayout(flt_row)
+        cons_lay.addLayout(find_row)
+        cons_lay.addLayout(flt_row)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -3955,181 +2342,654 @@ class FlashPilotWindow(QMainWindow):
             LogHighlighter(self.log.document())
         except Exception:
             pass
-        lay.addWidget(self.log, 1)
+        cons_lay.addWidget(self.log, 1)
 
-        # ---- CMD bar: transport dropdown + command input + run ----
-        # ADB shell runs over the authorized session, Fastboot sends one
-        # raw command to the connected fastboot phone, Bridge runs a local
-        # bridge subcommand. History on Up/Down, Ctrl+Enter runs.
-        cmd_row = QHBoxLayout()
-        cmd_row.setSpacing(6)
-        self.cmd_mode = QComboBox()
-        self.cmd_mode.addItems(["ADB shell", "Fastboot", "Bridge"])
-        self.cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.cmd_mode.setFixedWidth(108)
-        self.cmd_mode.setToolTip(
-            "ADB shell: run a shell command on the authorized phone\n"
-            "Fastboot: send one raw command (e.g. getvar all)\n"
-            "Bridge: run a local flashpilot-bridge subcommand")
-        self.cmd_mode.setStyleSheet(
-            f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
-            f" border-radius:6px; padding:4px 8px; color:{C['text']}; font-size:11px; font-weight:700; }}"
-            f" QComboBox:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QComboBox:focus {{ outline:none; }}"
-            f" QComboBox QAbstractItemView {{ background:{C['card']}; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-        )
-        cmd_row.addWidget(self.cmd_mode)
-        self.cmd_input = QLineEdit()
-        self.cmd_input.setPlaceholderText("Type a command — Ctrl+Enter runs  (Up/Down: history)")
-        self.cmd_input.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:6px; padding:5px 10px; color:{C['text']};"
-            f" font-family:'JetBrains Mono','Consolas',monospace; font-size:11px;"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        self.cmd_input.returnPressed.connect(self._run_cmd)
-        cmd_row.addWidget(self.cmd_input, 1)
-        self._cmd_hist = []
-        self._cmd_hist_idx = 0
-        QShortcut(QKeySequence(Qt.Key.Key_Up), self.cmd_input).activated.connect(
-            lambda: self._cmd_hist_nav(-1))
-        QShortcut(QKeySequence(Qt.Key.Key_Down), self.cmd_input).activated.connect(
-            lambda: self._cmd_hist_nav(1))
-        QShortcut(QKeySequence("Ctrl+Return"), self).activated.connect(self._run_cmd)
-        self.cmd_run_btn = self._tool_button("Run", self._run_cmd)
-        self.cmd_run_btn.setToolTip("Run the command above (Ctrl+Enter)")
-        cmd_row.addWidget(self.cmd_run_btn)
-        lay.addLayout(cmd_row)
+        # Right-click menu on the transcript (S2b): copy/save/clear/find plus
+        # checkable Wrap / Timestamps / Regex toggles kept in sync with the
+        # toolbar chips (the menu is rebuilt on every popup).
+        self.log.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log.customContextMenuRequested.connect(self._console_context_menu)
 
-        # quick-command chips (replace the static shortcut hints)
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(6)
-        for chip_txt, chip_mode, chip_cmd in (
-            ("adb devices", "Bridge", "adb-devices"),
-            ("fastboot devices", "Bridge", "fastboot-devices"),
-            ("getvar all", "Fastboot", "getvar all"),
-            ("detect-merged", "Bridge", "detect-merged"),
-        ):
-            chip = QPushButton(chip_txt)
-            chip.setCursor(Qt.CursorShape.PointingHandCursor)
-            chip.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            chip.setToolTip(f"Run: {chip_cmd}")
-            chip.setStyleSheet(
-                f"color:{C['dim']}; font-size:9px; font-weight:700;"
-                f" background:{C['card_hover']}; border:1px solid {C['border']};"
-                f" border-radius:6px; padding:3px 8px;"
-            )
-            chip.clicked.connect(
-                lambda _=False, m=chip_mode, c=chip_cmd: self._quick_cmd(m, c))
-            quick_row.addWidget(chip)
-        quick_row.addStretch(1)
-        lay.addLayout(quick_row)
+        # Batched flush (S2b): the first pending line renders synchronously so
+        # logging stays latency-free; further lines within the window coalesce
+        # into a single append from a single-shot timer (or at the line cap).
+        self._console_flush_timer = QTimer(self)
+        self._console_flush_timer.setSingleShot(True)
+        self._console_flush_timer.setInterval(self._CONSOLE_FLUSH_MS)
+        self._console_flush_timer.timeout.connect(self._flush_console)
+        # Compile the persisted search mode once the widgets exist.
+        self._refresh_search_regex()
 
-        # footer: shortcut hints (collapsed into a single line for the narrow
-        # right-hand console column)
-        footer = QFrame()
-        footer.setObjectName("footer")
-        footer.setStyleSheet(
-            f"QFrame#footer {{ background:{C['inset']};"
-            f" border:1px solid {C['border']}; border-radius:9px; }}"
-        )
-        f_lay = QVBoxLayout(footer)
-        f_lay.setContentsMargins(10, 6, 10, 6)
-        f_lay.setSpacing(6)
-        self.version_lbl = QLabel("flashpilot FLASHING TOOL v1.2")
-        self.version_lbl.setStyleSheet(
-            f"color:{C['mute']}; font-size:9px; font-weight:700; letter-spacing:1px;"
-        )
-        f_lay.addWidget(self.version_lbl)
-        for k in ("F5 refresh", "Ctrl+Enter run", "Ctrl+L clear", "Ctrl+S save"):
-            chip = QLabel(k)
-            chip.setStyleSheet(
-                f"color:{C['dim']}; font-size:9px; font-weight:600;"
-                f" background:{C['card_hover']}; border:1px solid {C['border']};"
-                f" border-radius:6px; padding:2px 7px;"
-            )
-            f_lay.addWidget(chip)
-        lay.addWidget(footer)
-
+        lay.addWidget(self._console_body, 1)
+        # Trailing spacer. With the body hidden (collapsed) the column would have
+        # only the header left, and Qt hands it the leftover height — centring the
+        # chevron in the tall bar, so it visibly jumped up and down on every
+        # collapse/expand. This takes that height instead: stretch 0 while
+        # expanded (the transcript keeps every pixel), 1 while collapsed.
+        lay.addStretch(0)
+        self._console_bottom_stretch = lay.count() - 1
         return panel
 
-    def _quick_cmd(self, mode, cmd):
-        """Quick chip: load the command into the CMD bar and run it."""
+    # ---- console dock: splitter / collapse / maximise (S2a) --------------
+    def _style_console_splitter(self):
+        """Splitter handle styling from theme tokens (no hardcoded colours)."""
+        self._splitter.setStyleSheet(_splitter_qss())
+
+    def _desired_device_panel_width(self, total):
+        """Device panel width for `total` px: persisted width if sane, else 232.
+
+        Always clamped into [min, max] *and* leaves the page its viewport floor,
+        so the page can never be squeezed out by a saved or dragged value.
+        """
         try:
-            idx = {"ADB shell": 0, "Fastboot": 1, "Bridge": 2}[mode]
-            self.cmd_mode.setCurrentIndex(idx)
-            self.cmd_input.setText(cmd)
+            w = int(getattr(self, "_device_panel_width", None) or 0)
+        except (TypeError, ValueError):
+            w = 0
+        if w <= 0:
+            w = self._BODY_PANEL_DEFAULT_W
+        room = max(self._BODY_PANEL_MIN_W,
+                   total - self._PAGE_VIEW_MIN_W - 6)
+        return max(self._BODY_PANEL_MIN_W,
+                   min(w, self._BODY_PANEL_MAX_W, room))
+
+    def _apply_default_body_split(self):
+        """Keep the device panel at its desired width across window resizes.
+
+        Re-applied on every resize *until the user drags the handle*: the first
+        layout pass can run before the window reaches its real geometry, so a
+        one-shot apply would pin the panel to a transient (too narrow) width.
+        Stretch factors (0, 1) then hold the panel steady and hand the page
+        every later resize.
+
+        On a window at its minimum width the console dock's default width
+        leaves the body narrower than the two hard child floors combined
+        (``_BODY_PANEL_MIN_W`` + ``_PAGE_VIEW_MIN_W`` + handle). ``QSplitter``
+        then **ignores** ``setSizes`` completely and the split silently stays at
+        its stale 50/50 — so the panel never reaches the width the formula above
+        already computed for it. The page floor is released just long enough for
+        the split to take, then re-pinned to the width the page actually got, so
+        a later drag can never squeeze it past what it already has. When there
+        *is* room this is a no-op: the page floor stays ``_PAGE_VIEW_MIN_W``.
+        """
+        splitter = getattr(self, "_body_splitter", None)
+        if splitter is None or splitter.width() <= 0:
+            return
+        if getattr(self, "_body_user_moved", False):
+            return
+        panel = self._desired_device_panel_width(splitter.width())
+        page = max(1, splitter.width() - panel)
+        if page >= self._PAGE_VIEW_MIN_W:
+            self._page_scroll.setMinimumWidth(self._PAGE_VIEW_MIN_W)
+            splitter.setSizes([panel, page])
+            return
+        self._page_scroll.setMinimumWidth(1)
+        splitter.setSizes([panel, page])
+        self._page_scroll.setMinimumWidth(max(1, splitter.sizes()[1]))
+
+
+    def _on_body_splitter_moved(self, *_args):
+        """Remember the user's device-panel width (persisted via QSettings)."""
+        try:
+            if not getattr(self, "_body_user_moved", False):
+                self._body_user_moved = True
+            sizes = self._body_splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 0:
+                self._device_panel_width = int(sizes[0])
+                self.settings.setValue(
+                    "layout/device_panel_width", int(sizes[0]))
         except Exception:
             pass
-        self._run_cmd()
 
-    def _cmd_hist_nav(self, direction):
-        """Up/Down through the CMD history."""
-        if not getattr(self, "_cmd_hist", None):
-            return
-        idx = getattr(self, "_cmd_hist_idx", 0) + direction
-        idx = max(0, min(idx, len(self._cmd_hist)))
-        self._cmd_hist_idx = idx
-        self.cmd_input.setText(self._cmd_hist[idx] if idx < len(self._cmd_hist) else "")
-
-    def _run_cmd(self):
-        """Run the CMD bar input in a worker thread (never block the UI)."""
+    def _desired_dock_console_width(self, total):
+        """Console width for `total` px: persisted width if sane, else default."""
+        if getattr(self, "_console_maximised", False):
+            return total
         try:
-            text = self.cmd_input.text().strip()
+            w = int(getattr(self, "_console_dock_width", None) or 0)
+        except (TypeError, ValueError):
+            w = 0
+        room = max(self._DOCK_MIN_CONSOLE, total - self._DOCK_MIN_TOP)
+        if w > 0:
+            return max(self._DOCK_MIN_CONSOLE, min(w, room))
+        return max(self._DOCK_MIN_CONSOLE,
+                   min(self._DOCK_DEFAULT_WIDTH, room))
+
+    def _apply_default_dock_split(self):
+        """Keep the console at its desired width across window resizes.
+
+        `setSizes()` before the first layout pass sees width 0 and is ignored,
+        so this runs from showEvent/resizeEvent. It keeps re-applying on every
+        resize *until the user drags the handle* — otherwise the very first
+        (possibly narrow, pre-geometry-restore) layout pass would pin the dock
+        to a transient width for the rest of the session. Skipped while
+        maximised; a collapsed dock only needs its thin bar re-applied.
+        """
+        if not hasattr(self, "_splitter"):
+            return
+        if getattr(self, "_console_maximised", False):
+            return
+        if getattr(self, "_dock_user_moved", False):
+            return
+        total = self._splitter.width()
+        if total <= 0:
+            return
+        if getattr(self, "_console_collapsed", False):
+            self._set_console_collapsed(True, persist=False)
+        else:
+            console = self._desired_dock_console_width(total)
+            self._splitter.setSizes(
+                [max(self._DOCK_MIN_TOP, total - console), console])
+
+    def _on_dock_splitter_moved(self, *_args):
+        """Remember the user's dock width (persisted via QSettings)."""
+        if getattr(self, "_console_maximised", False):
+            return
+        try:
+            # Only a real drag (not a programmatic setSizes) may pin the dock.
+            if not getattr(self, "_dock_user_moved", False):
+                self._dock_user_moved = True
+            sizes = self._splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._console_dock_width = int(sizes[1])
+                self.settings.setValue("console/dock_width", int(sizes[1]))
+        except Exception:
+            pass
+
+    def _apply_console_state_from_settings(self):
+        """Apply the persisted collapsed/maximised state at construction."""
+        if self._console_collapsed:
+            self._set_console_collapsed(True, persist=False)
+        if self._console_maximised:
+            self._set_console_maximised(True, persist=False)
+
+    def _set_console_collapsed(self, collapsed, persist=True):
+        """Collapse the dock to a thin bar (or expand it again)."""
+        collapsed = bool(collapsed)
+        self._console_collapsed = collapsed
+        try:
+            self._console_body.setVisible(not collapsed)
+            # In the collapsed vertical bar only the chevron fits.
+            self._console_title.setVisible(not collapsed)
+            self.console_count.setVisible(not collapsed)
+            self.console_toggle_btn.setText("▸" if collapsed else "▾")
+            self.console_toggle_btn.setToolTip(
+                "Expand the console dock" if collapsed
+                else "Collapse the console dock")
+            # Centre the chevron in the thin bar: with the title/count hidden a
+            # leading stretch balances the trailing one, and tighter side
+            # margins leave room for the 24px button inside the 44px bar.
+            self._console_header.setStretch(0, 1 if collapsed else 0)
+            # ...and let the trailing spacer own the bar's free height, so the
+            # chevron stays anchored at the top instead of being centred in it.
+            self._console_layout.setStretch(
+                self._console_bottom_stretch, 1 if collapsed else 0)
+            self._console_layout.setContentsMargins(
+                *((SPACE['xs'], SPACE['sm'], SPACE['xs'], SPACE['sm'])
+                  if collapsed else self._console_margins))
+            if collapsed:
+                # Let the splitter shrink the panel to its header bar. An
+                # explicit min=max overrides the layout's minimum hint, so the
+                # bar really does collapse to the chevron width.
+                self._console_dock.setMinimumWidth(self._DOCK_COLLAPSED_W)
+                self._console_dock.setMaximumWidth(self._DOCK_COLLAPSED_W)
+                total = self._splitter.width()
+                if total > 0:
+                    self._splitter.setSizes(
+                        [max(self._DOCK_MIN_TOP, total - self._DOCK_COLLAPSED_W),
+                         self._DOCK_COLLAPSED_W])
+            else:
+                self._console_dock.setMinimumWidth(self._DOCK_MIN_CONSOLE)
+                self._console_dock.setMaximumWidth(16777215)
+                total = self._splitter.width()
+                if total > 0:
+                    console = self._desired_dock_console_width(total)
+                    self._splitter.setSizes(
+                        [max(self._DOCK_MIN_TOP, total - console), console])
+        except Exception:
+            pass
+        if persist:
+            self._save_console_state()
+
+    def _toggle_console_collapse(self):
+        self._set_console_collapsed(
+            not getattr(self, "_console_collapsed", False))
+
+    def _set_console_maximised(self, maximised, persist=True):
+        """F11 mode: hide the page area so the console fills the window."""
+        maximised = bool(maximised)
+        if maximised == getattr(self, "_console_maximised", False):
+            if persist:
+                self._save_console_state()
+            return
+        self._console_maximised = maximised
+        try:
+            if maximised:
+                self._pre_max_sizes = self._splitter.sizes()
+                self._pre_max_collapsed = bool(
+                    getattr(self, "_console_collapsed", False))
+                # A collapsed dock would defeat full-screen mode.
+                if self._console_collapsed:
+                    self._set_console_collapsed(False, persist=False)
+                self._top_area.setVisible(False)
+                total = self._splitter.width()
+                if total > 0:
+                    self._splitter.setSizes([0, total])
+            else:
+                self._top_area.setVisible(True)
+                total = self._splitter.width()
+                pre = getattr(self, "_pre_max_sizes", None)
+                if pre and len(pre) >= 2 and sum(pre) > 0 and total > 0:
+                    self._splitter.setSizes(pre)
+                elif total > 0:
+                    console = self._desired_dock_console_width(total)
+                    self._splitter.setSizes(
+                        [max(self._DOCK_MIN_TOP, total - console), console])
+                if getattr(self, "_pre_max_collapsed", False):
+                    self._set_console_collapsed(True, persist=False)
+        except Exception:
+            pass
+        if persist:
+            self._save_console_state()
+
+    def _toggle_console_maximised(self):
+        self._set_console_maximised(
+            not getattr(self, "_console_maximised", False))
+
+    def _save_console_state(self):
+        """Persist dock width / collapsed / maximised via QSettings."""
+        try:
+            self.settings.setValue(
+                "console/collapsed", bool(getattr(self, "_console_collapsed", False)))
+            self.settings.setValue(
+                "console/maximised", bool(getattr(self, "_console_maximised", False)))
+            if hasattr(self, "_splitter") and not getattr(
+                    self, "_console_maximised", False):
+                sizes = self._splitter.sizes()
+                # Only a width the *user* actually chose is persisted: the live
+                # splitter width may be a transient layout artefact, and a
+                # sub-minimum width must never be recorded (it would reopen the
+                # dock as a sliver).
+                if (getattr(self, "_dock_user_moved", False)
+                        and len(sizes) >= 2
+                        and sizes[1] >= self._DOCK_MIN_CONSOLE):
+                    self._console_dock_width = int(sizes[1])
+                    self.settings.setValue("console/dock_width", int(sizes[1]))
+        except Exception:
+            pass
+
+    def _cmd_tab_closed(self, index):
+        """X on a CMD tab: remove it. The Console tab (index 0) stays."""
+        try:
+            if index <= 0:
+                return
+            widget = self.console_tabs.widget(index)
+            self.console_tabs.removeTab(index)
+            if widget is not None and widget == getattr(self, "_cmd_tab", None):
+                self._cmd_tab = None
+                self._cmd_busy = False
+            if widget is not None:
+                widget.deleteLater()
+        except Exception:
+            pass
+
+    def _open_cmd_tab(self, mode=None):
+        """Show the CMD tab (built on demand). Console <-> CMD via the tabs."""
+        try:
+            if getattr(self, "_cmd_tab", None) is not None:
+                if mode:
+                    try:
+                        self._cmd_mode.setCurrentText(mode)
+                    except Exception:
+                        pass
+                self.console_tabs.setCurrentWidget(self._cmd_tab)
+                self._cmd_refresh_prompt()
+                return
+            page = QWidget()
+            page.setStyleSheet("background: transparent;")
+            outer = QVBoxLayout(page)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            inner = QWidget()
+            inner.setStyleSheet("background: transparent;")
+            lay = QVBoxLayout(inner)
+            lay.setContentsMargins(4, 6, 4, 6)
+            lay.setSpacing(8)
+
+            mode_row = QHBoxLayout()
+            mode_row.setSpacing(6)
+            self._cmd_mode = QComboBox()
+            self._cmd_mode.addItems(["ADB", "Fastboot"])
+            self._cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._cmd_mode.setFixedWidth(110)
+            self._cmd_mode.setToolTip("Which transport the custom command uses")
+            self._cmd_mode.setStyleSheet(
+                f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
+                f" border-radius:6px; padding:4px 8px; color:{C['text']}; font-size:11px; font-weight:700; }}"
+                f" QComboBox:hover {{ border:1px solid {C['border_hi']}; }}"
+                f" QComboBox:focus {{ outline:none; }}"
+                f" QComboBox QAbstractItemView {{ background:{C['card']}; color:{C['text']};"
+                f" selection-background-color:{C['accent']}; }}"
+            )
+            mode_row.addWidget(self._cmd_mode)
+            self._cmd_code = QLineEdit()
+            self._cmd_code.setPlaceholderText("Unlock code (BL unlock only)")
+            self._cmd_code.setStyleSheet(
+                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
+                f" border-radius:6px; padding:5px 10px; color:{C['text']};"
+                f" font-family:'JetBrains Mono','Consolas',monospace; font-size:11px;"
+                f" selection-background-color:{C['accent']}; }}"
+                f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
+            )
+            mode_row.addWidget(self._cmd_code, 1)
+            lay.addLayout(mode_row)
+
+            adb_row = QHBoxLayout()
+            adb_row.setSpacing(6)
+            adb_lbl = QLabel("ADB")
+            adb_lbl.setStyleSheet("color:#34d399; font-size:10px; font-weight:800;")
+            adb_lbl.setFixedWidth(52)
+            adb_row.addWidget(adb_lbl)
+            for label, shell_cmd in (
+                ("Reboot", "reboot"),
+                ("Recovery", "reboot recovery"),
+                ("Bootloader", "reboot bootloader"),
+                ("EDL", "reboot edl"),
+            ):
+                b = QPushButton(label)
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                b.setToolTip(f"adb shell {shell_cmd}")
+                b.setStyleSheet(
+                    f"QPushButton {{ color:{C['text']}; background:{C['card']};"
+                    f" border:1px solid {C['border']}; border-radius:6px;"
+                    f" padding:4px 8px; font-size:10px; font-weight:700; }}"
+                    f" QPushButton:hover {{ border-color:{C['accent']}; }}"
+                    f" QPushButton:focus {{ outline:none; }}"
+                )
+                b.clicked.connect(lambda _=False, c=shell_cmd: self._cmd_adb_preset(c))
+                adb_row.addWidget(b)
+            adb_row.addStretch(1)
+            lay.addLayout(adb_row)
+
+            fb_row = QHBoxLayout()
+            fb_row.setSpacing(6)
+            fb_lbl = QLabel("Fastboot")
+            fb_lbl.setStyleSheet("color:#fbbf24; font-size:10px; font-weight:800;")
+            fb_lbl.setFixedWidth(52)
+            fb_row.addWidget(fb_lbl)
+            fb_scroll = QScrollArea()
+            fb_scroll.setWidgetResizable(True)
+            fb_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            fb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            fb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            fb_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+            fb_inner = QWidget()
+            fb_inner.setStyleSheet("background: transparent;")
+            fb_btns = QHBoxLayout(fb_inner)
+            fb_btns.setContentsMargins(0, 0, 0, 0)
+            fb_btns.setSpacing(6)
+            for label, fb_cmd, tip in (
+                ("Unlock BL", None, "oem unlock <code> (two-step, uses the code above)"),
+                ("Relock BL", "relock", "flashing lock (re-lock the bootloader)"),
+                ("Reboot", "reboot", "reboot to system"),
+                ("Bootloader", "reboot bootloader", "reboot to bootloader/fastboot"),
+                ("Recovery", "reboot recovery", "reboot to recovery"),
+                ("EDL", "oem edl", "reboot to EDL (falls back to reboot edl)"),
+                ("Getvar", "getvar all", "dump all bootloader variables"),
+                ("Continue", "continue", "continue boot to system"),
+            ):
+                b = QPushButton(label)
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                b.setToolTip(tip)
+                b.setStyleSheet(
+                    f"QPushButton {{ color:{C['text']}; background:{C['card']};"
+                    f" border:1px solid {C['border']}; border-radius:6px;"
+                    f" padding:4px 8px; font-size:10px; font-weight:700; }}"
+                    f" QPushButton:hover {{ border-color:{C['accent']}; }}"
+                    f" QPushButton:focus {{ outline:none; }}"
+                )
+                if fb_cmd is None:
+                    b.clicked.connect(lambda _=False: self._cmd_fastboot_unlock())
+                elif fb_cmd == "relock":
+                    b.clicked.connect(lambda _=False: self._cmd_fastboot_relock())
+                elif fb_cmd == "oem edl":
+                    b.clicked.connect(lambda _=False: self._cmd_fb_preset("oem edl", "reboot edl"))
+                else:
+                    b.clicked.connect(lambda _=False, c=fb_cmd: self._cmd_fb_preset(c))
+                b.setFixedHeight(30)
+                fb_btns.addWidget(b)
+            fb_scroll.setWidget(fb_inner)
+            fb_scroll.setFixedHeight(36)
+            fb_row.addWidget(fb_scroll, 1)
+            lay.addLayout(fb_row)
+
+            custom_row = QHBoxLayout()
+            custom_row.setSpacing(6)
+            self._cmd_prompt = QLabel("no-device$")
+            self._cmd_prompt.setStyleSheet(
+                "color:#34d399; font-size:12px; font-weight:700;"
+                " font-family:'JetBrains Mono','Consolas',monospace;"
+                " background:transparent; border:none;"
+            )
+            custom_row.addWidget(self._cmd_prompt)
+            self._cmd_input = QLineEdit()
+            self._cmd_input.setPlaceholderText("type a command — Enter runs")
+            self._cmd_input.setStyleSheet(
+                f"QLineEdit {{ background:transparent; border:none;"
+                f" padding:5px 2px; color:{C['text']};"
+                f" font-family:'JetBrains Mono','Consolas',monospace; font-size:12px;"
+                f" selection-background-color:{C['accent']}; }}"
+                " QLineEdit:focus { background:transparent; border:none; }"
+            )
+            self._cmd_input.returnPressed.connect(self._cmd_custom_run)
+            custom_row.addWidget(self._cmd_input, 1)
+            lay.addLayout(custom_row)
+
+            hint = QLabel("Output goes to the Console tab — switch tabs to read it.")
+            hint.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
+            hint.setWordWrap(True)
+            lay.addWidget(hint)
+            lay.addStretch(1)
+            scroll.setWidget(inner)
+            outer.addWidget(scroll, 1)
+
+            self._cmd_tab = page
+            self.console_tabs.addTab(page, "CMD")
+            try:
+                self.console_tabs.tabBar().setTabTextColor(
+                    self.console_tabs.count() - 1, QColor("#fbbf24"))
+            except Exception:
+                pass
+            self.console_tabs.setCurrentWidget(page)
+            if mode:
+                try:
+                    self._cmd_mode.setCurrentText(mode)
+                except Exception:
+                    pass
+            self._cmd_refresh_prompt()
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.log_line(f"[error] CMD tab failed: {e}")
+            except Exception:
+                pass
+
+    def _cmd_refresh_prompt(self):
+        """Device-aware prompt (serial@transport$) — never hardcoded."""
+        prompt = "no-device$"
+        try:
+            rows = device_pages.connected_rows()
+            if rows:
+                r = rows[0]
+                serial = (r.get("serial") or r.get("usb_key")
+                          or r.get("label") or "device")
+                serial = str(serial).split(" · ")[0].strip() or "device"
+                transports = r.get("transports") or ["?"]
+                prompt = f"{serial}@{str(transports[0]).lower()}$"
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_cmd_prompt", None) is not None:
+                self._cmd_prompt.setText(prompt)
+        except Exception:
+            pass
+
+    def _cmd_adb_preset(self, shell_cmd):
+        """One ADB reboot preset: gate on ADB first, then run in a worker."""
+        if not self._gate_transport("adb_frp"):
+            return
+        self._cmd_launch(f"[ADB] {shell_cmd}", self._cmd_adb_work, (shell_cmd,))
+
+    def _cmd_fb_preset(self, fb_cmd, fallback=None):
+        """One fastboot preset: gate on FASTBOOT first, then run in a worker."""
+        if not self._gate_transport("fastboot_unlock"):
+            return
+        self._cmd_launch(f"[fastboot] {fb_cmd}", self._cmd_fastboot_work, (fb_cmd, fallback))
+
+    def _cmd_custom_run(self):
+        """Custom command from the CMD tab input, in the picked mode."""
+        self._cmd_refresh_prompt()
+        try:
+            if getattr(self, "_cmd_tab", None) is None:
+                return
+            mode = self._cmd_mode.currentText()
+            text = self._cmd_input.text().strip()
         except Exception:
             return
         if not text:
             return
-        mode = self.cmd_mode.currentText()
-        self._cmd_hist.append(text)
-        if len(self._cmd_hist) > 100:
-            del self._cmd_hist[:-100]
-        self._cmd_hist_idx = len(self._cmd_hist)
-        self._ui.line.emit(f">>> [{mode}] {text}")
-        threading.Thread(target=self._cmd_work, args=(mode, text), daemon=True).start()
+        if mode == "Fastboot":
+            self._cmd_fb_preset(text)
+        else:
+            self._cmd_adb_preset(text)
 
-    def _cmd_work(self, mode, text):
-        """Worker: ADB shell / one raw fastboot command / bridge subcommand."""
+    def _cmd_fastboot_unlock(self):
+        """BL unlock via the Rust flow (two-step confirm + verify)."""
         try:
-            if mode == "Fastboot":
-                target = None
-                try:
-                    for row in device_pages.connected_rows():
-                        if "FASTBOOT" in (row.get("transports") or []):
-                            key = row.get("key") or row.get("usb_key")
-                            try:
-                                target = _devices.resolve_usb_target(key)
-                            except Exception:
-                                target = None
-                            if target:
-                                break
-                except Exception:
-                    target = None
-                if not target:
-                    self._ui.line.emit("[warn] no fastboot phone connected")
-                    return
-                out = bridge.fastboot_cmd(target, text.split(), timeout_ms=20000)
-            elif mode == "Bridge":
-                out = bridge._run(text.split(), timeout=60)
-            else:
-                out = bridge.adb_shell(text, timeout=30)
-            for line in str(out).splitlines():
-                self._ui.line.emit(line if line.strip() else " ")
-            self._ui.line.emit("[ok] done")
+            code = self._cmd_code.text().strip()
+        except Exception:
+            code = ""
+        if not code:
+            self._ui.line.emit("[warn] enter the bootloader unlock code first")
+            try:
+                self._toasts.show_warn("Unlock code missing",
+                                       "Enter the code, then press Unlock BL.")
+            except Exception:
+                pass
+            return
+        if not self._gate_transport("fastboot_unlock"):
+            return
+        target = self._cmd_fastboot_target()
+        if not target:
+            self._ui.line.emit("[warn] no fastboot phone connected")
+            return
+        self._cmd_launch(f"[fastboot] oem unlock {code}",
+                         self._cmd_flow_work,
+                         (["flow-run", "fastboot_unlock", target, "--code", code], 180))
+
+    def _cmd_fastboot_relock(self):
+        """Relock the bootloader via the Rust flow (flashing lock)."""
+        if not self._gate_transport("fastboot_unlock"):
+            return
+        target = self._cmd_fastboot_target()
+        if not target:
+            self._ui.line.emit("[warn] no fastboot phone connected")
+            return
+        self._cmd_launch("[fastboot] flashing lock",
+                         self._cmd_flow_work,
+                         (["flow-run", "fastboot_lock", target], 120))
+
+    def _cmd_launch(self, display, fn, args=()):
+        """Start one CMD run in a worker (serialized: no overlaps)."""
+        if getattr(self, "_cmd_busy", False):
+            self._ui.line.emit("[warn] a command is already running — wait for it to finish")
+            return
+        self._cmd_busy = True
+        self._ui.line.emit(f">>> {display}")
+        threading.Thread(target=self._cmd_wrap, args=(fn, args), daemon=True).start()
+
+    def _cmd_wrap(self, fn, args):
+        try:
+            fn(*args)
         except Exception as e:  # noqa: BLE001
             self._ui.line.emit(f"[error] CMD failed: {e}")
+        finally:
+            self._cmd_busy = False
+
+    def _cmd_adb_work(self, shell_cmd):
+        out = bridge.adb_shell(shell_cmd, timeout=30)
+        self._cmd_print_out(out)
+
+    def _cmd_flow_work(self, argv, timeout):
+        out = bridge._run(argv, timeout=timeout)
+        self._cmd_print_out(out)
+
+    def _cmd_fastboot_target(self):
+        try:
+            for row in device_pages.connected_rows():
+                if "FASTBOOT" in (row.get("transports") or []):
+                    key = row.get("key") or row.get("usb_key")
+                    try:
+                        target = _devices.resolve_usb_target(key)
+                    except Exception:
+                        target = None
+                    if target:
+                        return target
+        except Exception:
+            pass
+        return None
+
+    def _cmd_fastboot_work(self, fb_cmd, fallback=None):
+        target = self._cmd_fastboot_target()
+        if not target:
+            self._ui.line.emit("[warn] no fastboot phone connected")
+            return
+        out = bridge.fastboot_cmd(target, fb_cmd.split(), timeout_ms=20000)
+        if "FAILED" in str(out) and fallback:
+            self._ui.line.emit(f"[warn] '{fb_cmd}' rejected — trying '{fallback}'")
+            out = bridge.fastboot_cmd(target, fallback.split(), timeout_ms=20000)
+        self._cmd_print_out(out)
+
+    def _cmd_print_out(self, out):
+        for line in str(out).splitlines():
+            self._ui.line.emit(line if line.strip() else " ")
+        # Device-side failures come back as transcripts (no exception):
+        # never print a success marker over a rejected command.
+        if "FAILED" in str(out):
+            self._ui.line.emit("[error] device reported FAILED (see transcript above)")
+        else:
+            self._ui.line.emit("[ok] done")
 
     # ----------------------------- section switching ----------------------
-    def update_device_strip(self):
+    def update_device_strip(self, force=False):
         """Phase-1 device-first: refresh the connected-phone strip and dim
         drill-down buttons the phone can't use. Never raises (a failed
-        detect simply shows 'no phone', everything stays enabled)."""
+        detect simply shows 'no phone', everything stays enabled).
+
+        The USB scan runs in a worker thread (a slow bus must never freeze
+        the GUI); the widget update is posted back via the UI signal."""
+        if force:
+            try:
+                device_pages.invalidate_connected_cache()
+            except Exception:
+                pass
+        threading.Thread(target=self._device_strip_work, daemon=True).start()
+
+    def _device_strip_work(self):
         try:
             rows = device_pages.connected_rows()
         except Exception:
             rows = []
+        try:
+            self._ui.ui.emit(lambda: self._apply_device_strip(rows))
+        except Exception:
+            pass
+
+    def _apply_device_strip(self, rows):
         try:
             if not rows:
                 self._dev_dot.setText("○")
@@ -4164,6 +3024,125 @@ class FlashPilotWindow(QMainWindow):
         except Exception:
             pass
 
+    def _apply_tool_relevance(self):
+        """Tool-chip pattern: grey the MTK/Qualcomm/SPD/FUS tool chips that the
+        current brand's models cannot use. Samsung tools (FUS) light for
+        Samsung; chip tools light when ANY of the brand's model engines
+        matches or the connected phone exposes that transport. Never
+        removes a chip — greyed chips show a why tooltip."""
+        try:
+            section = getattr(self, "_current_section", "samsung")
+            brand_key = section.removeprefix("dev_")
+            if brand_key not in ("samsung", "mtk", "qc", "spd", "fus",
+                                 "general", "settings", "adb", "fastboot"):
+                engines = set()
+                for b in device_pages.BRAND_BY_KEY.get(brand_key, {}).get("models", []):
+                    e = (b.get("engine") or "").lower()
+                    engines.add({"motorola": "qcom"}.get(e, e))
+                    if e == "motorola":
+                        engines.update({"qcom", "mtk", "spd"})
+            else:
+                engines = None  # tool/chip section: all tools available
+            live = device_pages.connected_transports()
+            live_eng = set()
+            if "MTK" in live or "MTK BROM" in live:
+                live_eng.add("mtk")
+            if "SPD" in live:
+                live_eng.add("spd")
+            if "EDL" in live:
+                live_eng.add("qcom")
+            relevance = {
+                "fus": ("samsung", {"odin"}),
+                "mtk": ("mtk", {"mtk"}),
+                "qc": ("qc", {"qcom"}),
+                "spd": ("spd", {"spd"}),
+            }
+            for key, (tool_section, tool_engines) in relevance.items():
+                ok = (engines is None
+                      or bool(engines & tool_engines)
+                      or bool(live_eng & tool_engines))
+                why = ("" if ok else
+                       f"{brand_key.title() if brand_key else 'This brand'} models "
+                       f"don't use this tool (connect a matching phone to enable)")
+                self.oem_bar.set_tool_enabled(key, ok, tip=why or None)
+        except Exception:
+            pass
+
+    def _route_model_flash(self, label, engine, meta):
+        """Per-model flash routing: the model's engine decides the
+        destination. Unknown engines ask the user to pick the chip instead
+        of guessing; the workbench tabs remain for advanced use."""
+        engine = (engine or (meta.get("engine") or "")).lower()
+        if engine in ("motorola", "qcom"):
+            # Fastboot-based flashing with signed stock firmware. Route to
+            # the staged-flash flow when the firmware dir is set, else give
+            # the exact guidance.
+            import os as _os
+            fw = device_pages._moto_fw_dir() if engine == "motorola" else ""
+            if engine == "motorola" and fw:
+                self._run_ops_flow("Remove FRP", "FASTBOOT", "moto_fb_frp",
+                                   f"{label} · staged flash ({_os.path.basename(fw)})")
+                return
+            self._toasts.show_info(
+                f"{label} · Flash",
+                ("Signed firmware found — press FRP REMOVE → staged flash. "
+                 if fw else
+                 "Fastboot-based flashing: set MOTO_FW_DIR to the signed "
+                 "stock firmware (flashfile.xml) dir, then re-run — or use ")
+                + "FASTBOOT ▸ flash/erase with your firmware files.")
+            return
+        if engine in ("mtk", "spd", "odin"):
+            self._on_section(engine if engine != "odin" else "samsung")
+            dest = {"mtk": "MTK tab (DA + scatter + firmware dir)",
+                    "spd": "SPD tab (FDL1/FDL2 + firmware dir)",
+                    "odin": "Samsung ▸ FLASH slots (AP/BL/CP/CSC)"}[engine]
+            self._toasts.show_info(
+                f"{label} · Flash",
+                f"Opened the workbench for this model's chipset — {dest}.")
+            return
+        if engine in ("apple", "kirin"):
+            self._toasts.show_info(
+                f"{label} · Flash",
+                "No PC-side flash path for this chipset in FlashPilot "
+                "(Apple DFU / Kirin are not supported flash engines).")
+            return
+        # Unknown engine: ask, never guess.
+        from PyQt6.QtWidgets import QInputDialog, QComboBox, QDialog, QDialogButtonBox, QVBoxLayout, QLabel as _QL
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{label} · Chipset")
+        v = QVBoxLayout(dlg)
+        v.addWidget(_QL("Which chipset does this device use? "
+                        "(flash routing differs per chip)"))
+        combo = QComboBox()
+        combo.addItems(["MediaTek (MTK)", "UNISOC (SPD)",
+                        "Qualcomm (EDL/fastboot)", "Samsung (Odin)"])
+        v.addWidget(combo)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        pick = {0: "mtk", 1: "spd", 2: "qcom", 3: "odin"}[combo.currentIndex()]
+        self.log_line(f"[device] {label}: chip asked by user -> {pick}")
+        self._route_model_flash(label, pick, meta)
+
+    def _on_transport_pick(self, index):
+        """Transports dropdown: ADB hub / Fastboot hub / Easy Login / CMD."""
+        try:
+            self._transport_combo.setCurrentIndex(0)
+        except Exception:
+            pass
+        if index == 1:
+            self._on_section("adb")
+        elif index == 2:
+            self._on_section("fastboot")
+        elif index == 3:
+            self._on_section("easylogin")
+        elif index == 4:
+            self._open_cmd_tab()
+
     def _on_section(self, key):
         self._current_section = key
         idx = getattr(self, "_section_index", {}).get(key, 0)
@@ -4171,7 +3150,12 @@ class FlashPilotWindow(QMainWindow):
         if hasattr(self, "oem_bar"):
             self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
-        # Phase-1 device-first: the newly shown page gets the dimming pass.
+        # Phase-1 device-first: the newly shown page gets the dimming pass,
+        # and the tool chips re-grey for the brand now on screen.
+        try:
+            self._apply_tool_relevance()
+        except Exception:
+            pass
         try:
             self.update_device_strip()
         except Exception:
@@ -4190,6 +3174,204 @@ class FlashPilotWindow(QMainWindow):
             pass
 
     # --------------------- model action router (devices drill-down) --------
+    # MediaTek board actions (Devices page) --------------------------------
+    # These run the real BROM commands for the device the user selected in
+    # the Devices list. They never open the MTK workbench and never fall back
+    # to "the first device" (`_chip_begin` shows its picker when the key is
+    # unknown). Destructive work always goes through `_confirm_overlay`.
+
+    def _mtk_board_key(self):
+        """The key of the device selected on the Devices page (or None).
+
+        `_display_key` is the row the user picked; passing None is safe —
+        `_chip_begin` asks instead of guessing a target.
+        """
+        return getattr(self, "_display_key", None)
+
+    def _mtk_board_da(self, label, action):
+        """Bundled DA dir, or "" after an honest error when it is missing."""
+        try:
+            da_dir = bridge.bundled_mtk_da_dir() or ""
+        except Exception:
+            da_dir = ""
+        if da_dir:
+            return da_dir
+        self.log_line(
+            f"[error] {label}: bundled MediaTek DA containers missing "
+            "(root/tools/mtk/MTK_DA_V5.bin)")
+        self._toasts.show_error(
+            f"{label} · {action}",
+            "Bundled MediaTek DA is missing (root/tools/mtk). Reinstall "
+            "FlashPilot or restore the DA containers — BROM operations "
+            "cannot run without it.")
+        return ""
+
+    def _mtk_board_frp(self, label):
+        """FRP removal over BROM when the selected phone has no ADB."""
+        da_dir = self._mtk_board_da(label, "Remove FRP")
+        if not da_dir:
+            return
+        key = self._mtk_board_key()
+        self.log_line(f"[step] {label}: FRP via BROM (bundled DA, no ADB)")
+        self._confirm_overlay(
+            f"{label} · Remove FRP",
+            "No authorized ADB on the selected phone, so FRP is cleared\n"
+            "over BROM (boot ROM) instead.\n\n"
+            "The BROM exploit / DAA bypass runs first, then the FRP and\n"
+            "lock partitions are erased from the device GPT. Lock\n"
+            "partitions are erased and user data may be lost.\n\n"
+            "Continue?",
+            confirm_label="Remove FRP",
+            on_confirm=lambda k=key, d=da_dir: self._mtk_run(
+                ["mtk-frp-brom", "auto", d], timeout=1800, device_key=k),
+            chip="frp",
+        )
+
+    def _mtk_board_screen_lock_choice(self, label):
+        """No-ADB screen-lock choice: 'erase' | 'wipe' | None (cancelled)."""
+        box = QMessageBox(self)
+        box.setWindowTitle(f"{label} · Remove Screen Lock")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("No authorized ADB — the lock must be cleared over BROM.")
+        box.setInformativeText(
+            "Erase locks only: removes the PIN/pattern/password and FRP\n"
+            "keys; userdata is kept.\n\n"
+            "Factory reset: also wipes userdata (all apps and files).")
+        erase_btn = box.addButton("Erase locks only",
+                                  QMessageBox.ButtonRole.AcceptRole)
+        wipe_btn = box.addButton("Factory reset (wipe data)",
+                                 QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(erase_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is erase_btn:
+            return "erase"
+        if clicked is wipe_btn:
+            return "wipe"
+        return None
+
+    def _mtk_board_screen_lock(self, label):
+        """Screen lock removal over BROM when the selected phone has no ADB."""
+        da_dir = self._mtk_board_da(label, "Remove Screen Lock")
+        if not da_dir:
+            return
+        choice = self._mtk_board_screen_lock_choice(label)
+        if not choice:
+            self.log_line(f"[info] {label}: screen-lock removal cancelled")
+            return
+        wipe = choice == "wipe"
+        args = ["mtk-screen-lock", "auto", da_dir]
+        if wipe:
+            args.append("--wipe-userdata")
+        key = self._mtk_board_key()
+        warn = (
+            "FACTORY RESET: every user partition is erased (apps, photos,\n"
+            "accounts) in addition to the lock.\n\n" if wipe else
+            "ERASE LOCKS: the PIN/pattern/password, FRP and keystore\n"
+            "partitions are erased. Userdata is kept.\n\n")
+        self._confirm_overlay(
+            f"{label} · Remove Screen Lock",
+            warn + "Runs over BROM with the bundled DA. The phone must stay\n"
+                   "connected. Continue?",
+            confirm_label="Factory Reset" if wipe else "Erase Locks",
+            on_confirm=lambda a=args, k=key: self._mtk_run(
+                a, timeout=1800, device_key=k),
+            chip="wipe" if wipe else "lock",
+        )
+
+    def _mtk_board_backup(self, label):
+        """Back up the device GPT over BROM to a user-picked folder."""
+        da_dir = self._mtk_board_da(label, "Backup")
+        if not da_dir:
+            return
+        out_dir = QFileDialog.getExistingDirectory(
+            self, "MTK backup output folder", "/tmp/mtk_backup")
+        if not out_dir:
+            self.log_line(f"[info] {label}: backup cancelled")
+            return
+        key = self._mtk_board_key()
+        self.log_line(f"[step] {label}: GPT backup via BROM (bundled DA)")
+
+        def done(_out):
+            # Report the destination only once the bridge run has returned.
+            self.log_line(f"[backup] {label}: GPT backup written to {out_dir}")
+
+        self._confirm_overlay(
+            f"{label} · Backup GPT",
+            f"Read the partition table (GPT) over BROM and write a backup\n"
+            f"to:\n{out_dir}\n\nUses the bundled DA. Continue?",
+            confirm_label="Backup GPT",
+            on_confirm=lambda o=out_dir, d=da_dir, k=key: self._mtk_run(
+                ["mtk-backup-gpt", "auto", d, o], timeout=1800,
+                device_key=k, on_done=done),
+            chip="mtk",
+        )
+
+    def _mtk_board_flash_mode(self):
+        """Ask which download mode to use. Returns 'flash', 'format',
+        'format_data' or '' when cancelled. Extracted so tests can drive the
+        decision without a modal dialog."""
+        box = QMessageBox(self)
+        box.setWindowTitle("MTK flash mode")
+        box.setText(
+            "How should the flash run?\n\n"
+            "Format All erases each target partition before writing it; "
+            "Format All + wipe data also erases userdata and cache."
+        )
+        fmt_all = box.addButton("Format all + download", QMessageBox.ButtonRole.AcceptRole)
+        fmt_data = box.addButton(
+            "Format all + wipe data", QMessageBox.ButtonRole.DestructiveRole)
+        flash_only = box.addButton("Flash only", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is None or clicked is cancel:
+            return ""
+        if clicked is fmt_data:
+            return "format_data"
+        if clicked is fmt_all:
+            return "format"
+        if clicked is flash_only:
+            return "flash"
+        return ""
+
+    def _mtk_board_flash(self, label):
+        """Flash a firmware folder over BROM (mtk-flash-auto, auto DA)."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "MTK firmware folder",
+            self.settings.value("default_dir", os.path.expanduser("~/Downloads")))
+        if not folder:
+            self.log_line(f"[info] {label}: flash cancelled")
+            return
+        key = self._mtk_board_key()
+        mode = self._mtk_board_flash_mode()
+        if not mode:
+            self.log_line(f"[info] {label}: flash cancelled at mode prompt")
+            return
+        if mode == "format_data":
+            mode_flags = ["--format-all", "--erase-userdata"]
+            mode_label = "Format All + wipe data"
+        elif mode == "format":
+            mode_flags = ["--format-all"]
+            mode_label = "Format All + download"
+        else:
+            mode_flags = []
+            mode_label = "Flash only"
+        self._confirm_overlay(
+            f"{label} · Flash Firmware",
+            f"Mode: {mode_label}\nFolder:\n{folder}\n\n"
+            "mtk-flash-auto matches images to partitions from the device\n"
+            "GPT/scatter and OVERWRITES those partitions. A wrong folder,\n"
+            "a mismatched model or an interrupted cable can leave the\n"
+            "phone unbootable.\n\nContinue?",
+            confirm_label="Flash Firmware",
+            on_confirm=lambda f=folder, k=key, mf=list(mode_flags): self._mtk_run(
+                ["mtk-flash-auto", "auto", f, "--da", "auto", *mf],
+                timeout=3600, device_key=k),
+            chip="flash",
+        )
+
     def start_model_action(self, act, brand_label, meta, feature=None):
         """Wire a Devices drill-down action to the real engine for its chip.
 
@@ -4203,7 +3385,10 @@ class FlashPilotWindow(QMainWindow):
         label = f"{brand_label} {meta.get('model','')}"
         self.log_line(f"[device] {label}: {act} via {engine or 'n/a'}")
 
-        if act == "info":
+        if act == "info" and engine != "qcom":
+            # Generic identity refresh. Qualcomm is the exception: its engine
+            # block below runs the real `qcom-detect` EDL scan, so it must not
+            # be swallowed here.
             self.refresh_device()
             return
 
@@ -4274,13 +3459,12 @@ class FlashPilotWindow(QMainWindow):
             engine = (meta.get("engine") or "").lower()
             if act.endswith("_brom") and engine in ("spd", "mtk"):
                 self._on_section(engine)
-            if act == "flash" and engine in ("spd", "mtk"):
-                # Flash is special: never inline; just open the workbench.
-                self._on_section(engine)
-                self._toasts.show_info(
-                    f"{label} · Flash",
-                    "Open the workbench (FDL + firmware dir) and press Flash Firmware."
-                )
+            if act == "flash":
+                # Per-model flash: route by THIS model's engine, never a
+                # generic chip assumption. motorola/qcom = fastboot-based;
+                # mtk/spd/odin open their own workbench; apple/kirin have
+                # no PC flash path (honest toast).
+                self._route_model_flash(label, engine, meta)
                 return
             # Map to a generic (job, mode) so the global flow runner's status
             # banner reads sensibly. The flow name itself is the source of truth.
@@ -4295,6 +3479,8 @@ class FlashPilotWindow(QMainWindow):
                 "tecno_enable_adb":      ("Remove FRP",          "MTP"),
                 "moto_frp_adb":          ("Remove FRP",          "ADB"),
                 "moto_frp_fastboot":     ("Remove FRP",          "FASTBOOT"),
+                "moto_fb_frp":           ("Remove FRP",          "FASTBOOT"),
+                "moto_fb_factory_adb":   ("Remove FRP",          "FASTBOOT"),
                 "fastboot_unlock":       ("Unlock Bootloader",   "FASTBOOT"),
                 "fastboot_lock":         ("Lock Bootloader",     "FASTBOOT"),
                 "frp_fake_login":        ("Remove FRP",          "ADB"),
@@ -4310,66 +3496,122 @@ class FlashPilotWindow(QMainWindow):
                 self._run_ops_flow(job_mode[0], job_mode[1], act, f"{label} · {act}",
                                    feature=feature)
             else:
-                # Generic fallback: just run the flow under a synthetic label
-                self._run_ops_flow("Read Device Info", "ADB", act, f"{label} · {act}",
+                # Generic fallback: the Rust registry names the real
+                # job/mode so the banner reads sensibly for any present or
+                # future flow (hub buttons rely on this — no per-flow map).
+                _rj, _rm = "Read Device Info", "ADB"
+                try:
+                    for _row in core._load_registry() or []:
+                        if _row.get("key") == act:
+                            _rj = _row.get("job") or _rj
+                            _rm = _row.get("mode") or _rm
+                            break
+                except Exception:
+                    pass
+                self._run_ops_flow(_rj, _rm, act, f"{label} · {act}",
                                    feature=feature)
             return
 
         if engine == "spd":
-            self._on_section("spd")
+            # Unisoc (SPD) board actions run from ONE PAC file: `spd-flash-pac`
+            # pulls the matching FDL1/FDL2 + load addresses straight out of the
+            # PAC, so a model no longer dead-ends on "load the FDL binaries
+            # first". ADB-capable paths still win when the SELECTED phone is
+            # live over ADB; the manual FDL paths stay available for advanced
+            # workbench work (there they are genuinely required).
             if act == "screen_lock":
-                # Screen lock removal: ADB locksettings first (device is ADB live),
-                # fall back to BROM factory format if no ADB.
+                if self._adb_ready_for_key():
+                    self._run_ops_flow("Remove Screen Lock", "ADB",
+                                       "screen_lock_locksettings",
+                                       f"{label} · screen lock remove (ADB)")
+                    return
+                self._spd_board_screen_lock(label)
+                return
+            if act == "frp":
+                # ADB FRP first — bounded (<=1s) and only satisfied by the
+                # SELECTED phone, never a different attached one.
+                if self._adb_ready_for_key():
+                    self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
+                                       f"{label} · FRP bypass (ADB)")
+                    return
+                if self._spd_fdl1():
+                    # FDL1/FDL2 already configured on the SPD tab: keep the
+                    # proven `spd-frp` path (and show the tab it reads from).
+                    self._on_section("spd")
+                    self._spd_frp()
+                    return
+                self._spd_board_frp(label)
+                return
+            if act == "backup":
+                self._spd_board_backup(label)
+                return
+            if act == "flash":
+                # Single PAC flash straight from the board — no SPD workbench
+                # detour and no per-partition image folder.
+                self._spd_board_flash(label)
+                return
+            if act == "adb_enable":
+                self._on_section("spd")
+                self._spd_enable_adb()
+                return
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
+            return
+
+        if engine == "qcom":
+            # Qualcomm (catalogued + curated models): the board actions run the
+            # real EDL 9008 (Sahara/Firehose) bridge commands for the SELECTED
+            # device. The bundled programmers are auto-selected by SoC index
+            # (`--programmer auto` / the bare `auto` target slot), so nothing
+            # here needs the QC workbench tab. ADB-capable actions still go to
+            # the universal ADB flows.
+            if act == "screen_lock":
                 self._run_ops_flow("Remove Screen Lock", "ADB",
                                    "screen_lock_locksettings",
                                    f"{label} · screen lock remove (ADB)")
                 return
-            if act == "flash":
-                self._on_section("spd")
-                self._toasts.show_info(
-                    f"{label} · Flash",
-                    "Load this model's FDL1/FDL2 + firmware dir on the SPD tab, "
-                    "then Flash Firmware.")
+            if act == "adb_enable":
+                self._run_ops_flow("Remove FRP", "MTP", "enable_adb",
+                                   f"{label} · enable ADB")
                 return
-            have_fdl = bool(self.spd_files["fdl1"].text().strip())
-            if not have_fdl:
-                self._toasts.show_warn(
-                    f"{label} · {act}",
-                    "Load this model's FDL1/FDL2 binaries on the SPD tab "
-                    "(they are model-specific) then press the action again.",
-                )
+            if act == "info":
+                self._on_section("qc")
+                self._qc_detect()
                 return
             if act == "frp":
-                self._spd_frp()
-            elif act == "backup":
-                from PyQt6.QtWidgets import QFileDialog
-                out_dir = QFileDialog.getExistingDirectory(
-                    self, "Backup output folder",
-                    self.settings.value("default_dir", os.path.expanduser("~/Downloads")),
-                )
-                if not out_dir:
+                # Prefer ADB FRP when the SELECTED phone is authorized. Bounded
+                # (<=1s) and never satisfied by a different attached phone.
+                adb_up = self._adb_ready_for_key()
+                if adb_up:
+                    self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
+                                       f"{label} · FRP bypass (ADB)")
                     return
-                a1 = self._spd_addr(self.spd_fdl1_addr)
-                fdl1 = self.spd_files["fdl1"].text().strip()
-                fdl2 = self.spd_files["fdl2"].text().strip()
-                args = ["spd-backup", self._spd_resolve_target() or "", fdl1,
-                        f"0x{a1:x}" if a1 is not None else "0x0"]
-                if fdl2:
-                    a2 = self._spd_addr(self.spd_fdl2_addr)
-                    args += [fdl2, f"0x{a2:x}" if a2 is not None else "0x0"]
-                args.append(out_dir)
-                self._spd_run(args, timeout=3600)
-            elif act == "adb_enable":
-                self._spd_enable_adb()
-            else:
-                self._toasts.show_info(f"{label} · {act}",
-                                       "Wiring lands in the next step.")
+                self._qc_board_frp(label)
+                return
+            if act == "backup":
+                self._qc_board_backup(label)
+                return
+            if act == "flash":
+                self._qc_board_flash(label)
+                return
+            self._toasts.show_info(f"{label} · {act}",
+                                   "Wiring lands in the next step.")
             return
 
-        if engine in ("mtk", "qcom", "kirin"):
-            # MediaTek / Qualcomm / Huawei engines — route ADB-capable actions to
-            # the universal ADB flows; BROM/low-level to their workbench tabs.
+        if engine in ("mtk", "kirin"):
+            # MediaTek / Huawei engines — route ADB-capable actions to
+            # the universal ADB flows; MTK board actions run the real BROM
+            # commands for the selected device (no workbench detour).
             if act == "screen_lock":
+                if engine == "mtk":
+                    if self._adb_ready_for_key():
+                        self._run_ops_flow(
+                            "Remove Screen Lock", "ADB",
+                            "screen_lock_locksettings",
+                            f"{label} · screen lock remove (ADB)")
+                        return
+                    self._mtk_board_screen_lock(label)
+                    return
                 self._run_ops_flow("Remove Screen Lock", "ADB",
                                    "screen_lock_locksettings",
                                    f"{label} · screen lock remove (ADB)")
@@ -4383,18 +3625,18 @@ class FlashPilotWindow(QMainWindow):
                     self.log_line(f"[device] {label}: Moto G6 has no AT ADB enable (22b8 MTP vendor, no diag port)")
                     self._toasts.show_info(
                         f"{label} · Enable ADB",
-                        "Moto G6 FRP-locked has no ADB: use on-phone Browser (TalkBack → YouTube → Chrome → Settings) "
-                        "or reboot to fastboot (Vol Down+Power) then fastboot erase frp. No Samsung *#0*#/AT.")
+                        "Moto FRP-locked has no ADB: use the MDM ▸ Generate QR "
+                        "fake-login (enrolls a device owner that enables ADB), "
+                        "the factory-bootmode cycle (FRP REMOVE → factory-mode), "
+                        "or on-phone wizard escapes. No Samsung *#0*#/AT.")
                     return
                 self._run_ops_flow("Remove FRP", "MTP", "enable_adb",
                                    f"{label} · enable ADB")
                 return
             if act == "frp":
-                # Prefer ADB FRP when authorized; else per-chip path
-                try:
-                    adb_up = any(d["state"] == "device" for d in bridge.adb_status())
-                except Exception:
-                    adb_up = False
+                # Prefer ADB FRP when the SELECTED phone is authorized; the
+                # check is bounded (<=1s) and never satisfied by another phone.
+                adb_up = self._adb_ready_for_key()
                 if adb_up:
                     self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
                                        f"{label} · FRP bypass (ADB)")
@@ -4405,11 +3647,14 @@ class FlashPilotWindow(QMainWindow):
                     self.log_line(f"[device] {label}: Moto G6 FRP — no ADB, use browser/fastboot")
                     self._toasts.show_info(
                         f"{label} · FRP",
-                        "No ADB: on-phone Browser (TalkBack → Chrome → Settings → remove account) "
-                        "or fastboot (Vol Down+Power) → fastboot erase frp + cache.")
+                        "No ADB: MDM ▸ Generate QR (fake-login enables ADB), "
+                        "FRP REMOVE → factory-mode cycle, or on-phone wizard "
+                        "escapes (Browser → Settings → remove account).")
                     return
-                # MTK combo / MTP enable path
-                method = "mtk_combo_flash" if engine == "mtk" else "enable_adb"
+                if engine == "mtk":
+                    self._mtk_board_frp(label)
+                    return
+                # Huawei/Kirin: no PC-side FRP path — keep the guidance.
                 self._on_section("mtk")
                 self._toasts.show_info(
                     f"{label} · FRP",
@@ -4418,12 +3663,15 @@ class FlashPilotWindow(QMainWindow):
                     "USB debugging first.")
                 return
             if act == "flash":
-                self._on_section("mtk")
-                self._toasts.show_info(
-                    f"{label} · Flash",
-                    "Load DA + scatter + firmware dir on the MTK tab, then Flash.")
+                if engine == "mtk":
+                    self._mtk_board_flash(label)
+                    return
+                self._route_model_flash(label, engine, meta)
                 return
             if act == "backup":
+                if engine == "mtk":
+                    self._mtk_board_backup(label)
+                    return
                 self._on_section("mtk")
                 self._toasts.show_info(
                     f"{label} · Backup",
@@ -4431,7 +3679,7 @@ class FlashPilotWindow(QMainWindow):
                 return
             if act == "info":
                 self._on_section("mtk")
-                self._spd_detect()
+                self._mtk_detect()
                 return
             self._toasts.show_info(f"{label} · {act}",
                                    "Wiring lands in the next step.")
@@ -4457,10 +3705,9 @@ class FlashPilotWindow(QMainWindow):
                     "USB debugging, or unlock via fastboot (see FRP REMOVE → FB).")
                 return
             if act == "frp":
-                try:
-                    adb_up = any(d["state"] == "device" for d in bridge.adb_status())
-                except Exception:
-                    adb_up = False
+                # Selected-device-only, bounded ADB check (no GUI freeze, no
+                # unrelated-phone false positive).
+                adb_up = self._adb_ready_for_key()
                 if adb_up:
                     self._run_ops_flow("Remove FRP", "ADB", "moto_frp_adb",
                                        f"{label} · FRP reset (ADB)")
@@ -4469,7 +3716,8 @@ class FlashPilotWindow(QMainWindow):
                     self._toasts.show_info(
                         f"{label} · FRP",
                         "No authorized ADB. Either run FRP REMOVE → FB "
-                        "(unlock token → erase frp), or on-phone Browser → "
+                        "(staged flash when firmware is set, else the "
+                        "CVE-2016-10277 chain), or on-phone Browser → "
                         "Settings → remove account.")
                 return
             if act in ("flash", "backup"):
@@ -4496,11 +3744,7 @@ class FlashPilotWindow(QMainWindow):
             self._run_ops_flow("Flash Firmware", "Download mode",
                                "odin_efs_backup", f"{label} · EFS backup")
         elif act == "flash":
-            self._on_section("samsung")
-            self._toasts.show_info(
-                f"{label} · Flash",
-                "Load AP/BL/CP/CSC in Samsung ▸ FLASH slots, then Flash — "
-                "PIT safety contract runs automatically.")
+            self._route_model_flash(label, engine, meta)
         else:
             self._toasts.show_info(f"{label} · {act}",
                                    "Wiring lands in the next step.")
@@ -4866,190 +4110,6 @@ class FlashPilotWindow(QMainWindow):
             self._ui.ui.emit(done)
 
         threading.Thread(target=work, daemon=True).start()
-
-    # ----------------------------- Firmware Downloader page --------------
-    def _build_fus_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(_card_qss())
-        panel_lay = QVBoxLayout(panel)
-        panel_lay.setContentsMargins(0, 0, 0, 0)
-        panel_lay.setSpacing(0)
-        page_scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(12)
-
-        lay.addWidget(SectionTitle("SAMSUNG OFFICIAL FIRMWARE DOWNLOADER (SAMFIRM / FUS)"))
-        info = QLabel(
-            "Direct FUS client to query Samsung servers, check latest firmware versions, "
-            "download encrypted firmware packages in parallel, and auto-decrypt them into "
-            "ready-to-flash .tar.md5 archives."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        form_card = QFrame()
-        form_card.setStyleSheet(
-            f"QFrame {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 12px; }}"
-        )
-        form_lay = QVBoxLayout(form_card)
-        form_lay.setSpacing(10)
-
-        # Model row
-        r1 = QHBoxLayout()
-        lbl1 = QLabel("Device Model:")
-        lbl1.setStyleSheet(f"color:{C['text']}; font-weight:600;")
-        r1.addWidget(lbl1)
-        self.fus_model_input = QLineEdit("SM-S918B")
-        self.fus_model_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
-        r1.addWidget(self.fus_model_input, 1)
-
-        self.fus_detect_btn = QPushButton("🔍 Detect Connected Device")
-        self.fus_detect_btn.setStyleSheet(_btn_ghost())
-        self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_detect_btn.clicked.connect(self._fus_detect_device)
-        self._gate_button(self.fus_detect_btn, command="adb_shell")
-        r1.addWidget(self.fus_detect_btn)
-        
-        lbl_reg = QLabel("Region:")
-        lbl_reg.setStyleSheet(f"color:{C['text']}; font-weight:600;")
-        r1.addWidget(lbl_reg)
-        self.fus_region_input = QLineEdit("EUX")
-        self.fus_region_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
-        self.fus_region_input.setMaximumWidth(100)
-        r1.addWidget(self.fus_region_input)
-        form_lay.addLayout(r1)
-
-        # Version row
-        r2 = QHBoxLayout()
-        lbl2 = QLabel("Firmware Version:")
-        lbl2.setStyleSheet(f"color:{C['text']}; font-weight:600;")
-        r2.addWidget(lbl2)
-        self.fus_version_input = QLineEdit()
-        self.fus_version_input.setPlaceholderText("e.g. S918BXXU3BWCV/S918BOXM3BWCV/S918BXXU3BWCV (or click Check Version)")
-        self.fus_version_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
-        r2.addWidget(self.fus_version_input, 1)
-
-        self.fus_check_btn = QPushButton("Check Version")
-        self.fus_check_btn.setStyleSheet(_btn_primary())
-        self.fus_check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_check_btn.clicked.connect(self._fus_check_version)
-        r2.addWidget(self.fus_check_btn)
-
-        self.fus_list_btn = QPushButton("List All Versions")
-        self.fus_list_btn.setStyleSheet(_btn_ghost())
-        self.fus_list_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_list_btn.clicked.connect(self._fus_list_versions)
-        r2.addWidget(self.fus_list_btn)
-        form_lay.addLayout(r2)
-
-        # Output dir row
-        r3 = QHBoxLayout()
-        lbl3 = QLabel("Output Directory:")
-        lbl3.setStyleSheet(f"color:{C['text']}; font-weight:600;")
-        r3.addWidget(lbl3)
-        self.fus_out_input = QLineEdit(os.path.expanduser("~/brilliant/cache"))
-        self.fus_out_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
-        r3.addWidget(self.fus_out_input, 1)
-        form_lay.addLayout(r3)
-
-        lay.addWidget(form_card)
-
-        # SamFW-style firmware details card: shows the exact firmware the
-        # connected device needs. Auto-filled by Detect / Check Version.
-        details_card = QFrame()
-        details_card.setStyleSheet(
-            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 3px solid {C['accent']}; border-radius: 10px; }}"
-        )
-        details_lay = QVBoxLayout(details_card)
-        details_lay.setContentsMargins(12, 10, 12, 10)
-        details_lay.setSpacing(6)
-        details_title = QLabel("📋 FIRMWARE FOR THIS DEVICE")
-        details_title.setStyleSheet(f"color:{C['accent_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;")
-        details_lay.addWidget(details_title)
-        details_grid = QGridLayout()
-        details_grid.setContentsMargins(0, 0, 0, 0)
-        details_grid.setHorizontalSpacing(12)
-        details_grid.setVerticalSpacing(3)
-        self.fus_detail_vals = {}
-        for _row, (_dkey, _dlabel) in enumerate((
-            ("model", "Model"), ("region", "Region / CSC"),
-            ("pda", "PDA (AP)"), ("csc_ver", "CSC"), ("cp", "Modem (CP)"),
-            ("size", "Size"), ("file", "File"),
-        )):
-            _k = QLabel(_dlabel + ":")
-            _k.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:600;")
-            _v = QLabel("—")
-            _v.setStyleSheet(f"color:{C['text']}; font-size:11px; font-weight:700; font-family:'Consolas','Monaco',monospace;")
-            _v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            _v.setWordWrap(True)
-            details_grid.addWidget(_k, _row, 0)
-            details_grid.addWidget(_v, _row, 1)
-            self.fus_detail_vals[_dkey] = _v
-        details_grid.setColumnStretch(1, 1)
-        details_lay.addLayout(details_grid)
-        lay.addWidget(details_card)
-
-        # Actions row
-        act_row = QHBoxLayout()
-        self.fus_download_btn = QPushButton("⬇ Download & Decrypt Firmware")
-        self.fus_download_btn.setStyleSheet(_btn_primary())
-        self.fus_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_download_btn.setFixedHeight(38)
-        self.fus_download_btn.clicked.connect(self._fus_download)
-        act_row.addWidget(self.fus_download_btn)
-
-        self.fus_load_ap_btn = QPushButton("📂 Load into AP Slot")
-        self.fus_load_ap_btn.setStyleSheet(_btn_ghost())
-        self.fus_load_ap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_load_ap_btn.setFixedHeight(38)
-        self.fus_load_ap_btn.clicked.connect(self._fus_load_into_ap)
-        act_row.addWidget(self.fus_load_ap_btn)
-        lay.addLayout(act_row)
-
-        # Progress bar
-        self.fus_progress = QProgressBar()
-        self.fus_progress.setRange(0, 100)
-        self.fus_progress.setValue(0)
-        self.fus_progress.setStyleSheet(f"QProgressBar {{ background:{C['inset']}; border:1px solid {C['border']}; border-radius:5px; text-align:center; color:{C['text']}; }} QProgressBar::chunk {{ background:{C['accent']}; border-radius:4px; }}")
-        lay.addWidget(self.fus_progress)
-
-        # Status label
-        self.fus_status_lbl = QLabel("Ready.")
-        self.fus_status_lbl.setStyleSheet(f"color:{C['dim']}; font-size:12px; font-weight:600;")
-        lay.addWidget(self.fus_status_lbl)
-
-        # Other brand resources card
-        res_card = QFrame()
-        res_card.setStyleSheet(
-            f"QFrame {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 10px; padding: 12px; }}"
-        )
-        res_lay = QVBoxLayout(res_card)
-        res_lay.setSpacing(6)
-        
-        res_title = QLabel("🌐 Other Brand Firmware & Loader Repositories (Reference)")
-        res_title.setStyleSheet(f"color:{C['text']}; font-weight:700; font-size:12px;")
-        res_lay.addWidget(res_title)
-
-        res_info = QLabel(
-            "• <b>MediaTek (MTK) Scatter / DA:</b> Check Hovatek & Needrom for scatter files and signed Download Agents.<br>"
-            "• <b>Qualcomm EDL Firehose:</b> Use <i>bkerler/Firehose</i> on GitHub for open EDL programmer loaders.<br>"
-            "• <b>UNISOC / Spreadtrum (SPD):</b> Stock PAC firmwares contain FDL1/FDL2 binaries required for BSL flashing."
-        )
-        res_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        res_info.setWordWrap(True)
-        res_lay.addWidget(res_info)
-        lay.addWidget(res_card)
-
-        host.setLayout(lay)
-        page_scroll.setWidget(host)
-        panel_lay.addWidget(page_scroll)
-        return panel
 
     def _fus_detect_device(self):
         self.fus_status_lbl.setText("Scanning connected Samsung device (ADB or Download mode)...")
@@ -5424,336 +4484,6 @@ class FlashPilotWindow(QMainWindow):
         else:
             self.show_toast(f"Firmware ready at: {fw}", "info")
 
-    # ----------------------------- MTK Tools page -------------------------
-    def _build_mtk_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(
-            _card_qss()
-        )
-        panel_lay = QVBoxLayout(panel)
-        panel_lay.setContentsMargins(0, 0, 0, 0)
-        panel_lay.setSpacing(0)
-        page_scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(9)
-
-        lay.addWidget(SectionTitle("MEDIATEK LOW-LEVEL TOOLING"))
-        info = QLabel(
-            "MediaTek BROM / Preloader / DA tooling (VID 0e8d). Needs a matching "
-            "DA + scatter file from the device's firmware."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        detect_row = QHBoxLayout()
-        self.mtk_detect_btn = QPushButton("Detect MediaTek")
-        self.mtk_detect_btn.setStyleSheet(_btn_primary())
-        self.mtk_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mtk_detect_btn.clicked.connect(self._mtk_detect)
-        detect_row.addWidget(self.mtk_detect_btn)
-        self.mtk_status = QLabel("No MediaTek device detected")
-        self.mtk_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
-        detect_row.addWidget(self.mtk_status, 1)
-        lay.addLayout(detect_row)
-
-        # --- Combination Flash section (Samsung-style: Scatter + DA + Firmware dir) ---
-        combo_panel = QFrame()
-        combo_panel.setObjectName("combo")
-        combo_panel.setStyleSheet(
-            f"QFrame#combo {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        combo_lay = QVBoxLayout(combo_panel)
-        combo_lay.setContentsMargins(14, 10, 14, 14)
-        combo_lay.setSpacing(8)
-
-        combo_lay.addWidget(QLabel("COMBINATION FLASH (Scatter + DA + Firmware)"))
-        combo_lay.addWidget(
-            _risk_banner(
-                "This flashes ALL partitions defined in the scatter file. "
-                "Wrong DA/scatter/firmware for this model can hard-brick the device."
-            )
-        )
-
-        # Scatter file row
-        scatter_row = QHBoxLayout()
-        scatter_lbl = QLabel("Scatter file")
-        scatter_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
-        scatter_row.addWidget(scatter_lbl)
-        self.mtk_scatter_edit = QLineEdit()
-        self.mtk_scatter_edit.setPlaceholderText("Select scatter file (.txt)...")
-        self.mtk_scatter_edit.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        scatter_row.addWidget(self.mtk_scatter_edit, 1)
-        scatter_btn = QPushButton("Browse...")
-        scatter_btn.setStyleSheet(_btn_ghost())
-        scatter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        scatter_btn.setFixedWidth(90)
-        scatter_btn.clicked.connect(
-            lambda: self._mtk_browse(self.mtk_scatter_edit, "scatter", "Scatter (*.txt);;All files (*)")
-        )
-        scatter_row.addWidget(scatter_btn)
-        combo_lay.addLayout(scatter_row)
-
-        # DA binary row
-        da_row = QHBoxLayout()
-        da_lbl = QLabel("DA binary")
-        da_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
-        da_row.addWidget(da_lbl)
-        self.mtk_da_edit = QLineEdit()
-        self.mtk_da_edit.setPlaceholderText("Select DA binary (.bin)...")
-        self.mtk_da_edit.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        da_row.addWidget(self.mtk_da_edit, 1)
-        da_btn = QPushButton("Browse...")
-        da_btn.setStyleSheet(_btn_ghost())
-        da_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        da_btn.setFixedWidth(90)
-        da_btn.clicked.connect(
-            lambda: self._mtk_browse(self.mtk_da_edit, "da", "DA (*.bin);;All files (*)")
-        )
-        da_row.addWidget(da_btn)
-        combo_lay.addLayout(da_row)
-
-        # Firmware directory row
-        fw_row = QHBoxLayout()
-        fw_lbl = QLabel("Firmware dir")
-        fw_lbl.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; min-width:90px; font-size:11px;")
-        fw_row.addWidget(fw_lbl)
-        self.mtk_fw_dir = QLineEdit()
-        self.mtk_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
-        self.mtk_fw_dir.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        fw_row.addWidget(self.mtk_fw_dir, 1)
-        fw_btn = QPushButton("Browse...")
-        fw_btn.setStyleSheet(_btn_ghost())
-        fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fw_btn.setFixedWidth(90)
-        fw_btn.clicked.connect(self._mtk_browse_dir)
-        fw_row.addWidget(fw_btn)
-        combo_lay.addLayout(fw_row)
-
-        # Auth bypass toggle
-        auth_row = QHBoxLayout()
-        self.mtk_auth_bypass_cb = QCheckBox("Auth bypass (da_auth_bypass mode)")
-        self.mtk_auth_bypass_cb.setChecked(False)
-        self.mtk_auth_bypass_cb.setToolTip(
-            "When ON, uses 'da_auth_bypass' mode to skip preloader auth checks.\n"
-            "Required for some secured devices where standard DA auth fails.\n"
-            "WARNING: May not work on all chips; can brick if used incorrectly."
-        )
-        self.mtk_auth_bypass_cb.setStyleSheet(
-            f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
-            f" QCheckBox::indicator {{ width:14px; height:14px; }}"
-        )
-        auth_row.addWidget(self.mtk_auth_bypass_cb)
-        auth_row.addStretch(1)
-        combo_lay.addLayout(auth_row)
-
-        # Flash button
-        flash_row = QHBoxLayout()
-        flash_row.setSpacing(10)
-        self.mtk_flash_combo_btn = QPushButton("Flash Firmware (Combination)")
-        self.mtk_flash_combo_btn.setStyleSheet(_btn_primary())
-        self.mtk_flash_combo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mtk_flash_combo_btn.setToolTip(
-            "Flash ALL partitions from the firmware directory using the scatter file"
-        )
-        self.mtk_flash_combo_btn.clicked.connect(self._mtk_flash)
-        self._gate_button(self.mtk_flash_combo_btn, command="mtk-flash")
-        flash_row.addWidget(self.mtk_flash_combo_btn)
-        self.mtk_check_combo_btn = QPushButton("Check Scatter")
-        self.mtk_check_combo_btn.setStyleSheet(_btn_ghost())
-        self.mtk_check_combo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mtk_check_combo_btn.setToolTip(
-            "Validate the scatter file and firmware directory without flashing"
-        )
-        self.mtk_check_combo_btn.clicked.connect(self._mtk_check_scatter)
-        self._gate_button(self.mtk_check_combo_btn, command="mtk-check-scatter")
-        flash_row.addWidget(self.mtk_check_combo_btn)
-        flash_row.addStretch(1)
-        combo_lay.addLayout(flash_row)
-
-        lay.addWidget(combo_panel)
-
-        # --- Advanced Tools section ---
-        adv_panel = QFrame()
-        adv_panel.setObjectName("adv")
-        adv_panel.setStyleSheet(
-            f"QFrame#adv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['ok']};"
-            f" border-top: 1px solid {C['border_hi']}; border-radius: 9px; }}"
-        )
-        adv_lay = QVBoxLayout(adv_panel)
-        adv_lay.setContentsMargins(14, 10, 14, 14)
-        adv_lay.setSpacing(8)
-
-        adv_lay.addWidget(QLabel("ADVANCED TOOLS"))
-        adv_lay.addWidget(
-            _risk_banner(
-                "These write directly to partitions by NAME (no scatter). "
-                "A wrong partition/image combo can soft-brick the device."
-            )
-        )
-
-        # Generate scatter / Dump preloader row
-        gen_row = QHBoxLayout()
-        gen_btn = QPushButton("Generate Scatter (from device GPT)")
-        gen_btn.setStyleSheet(_btn_ghost())
-        gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        gen_btn.setToolTip(
-            "Read the device's own GPT partition table and write an SP Flash\n"
-            "Tool scatter file. Samsung firmware never includes a scatter file,\n"
-            "so this rebuilds one from the phone. Large data partitions are\n"
-            "marked non-downloadable. Needs the DA binary + BROM/preloader."
-        )
-        gen_btn.clicked.connect(self._mtk_gen_scatter)
-        self._gate_button(gen_btn, command="mtk-gpt")
-        gen_row.addWidget(gen_btn)
-        dump_btn = QPushButton("Dump & Patch Preloader (build DA from phone)")
-        dump_btn.setStyleSheet(_btn_ghost())
-        dump_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        dump_btn.setToolTip(
-            "Dump the phone's own preloader and patch its security checks -\n"
-            "the result IS a working Download Agent for this device. This is\n"
-            "how you get a DA without downloading one: the phone provides it.\n"
-            "The patched file is saved to ~/Downloads/preloader_patched.bin\n"
-            "and auto-selected as the DA binary. Needs the phone in BROM."
-        )
-        dump_btn.clicked.connect(self._mtk_dump_preloader)
-        gen_row.addWidget(dump_btn)
-        gen_row.addStretch(1)
-        adv_lay.addLayout(gen_row)
-
-        # Action buttons
-        acts = QVBoxLayout()
-        acts.setSpacing(8)
-        acts_row1 = QHBoxLayout()
-        acts_row1.setSpacing(10)
-        for label, slot in (
-            ("Backup Partitions", self._mtk_backup),
-            ("Get Device Info", self._mtk_info),
-            ("List Partitions", self._mtk_list_parts),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            acts_row1.addWidget(b)
-        acts_row1.addStretch(1)
-        acts.addLayout(acts_row1)
-        acts_row2 = QHBoxLayout()
-        acts_row2.setSpacing(10)
-        for label, slot in (
-            ("FRP Bypass", self._mtk_frp),
-            ("Enable ADB", self._mtk_adb),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            acts_row2.addWidget(b)
-        acts_row2.addStretch(1)
-        self.mtk_stop_btn = QPushButton("Stop")
-        self.mtk_stop_btn.setEnabled(False)
-        self.mtk_stop_btn.setStyleSheet(_btn_danger())
-        self.mtk_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mtk_stop_btn.clicked.connect(self._mtk_stop)
-        self.mtk_stop_btn.setToolTip("Cancel the running MTK operation")
-        acts_row2.addWidget(self.mtk_stop_btn)
-        self.mtk_stop_btn.setVisible(False)
-        acts.addLayout(acts_row2)
-        acts_row3 = QHBoxLayout()
-        acts_row3.setSpacing(10)
-        self.mtk_flash_part_btn = QPushButton("Flash Partition (No Scatter)")
-        self.mtk_flash_part_btn.setStyleSheet(_btn_ghost())
-        self.mtk_flash_part_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mtk_flash_part_btn.setToolTip(
-            "Write one or more partitions by NAME, resolving addresses from "
-            "the device GPT. No scatter file required."
-        )
-        self.mtk_flash_part_btn.clicked.connect(self._mtk_flash_part)
-        self._gate_button(self.mtk_flash_part_btn, command="mtk-flash-part")
-        acts_row3.addWidget(self.mtk_flash_part_btn)
-        frp_gpt_btn = QPushButton("FRP Bypass (No Scatter)")
-        frp_gpt_btn.setStyleSheet(_btn_ghost())
-        frp_gpt_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        frp_gpt_btn.setToolTip(
-            "Clear lock/FRP partitions by NAME from the device GPT. "
-            "No scatter file required."
-        )
-        frp_gpt_btn.clicked.connect(self._mtk_frp_gpt)
-        self._gate_button(frp_gpt_btn, command="mtk-frp-gpt")
-        acts_row3.addWidget(frp_gpt_btn)
-        acts_row3.addStretch(1)
-        acts.addLayout(acts_row3)
-        adv_lay.addLayout(acts)
-
-        lay.addWidget(adv_panel)
-
-        self.mtk_progress = QProgressBar()
-        self.mtk_progress.setRange(0, 1000)
-        self.mtk_progress.setValue(0)
-        self.mtk_progress.setTextVisible(False)
-        self.mtk_progress.setFixedHeight(8)
-        self.mtk_progress.setStyleSheet(
-            f"QProgressBar {{ background:{C['inset']}; border:none; border-radius:4px; }}"
-            f" QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); border-radius:4px; }}"
-        )
-        self.mtk_progress.setVisible(False)
-        mtk_ops = self._build_chip_ops_section(
-            "mtk",
-            {"MTK", "MTK BROM", "ADB", "MTP", "FASTBOOT"},
-            self.mtk_stop_btn, self.mtk_progress, self._mtk_reset_ui,
-        )
-        lay.addWidget(mtk_ops, 1)
-
-        # EXPERIMENTAL — MediaTek IMEI (per-chip, amber, every-run ack)
-        _mtk_exp_host = QWidget()
-        _mtk_exp_host.setStyleSheet("background: transparent;")
-        _mtk_exp_lay = QVBoxLayout(_mtk_exp_host)
-        _mtk_exp_lay.setContentsMargins(0, 0, 0, 0)
-        _mtk_exp_lay.setSpacing(8)
-        _mtk_exp_lay.addWidget(_experimental_banner(
-            "EXPERIMENTAL — MediaTek IMEI via NVRAM (nvdata MP0B001_*). Foreign IMEI on a non-owned device may be ILLEGAL. Educational, own device only. Every run requires the checkbox — Change additionally requires “I UNDERSTAND”."))
-        self._add_job_flows(_mtk_exp_lay, ["IMEI Repair / Change"], modes={"MTK BROM", "ADB"})
-        _mtk_exp_body = QWidget()
-        _mtk_exp_body.setStyleSheet("background: transparent;")
-        _mtk_exp_body_lay = QVBoxLayout(_mtk_exp_body)
-        _mtk_exp_body_lay.setContentsMargins(16, 14, 16, 14)
-        _mtk_exp_body_lay.setSpacing(8)
-        _mtk_exp_body_lay.addWidget(_mtk_exp_host)
-        lay.addWidget(CollapsibleSection("IMEI — EXPERIMENTAL", _mtk_exp_body, accent=C["warn"], collapsed=True))
-
-        lay.addWidget(self.mtk_progress)
-        page_scroll.setWidget(host)
-        panel_lay.addWidget(page_scroll)
-        return panel
-
     def _mtk_browse(self, edit, name, name_filter):
         path, _ = QFileDialog.getOpenFileName(self, f"Select {name}", os.path.expanduser("~/Downloads"), name_filter)
         if path:
@@ -5934,6 +4664,48 @@ class FlashPilotWindow(QMainWindow):
                 return adb.get("serial") or r.get("serial") or None
         return None
 
+    def _adb_ready_for_key(self, device_key=None, timeout=1.0):
+        """Bounded, selected-device-only ADB authorization check.
+
+        `adb_status()` can block for ~50s (3 x 15s attempts + sleeps) and was
+        called on the GUI thread; it also accepted ANY authorized phone. This
+        check:
+          * resolves the serial for the SELECTED key only — an unresolvable
+            key means "no authorized ADB", never a first-authorized fallback
+            (so an unrelated phone can never satisfy the check);
+          * uses the zero-touch presence listing (no USB claim/handshake);
+          * probes in a daemon thread and waits at most ``timeout`` seconds,
+            so the GUI blocks for no more than ~1s;
+          * returns False when the probe is inconclusive, so callers take
+            the non-ADB guidance path instead of guessing.
+        """
+        key = (device_key if device_key is not None
+               else getattr(self, "_display_key", None))
+        serial = self._adb_serial_for_key(key)
+        if not serial:
+            return False
+        rows = []
+
+        def probe():
+            try:
+                rows.extend(bridge.adb_presence_status())
+            except Exception:
+                pass
+
+        worker = threading.Thread(target=probe, daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            # Inconclusive: the daemon probe finishes in the background; the
+            # caller must fall back to guidance, not assume ADB.
+            return False
+        return any(
+            isinstance(r, dict)
+            and r.get("serial") == serial
+            and r.get("state") == "device"
+            for r in rows
+        )
+
     def _adb_begin(self, label, method, device_key=None):
         """Shared prologue for ADB-mechanism tools (triage/battery/network).
 
@@ -6027,7 +4799,13 @@ class FlashPilotWindow(QMainWindow):
         flux.set_state("VALIDATED")
         return serial, device_key, flux
 
-    def _mtk_run(self, args, timeout=600, device_key=None):
+    def _mtk_run(self, args, timeout=600, device_key=None, on_done=None):
+        """Run a bridge MTK command in a worker.
+
+        ``on_done(out)`` (optional) runs in the worker after a successful
+        return, so callers can report result details (e.g. a backup path)
+        only once the flow really finished.
+        """
         prep = self._chip_begin("MTK", args[0] if args else "",
                                 {"MTK BROM", "MTK"}, args,
                                 device_key=device_key,
@@ -6053,6 +4831,11 @@ class FlashPilotWindow(QMainWindow):
                 with _devices.device_scope(device_key):
                     out = bridge._run(args, timeout=timeout)
                 emit(out or "(no output)")
+                if on_done is not None:
+                    try:
+                        on_done(out or "")
+                    except Exception:
+                        pass
                 self._ui.status.emit(f"MTK: {args[0]} done")
                 self._ui.toast.emit("ok", f"MTK {args[0]}", "Completed successfully")
                 if flux:
@@ -6363,8 +5146,7 @@ class FlashPilotWindow(QMainWindow):
 
         def work():
             try:
-                all_devs = bridge.detect_all()
-                mtk_usb = [d for d in all_devs if d.get("vid") == mtk.MTK_VID]
+                mtk_usb = mtk.find_mtk()
                 devs = bridge.detect_mtk()
                 if not mtk_usb:
                     self._ui.line.emit("[info] mtk-detect: no MediaTek device found")
@@ -6589,7 +5371,7 @@ class FlashPilotWindow(QMainWindow):
                 except Exception as e:
                     self._toasts.show_error("Auth bypass failed", str(e))
                     return
-            self._toasts.show_ok("MTK FRP bypass", "Clearing frp/nvdata...")
+            self._ui.line.emit("[step] Clearing frp/nvdata...")
             self._mtk_run(["mtk-frp", "auto", da, scatter], timeout=1800)
         
         self._confirm_overlay(
@@ -6698,250 +5480,6 @@ class FlashPilotWindow(QMainWindow):
             ),
         )
 
-    # ----------------------------- Qualcomm page --------------------------
-    def _build_qc_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(
-            _card_qss()
-        )
-        panel_lay = QVBoxLayout(panel)
-        panel_lay.setContentsMargins(0, 0, 0, 0)
-        panel_lay.setSpacing(0)
-        page_scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(9)
-
-        lay.addWidget(SectionTitle("QUALCOMM EDL / SAHARA / FIREHOSE"))
-        info = QLabel(
-            "Qualcomm Emergency Download (EDL) tooling. Requires the device in EDL "
-            "mode (VID 05c6) plus a firehose programmer and rawprogram XML."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        det_row = QHBoxLayout()
-        self.qc_detect_btn = QPushButton("Detect Qualcomm")
-        self.qc_detect_btn.setStyleSheet(_btn_primary())
-        self.qc_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.qc_detect_btn.clicked.connect(self._qc_detect)
-        det_row.addWidget(self.qc_detect_btn)
-        self.qc_status = QLabel("No Qualcomm EDL device detected")
-        self.qc_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
-        det_row.addWidget(self.qc_status, 1)
-        lay.addLayout(det_row)
-
-        self.qc_files = {}
-        for name, lbl, flt in (
-            ("prog", "Programmer (.mbn)", "Programmer (*.mbn *.elf);;All files (*)"),
-            ("xml", "Rawprogram XML", "XML (*.xml);;All files (*)"),
-        ):
-            row = QHBoxLayout()
-            lab = QLabel(lbl)
-            lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:120px;")
-            edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {lbl.lower()}...")
-            edit.setStyleSheet(
-                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-                f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-                f" selection-background-color:{C['accent']}; }}"
-                f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-                f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-            )
-            btn = QPushButton("Browse...")
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
-            btn.clicked.connect(
-                lambda _=False, e=edit, n=name, f=flt: self._qc_browse(e, n, f)
-            )
-            row.addWidget(lab)
-            row.addWidget(edit, 1)
-            row.addWidget(btn)
-            lay.addLayout(row)
-            self.qc_files[name] = edit
-
-        acts = QVBoxLayout()
-        acts.setSpacing(8)
-        acts_row1 = QHBoxLayout()
-        acts_row1.setSpacing(10)
-        for label, slot in (
-            ("Flash via Firehose", self._qc_flash),
-            ("Backup Partitions", self._qc_backup),
-            ("Get Device Info", self._qc_info),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            self._gate_button(b, command={
-                "Flash via Firehose": "qcom-flash",
-                "Backup Partitions": "qcom-backup",
-                "Get Device Info": "qcom-info",
-            }.get(label))
-            acts_row1.addWidget(b)
-        acts_row1.addStretch(1)
-        acts.addLayout(acts_row1)
-        acts_row2 = QHBoxLayout()
-        acts_row2.setSpacing(10)
-        for label, slot in (
-            ("FRP Reset", self._qc_frp_reset),
-            ("Enable ADB", self._qc_adb),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            self._gate_button(b, command={
-                "FRP Reset": "qcom-frp-reset",
-                "Enable ADB": "adb_shell",
-            }.get(label))
-            acts_row2.addWidget(b)
-        acts_row2.addStretch(1)
-        self.qc_stop_btn = QPushButton("Stop")
-        self.qc_stop_btn.setEnabled(False)
-        self.qc_stop_btn.setStyleSheet(_btn_danger())
-        self.qc_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.qc_stop_btn.clicked.connect(self._qc_stop)
-        self.qc_stop_btn.setToolTip("Cancel the running Qualcomm operation")
-        acts_row2.addWidget(self.qc_stop_btn)
-        self.qc_stop_btn.setVisible(False)
-        acts.addLayout(acts_row2)
-        lay.addLayout(acts)
-
-        self.qc_fw_dir = QLineEdit()
-        self.qc_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
-        self.qc_fw_dir.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        fw_row = QHBoxLayout()
-        fw_row.addWidget(QLabel("Firmware dir"), 0)
-        fw_row.addWidget(self.qc_fw_dir, 1)
-        fw_btn = QPushButton("Browse...")
-        fw_btn.setStyleSheet(_btn_ghost())
-        fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fw_btn.clicked.connect(self._qc_browse_dir)
-        fw_btn.setFixedWidth(90)
-        fw_row.addWidget(fw_btn)
-        lay.addLayout(fw_row)
-        lay.addWidget(
-            _risk_banner(
-                "Qualcomm firehose flashing writes the whole device. The "
-                "programmer must match your exact SoC - a mismatch can hard-brick."
-            )
-        )
-
-        self.qc_progress = QProgressBar()
-        self.qc_progress.setRange(0, 1000)
-        self.qc_progress.setValue(0)
-        self.qc_progress.setTextVisible(False)
-        self.qc_progress.setFixedHeight(8)
-        self.qc_progress.setStyleSheet(
-            f"QProgressBar {{ background:{C['inset']}; border:none; border-radius:4px; }}"
-            f" QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); border-radius:4px; }}"
-        )
-        self.qc_progress.setVisible(False)
-
-        # --- Fastboot partition tools (not covered by the job/flow maps) ---
-        fb_body = QWidget()
-        fb_body.setStyleSheet("background: transparent;")
-        fb_lay = QVBoxLayout(fb_body)
-        fb_lay.setContentsMargins(0, 0, 0, 0)
-        fb_lay.setSpacing(8)
-
-        fb_row = QHBoxLayout()
-        fb_row.setSpacing(6)
-        fb_part = QLineEdit()
-        fb_part.setPlaceholderText("Partition (e.g. boot, system, super)")
-        fb_part.setMinimumWidth(80)
-        fb_part.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        fb_part.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-        fb_row.addWidget(fb_part, 1)
-        fb_img = QLineEdit()
-        fb_img.setPlaceholderText("Image file (.img / .tar)")
-        fb_img.setMinimumWidth(80)
-        fb_img.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        fb_img.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
-        fb_row.addWidget(fb_img, 1)
-        fb_browse = QPushButton("Browse...")
-        fb_browse.setStyleSheet(_btn_ghost())
-        fb_browse.setCursor(Qt.CursorShape.PointingHandCursor)
-        fb_browse.setFixedWidth(80)
-        fb_browse.clicked.connect(lambda: self._qc_browse(fb_img, "fastboot image", "Images (*.img *.img.gz *.tar);;All files (*)"))
-        fb_row.addWidget(fb_browse)
-        fb_lay.addLayout(fb_row)
-
-        def _fb_run(method, label, tooltip):
-            btn = QPushButton(label)
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setToolTip(tooltip)
-            btn.clicked.connect(
-                lambda _=False, m=method, n=label: self._qc_fastboot_flow(
-                    m, n, fb_part, fb_img
-                )
-            )
-            return btn
-
-        fb_btns = QHBoxLayout()
-        fb_btns.setSpacing(6)
-        fb_btns.addWidget(_fb_run("fastboot_flash", "Flash", "fastboot flash <partition> <image> (bootloader must be unlocked)"))
-        fb_btns.addWidget(_fb_run("fastboot_format", "Format", "fastboot format <partition> (ext4/f2fs)"))
-        fb_btns.addWidget(_fb_run("fastboot_lock", "Relock", "fastboot flashing lock / oem lock (re-lock the bootloader)"))
-        fb_btns.addWidget(_fb_run("fastboot_set_active", "Set active", "fastboot set_active a/b - choose the boot slot"))
-        fb_btns.addStretch(1)
-        fb_lay.addLayout(fb_btns)
-
-        fb_btns2 = QHBoxLayout()
-        fb_btns2.setSpacing(6)
-        fb_btns2.addWidget(_fb_run("fastboot_getvar", "Getvar", "fastboot getvar all - dump device variables"))
-        fb_btns2.addWidget(_fb_run("fastboot_oem", "OEM", "fastboot oem <cmd> (set FASTBOOT_OEM, default device-info)"))
-        fb_btns2.addStretch(1)
-        fb_lay.addLayout(fb_btns2)
-
-        fb_sec = CollapsibleSection(
-            "FASTBOOT TOOLS", fb_body, accent=C["accent"], collapsed=True
-        )
-        lay.addWidget(fb_sec)
-
-        qc_ops = self._build_chip_ops_section(
-            "qc",
-            {"EDL", "FASTBOOT", "ADB", "MTP"},
-            self.qc_stop_btn, self.qc_progress, self._qc_reset_ui,
-        )
-        lay.addWidget(qc_ops, 1)
-
-        # EXPERIMENTAL — Qualcomm QCN + IMEI (per-chip, amber, every-run ack)
-        _qc_exp_host = QWidget()
-        _qc_exp_host.setStyleSheet("background: transparent;")
-        _qc_exp_lay = QVBoxLayout(_qc_exp_host)
-        _qc_exp_lay.setContentsMargins(0, 0, 0, 0)
-        _qc_exp_lay.setSpacing(8)
-        _qc_exp_lay.addWidget(_experimental_banner(
-            "EXPERIMENTAL — QCN/IMEI writes modem NV (NV 550/682, sec.dat). Foreign IMEI or non-owned device may be ILLEGAL (US 18 USC 1029 etc.) and can kill cellular. Educational, own device only. Every run requires the checkbox — IMEI Change additionally requires typing “I UNDERSTAND”."))
-        self._add_job_flows(_qc_exp_lay, ["QCN / Modem", "IMEI Repair / Change"], modes={"EDL", "ADB"})
-        _qc_exp_body = QWidget()
-        _qc_exp_body.setStyleSheet("background: transparent;")
-        _qc_exp_body_lay = QVBoxLayout(_qc_exp_body)
-        _qc_exp_body_lay.setContentsMargins(16, 14, 16, 14)
-        _qc_exp_body_lay.setSpacing(8)
-        _qc_exp_body_lay.addWidget(_qc_exp_host)
-        lay.addWidget(CollapsibleSection("QCN / IMEI — EXPERIMENTAL", _qc_exp_body, accent=C["warn"], collapsed=True))
-
-        lay.addWidget(self.qc_progress)
-        page_scroll.setWidget(host)
-        panel_lay.addWidget(page_scroll)
-        return panel
-
     def _qc_fastboot_flow(self, method, label, part_edit, img_edit):
         """Run a fastboot partition flow with the values typed in the FASTBOOT
         TOOLS section. Sets FASTBOOT_PARTITION / FASTBOOT_IMAGE env so the flow
@@ -6973,7 +5511,13 @@ class FlashPilotWindow(QMainWindow):
         if d:
             self.qc_fw_dir.setText(d)
 
-    def _qc_run(self, args, timeout=600, device_key=None):
+    def _qc_run(self, args, timeout=600, device_key=None, on_done=None):
+        """Run a bridge Qualcomm command in a worker.
+
+        ``on_done(out)`` (optional) runs in the worker after a successful
+        return, so callers can report result details (e.g. a backup path)
+        only once the flow really finished.
+        """
         prep = self._chip_begin("Qualcomm", args[0] if args else "",
                                 {"EDL"}, args,
                                 device_key=device_key,
@@ -6999,6 +5543,11 @@ class FlashPilotWindow(QMainWindow):
                 with _devices.device_scope(device_key):
                     out = bridge._run(args, timeout=timeout)
                 emit(out or "(no output)")
+                if on_done is not None:
+                    try:
+                        on_done(out or "")
+                    except Exception:
+                        pass
                 self._ui.status.emit(f"Qualcomm: {args[0]} done")
                 self._ui.toast.emit("ok", f"Qualcomm {args[0]}", "Completed successfully")
                 if flux:
@@ -7116,6 +5665,168 @@ class FlashPilotWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _qc_board_key(self):
+        """The key of the device selected on the Devices page (or None).
+
+        `_display_key` is the row the user picked; passing None is safe —
+        `_chip_begin` asks instead of guessing a target.
+        """
+        return getattr(self, "_display_key", None)
+
+    def _qc_bundled_dir(self, label):
+        """Log where the bundled programmers live; never block on it.
+
+        `auto` is resolved by the bridge by SoC index and the resolver also
+        honours FLASHPILOT_QCOM_PAYLOADS, so a missing bundle only means the
+        environment has to provide the programmers.
+        """
+        try:
+            qdir = bridge.bundled_qcom_dir() or ""
+        except Exception:
+            qdir = ""
+        if qdir:
+            self.log_line(
+                f"[step] {label}: bundled Qualcomm programmers: {qdir}")
+        else:
+            self.log_line(
+                f"[info] {label}: no bundled Qualcomm programmers "
+                "(payloads/qcom) — the bridge resolves them from "
+                "FLASHPILOT_QCOM_PAYLOADS or an explicit --programmer path")
+        return qdir
+
+    def _qc_frp_choice(self, label):
+        """Ask how much to erase over EDL: "frp", "wipe", or None (cancel)."""
+        box = QMessageBox(self)
+        box.setWindowTitle(f"{label} · FRP (EDL 9008)")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            "Qualcomm FRP over EDL 9008 (Sahara + Firehose).\n\n"
+            "The phone must be in EDL mode (9008): power it off, hold "
+            "Vol Up + Vol Down and plug USB.\n\n"
+            "How much should be erased?")
+        only = box.addButton("Erase FRP only",
+                             QMessageBox.ButtonRole.AcceptRole)
+        wipe = box.addButton("Erase FRP + wipe data",
+                             QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(only)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is only:
+            return "frp"
+        if clicked is wipe:
+            return "wipe"
+        return None
+
+    def _qc_board_frp(self, label):
+        """FRP over EDL 9008: erase FRP (optionally with user data)."""
+        choice = self._qc_frp_choice(label)
+        if not choice:
+            self.log_line(f"[info] {label}: FRP (EDL) cancelled")
+            return
+        wipe = choice == "wipe"
+        argv = ["qcom-frp-reset", "auto"]
+        if wipe:
+            argv.append("--wipe-data")
+        key = self._qc_board_key()
+        self._qc_bundled_dir(label)
+        self._confirm_overlay(
+            f"{label} · Remove FRP",
+            "Erase Factory Reset Protection over EDL 9008?\n\n"
+            "The phone must already be in EDL mode (9008).\n"
+            "This deletes the FRP/lock data on the device.\n"
+            + ("This variant ALSO ERASES USER DATA (a factory reset).\n\n"
+               if wipe else "\n")
+            + "Continue?",
+            confirm_label="Erase FRP + Data" if wipe else "Erase FRP",
+            on_confirm=lambda a=argv, k=key: self._qc_run(
+                a, timeout=600, device_key=k),
+            chip="wipe" if wipe else "frp",
+        )
+
+    def _qc_board_backup(self, label):
+        """Back up the device partitions over EDL 9008 to a picked folder."""
+        out_dir = QFileDialog.getExistingDirectory(
+            self, "Qualcomm backup output folder", "/tmp/qcom_backup")
+        if not out_dir:
+            self.log_line(f"[info] {label}: backup cancelled")
+            return
+        key = self._qc_board_key()
+        self._qc_bundled_dir(label)
+
+        def done(_out):
+            # Report the destination only once the bridge run has returned.
+            self.log_line(f"[backup] {label}: backup written to {out_dir}")
+
+        self._confirm_overlay(
+            f"{label} · Backup Partitions",
+            f"Read the device partitions over EDL 9008 (Firehose) and write\n"
+            f"a backup to:\n{out_dir}\n\n"
+            "Read-only on the phone. The firehose programmer is picked by "
+            "SoC from the bundle. Continue?",
+            confirm_label="Backup",
+            on_confirm=lambda o=out_dir, k=key: self._qc_run(
+                ["qcom-backup", "auto", o], timeout=1800,
+                device_key=k, on_done=done),
+            chip="qcom",
+        )
+
+    def _qc_board_flash(self, label):
+        """Flash a rawprogram XML + firmware folder over EDL 9008."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Qualcomm firmware folder",
+            self.settings.value("default_dir",
+                                os.path.expanduser("~/Downloads")))
+        if not folder:
+            self.log_line(f"[info] {label}: flash cancelled")
+            return
+        try:
+            xmls = sorted(
+                e.name for e in os.scandir(folder)
+                if e.is_file()
+                and e.name.lower().startswith("rawprogram")
+                and e.name.lower().endswith(".xml"))
+        except OSError as e:
+            self._toasts.show_error(f"{label} · Flash",
+                                    f"Cannot read {folder}: {e}")
+            return
+        if not xmls:
+            self._toasts.show_error(
+                f"{label} · Flash",
+                f"No rawprogram*.xml in {folder}. A Qualcomm EDL flash needs "
+                "the rawprogram XML that ships with the firmware.")
+            return
+        if len(xmls) == 1:
+            xml = os.path.join(folder, xmls[0])
+        else:
+            picked, _filt = QFileDialog.getOpenFileName(
+                self, "Select the rawprogram XML to flash", folder,
+                "rawprogram XML (rawprogram*.xml);;XML (*.xml)")
+            if not picked:
+                self.log_line(f"[info] {label}: flash cancelled")
+                return
+            if os.path.basename(picked) not in xmls:
+                self._toasts.show_error(
+                    f"{label} · Flash",
+                    f"{os.path.basename(picked)} is not one of the rawprogram "
+                    f"XMLs in {folder}: " + ", ".join(xmls))
+                return
+            xml = picked
+        key = self._qc_board_key()
+        self._qc_bundled_dir(label)
+        self._confirm_overlay(
+            f"{label} · Flash Firmware",
+            f"Flash {os.path.basename(xml)} from:\n{folder}\n\n"
+            "qcom-flash writes every partition listed in the XML over EDL "
+            "9008 (Firehose) and OVERWRITES the matching partitions. A wrong "
+            "XML, mismatched firmware or an interrupted cable can leave the "
+            "phone unbootable.\n\nContinue?",
+            confirm_label="Flash Firmware",
+            on_confirm=lambda x=xml, f=folder, k=key: self._qc_run(
+                ["qcom-flash", "auto", x, f], timeout=1800, device_key=k),
+            chip="flash",
+        )
+
     def _qc_flash(self):
         prog = self.qc_files["prog"].text().strip()
         xml = self.qc_files["xml"].text().strip()
@@ -7164,20 +5875,20 @@ class FlashPilotWindow(QMainWindow):
             lines = []
             try:
                 with _devices.device_scope(device_key):
-                    all_devs = bridge.detect_all()
-                    qcom = [d for d in all_devs if d.get("vid") == 0x05C6]
+                    rows = device_pages.connected_rows()
+                    qcom = [r for r in rows
+                            if str(r.get("mode", "")).startswith("qualcomm")]
                     if qcom:
                         lines.append("=== Qualcomm USB Device(s) ===")
-                        for d in qcom:
-                            lines.extend(_fmt_usb_full(d))
-                            pid = d.get("pid", 0)
-                            if pid in (0x9008, 0x900E):
+                        for r in qcom:
+                            lines.extend(_fmt_usb_full(r))
+                            if (r.get("mode") or "") == "qualcomm-edl":
                                 lines.append("  -> EDL mode (Sahara/firehose capable)")
                             else:
                                 lines.append("  -> normal/modem mode (not in EDL)")
                             lines.append("")
                     else:
-                        lines.append("No Qualcomm USB device (VID 05c6) found over USB")
+                        lines.append("No Qualcomm device connected over USB")
                         lines.append("")
 
                     out = bridge._run(["qcom-info", tgt], timeout=120)
@@ -8044,469 +6755,6 @@ class FlashPilotWindow(QMainWindow):
         ok.setFocus()
 
     # ----------------------------- Battery page ---------------------------
-    # ----------------------------- SPD / UNISOC page ----------------------
-    def _build_spd_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(_card_qss())
-        panel_lay = QVBoxLayout(panel)
-        panel_lay.setContentsMargins(0, 0, 0, 0)
-        panel_lay.setSpacing(0)
-        page_scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(9)
-
-        lay.addWidget(SectionTitle("SPREADTRUM / UNISOC (SPD) DOWNLOAD"))
-        info = QLabel(
-            "Feature-phone & SoC BSL download tooling. Requires the device in "
-            "download mode (1782:4d00) plus FDL1/FDL2 binaries + base addresses."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        det_row = QHBoxLayout()
-        self.spd_detect_btn = QPushButton("Detect SPD")
-        self.spd_detect_btn.setStyleSheet(_btn_primary())
-        self.spd_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_detect_btn.clicked.connect(self._spd_detect)
-        det_row.addWidget(self.spd_detect_btn)
-        self.spd_brom_watch_btn = QPushButton("👁 Watch for BROM (3 min)")
-        self.spd_brom_watch_btn.setStyleSheet(_btn_ghost())
-        self.spd_brom_watch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_brom_watch_btn.setToolTip(
-            "Unisoc BROM (1782:4d00) only appears for ~2s when a powered-off\n"
-            "phone is plugged with the boot key held. This watcher polls every\n"
-            "400ms and auto-fills the target when it catches the window.\n"
-            "Steps: power off → hold VOL- → plug USB while watching."
-        )
-        self.spd_brom_watch_btn.clicked.connect(self._spd_brom_watch)
-        det_row.addWidget(self.spd_brom_watch_btn)
-        self.spd_status = QLabel("No SPD download device detected")
-        self.spd_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
-        det_row.addWidget(self.spd_status, 1)
-        lay.addLayout(det_row)
-
-        # ——— Immediate BROM Factory Reset (FIRST) ———
-        brom_box = QFrame()
-        brom_box.setObjectName("brombox")
-        brom_box.setStyleSheet(
-            f"QFrame#brombox {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 3px solid #a78bfa;"
-            f" border-radius: 10px; }}"
-        )
-        brom_lay = QVBoxLayout(brom_box)
-        brom_lay.setContentsMargins(12, 10, 12, 10)
-        brom_lay.setSpacing(6)
-        brom_title = QLabel("⚡ BROM FACTORY RESET — IMMEDIATE (FIRST)")
-        brom_title.setStyleSheet(f"color:#c4b5fd; font-weight:800; font-size:11px; letter-spacing:0.6px;")
-        brom_lay.addWidget(brom_title)
-        brom_info = QLabel(
-            "One-click wipe for SPD BROM (1782:4d00). When caught, immediately erases "
-            "userdata/cache/frp via BSL — no firmware flash. Works BROM-only without FDL; "
-            "if FDL1/FDL2 are selected below they are used for full userdata wipe."
-        )
-        brom_info.setWordWrap(True)
-        brom_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        brom_lay.addWidget(brom_info)
-        brom_btn_row = QHBoxLayout()
-        brom_btn_row.setSpacing(10)
-        self.spd_brom_factory_btn = QPushButton("⚡ Factory Reset (BROM) — 1-Click")
-        self.spd_brom_factory_btn.setStyleSheet(_btn_primary())
-        self.spd_brom_factory_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_brom_factory_btn.setToolTip(
-            "Immediate factory reset from BROM. Auto-catches 1782:4d00 window (~2s),\n"
-            "erases userdata/cache/frp via BROM-only (no FDL needed) or with FDL1/FDL2\n"
-            "for full wipe. Do this FIRST before any flash. If FDLs are set they must match chipset."
-        )
-        self.spd_brom_factory_btn.clicked.connect(self._spd_brom_factory_reset)
-        self._gate_button(self.spd_brom_factory_btn, command="spd-format")
-        brom_btn_row.addWidget(self.spd_brom_factory_btn)
-        self.spd_brom_auto_check = QCheckBox("Auto-run when BROM caught")
-        self.spd_brom_auto_check.setChecked(False)
-        self.spd_brom_auto_check.setStyleSheet(f"QCheckBox {{ color:{C['dim']}; font-size:11px; }}")
-        self.spd_brom_auto_check.setToolTip("If checked, Format will fire automatically the instant BROM is caught — no extra click.")
-        brom_btn_row.addWidget(self.spd_brom_auto_check)
-        brom_btn_row.addStretch(1)
-        brom_lay.addLayout(brom_btn_row)
-        brom_lay.addWidget(_risk_banner(
-            "BROM factory reset erases user data (password/PIN/FRP). No FDL needed for basic wipe; "
-            "if FDLs are set, mismatch = hard-brick. This is intentionally the FIRST operation for SPD."
-        ))
-        lay.addWidget(brom_box)
-
-        self.spd_files = {}
-        for name, lbl, flt in (
-            ("fdl1", "FDL1 binary", "FDL (*.bin);;All files (*)"),
-            ("fdl2", "FDL2 binary", "FDL (*.bin);;All files (*)"),
-        ):
-            row = QHBoxLayout()
-            lab = QLabel(lbl)
-            lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
-            edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {lbl.lower()}...")
-            edit.setStyleSheet(
-                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-                f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-                f" selection-background-color:{C['accent']}; }}"
-                f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-                f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-            )
-            btn = QPushButton("Browse...")
-            btn.setStyleSheet(_btn_ghost())
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
-            btn.clicked.connect(
-                lambda _=False, e=edit, n=name, f=flt: self._spd_browse(e, n, f)
-            )
-            row.addWidget(lab)
-            row.addWidget(edit, 1)
-            row.addWidget(btn)
-            lay.addLayout(row)
-            self.spd_files[name] = edit
-
-        # FDL base addresses (hex)
-        base_row = QHBoxLayout()
-        self.spd_fdl1_addr = QLineEdit("0x40004000")
-        self.spd_fdl1_addr.setToolTip("FDL1 base address for your chip")
-        self.spd_fdl2_addr = QLineEdit("0x14000000")
-        self.spd_fdl2_addr.setToolTip("FDL2 base address for your chip")
-        for edit in (self.spd_fdl1_addr, self.spd_fdl2_addr):
-            edit.setStyleSheet(
-                f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-                f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-                f" selection-background-color:{C['accent']}; }}"
-                f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            )
-        base_row.addWidget(QLabel("FDL1 base"))
-        base_row.addWidget(self.spd_fdl1_addr, 1)
-        base_row.addWidget(QLabel("FDL2 base"))
-        base_row.addWidget(self.spd_fdl2_addr, 1)
-        lay.addLayout(base_row)
-
-        acts = QVBoxLayout()
-        acts.setSpacing(8)
-        acts_row1 = QHBoxLayout()
-        acts_row1.setSpacing(10)
-        for label, slot in (
-            ("Get Device Info", self._spd_info),
-            ("Flash Firmware", self._spd_flash),
-            ("Backup Partitions", self._spd_backup),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            self._gate_button(b, command={
-                "Get Device Info": "spd-info",
-                "Flash Firmware": "spd-flash",
-                "Backup Partitions": "spd-backup",
-            }.get(label))
-            acts_row1.addWidget(b)
-        acts_row1.addStretch(1)
-        acts.addLayout(acts_row1)
-        acts_row2 = QHBoxLayout()
-        acts_row2.setSpacing(10)
-        for label, slot in (
-            ("Format / Unlock", self._spd_format),
-            ("FRP Reset", self._spd_frp),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            self._gate_button(b, command={
-                "Format / Unlock": "spd-format",
-                "FRP Reset": "spd-frp",
-            }.get(label))
-            acts_row2.addWidget(b)
-        acts_row2.addStretch(1)
-        self.spd_stop_btn = QPushButton("Stop")
-        self.spd_stop_btn.setEnabled(False)
-        self.spd_stop_btn.setStyleSheet(_btn_danger())
-        self.spd_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_stop_btn.clicked.connect(self._spd_stop)
-        self.spd_stop_btn.setToolTip("Cancel the running SPD operation")
-        acts_row2.addWidget(self.spd_stop_btn)
-        self.spd_stop_btn.setVisible(False)
-        acts.addLayout(acts_row2)
-
-        # Reboot targets row (commercial-style: Recovery / Fastboot / Normal)
-        acts_row3 = QHBoxLayout()
-        acts_row3.setSpacing(10)
-        for label, mode in (
-            ("Reboot → Recovery", "recovery"),
-            ("Reboot → Fastboot", "fastboot"),
-            ("Reset (Normal)", "normal"),
-        ):
-            b = QPushButton(label)
-            b.setStyleSheet(_btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setToolTip(
-                f"Reboot the download-mode Unisoc device into {mode}.\n"
-                + ("Writes 'boot-recovery' to the misc BCB via FDL2, then resets.\n"
-                   if mode != "normal" else
-                   "Plain BSL NORMAL_RESET - works from bare BROM, no FDLs.\n")
-                + ("Needs FDL1+FDL2." if mode != "normal" else "")
-            )
-            b.clicked.connect(lambda _=False, m=mode: self._spd_boot(m))
-            self._gate_button(b, command="spd-boot")
-            acts_row3.addWidget(b)
-        acts_row3.addStretch(1)
-        acts.addLayout(acts_row3)
-
-        # --- Advanced: magic64 signature-preserving packer (fused SoCs) ---
-        adv_box = QFrame()
-        adv_box.setObjectName("spdadv")
-        adv_box.setStyleSheet(
-            f"QFrame#spdadv {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['warn']};"
-            f" border-radius: 9px; }}"
-        )
-        adv_lay = QVBoxLayout(adv_box)
-        adv_lay.setContentsMargins(12, 8, 12, 10)
-        adv_lay.setSpacing(6)
-
-        _adv_title = QLabel("MAGIC64 — SIGNATURE-PRESERVING RUNTIME PATCH (FUSED SoC)")
-        _adv_title.setStyleSheet(f"color:{C['accent_hi']}; font-weight:800; font-size:11px;")
-        adv_lay.addWidget(_adv_title)
-
-        # stock image row
-        stock_row = QHBoxLayout()
-        stock_lbl = QLabel("Stock image")
-        stock_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
-        stock_row.addWidget(stock_lbl)
-        self.spd_magic_stock = QLineEdit()
-        self.spd_magic_stock.setPlaceholderText("uboot.img read via Backup Partitions / spd-readback...")
-        self.spd_magic_stock.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        stock_row.addWidget(self.spd_magic_stock, 1)
-        stock_btn = QPushButton("Browse...")
-        stock_btn.setStyleSheet(_btn_ghost())
-        stock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        stock_btn.setFixedWidth(90)
-        stock_btn.clicked.connect(lambda: self._spd_browse(
-            self.spd_magic_stock, "stock image", "Images (*.img *.bin);;All files (*)"))
-        stock_row.addWidget(stock_btn)
-        adv_lay.addLayout(stock_row)
-
-        # preset checkboxes (UMS9620 silencer pack)
-        preset_row = FlowLayout(spacing=6)
-        self.spd_magic_presets = {}
-        for off, tip in (
-            ("0xafe8=0xd503201f", "remove unlock warning + 10s pause"),
-            ("0xb2a4=0xd503201f", "remove SKIP VERIFY (UART)"),
-            ("0xb2ac=0xd503201f", "remove SKIP VERIFY (screen)"),
-            ("0x604c0=0xd503201f", "force lock status = UNLOCKED"),
-        ):
-            cb = QCheckBox(off.split("=")[0])
-            cb.setChecked(False)
-            cb.setToolTip(f"{off}  —  {tip}\nWrong offsets corrupt memory at boot.")
-            cb.setStyleSheet(f"QCheckBox {{ color:{C['dim']}; font-size:10px; }}")
-            cb.toggled.connect(lambda _v, _off=off: self._spd_magic_sync_presets())
-            preset_row.addWidget(cb)
-            self.spd_magic_presets[off] = cb
-        adv_lay.addLayout(preset_row)
-
-        # patches row
-        patch_row = QHBoxLayout()
-        patch_lbl = QLabel("Patches")
-        patch_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
-        patch_row.addWidget(patch_lbl)
-        self.spd_magic_patches = QLineEdit()
-        self.spd_magic_patches.setPlaceholderText("off=word; off=word ... e.g. 0xafe8=0xd503201f; 0x604c0=0xd503201f")
-        self.spd_magic_patches.setToolTip(
-            "Runtime patches applied by the shellcode after the SPL's RSA check\n"
-            "passes. Format: hexOffset=hexWord, semicolon-separated.\n"
-            "Offsets are RELATIVE TO PAYLOAD START (file offset minus 0x200).\n"
-            "Tick presets above or type custom entries here.\n"
-            "Wrong offsets corrupt memory at boot - verify in Ghidra first."
-        )
-        self.spd_magic_patches.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-            f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
-        )
-        patch_row.addWidget(self.spd_magic_patches, 1)
-        adv_lay.addLayout(patch_row)
-
-        # load base row
-        lb_row = QHBoxLayout()
-        lb_lbl = QLabel("Load base")
-        lb_lbl.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:90px;")
-        lb_row.addWidget(lb_lbl)
-        self.spd_magic_load_base = QLineEdit("0xB5000000")
-        self.spd_magic_load_base.setToolTip(
-            "Payload runtime address (text base). UMS9620 default 0xB5000000\n"
-            "= PAC XML image base 0xB4FFFE00 + 0x200 header.\n"
-            "Wrong load-base writes patches to random memory at boot."
-        )
-        self.spd_magic_load_base.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
-        )
-        self.spd_magic_load_base.setMaximumWidth(160)
-        lb_row.addWidget(self.spd_magic_load_base)
-        lb_row.addStretch(1)
-        adv_lay.addLayout(lb_row)
-
-        # actions row
-        mpb_row = QHBoxLayout()
-        self.spd_magic_pack_btn = QPushButton("🪄 Pack (no flash)")
-        self.spd_magic_pack_btn.setStyleSheet(_btn_primary())
-        self.spd_magic_pack_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_magic_pack_btn.setToolTip(
-            "Produce a magic64-packed copy next to the stock image.\n"
-            "NEVER flashes anything - review the log then use Flash Firmware\n"
-            "with the packed file to deliver it."
-        )
-        self.spd_magic_pack_btn.clicked.connect(self._spd_magic_pack)
-        mpb_row.addWidget(self.spd_magic_pack_btn)
-
-        self.spd_magic_flash_btn = QPushButton("Flash Packed Image")
-        self.spd_magic_flash_btn.setStyleSheet(_btn_ghost())
-        self.spd_magic_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_magic_flash_btn.setToolTip(
-            "Two-step confirmation for the packed output. Refuses unless the\n"
-            "packed file exists and ends with _magic.img (safety marker)."
-        )
-        self.spd_magic_flash_btn.clicked.connect(self._spd_magic_flash)
-        self._gate_button(self.spd_magic_flash_btn, command="spd-flash")
-        mpb_row.addWidget(self.spd_magic_flash_btn)
-        mpb_row.addStretch(1)
-        adv_lay.addLayout(mpb_row)
-
-        adv_lay.addWidget(_risk_banner(
-            "magic64 keeps the signed payload untouched so the SPL check still "
-            "passes - but wrong load-base/offsets corrupt memory AT BOOT. "
-            "Always keep the stock image."
-        ))
-        lay.addWidget(adv_box)
-
-        # --- Enable ADB (boot patch) --------------------------------
-        adb_box = QFrame()
-        adb_box.setObjectName("spdadb")
-        adb_box.setStyleSheet(
-            f"QFrame#spdadb {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 {C['card']}, stop:1 {C['inset']});"
-            f" border: 1px solid {C['border']}; border-left: 2px solid {C['border_hi']};"
-            f" border-radius: 9px; }}"
-        )
-        adb_lay = QVBoxLayout(adb_box)
-        adb_lay.setContentsMargins(12, 8, 12, 10)
-        adb_lay.setSpacing(6)
-        adb_lay.addWidget(QLabel("ENABLE ADB — BOOT PATCH (NO ROOT NEEDED)"))
-        adb_info = QLabel(
-            "Reads boot_a via BROM/FDL, patches default.prop (ro.adb.secure=0, "
-            "persist.sys.usb.config+=adb) cpio+gunzip round-trip, flashes it "
-            "back and reboots. Stock boot saved to ~/flashpilot/backups/ first."
-        )
-        adb_info.setWordWrap(True)
-        adb_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        adb_lay.addWidget(adb_info)
-        adb_row = QHBoxLayout()
-        self.spd_adb_part = QComboBox()
-        self.spd_adb_part.addItems(["boot_a", "boot_b", "boot"])
-        self.spd_adb_part.setCurrentText("boot_a")
-        self.spd_adb_part.setMaximumWidth(110)
-        self.spd_adb_part.setStyleSheet(
-            f"QComboBox {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px; color:{C['text']}; }}"
-        )
-        adb_row.addWidget(QLabel("Part"))
-        adb_row.addWidget(self.spd_adb_part)
-        adb_row.addStretch(1)
-        self.spd_adb_btn = QPushButton("🔓 Enable ADB (boot patch)")
-        self.spd_adb_btn.setStyleSheet(_btn_primary())
-        self.spd_adb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.spd_adb_btn.clicked.connect(self._spd_enable_adb)
-        self._gate_button(self.spd_adb_btn, command="spd-flash")
-        adb_row.addWidget(self.spd_adb_btn)
-        adb_lay.addLayout(adb_row)
-        adb_lay.addWidget(_risk_banner(
-            "Uses the same FDL pair as other SPD ops. Boot size must allow the "
-            "patched ramdisk — larger props grow the cpio; always review the log."
-        ))
-        lay.addWidget(adb_box)
-        lay.addLayout(acts)
-
-        self.spd_fw_dir = QLineEdit()
-        self.spd_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
-        self.spd_fw_dir.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']};"
-            f" selection-background-color:{C['accent']}; }}"
-            f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
-        )
-        fw_row = QHBoxLayout()
-        fw_row.addWidget(QLabel("Firmware dir"), 0)
-        fw_row.addWidget(self.spd_fw_dir, 1)
-        fw_btn = QPushButton("Browse...")
-        fw_btn.setStyleSheet(_btn_ghost())
-        fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fw_btn.clicked.connect(self._spd_browse_dir)
-        fw_btn.setFixedWidth(90)
-        fw_row.addWidget(fw_btn)
-        lay.addLayout(fw_row)
-        lay.addWidget(
-            _risk_banner(
-                "SPD flashing and factory format write directly to the chip. "
-                "The FDL binaries and base addresses must match your exact "
-                "chipset - a wrong FDL can hard-brick the device."
-            )
-        )
-
-        self.spd_progress = QProgressBar()
-        self.spd_progress.setRange(0, 1000)
-        self.spd_progress.setValue(0)
-        self.spd_progress.setTextVisible(False)
-        self.spd_progress.setFixedHeight(8)
-        self.spd_progress.setStyleSheet(
-            f"QProgressBar {{ background:{C['inset']}; border:none; border-radius:4px; }}"
-            f" QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 {C['grad_a']}, stop:1 {C['grad_b']}); border-radius:4px; }}"
-        )
-        self.spd_progress.setVisible(False)
-        spd_ops = self._build_chip_ops_section(
-            "spd",
-            {"ADB", "MTP", "FASTBOOT", "SPD"},
-            self.spd_stop_btn, self.spd_progress, self._spd_reset_ui,
-        )
-        lay.addWidget(spd_ops, 1)
-
-        # EXPERIMENTAL — SPD/UNISOC IMEI + PAC (per-chip, amber, every-run ack)
-        _spd_exp_host = QWidget()
-        _spd_exp_host.setStyleSheet("background: transparent;")
-        _spd_exp_lay = QVBoxLayout(_spd_exp_host)
-        _spd_exp_lay.setContentsMargins(0, 0, 0, 0)
-        _spd_exp_lay.setSpacing(8)
-        _spd_exp_lay.addWidget(_experimental_banner(
-            "EXPERIMENTAL — SPD IMEI via BSL modem-NV. Foreign IMEI on a non-owned device may be ILLEGAL. Educational, own device only. Every run requires the checkbox — Change additionally requires “I UNDERSTAND”."))
-        self._add_job_flows(_spd_exp_lay, ["IMEI Repair / Change"], modes={"ADB"})
-        _spd_exp_body = QWidget()
-        _spd_exp_body.setStyleSheet("background: transparent;")
-        _spd_exp_body_lay = QVBoxLayout(_spd_exp_body)
-        _spd_exp_body_lay.setContentsMargins(16, 14, 16, 14)
-        _spd_exp_body_lay.setSpacing(8)
-        _spd_exp_body_lay.addWidget(_spd_exp_host)
-        lay.addWidget(CollapsibleSection("IMEI — EXPERIMENTAL", _spd_exp_body, accent=C["warn"], collapsed=True))
-
-        lay.addWidget(self.spd_progress)
-        page_scroll.setWidget(host)
-        panel_lay.addWidget(page_scroll)
-        return panel
 
     def _spd_browse(self, edit, name, name_filter):
         path, _ = QFileDialog.getOpenFileName(
@@ -8522,11 +6770,154 @@ class FlashPilotWindow(QMainWindow):
         if d:
             self.spd_fw_dir.setText(d)
 
+    # ---------------------------------------------------------- board actions
+    # One-PAC paths for the Devices page. A Unisoc PAC carries the model's
+    # FDL1/FDL2 plus load addresses, so `spd-flash-pac` needs neither the SPD
+    # tab nor manually entered binaries. Every device-writing mode is
+    # confirmed first and nothing is reported as done before the bridge call
+    # returns. The manual FDL paths stay for advanced workbench work, where
+    # the model-specific binaries genuinely are required.
+    def _spd_board_key(self):
+        """The device row the user picked (never "first device")."""
+        return getattr(self, "_display_key", None)
+
+    def _spd_fdl1(self):
+        """FDL1 path configured on the SPD tab ("" when unset)."""
+        return self.spd_files["fdl1"].text().strip()
+
+    def _spd_fdl2(self):
+        """FDL2 path configured on the SPD tab ("" when unset)."""
+        return self.spd_files["fdl2"].text().strip()
+
+    def _spd_pick_pac(self, label, title=None):
+        """Ask for the model's PAC file; "" when the user cancels."""
+        start = self.settings.value(
+            "default_dir", os.path.expanduser("~/Downloads"))
+        pac, _filt = QFileDialog.getOpenFileName(
+            self, title or f"{label} · select PAC firmware", start,
+            "SPD PAC firmware (*.pac);;All files (*)")
+        if not pac:
+            self.log_line(f"[info] {label}: PAC picker cancelled")
+            return ""
+        return pac
+
+    def _spd_pac_run(self, label, pac, mode, out_dir=None, timeout=1800,
+                     on_done=None):
+        """Run one `spd-flash-pac` mode for the SELECTED device.
+
+        The target slot stays ``auto`` (the bridge resolves the download-mode
+        phone); the device key pins the job/lock scope to the picked row.
+        PAC path + mode are logged up front; success is only reported by
+        `_spd_run` once the bridge call returns cleanly.
+        """
+        argv = ["spd-flash-pac", "auto", pac, "--mode", mode]
+        if out_dir:
+            argv += ["--out", out_dir]
+        self.log_line(f"[spd] {label}: {mode} from PAC {pac}")
+        self._spd_run(argv, timeout=timeout,
+                      device_key=self._spd_board_key(), on_done=on_done)
+        return argv
+
+    def _spd_board_screen_lock(self, label):
+        """No ADB: erase the lock/FRP partitions from a PAC."""
+        pac = self._spd_pick_pac(label)
+        if not pac:
+            return
+        self._confirm_overlay(
+            f"{label} · Remove Screen Lock",
+            "No ADB connection to the selected phone, so the lock will be\n"
+            "erased in download mode from:\n"
+            f"{os.path.basename(pac)}\n\n"
+            "spd-flash-pac loads the PAC's own FDL1/FDL2 (nothing to type\n"
+            "in by hand) and erases the lock/FRP partitions.\n"
+            "THIS MAY WIPE USER DATA.\n\nContinue?",
+            confirm_label="Erase Lock",
+            on_confirm=lambda p=pac: self._spd_pac_run(label, p, "erase"),
+            chip="lock",
+        )
+
+    def _spd_board_frp(self, label):
+        """No ADB, no FDLs configured: erase FRP from a PAC."""
+        pac = self._spd_pick_pac(label)
+        if not pac:
+            return
+        self._confirm_overlay(
+            f"{label} · Remove FRP",
+            "No ADB connection and no FDL binaries configured, so FRP will\n"
+            "be erased in download mode from:\n"
+            f"{os.path.basename(pac)}\n\n"
+            "spd-flash-pac loads the PAC's own FDL1/FDL2 (nothing to type\n"
+            "in by hand) and erases the FRP/lock partitions.\n"
+            "THIS MAY WIPE USER DATA.\n\nContinue?",
+            confirm_label="Erase FRP",
+            on_confirm=lambda p=pac: self._spd_pac_run(label, p, "frp"),
+            chip="frp",
+        )
+
+    def _spd_board_backup(self, label):
+        """Back up partitions to a picked folder (FDL path or one PAC)."""
+        out_dir = QFileDialog.getExistingDirectory(
+            self, "Backup output folder",
+            self.settings.value("default_dir", os.path.expanduser("~/Downloads")))
+        if not out_dir:
+            self.log_line(f"[info] {label}: backup cancelled")
+            return
+
+        def done(_out, d=out_dir):
+            # Report the destination only once the bridge run has returned.
+            self.log_line(f"[backup] {label}: backup written to {d}")
+
+        fdl1 = self._spd_fdl1()
+        if fdl1:
+            self._on_section("spd")
+            a1 = self._spd_addr(self.spd_fdl1_addr)
+            fdl2 = self._spd_fdl2()
+            args = ["spd-backup", self._spd_resolve_target() or "", fdl1,
+                    f"0x{a1:x}" if a1 is not None else "0x0"]
+            if fdl2:
+                a2 = self._spd_addr(self.spd_fdl2_addr)
+                args += [fdl2, f"0x{a2:x}" if a2 is not None else "0x0"]
+            args.append(out_dir)
+            self._spd_run(args, timeout=3600,
+                          device_key=self._spd_board_key(), on_done=done)
+            return
+
+        pac = self._spd_pick_pac(label)
+        if not pac:
+            return
+        self._spd_pac_run(label, pac, "backup", out_dir=out_dir,
+                          timeout=3600, on_done=done)
+
+    def _spd_board_flash(self, label):
+        """Flash a single PAC file (the PAC embeds its FDL1/FDL2)."""
+        pac = self._spd_pick_pac(label)
+        if not pac:
+            return
+        self._confirm_overlay(
+            f"{label} · Flash Firmware",
+            f"Flash the stock firmware in:\n{pac}\n\n"
+            "spd-flash-pac writes every image in the PAC and OVERWRITES the\n"
+            "matching partitions/regions. The PAC's FDL1/FDL2 must match\n"
+            "this phone's SoC.\n\n"
+            "A wrong PAC, a mismatched model or an interrupted cable can\n"
+            "leave the phone unbootable. Continue?",
+            confirm_label="Flash Firmware",
+            on_confirm=lambda p=pac: self._spd_pac_run(
+                label, p, "flash", timeout=3600),
+            chip="flash",
+        )
+
     def _spd_target(self):
         """Best-effort current SPD download target from the poll state."""
         return getattr(self, "_last_spd_target", None)
 
-    def _spd_run(self, args, timeout=900, device_key=None):
+    def _spd_run(self, args, timeout=900, device_key=None, on_done=None):
+        """Run a bridge SPD command in a worker.
+
+        ``on_done(out)`` (optional) runs in the worker after a successful
+        return, so callers can report result details (e.g. a backup path)
+        only once the flow really finished.
+        """
         prep = self._chip_begin("SPD", args[0] if args else "",
                                 {"SPD"}, args,
                                 device_key=device_key,
@@ -8552,6 +6943,11 @@ class FlashPilotWindow(QMainWindow):
                 with _devices.device_scope(device_key):
                     out = bridge._run(args, timeout=timeout)
                 emit(out or "(no output)")
+                if on_done is not None:
+                    try:
+                        on_done(out or "")
+                    except Exception:
+                        pass
                 self._ui.status.emit(f"SPD: {args[0]} done")
                 self._ui.toast.emit("ok", f"SPD {args[0]}", "Completed successfully")
                 if flux:
@@ -8999,6 +7395,21 @@ class FlashPilotWindow(QMainWindow):
 
     def _spd_enable_adb(self):
         """Enable ADB on an SPD phone via boot.img ramdisk patch (Path 1)."""
+        # The helper ships an honest refusal while no safe one-shot path
+        # exists. Report it before asking for FDL files, so the button never
+        # looks like it "did nothing" and never claims a patch was written.
+        try:
+            from python.core import spd_adb as _spd_adb
+        except Exception as e:  # pragma: no cover - import must never fail
+            self._ui.line.emit(f"[error] SPD ADB helper unavailable: {e}")
+            self._toasts.show_error("SPD ADB unavailable", str(e))
+            return
+        if not getattr(_spd_adb, "SUPPORTED", True):
+            reason = getattr(_spd_adb, "UNAVAILABLE_REASON", "")
+            self._ui.line.emit(f"[error] SPD ADB: {reason}")
+            self._toasts.show_error("SPD ADB not available", reason)
+            return
+
         fdl1 = self._spd_require_files()
         if not fdl1:
             return
@@ -9020,16 +7431,10 @@ class FlashPilotWindow(QMainWindow):
 
         def work():
             try:
-                # Import the boot-patch helper.
-                try:
-                    from python.core.spd_adb import enable_adb_via_boot_patch
-                except Exception:
-                    import importlib
-                    from python.core import spd_adb as _sa
-                    importlib.reload(_sa)
-                    enable_adb_via_boot_patch = _sa.enable_adb_via_boot_patch
+                # Import the boot-patch helper. The module always exists now,
+                # so a failing import is a real error (not reloaded away).
+                from python.core.spd_adb import enable_adb_via_boot_patch
 
-                self._ui.line.emit(f"[adb] reading {part} via BROM/FDL ...")
                 backup_dir = os.path.expanduser("~/flashpilot/backups")
                 res = enable_adb_via_boot_patch(
                     bridge, tgt, fdl1, a1,
@@ -9039,14 +7444,25 @@ class FlashPilotWindow(QMainWindow):
                     backup_dir=backup_dir,
                     log=lambda m: self._ui.line.emit(m),
                 )
-                self._ui.line.emit(f"[adb] patched image: {res['patched']}")
-                self._ui.line.emit(
-                    "[adb] boot.img patched + flashed. Reboot the device; "
-                    "ro.adb.secure=0 so ADB should come up. If a dialog shows, "
-                    "tap Allow once."
-                )
-                self._ui.status.emit("SPD: ADB enable complete")
-                self._ui.toast.emit("ok", "SPD ADB", "boot patched + flashed")
+                patched = res.get("patched")
+                if patched:
+                    self._ui.line.emit(f"[adb] patched image: {patched}")
+                if res.get("flashed", True):
+                    self._ui.line.emit(
+                        "[adb] boot.img patched + flashed. Reboot the device; "
+                        "ro.adb.secure=0 so ADB should come up. If a dialog "
+                        "shows, tap Allow once."
+                    )
+                    self._ui.status.emit("SPD: ADB enable complete")
+                    self._ui.toast.emit("ok", "SPD ADB", "boot patched + flashed")
+                else:
+                    self._ui.line.emit(
+                        "[info] patched image staged but NOT flashed — follow "
+                        "the next steps in the log."
+                    )
+                    self._ui.status.emit("SPD: ADB enable staged (not flashed)")
+                    self._ui.toast.emit(
+                        "warn", "SPD ADB", "Patched image staged — not flashed")
             except bridge.BridgeError as e:
                 self._ui.line.emit(f"[error] SPD ADB: {e}")
                 self._ui.toast.emit("error", "SPD ADB", str(e))
@@ -9322,376 +7738,6 @@ class FlashPilotWindow(QMainWindow):
         self.spd_progress.setValue(150)
         threading.Thread(target=work, daemon=True).start()
 
-    # ----------------------------- Battery page --------------------------
-    def _build_battery_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(_card_qss())
-        lay = QVBoxLayout(panel)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(12)
-
-        lay.addWidget(SectionTitle("BATTERY REPAIR (ADB)"))
-        info = QLabel(
-            "Diagnose and repair any connected Android device over ADB - no "
-            "vendor-specific hardware needed.\n"
-            "Works on Samsung, MediaTek (Tecno/Infinix/itel/Redmi...), Qualcomm "
-            "and any other phone with USB debugging enabled."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        status_row = QHBoxLayout()
-        self.batt_status = QLabel("No device probed yet")
-        self.batt_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
-        status_row.addWidget(self.batt_status, 1)
-        lay.addLayout(status_row)
-
-        # three big action cards
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
-
-        def action_card(title, desc, btn_label, slot, primary=False):
-            c = QFrame()
-            c.setStyleSheet(
-                f"background: {C['inset']}; border: 1px solid {C['border']};"
-                f" border-radius: 12px;"
-            )
-            cv = QVBoxLayout(c)
-            cv.setContentsMargins(14, 14, 14, 14)
-            cv.setSpacing(10)
-            t = QLabel(title)
-            t.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800;")
-            t.setWordWrap(True)
-            cv.addWidget(t)
-            d = QLabel(desc)
-            d.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-            d.setWordWrap(True)
-            cv.addWidget(d)
-            cv.addStretch(1)
-            b = QPushButton(btn_label)
-            b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            # ADB-mechanism cards gate on adb_shell availability.
-            self._gate_button(b, command={
-                "_battery_report": "adb_shell",
-                "_battery_repair": "adb_shell",
-                "_battery_load_test": "adb_shell",
-                "_network_report": "adb_shell",
-                "_network_repair": "adb_shell",
-                "_network_modem_reset": "adb_shell",
-            }.get(getattr(slot, "__name__", "")))
-            cv.addWidget(b)
-            return c
-
-        cards.addWidget(
-            action_card(
-                "Battery Report",
-                "Accurate health % from the fuel gauge, level, temperature, "
-                "voltage, current draw and top consumers.",
-                "Run Report",
-                self._battery_report,
-            ),
-            1,
-        )
-        cards.addWidget(
-            action_card(
-                "Battery Repair",
-                "The fixes commercial tools apply: reset battery stats, "
-                "Battery Saver, disable scanning, kill background apps, trim "
-                "caches, tune screen/animation power.",
-                "Repair Battery",
-                self._battery_repair,
-                primary=True,
-            ),
-            1,
-        )
-        cards.addWidget(
-            action_card(
-                "Load Test",
-                "Stress the battery under heavy load and measure voltage sag / "
-                "internal resistance to confirm a weak cell.",
-                "Start Load Test",
-                self._battery_load_test,
-            ),
-            1,
-        )
-        lay.addLayout(cards, 1)
-
-        tip = QLabel(
-            "Tip: for accurate battery health the device must expose the "
-            "fuel-gauge sysfs (charge_full / charge_full_design). Connect the "
-            "phone, authorize USB debugging, then run any tool - they work on "
-            "any connected device."
-        )
-        tip.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        tip.setWordWrap(True)
-        lay.addWidget(tip)
-
-        return panel
-
-    # ----------------------------- Network page --------------------------
-    def _build_network_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(_card_qss())
-        root_lay = QVBoxLayout(panel)
-        root_lay.setContentsMargins(0, 0, 0, 0)
-        root_lay.setSpacing(0)
-
-        # Scroll wrapper: the page holds a live readout + two action groups, so
-        # it must be scrollable rather than crushed into the fixed viewport.
-        page_scroll = self._ops_scroll_area()
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(18, 16, 18, 16)
-        lay.setSpacing(14)
-
-        lay.addWidget(SectionTitle("NETWORK REPAIR (ADB)"))
-        info = QLabel(
-            "Diagnose and repair Wi-Fi / mobile data / modem issues on any "
-            "connected Android device over ADB.\n"
-            "Useful for: no internet, weak signal, stuck on 3G, DNS failures, "
-            "SIM not detected after a flash, airplane-mode glitches."
-        )
-        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        # --- Live diagnostics readout (updates every 3s while an ADB device
-        #     is connected - no need to click anything) ---
-        self.net_cards = {}
-        net_grid = QGridLayout()
-        net_grid.setContentsMargins(0, 0, 0, 0)
-        net_grid.setHorizontalSpacing(14)
-        net_grid.setVerticalSpacing(12)
-        for i, (key, cap) in enumerate(
-            (
-                ("sim", "SIM STATE"),
-                ("net", "NETWORK TYPE"),
-                ("mode", "PREFERRED MODE"),
-                ("signal", "SIGNAL"),
-                ("data", "MOBILE DATA"),
-                ("wifi", "WI-FI"),
-                ("dns", "PRIVATE DNS"),
-                ("airplane", "AIRPLANE MODE"),
-            )
-        ):
-            mc = MetricCard(cap, "--", accent=C["accent"])
-            net_grid.addWidget(mc, i // 4, i % 4)
-            self.net_cards[key] = mc
-        net_grid.setColumnStretch(0, 1)
-        net_grid.setColumnStretch(1, 1)
-        net_grid.setColumnStretch(2, 1)
-        net_grid.setColumnStretch(3, 1)
-        lay.addLayout(net_grid)
-
-        status_row = QHBoxLayout()
-        self.net_status = QLabel("Live diagnostics update while a device is connected")
-        self.net_status.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        status_row.addWidget(self.net_status, 1)
-        lay.addLayout(status_row)
-
-        def action_card(title, desc, btn_label, slot, primary=False):
-            c = QFrame()
-            c.setStyleSheet(
-                f"background: {C['inset']}; border: 1px solid {C['border']};"
-                f" border-radius: 12px;"
-            )
-            cv = QVBoxLayout(c)
-            cv.setContentsMargins(16, 16, 16, 16)
-            cv.setSpacing(10)
-            t = QLabel(title)
-            t.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:800;")
-            t.setWordWrap(True)
-            cv.addWidget(t)
-            d = QLabel(desc)
-            d.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-            d.setWordWrap(True)
-            cv.addWidget(d)
-            cv.addStretch(1)
-            b = QPushButton(btn_label)
-            b.setStyleSheet(_btn_primary() if primary else _btn_ghost())
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            # ADB-mechanism cards gate on adb_shell availability.
-            self._gate_button(b, command={
-                "_battery_report": "adb_shell",
-                "_battery_repair": "adb_shell",
-                "_battery_load_test": "adb_shell",
-                "_network_report": "adb_shell",
-                "_network_repair": "adb_shell",
-                "_network_modem_reset": "adb_shell",
-            }.get(getattr(slot, "__name__", "")))
-            cv.addWidget(b)
-            return c
-
-        lay.addWidget(SectionTitle("ACTIONS"))
-        cards = QHBoxLayout()
-        cards.setSpacing(14)
-        cards.addWidget(
-            action_card(
-                "Network Report",
-                "Full report: SIM state, network type, preferred mode, "
-                "data/Wi-Fi flags, DNS, IP and radio version - printed to the "
-                "console.",
-                "Run Report",
-                self._network_report,
-            ),
-            1,
-        )
-        cards.addWidget(
-            action_card(
-                "Network Repair",
-                "The fixes commercial tools use: reset radios (airplane cycle), "
-                "re-enable Wi-Fi/data, restore network mode, clear DNS, flush "
-                "phone/telephony caches.",
-                "Repair Network",
-                self._network_repair,
-                primary=True,
-            ),
-            1,
-        )
-        cards.addWidget(
-            action_card(
-                "Mobile Data Reset",
-                "Force the modem to re-register: airplane cycle + preferred "
-                "network mode + data re-enable. Good for stuck 'No service'.",
-                "Reset Modem",
-                self._network_modem_reset,
-            ),
-            1,
-        )
-        lay.addLayout(cards)
-
-        # --- SIM / carrier lock lives in a collapsible section so the main
-        #     view stays open and breathable ---
-        lock_body = QWidget()
-        lock_body.setStyleSheet("background: transparent;")
-        lock_lay = QVBoxLayout(lock_body)
-        lock_lay.setContentsMargins(0, 0, 0, 0)
-        lock_lay.setSpacing(12)
-
-        lock_info = QLabel(
-            "Check the SIM / network lock state on any device (read-only), and "
-            "read / back up the modem lock record on MediaTek A05/A06 (BROM).\n"
-            "The MTK unlock step never writes without a validated device recipe."
-        )
-        lock_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        lock_info.setWordWrap(True)
-        lock_lay.addWidget(lock_info)
-
-        lock_cards = QHBoxLayout()
-        lock_cards.setSpacing(14)
-        lock_cards.addWidget(
-            action_card(
-                "Carrier Lock Status",
-                "Read the SIM / network lock state over ADB on ANY phone "
-                "(Samsung, MTK, Qualcomm, UNISOC). Pure read - nothing is "
-                "written.",
-                "Check Status",
-                self._carrier_lock_status,
-                primary=True,
-            ),
-            1,
-        )
-        lock_cards.addWidget(
-            action_card(
-                "MTK NVRAM SimLock",
-                "A05/A06 (Helio G85): dump the modem NVRAM lock record over the "
-                "DA, keep a backup and locate the SimLock record. Recipe-gated "
-                "patch.",
-                "Read / Backup",
-                self._carrier_lock_mtk,
-            ),
-            1,
-        )
-        lock_lay.addLayout(lock_cards)
-
-        lay.addWidget(CollapsibleSection(
-            "CARRIER / SIM LOCK", lock_body, accent=C["warn"], collapsed=True
-        ))
-
-        tip = QLabel(
-            "All fixes work over ADB on any connected device (Samsung / MTK / "
-            "Qualcomm / any Android). Reversible from the phone's network "
-            "settings."
-        )
-        tip.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        tip.setWordWrap(True)
-        lay.addWidget(tip)
-        lay.addStretch(1)
-
-        page_scroll.setWidget(host)
-        root_lay.addWidget(page_scroll)
-        return panel
-
-    # ----------------------------- Settings page --------------------------
-    def _build_settings_page(self):
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel.setStyleSheet(
-            _card_qss()
-        )
-        root_lay = QHBoxLayout(panel)
-        root_lay.setContentsMargins(0, 0, 0, 0)
-        root_lay.setSpacing(0)
-
-        # Left category rail - premium Windows 11 style settings sidebar
-        cat = QFrame()
-        cat.setStyleSheet(
-            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 rgba(15, 23, 42, 245), stop:1 rgba(2, 6, 23, 245));"
-            f" border-right: 1px solid {C['border_hi']}; border-top-left-radius: 14px;"
-            f" border-bottom-left-radius: 14px; }}"
-        )
-        cat.setFixedWidth(180)
-        cat_lay = QVBoxLayout(cat)
-        cat_lay.setContentsMargins(12, 20, 12, 16)
-        cat_lay.setSpacing(6)
-
-        self._settings_pages = QStackedWidget()
-        self._settings_pages.setStyleSheet(
-            "QStackedWidget { background: transparent; }"
-        )
-        self._settings_cats = {}
-
-        categories = [
-            ("general", "◈", "General",
-             self._build_settings_general),
-            ("updates", "↻", "Updates",
-             self._build_settings_updates),
-            ("appearance", "✦", "Appearance",
-             self._build_settings_appearance),
-            ("tools", "▤", "Tools",
-             self._build_settings_tools),
-            ("about", "ℹ", "About",
-             self._build_settings_about),
-        ]
-        for key, glyph, label, builder in categories:
-            page = builder()
-            self._settings_pages.addWidget(page)
-            btn = _SettingsCatButton(glyph, label)
-            btn.clicked.connect(lambda _=False, k=key: self._switch_settings(k))
-            cat_lay.addWidget(btn)
-            self._settings_cats[key] = btn
-
-        cat_lay.addStretch(1)
-        root_lay.addWidget(cat)
-        root_lay.addWidget(self._settings_pages, 1)
-        self._switch_settings("general")
-        return panel
-
-    def _switch_settings(self, key):
-        order = {"general": 0, "updates": 1, "appearance": 2, "tools": 3, "about": 4}
-        idx = order.get(key, 0)
-        self._settings_pages.setCurrentIndex(idx)
-        for k, btn in self._settings_cats.items():
-            btn.set_active(k == key)
-
     # --- settings helpers -------------------------------------------------
     def _settings_box(self, title, parent_lay):
         box = QFrame()
@@ -9736,173 +7782,6 @@ class FlashPilotWindow(QMainWindow):
         cb._thumb_pos = 0.0
         return cb
 
-    # --- General -----------------------------------------------------------
-    def _build_settings_general(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
-
-        bl = self._settings_box("SCAN & BEHAVIOUR", lay)
-        self._s_interval = QSpinBox()
-        self._s_interval.setRange(1, 30)
-        self._s_interval.setSuffix(" s")
-        self._s_interval.setValue(int(self.settings.value("scan_interval", 3)))
-        self._s_interval.valueChanged.connect(self._apply_scan_interval)
-        self._settings_row(
-            bl, "USB / ADB auto-scan interval",
-            "How often the app re-checks the USB bus for connected devices.",
-            self._s_interval,
-        )
-        self._s_autoscan = self._settings_switch()
-        self._s_autoscan.setChecked(
-            self.settings.value("autoscan", "true", type=bool)
-        )
-        self._s_autoscan.toggled.connect(self._apply_autoscan)
-        self._settings_row(
-            bl, "Auto-scan on startup",
-            "Begin monitoring devices immediately when the app opens.",
-            self._s_autoscan,
-        )
-        self._s_toast = self._settings_switch()
-        self._s_toast.setChecked(self.settings.value("toasts", "true", type=bool))
-        self._s_toast.toggled.connect(self._apply_toasts)
-        self._settings_row(
-            bl, "Desktop notifications",
-            "Show a toast when a device connects or disconnects.",
-            self._s_toast,
-        )
-
-        bl = self._settings_box("DEFAULT PATHS", lay)
-        self._s_dir_row = QHBoxLayout()
-        self._s_dir = QLineEdit(
-            self.settings.value("default_dir", os.path.expanduser("~/Downloads"))
-        )
-        self._s_dir.setStyleSheet(
-            f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
-            f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
-        )
-        dir_btn = QPushButton("Browse...")
-        dir_btn.setStyleSheet(_btn_ghost())
-        dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        dir_btn.clicked.connect(self._pick_default_dir)
-        self._s_dir_row.addWidget(self._s_dir, 1)
-        self._s_dir_row.addWidget(dir_btn)
-        bl.addLayout(self._s_dir_row)
-        self._s_dir.editingFinished.connect(self._apply_default_dir)
-
-        bl = self._settings_box("FLASHING", lay)
-        self._s_clear = self._settings_switch()
-        self._s_clear.setChecked(
-            self.settings.value("clear_on_run", "false", type=bool)
-        )
-        self._s_clear.toggled.connect(self._apply_clear_on_run)
-        self._settings_row(
-            bl, "Clear console before each run",
-            "Automatically empty the log when you start an operation.",
-            self._s_clear,
-        )
-
-        lay.addStretch(1)
-        return page
-
-    def _build_settings_updates(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
-
-        bl = self._settings_box("UPDATES & RELEASES", lay)
-        self._auto_update_cb = self._settings_switch()
-        self._auto_update_cb.setChecked(
-            self.settings.value("auto_update_check", False, type=bool)
-        )
-        self._auto_update_cb.toggled.connect(lambda on: self.settings.setValue("auto_update_check", on))
-        self._settings_row(
-            bl, "Auto-check for updates",
-            "Automatically check for new versions when FlashPilot starts.",
-            self._auto_update_cb,
-        )
-
-        self._auto_download_cb = self._settings_switch()
-        self._auto_download_cb.setChecked(
-            self.settings.value("auto_download_update", False, type=bool)
-        )
-        self._auto_download_cb.toggled.connect(lambda on: self.settings.setValue("auto_download_update", on))
-        self._settings_row(
-            bl, "Automatically download updates",
-            "Download new updates in the background when available.",
-            self._auto_download_cb,
-        )
-
-        # Manual check button
-        self._check_updates_btn = QPushButton("Check for Updates Now")
-        self._check_updates_btn.setStyleSheet(
-            f"QPushButton {{ background:{C['accent']}; color:{C['panel']}; padding:8px 16px; border-radius:6px; font-size:12px; font-weight:700; }}"
-            f" QPushButton:hover {{ background:{C['card_hover']}; }}"
-            f" QPushButton:disabled {{ background:{C['border']}; color:{C['mute']}; }}"
-        )
-        self._check_updates_btn.setFixedWidth(200)
-        self._check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._check_updates_btn.clicked.connect(self._manual_check_update)
-        self._settings_row(
-            bl, "Manual version check",
-            "Query GitHub releases immediately for updates.",
-            self._check_updates_btn,
-        )
-
-        # Two-tier light patch (python-only) button
-        self._apply_patch_btn = QPushButton("Apply Python Patch…")
-        self._apply_patch_btn.setStyleSheet(
-            f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
-            f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
-            f" QPushButton:hover {{ border-color:{C['accent']}; }}"
-            f" QPushButton:disabled {{ color:{C['mute']}; }}"
-        )
-        self._apply_patch_btn.setFixedWidth(200)
-        self._apply_patch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._apply_patch_btn.setToolTip(
-            "Tier-1 update: pulls only the python/ tree from GitHub main when\n"
-            "no bridge/packaging changes are involved (~200 KB, no full .deb).\n"
-            "Requires a restart afterwards."
-        )
-        self._apply_patch_btn.clicked.connect(self._apply_python_patch_clicked)
-        self._settings_row(
-            bl, "Light patch (python only)",
-            "Fast tier-1 update when only python code changed upstream.",
-            self._apply_patch_btn,
-        )
-
-        # Beta warning frequency — first_install (default) vs every_boot
-        self._beta_every_boot = self._settings_switch()
-        self._beta_every_boot.setChecked(
-            self.settings.value("beta_warning_mode", "first_install") == "every_boot"
-        )
-        self._beta_every_boot.toggled.connect(self._apply_beta_warning_mode)
-        self._settings_row(
-            bl, "Beta warning on every boot",
-            "ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version.",
-            self._beta_every_boot,
-        )
-        prev_btn = QPushButton("Preview beta warning")
-        prev_btn.setStyleSheet(
-            f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
-            f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
-            f" QPushButton:hover {{ border-color:{C['accent']}; }}"
-        )
-        prev_btn.setFixedWidth(200)
-        prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        prev_btn.clicked.connect(lambda: self._show_beta_risk_dialog(
-            APP_VERSION, "", force=True))
-        self._settings_row(
-            bl, "Preview beta warning",
-            "Show the full-screen beta risk dialog now (ignores 'accepted' state).",
-            prev_btn,
-        )
-
-        lay.addStretch(1)
-        return page
-
     def _pick_default_dir(self):
         d = QFileDialog.getExistingDirectory(
             self, "Default working folder", self._s_dir.text() or os.path.expanduser("~/Downloads")
@@ -9941,249 +7820,6 @@ class FlashPilotWindow(QMainWindow):
         self.settings.setValue("beta_warning_mode", mode)
         self._ui.line.emit(f"[settings] beta warning mode -> {mode}")
 
-    # --- Appearance --------------------------------------------------------
-    def _build_settings_appearance(self):
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; }")
-        host = QWidget()
-        host.setStyleSheet("background: transparent;")
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(20, 20, 20, 20)
-        lay.setSpacing(18)
-
-        # THEME — 10 cards only (no dropdown) — progressively advanced, fit-well
-        bl = self._settings_box("THEME — 10 professional accents (click a card)", lay)
-        # Hidden combo for back-compat (cards drive it)
-        self._s_theme = QComboBox()
-        self._s_theme.addItems(list(ACCENT_THEMES))
-        self._s_theme.setCurrentText(self.settings.value("theme", "Slate Professional"))
-        self._s_theme.currentTextChanged.connect(self._apply_theme)
-        self._s_theme.setVisible(False)
-        intro = QLabel("Whole-app live — buttons, cards, console, shimmer, cable/ORB recolor instantly. Each next theme is a touch more advanced.")
-        intro.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        intro.setWordWrap(True)
-        bl.addWidget(intro)
-        # Fit-well wrapping grid: FlowHost delegates heightForWidth so wrap is visible/clickable on small screens
-        grid_host = FlowHost()
-        grid_host.setStyleSheet("background: transparent;")
-        grid = FlowLayout(grid_host, spacing=10)
-        grid.setContentsMargins(0, 0, 0, 0)
-        for idx, (th, tok) in enumerate(ACCENT_THEMES.items()):
-            card = QFrame()
-            card.setCursor(Qt.CursorShape.PointingHandCursor)
-            # Fixed width for wrapping — 158 allows 3 per row on 520px, 2 on 340px, always visible via wrap
-            card.setFixedWidth(158)
-            h = 64 + (idx // 3) * 4 + (1 if idx >= 7 else 0) * 4
-            card.setFixedHeight(h)
-            card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            is_sel = self.settings.value("theme", "Slate Professional") == th
-            # Progressively advanced border/glow
-            prog = idx / 9.0  # 0..1
-            # Level 0-2: flat, 3-5: soft glow, 6-8: double border, 9: premium halo
-            if idx < 3:
-                bd = tok["accent_hi"] if is_sel else "rgba(255,255,255,14)"
-                bw = "2px" if is_sel else "1px"
-                shadow = ""
-            elif idx < 6:
-                bd = tok["accent_hi"] if is_sel else "rgba(255,255,255,20)"
-                bw = "2px" if is_sel else "1px"
-                shadow = f" QFrame {{ border-bottom: 1px solid {tok['accent_hi']}20; }}"
-            elif idx < 9:
-                bd = tok["accent_hi"] if is_sel else tok["accent"] + "55"
-                bw = "2px" if is_sel else "1.5px"
-                shadow = ""
-            else:
-                bd = tok["accent_hi"]
-                bw = "2px"
-                shadow = f" QFrame {{ border-top: 1px solid rgba(255,255,255,18); }}"
-            # Gradient gets more stops as we advance
-            if idx < 2:
-                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['grad_b']})"
-            elif idx < 5:
-                mid = tok["accent"]
-                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.55 {mid}, stop:1 {tok['grad_b']})"
-            elif idx < 8:
-                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.35 {tok['accent']}, stop:0.75 {tok['grad_b']}, stop:1 {tok['accent_hi']})"
-            else:
-                bg = f"qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:0.5 {tok['accent_hi']}, stop:1 {tok['grad_b']})"
-            card.setStyleSheet(
-                f"QFrame {{ background: {bg}; border: {bw} solid {bd}; border-radius: 11px; }}"
-                + shadow
-            )
-            card.setToolTip(f"{th}\n{tok['accent']} → {tok['grad_b']} (click to apply)")
-            # Subtle drop shadow for most advanced tiers
-            if idx >= 6:
-                sd = QGraphicsDropShadowEffect(card)
-                sd.setBlurRadius(12 + idx * 2)
-                sd.setOffset(0, 2)
-                sd.setColor(QColor(0, 0, 0, 90 if idx < 8 else 120))
-                card.setGraphicsEffect(sd)
-            cl = QVBoxLayout(card)
-            cl.setContentsMargins(12, 10, 12, 10)
-            cl.setSpacing(2)
-            # Advancement badge for later cards
-            hdr = QHBoxLayout()
-            hdr.setSpacing(6)
-            name = QLabel(th)
-            name.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: 800; background: transparent; border: none;")
-            hdr.addWidget(name, 1)
-            if idx >= 3:
-                lvl = QLabel(f"Lv{idx+1}")
-                lvl.setFixedHeight(16)
-                lvl.setStyleSheet(f"color: {tok['accent_hi']}; background: rgba(0,0,0,22); border: 1px solid {tok['accent_hi']}55; border-radius: 8px; padding: 0 5px; font-size: 8px; font-weight: 800;")
-                hdr.addWidget(lvl, 0)
-            cl.addLayout(hdr)
-            hexlbl = QLabel(f"{tok['accent']} → {tok['grad_b']}")
-            hexlbl.setStyleSheet("color: rgba(255,255,255,195); font-size: 9px; background: transparent; border: none;")
-            cl.addWidget(hexlbl)
-            # tiny progress bar hint for most advanced
-            if idx >= 5:
-                bar = QFrame()
-                bar.setFixedHeight(2)
-                bar.setStyleSheet(f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {tok['grad_a']}, stop:1 {tok['accent_hi']}); border-radius: 1px; }}")
-                cl.addWidget(bar)
-            card.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
-            grid.addWidget(card)
-        bl.addWidget(grid_host)
-        hint = QLabel("Tip: cards only — no dropdown. Each next theme adds a stop/glow, fitted in a 3-column grid that never overflows.")
-        hint.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-        hint.setWordWrap(True)
-        bl.addWidget(hint)
-
-        # ANIMATIONS — granular, not single switch
-        bl2 = self._settings_box("ANIMATIONS — granular", lay)
-        self._s_anim = self._settings_switch()
-        self._s_anim.setChecked(self.settings.value("animations", "true", type=bool))
-        self._s_anim.toggled.connect(self._apply_animations)
-        self._settings_row(
-            bl2, "Master animations",
-            "Global toggle — disables all motion when off.",
-            self._s_anim,
-        )
-        # Granular toggles — every toggle demos immediately when turned ON, stops when OFF
-        def _make_anim_toggle(key, label, detail):
-            sw = self._settings_switch()
-            sw.setChecked(self.settings.value(key, "true", type=bool))
-            def _on_toggled(on, k=key, s=sw):
-                self.settings.setValue(k, bool(on))
-                if on and self.settings.value("animations", "true", type=bool):
-                    try:
-                        do_s = self.settings.value("anim_shake", "true", type=bool)
-                        do_r = self.settings.value("anim_rubber", "true", type=bool)
-                        if do_s and do_r:
-                            Motion.shake(s, amplitude=4)
-                            from PyQt6.QtCore import QTimer
-                            QTimer.singleShot(420, lambda w=s: Motion.rubber(w, scale=1.10, dur=320))
-                        elif do_s:
-                            Motion.shake(s, amplitude=4)
-                        elif do_r:
-                            Motion.rubber(s, scale=1.10, dur=320)
-                    except Exception:
-                        pass
-                try:
-                    if k == "anim_cable":
-                        if hasattr(self, "scene"):
-                            self.scene.update()
-                    elif k == "anim_orb":
-                        self.orb.set_animations(bool(on) and self._s_anim.isChecked())
-                    elif k == "anim_window":
-                        if on:
-                            Motion.window_open(self, dur=220)
-                    elif k == "anim_shake":
-                        if on:
-                            Motion.shake(s, amplitude=6)
-                    elif k == "anim_rubber":
-                        if on:
-                            Motion.rubber(s, scale=1.08, dur=340)
-                    elif k == "anim_bubble":
-                        if on and hasattr(self, "scene"):
-                            Motion.bubble_splash(self.scene, count=6)
-                    elif k == "anim_shimmer":
-                        if hasattr(self, "shimmer"):
-                            self.shimmer.setVisible(bool(on) and self._s_anim.isChecked())
-                            self.shimmer.update()
-                except Exception:
-                    pass
-            sw.toggled.connect(_on_toggled)
-            self._settings_row(bl2, label, detail, sw)
-            return sw
-
-        self._s_anim_cable = _make_anim_toggle("anim_cable", "Cable pulse", "Animated data flow in the connection banner.")
-        self._s_anim_orb = _make_anim_toggle("anim_orb", "Status orb", "Pulsing LED orb next to connection state.")
-        self._s_anim_shimmer = _make_anim_toggle("anim_shimmer", "Shimmer bar", "Progress shimmer during flash.")
-        self._s_anim_toast = _make_anim_toggle("anim_toast", "Toast slide", "Slide-in animation for notifications.")
-        self._s_anim_window = _make_anim_toggle("anim_window", "Window pop", "Rubber window open/close pop.")
-        self._s_anim_shake = _make_anim_toggle("anim_shake", "Button shake", "Every button tap shakes (when enabled).")
-        self._s_anim_rubber = _make_anim_toggle("anim_rubber", "Rubber band", "Elastic pop on buttons/windows (when enabled).")
-        self._s_anim_bubble = _make_anim_toggle("anim_bubble", "Bubble splash", "Bubbles rising from USB-C on phone connect (when enabled).")
-
-        # No preview row — toggle itself demos immediately when turned ON (see _make_anim_toggle)
-
-        self._s_blur = self._settings_switch()
-        self._s_blur.setChecked(self.settings.value("blur", "true", type=bool))
-        self._s_blur.toggled.connect(self._apply_blur)
-        self._settings_row(
-            bl2, "Window glow / shadow",
-            "Drop shadow and halo around the main window.",
-            self._s_blur,
-        )
-
-        # SHORTCUTS — table with all shortcuts, editable hint
-        bl3 = self._settings_box("SHORTCUTS", lay)
-        shortcuts = [
-            ("F5 / Ctrl+R", "Re-scan USB / ADB"),
-            ("Ctrl+Enter", "Run selected operation"),
-            ("Ctrl+L", "Clear console"),
-            ("Ctrl+S", "Save console log"),
-            ("Ctrl+F", "Find in console"),
-            ("Ctrl+Shift+C", "Copy console"),
-            ("Ctrl+Esc", "Stop any operation (global)"),
-        ]
-        for k, d in shortcuts:
-            row = QHBoxLayout()
-            chip = QLabel(k)
-            chip.setStyleSheet(
-                f"color:{C['dim']}; font-weight:700; font-size:10px;"
-                f" background:{C['card_hover']}; border:1px solid {C['border']};"
-                f" border-radius:6px; padding:3px 8px;"
-            )
-            chip.setFixedWidth(130)
-            desc = QLabel(d)
-            desc.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-            row.addWidget(chip)
-            row.addWidget(desc, 1)
-            bl3.addLayout(row)
-        sc_hint = QLabel("Shortcuts are fixed in this build — custom key mapping is planned. Use Settings → Tools → Reset to restore defaults.")
-        sc_hint.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
-        sc_hint.setWordWrap(True)
-        bl3.addWidget(sc_hint)
-
-        # UI DENSITY / FONT — more UI improvements
-        bl4 = self._settings_box("UI DENSITY", lay)
-        self._s_density = QComboBox()
-        self._s_density.addItems(["Comfortable", "Compact", "Spacious"])
-        self._s_density.setCurrentText(self.settings.value("density", "Comfortable"))
-        self._style_combo(self._s_density)
-        self._s_density.currentTextChanged.connect(lambda v: self.settings.setValue("density", v))
-        self._settings_row(bl4, "Layout density", "Compact saves vertical space, Spacious adds padding.", self._s_density)
-        self._s_font = QSpinBox()
-        self._s_font.setRange(8, 16)
-        self._s_font.setValue(int(self.settings.value("font_size", 13)))
-        self._s_font.setSuffix(" px")
-        self._s_font.valueChanged.connect(lambda v: self.settings.setValue("font_size", int(v)))
-        self._settings_row(bl4, "Base font size", "Applies to console and cards (restart to fully apply).", self._s_font)
-
-        lay.addStretch(1)
-        scroll.setWidget(host)
-        outer.addWidget(scroll)
-        return page
-
     def _apply_theme(self, name):
         self.settings.setValue("theme", name)
         if name in ACCENT_THEMES:
@@ -10197,7 +7833,7 @@ class FlashPilotWindow(QMainWindow):
         try:
             self.setStyleSheet(_get_base_qss() + _console_qss())
         except Exception:
-            self.setStyleSheet(_BASE_QSS + _console_qss())
+            self.setStyleSheet(_get_base_qss() + _console_qss())
         # Accent strip (top line)
         if hasattr(self, "_accent_strip") and self._accent_strip:
             try:
@@ -10264,56 +7900,6 @@ class FlashPilotWindow(QMainWindow):
         if self._root_shadow is not None:
             self._root_shadow.setEnabled(bool(on))
 
-    # --- Tools --------------------------------------------------------------
-    def _build_settings_tools(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
-
-        bl = self._settings_box("ENGINE", lay)
-        rows = [
-            ("Engine", "Rust core (flashpilot-bridge) + PyQt6 shell"),
-            ("Bridge binary", str(bridge.BRIDGE)),
-            ("Bridge built", "yes" if bridge.BRIDGE.exists()
-             else "no (run `cargo build --release`)"),
-            ("ADB available", "yes (native)" if bridge.has_adb() else "no (bridge not built)"),
-        ]
-        for label, value in rows:
-            row = QHBoxLayout()
-            lab = QLabel(label)
-            lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:110px;")
-            val = QLabel(value)
-            val.setStyleSheet(f"color:{C['text']}; font-size:12px;")
-            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            row.addWidget(lab)
-            row.addWidget(val, 1)
-            bl.addLayout(row)
-
-        bl = self._settings_box("ACTIONS", lay)
-        act = QHBoxLayout()
-        act.setSpacing(10)
-        b1 = QPushButton("Rebuild bridge (cargo)")
-        b1.setStyleSheet(_btn_ghost())
-        b1.setCursor(Qt.CursorShape.PointingHandCursor)
-        b1.clicked.connect(self._rebuild_bridge)
-        act.addWidget(b1)
-        b2 = QPushButton("Open log folder")
-        b2.setStyleSheet(_btn_ghost())
-        b2.setCursor(Qt.CursorShape.PointingHandCursor)
-        b2.clicked.connect(self._open_log_dir)
-        act.addWidget(b2)
-        b3 = QPushButton("Reset all settings")
-        b3.setStyleSheet(_btn_danger())
-        b3.setCursor(Qt.CursorShape.PointingHandCursor)
-        b3.clicked.connect(self._reset_settings)
-        act.addWidget(b3)
-        act.addStretch(1)
-        bl.addLayout(act)
-
-        lay.addStretch(1)
-        return page
-
     def _rebuild_bridge(self):
         def work():
             self._ui.line.emit("[build] cargo build --release ...")
@@ -10340,99 +7926,6 @@ class FlashPilotWindow(QMainWindow):
         self.settings.clear()
         self._toasts.show_info("Settings reset", "Values restored to defaults")
         self._switch_settings("general")
-
-    # --- About --------------------------------------------------------------
-    def _build_settings_about(self):
-        page = QWidget()
-        lay = QVBoxLayout(page)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
-
-        card = QFrame()
-        card.setObjectName("aboutcard")
-        card.setStyleSheet(
-            f"QFrame#aboutcard {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            f" stop:0 rgba(37, 99, 235, 26), stop:1 rgba(6, 182, 212, 18));"
-            f" border: 1px solid {C['border']}; border-top: 1px solid {C['border_hi']};"
-            f" border-radius: 14px; }}"
-        )
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(20, 22, 20, 22)
-        cl.setSpacing(6)
-        logo = QLabel()
-        logo.setPixmap(_draw_logo(56))
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(logo)
-        name = QLabel("Legendary-Brilliantforous")
-        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name.setStyleSheet(
-            f"color:{C['text']}; font-size:17px; font-weight:800; letter-spacing:1px;"
-        )
-        cl.addWidget(name)
-        _disp = _display_version(APP_VERSION)
-        _beta = _is_beta_version(APP_VERSION)
-        ver_text = f"Version {_disp}  ·  Rust core + PyQt6"
-        if _beta:
-            ver_text += "  ·  BETA"
-            # Beta pill badge
-            badge = QLabel("  BETA  ")
-            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge.setStyleSheet(
-                "color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-                " stop:0 #f59e0b, stop:1 #dc2626);"
-                " border-radius: 6px; padding: 2px 8px; font-size: 9px; font-weight: 800; letter-spacing: 1px;"
-            )
-            # container for badge
-            badge_wrap = QHBoxLayout()
-            badge_wrap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge_wrap.addStretch()
-            badge_wrap.addWidget(badge)
-            badge_wrap.addStretch()
-            bw = QWidget()
-            bw.setLayout(badge_wrap)
-            bw.setStyleSheet("background: transparent;")
-            cl.addWidget(bw)
-        ver = QLabel(ver_text)
-        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ver.setStyleSheet(
-            f"color:{C['dim']}; font-size:11px;"
-            + (" color: #fbbf24;" if _beta else "")
-        )
-        cl.addWidget(ver)
-        tag = QLabel(
-            "Samsung · MediaTek · Qualcomm low-level flashing & repair\n"
-            "FRP bypass · screen-lock removal · download-mode tooling"
-        )
-        tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tag.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
-        cl.addWidget(tag)
-
-        lay.addWidget(card)
-
-        bl = self._settings_box("SHORTCUTS", lay)
-        for k, d in (
-            ("F5", "Re-scan USB / ADB"),
-            ("Ctrl+Enter", "Run the selected operation"),
-            ("Ctrl+L", "Clear console"),
-            ("Ctrl+S", "Save console log"),
-            ("Ctrl+F", "Find in console"),
-        ):
-            row = QHBoxLayout()
-            chip = QLabel(k)
-            chip.setStyleSheet(
-                f"color:{C['dim']}; font-weight:700; font-size:10px;"
-                f" background:{C['card_hover']}; border:1px solid {C['border']};"
-                f" border-radius:6px; padding:3px 8px;"
-            )
-            chip.setFixedWidth(90)
-            desc = QLabel(d)
-            desc.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
-            row.addWidget(chip)
-            row.addWidget(desc, 1)
-            bl.addLayout(row)
-
-        lay.addStretch(1)
-        return page
 
     def _download_and_prompt_install(self, latest_url, stable_tag):
         import threading
@@ -11002,6 +8495,25 @@ class FlashPilotWindow(QMainWindow):
         btn.clicked.connect(slot)
         return btn
 
+    def _console_chip(self, text, tip, checked=False, width=48):
+        """Compact checkable console chip (theme tokens only)."""
+        btn = QPushButton(text)
+        btn.setCheckable(True)
+        btn.setChecked(bool(checked))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setFixedWidth(width)
+        btn.setToolTip(tip)
+        btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border:1px solid {C['border']};"
+            f" border-radius:6px; padding:3px 4px; font-size:10px; font-weight:700;"
+            f" color:{C['dim']}; }}"
+            f" QPushButton:hover {{ border-color:{C['border_hi']}; color:{C['text']}; }}"
+            f" QPushButton:checked {{ background:{C['accent_dim']};"
+            f" color:{C['accent_hi']}; border-color:{C['accent']}; }}"
+        )
+        return btn
+
     def _style_combo(self, combo):
         """Force a dark, premium dropdown popup regardless of platform."""
         combo.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -11089,49 +8601,285 @@ class FlashPilotWindow(QMainWindow):
         return "info"
 
     def log_line(self, msg):
-        level = self._classify(msg)
-        self._log_buffer.append((level, msg))
+        """Record a line: ANSI stripped into the buffer, rendered in batches.
+
+        The (level, plain) tuple goes into ``_log_buffer`` (ANSI-free, so
+        search/copy/save stay clean); the raw message is kept in the parallel
+        ``_log_ansi`` list so a rebuild can restore its colour mapping. The
+        first pending line renders synchronously; a burst coalesces onto a
+        single-shot flush timer (or immediately at the line cap).
+        """
+        raw = "" if msg is None else str(msg)
+        plain, spans = parse_ansi(raw)
+        level = self._classify(plain)
+        self._log_buffer.append((level, plain))
+        self._log_ansi.append(raw)
         if len(self._log_buffer) > 6000:
             del self._log_buffer[:-2000]
-        if self._filter.get(level, True):
-            self._append_to_widget(level, msg)
-            if self.find_edit.text():
-                self._apply_find()
+            del self._log_ansi[:-2000]
         self._update_count()
+        if self._filter.get(level, True) and self._console_search_matches(plain):
+            if self._pending_console or self._flush_timer_active():
+                self._pending_console.append((level, plain, spans))
+                if len(self._pending_console) >= self._CONSOLE_FLUSH_MAX:
+                    self._flush_console()
+                else:
+                    self._start_flush_timer()
+            else:
+                # First line of a burst: render it now (no added latency) and
+                # open the coalescing window so the rest of the burst batches.
+                self._append_to_widget(level, plain, spans)
+                self._start_flush_timer()
+                if self.find_edit.text():
+                    self._apply_find()
 
-    def _append_to_widget(self, level, msg):
-        stamp = _time.strftime("%H:%M:%S")
+    def _flush_timer_active(self):
+        timer = getattr(self, "_console_flush_timer", None)
+        try:
+            return bool(timer is not None and timer.isActive())
+        except Exception:
+            return False
+
+    def _start_flush_timer(self):
+        timer = getattr(self, "_console_flush_timer", None)
+        if timer is None:
+            return
+        try:
+            if not timer.isActive():
+                timer.start()
+        except Exception:
+            pass
+
+    def _flush_console(self):
+        """Append every pending line, in order, as one coalesced batch."""
+        timer = getattr(self, "_console_flush_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        pending = getattr(self, "_pending_console", None)
+        if not pending:
+            return
+        self._pending_console = []
+        # One widget append for the whole batch: ``appendPlainText`` (and the
+        # ``maxBlockCount`` trim it triggers) is O(document length), so a call
+        # per line makes a burst O(n^2). A single call per flush removes that.
+        self._append_batch_to_widget(pending)
+
+    def _base_line_format(self, level, msg):
         fmt = QTextCharFormat()
-        m = msg.strip()
+        m = (msg or "").strip()
         if level == "err":
             fmt.setForeground(QColor(C["err"]))
         elif level == "warn":
             fmt.setForeground(QColor(C["warn"]))
         elif level == "ok":
             fmt.setForeground(QColor(C["ok"]))
-        elif m.startswith(">>> ") or m.startswith("== running flow:") or m.startswith("== flow finished:"):
+        elif (m.startswith(">>> ") or m.startswith("== running flow:")
+              or m.startswith("== flow finished:")):
             fmt.setForeground(QColor(C["accent_hi"]))
             fmt.setFontWeight(QFont.Weight.DemiBold)
         else:
             fmt.setForeground(QColor(C["text"]))
+        return fmt
 
-        self.log.appendPlainText(f"[{stamp}] {msg}")
-        cur = self.log.textCursor()
-        cur.movePosition(cur.MoveOperation.StartOfLine)
-        cur.movePosition(cur.MoveOperation.EndOfLine, cur.MoveMode.KeepAnchor)
+    def _base_format_key(self, level, msg):
+        """Identity of the format ``_base_line_format`` builds for a line.
+
+        ``err``/``warn``/``ok`` colour by level alone; ``info`` is ``accent``
+        for the flow-marker prefixes and ``text`` otherwise. Consecutive lines
+        sharing a key can therefore be formatted by a single merge pass.
+        """
+        if level in ("err", "warn", "ok"):
+            return level
+        m = (msg or "").strip()
+        if (m.startswith(">>> ") or m.startswith("== running flow:")
+                or m.startswith("== flow finished:")):
+            return "accent"
+        return "text"
+
+    def _base_format_for_key(self, key):
+        """Resolve a ``_base_format_key`` back to its ``QTextCharFormat``.
+
+        Delegates to ``_base_line_format`` so the theme tokens stay defined in
+        exactly one place (a probe message stands in for the accent case).
+        """
+        if key in ("err", "warn", "ok"):
+            return self._base_line_format(key, "")
+        if key == "accent":
+            return self._base_line_format("info", ">>> marker")
+        return self._base_line_format("info", "")
+
+    def _merge_format(self, start, end, fmt):
+        """Merge ``fmt`` over ``[start, end)``, clamped to the document.
+
+        ``QTextCursor.setPosition`` warns (and, at exit, can crash) for a
+        position past the document end, so the range is clamped to Qt's valid
+        cursor positions ``[0, characterCount() - 1]`` before use. The last
+        valid position is the *exclusive* end used by the anchored range.
+        """
+        doc = self.log.document()
+        last = doc.characterCount() - 1
+        start = max(0, min(int(start), last))
+        end = max(0, min(int(end), last))
+        if end <= start:
+            return
+        cur = QTextCursor(doc)
+        cur.setPosition(start)
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
         cur.mergeCharFormat(fmt)
-        self.log.setTextCursor(cur)
+
+    def _append_to_widget(self, level, msg, spans=None):
+        """Append one message (single-entry wrapper around the batch renderer).
+
+        Kept as a stable entry point: ``log_line`` renders the first line of a
+        burst synchronously through this, and ``_rebuild_console`` may too.
+        """
+        self._append_batch_to_widget([(level, msg, spans)])
+
+    def _append_batch_to_widget(self, entries):
+        """Append ``entries`` (``(level, msg, spans)``) in one widget call.
+
+        ``appendPlainText`` is O(document length) because ``maxBlockCount``
+        trims on each call, so rendering a batch one call at a time is O(n^2).
+        Joining the batch into a single call makes it O(n) per flush.
+
+        Formatting is then merged in as few passes as possible:
+
+        * the base level format once per consecutive run of lines sharing a
+          ``_base_format_key`` (one cursor range for the whole run);
+        * the dim timestamp prefix once per message (first line only);
+        * ANSI spans only on the messages that carry them.
+
+        ``msg`` may contain embedded ``\\n``: each line becomes its own
+        paragraph, the prefix lands on the first line only, and a span that
+        crosses a newline is clipped to the matching slice of every line it
+        touches. All positions are derived *after* the append, from the block
+        count, so front-trimming cannot desync them.
+        """
+        if not entries:
+            return
+        show_ts = getattr(self, "_show_timestamps", True)
+        stamp = f"[{_time.strftime('%H:%M:%S')}] " if show_ts else ""
+
+        parts = []          # each entry's ``prefix + msg``, joined with "\n"
+        line_offsets = []   # offset of every rendered line within ``combined``
+        line_text = []      # rendered line text (no trailing newline)
+        line_key = []       # base-format key per line
+        meta = []           # (first_line, line_count, prefix_len, spans)
+        combined_len = 0
+        for level, msg, spans in entries:
+            msg = "" if msg is None else str(msg)
+            prefix = stamp
+            full = prefix + msg
+            first_line = len(line_text)
+            key = self._base_format_key(level, msg)
+            local = 0
+            for line in full.split("\n"):
+                line_offsets.append(combined_len + local)
+                line_text.append(line)
+                line_key.append(key)
+                local += len(line) + 1  # +1 for the separating newline
+            meta.append((first_line, len(line_text) - first_line,
+                         len(prefix), spans))
+            parts.append(full)
+            combined_len += len(full) + 1
+        combined = "\n".join(parts)
+
+        doc = self.log.document()
+        self.log.appendPlainText(combined)
+
+        total_lines = len(line_text)
+        blocks = doc.blockCount()
+        # A single batch may exceed ``maxBlockCount``: the front is trimmed
+        # away, so the surviving lines are the tail and the origin matches.
+        trimmed = max(0, total_lines - blocks)
+        first_index = max(0, blocks - total_lines)
+        first_block = doc.findBlockByNumber(first_index)
+        base = first_block.position() if first_block.isValid() else 0
+        origin = line_offsets[trimmed] if trimmed else 0
+
+        def doc_pos(off):
+            # A newline in ``combined`` maps to exactly one paragraph
+            # separator, so string offsets and document positions coincide.
+            return base + (off - origin)
+
+        # Base level format: one merge per run of consecutive same-key lines.
+        fmt_cache = {}
+        i = trimmed
+        while i < total_lines:
+            key = line_key[i]
+            fmt = fmt_cache.get(key)
+            if fmt is None:
+                fmt = self._base_format_for_key(key)
+                fmt_cache[key] = fmt
+            j = i + 1
+            while j < total_lines and line_key[j] == key:
+                j += 1
+            lo = doc_pos(line_offsets[i])
+            hi = doc_pos(line_offsets[j - 1] + len(line_text[j - 1]))
+            self._merge_format(lo, hi, fmt)
+            i = j
+
+        # Timestamp: dim, first line of each message only.
+        if stamp:
+            dim = QTextCharFormat()
+            dim.setForeground(QColor(C["dim"]))
+            for first_line, _count, prefix_len, _spans in meta:
+                if prefix_len <= 0 or first_line < trimmed:
+                    continue
+                lo = doc_pos(line_offsets[first_line])
+                self._merge_format(lo, lo + prefix_len, dim)
+
+        # ANSI spans, only on the messages that have them.
+        for first_line, count, prefix_len, spans in meta:
+            if not spans:
+                continue
+            entry_start = line_offsets[first_line]
+            for start, stop, attrs in spans:
+                if not isinstance(attrs, dict):
+                    continue
+                fmt = QTextCharFormat()
+                fg = attrs.get("fg")
+                if fg and fg in C:
+                    fmt.setForeground(QColor(C[fg]))
+                elif attrs.get("dim"):
+                    fmt.setForeground(QColor(C["dim"]))
+                if attrs.get("bold"):
+                    fmt.setFontWeight(QFont.Weight.Bold)
+                gstart = entry_start + prefix_len + start
+                gstop = entry_start + prefix_len + stop
+                # Clip the span to each line so it survives newlines.
+                for k in range(count):
+                    idx = first_line + k
+                    if idx < trimmed:
+                        continue
+                    lstart = line_offsets[idx]
+                    lend = lstart + len(line_text[idx])
+                    lo = max(gstart, lstart)
+                    hi = min(gstop, lend)
+                    if hi <= lo:
+                        continue
+                    self._merge_format(doc_pos(lo), doc_pos(hi), fmt)
 
     def _set_filter(self, level, checked):
         self._filter[level] = checked
         self._rebuild_console()
 
     def _rebuild_console(self):
-        """Re-render the console respecting the level filters."""
+        """Re-render the console respecting the level filters and search."""
+        self._flush_console()
         self.log.clear()
-        for level, msg in self._log_buffer:
-            if self._filter.get(level, True):
-                self._append_to_widget(level, msg)
+        batch = []
+        for i, (level, msg) in enumerate(self._log_buffer):
+            if self._filter.get(level, True) and self._console_search_matches(msg):
+                raw = self._log_ansi[i] if i < len(self._log_ansi) else msg
+                _plain, spans = parse_ansi(raw)
+                batch.append((level, msg, spans))
+        # One whole rebuild as a single batch: a filter toggle re-renders up to
+        # the full buffer, so per-entry appends would be O(n^2) too.
+        self._append_batch_to_widget(batch)
         self._update_count()
         self._apply_find()
 
@@ -11139,69 +8887,311 @@ class FlashPilotWindow(QMainWindow):
         self.console_count.setText(f"{len(self._log_buffer)} lines")
 
     def _clear_console(self):
+        self._flush_console()
         self._log_buffer.clear()
+        self._log_ansi.clear()
+        self._pending_console = []
         self.log.clear()
         self._update_count()
 
     def _copy_console(self):
+        self._flush_console()
         QApplication.clipboard().setText(self.log.toPlainText())
         self.set_status("Console copied to clipboard")
 
+    def _copy_selection(self):
+        text = self.log.textCursor().selectedText()
+        if text:
+            QApplication.clipboard().setText(text)
+            self.set_status("Selection copied to clipboard")
+
     def _save_console(self):
+        self._flush_console()
+        default_name = ("flashpilot-console-"
+                        + _time.strftime("%Y%m%d-%H%M%S") + ".log")
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save console log", "samsung-console.log", "Log files (*.log);;Text (*.txt);;All files (*)"
+            self, "Save console log", default_name,
+            "Log files (*.log);;Text (*.txt);;All files (*)"
         )
         if path:
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(m for _, m in self._log_buffer))
             self.set_status(f"Console saved: {path}")
 
+    def _set_wrap(self, enabled):
+        enabled = bool(enabled)
+        try:
+            self.log.setLineWrapMode(
+                QPlainTextEdit.LineWrapMode.WidgetWidth if enabled
+                else QPlainTextEdit.LineWrapMode.NoWrap)
+            btn = getattr(self, "wrap_btn", None)
+            if btn is not None:
+                # Label shows the action the next click performs.
+                btn.setText("Wrap" if not enabled else "NoWrap")
+        except Exception:
+            pass
+
     def _toggle_wrap(self):
-        wrapping = self.log.lineWrapMode() == QPlainTextEdit.LineWrapMode.WidgetWidth
-        self.log.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.NoWrap
-            if wrapping
-            else QPlainTextEdit.LineWrapMode.WidgetWidth
-        )
-        self.wrap_btn.setText("Wrap" if wrapping else "NoWrap")
+        try:
+            wrapping = (self.log.lineWrapMode()
+                        == QPlainTextEdit.LineWrapMode.WidgetWidth)
+        except Exception:
+            wrapping = True
+        self._set_wrap(not wrapping)
+
+    def _console_wrap_enabled(self):
+        try:
+            return (self.log.lineWrapMode()
+                    == QPlainTextEdit.LineWrapMode.WidgetWidth)
+        except Exception:
+            return False
+
+    def _refresh_search_regex(self):
+        """(Re)compile the search pattern; mark an invalid regex and match nothing."""
+        self._console_regex_obj = None
+        pattern = (self._console_search_text or "")
+        if self._console_regex and pattern:
+            rx = QRegularExpression(pattern)
+            if rx.isValid():
+                self._console_regex_obj = rx
+        invalid = bool(self._console_regex and pattern
+                       and self._console_regex_obj is None)
+        self._mark_search_error(invalid)
+        return invalid
+
+    def _mark_search_error(self, on):
+        """Flag the search box (red border + tooltip) for an invalid regex."""
+        edit = getattr(self, "find_edit", None)
+        if edit is None:
+            return
+        base = getattr(self, "_find_edit_base_qss", "")
+        try:
+            if on:
+                edit.setStyleSheet(
+                    base + f" QLineEdit {{ border:1px solid {C['err']}; }}")
+                edit.setToolTip("Invalid regular expression")
+            else:
+                edit.setStyleSheet(base)
+                edit.setToolTip("")
+        except Exception:
+            pass
+
+    def _console_find_target(self):
+        """Current find target: QRegularExpression, str, or None (no match)."""
+        pattern = (self.find_edit.text() or "")
+        if not pattern:
+            return None
+        if self._console_regex:
+            return self._console_regex_obj  # None when invalid
+        return pattern
+
+    def _sync_console_chip(self, attr, checked):
+        """Keep a checkable console chip in sync without re-emitting toggled.
+
+        The chips are wired ``toggled -> _set_*`` (so a programmatic
+        ``setChecked`` can drive the real mode); syncing therefore blocks
+        signals and only touches the button when its state actually differs,
+        which makes ``_set_*`` idempotent and recursion-safe.
+        """
+        btn = getattr(self, attr, None)
+        if btn is None:
+            return
+        try:
+            if btn.isChecked() != bool(checked):
+                btn.blockSignals(True)
+                try:
+                    btn.setChecked(bool(checked))
+                finally:
+                    btn.blockSignals(False)
+        except Exception:
+            pass
+
+    def _set_timestamps(self, enabled, persist=True):
+        """Show/hide the render-only [HH:MM:SS] prefix (persisted)."""
+        self._show_timestamps = bool(enabled)
+        self._sync_console_chip("time_btn", self._show_timestamps)
+        if persist:
+            try:
+                self.settings.setValue(
+                    "console/timestamps", self._show_timestamps)
+            except Exception:
+                pass
+        if getattr(self, "log", None) is not None:
+            try:
+                self._rebuild_console()
+            except Exception:
+                pass
+
+    def _toggle_timestamps(self):
+        self._set_timestamps(not getattr(self, "_show_timestamps", True))
+
+    def _set_regex_mode(self, enabled, persist=True):
+        """Interpret the search text as a regex (persisted)."""
+        self._console_regex = bool(enabled)
+        self._sync_console_chip("regex_btn", self._console_regex)
+        if persist:
+            try:
+                self.settings.setValue("console/regex", self._console_regex)
+            except Exception:
+                pass
+        try:
+            self._refresh_search_regex()
+        except Exception:
+            pass
+        if getattr(self, "log", None) is not None:
+            try:
+                self._rebuild_console()
+            except Exception:
+                pass
+
+    def _toggle_regex_mode(self):
+        self._set_regex_mode(not getattr(self, "_console_regex", False))
+
+    def _console_context_menu(self, pos):
+        try:
+            menu = self._build_console_menu()
+            menu.exec(self.log.mapToGlobal(pos))
+        except Exception:
+            pass
+
+    def _focus_console_find(self):
+        try:
+            self.find_edit.setFocus()
+            self.find_edit.selectAll()
+        except Exception:
+            pass
+
+    def _build_console_menu(self):
+        """Transcript right-click menu (state kept in sync with the chips)."""
+        menu = QMenu(self)
+        act_copy_sel = menu.addAction("Copy selection")
+        act_copy_sel.setEnabled(bool(self.log.textCursor().hasSelection()))
+        act_copy_sel.triggered.connect(self._copy_selection)
+        act_copy_all = menu.addAction("Copy all")
+        act_copy_all.triggered.connect(self._copy_console)
+        act_save = menu.addAction("Save…")
+        act_save.triggered.connect(self._save_console)
+        act_clear = menu.addAction("Clear")
+        act_clear.triggered.connect(self._clear_console)
+        act_find = menu.addAction("Find…")
+        act_find.triggered.connect(self._focus_console_find)
+        menu.addSeparator()
+        act_wrap = menu.addAction("Wrap lines")
+        act_wrap.setCheckable(True)
+        act_wrap.setChecked(self._console_wrap_enabled())
+        act_wrap.toggled.connect(self._set_wrap)
+        act_time = menu.addAction("Timestamps")
+        act_time.setCheckable(True)
+        act_time.setChecked(bool(getattr(self, "_show_timestamps", True)))
+        act_time.toggled.connect(self._set_timestamps)
+        act_regex = menu.addAction("Regex search")
+        act_regex.setCheckable(True)
+        act_regex.setChecked(bool(getattr(self, "_console_regex", False)))
+        act_regex.toggled.connect(self._set_regex_mode)
+        return menu
+
+    def _console_search_matches(self, msg):
+        """Filter predicate: case-insensitive substring or regex (invalid => no match)."""
+        needle = (self._console_search_text or "").strip()
+        if not needle:
+            return True
+        if self._console_regex:
+            rx = self._console_regex_obj
+            if rx is None:
+                return False
+            return rx.match(msg or "").hasMatch()
+        return needle.lower() in (msg or "").lower()
+
+    def _apply_console_search(self, text=None):
+        """Filter visible console lines by the search text (buffer is retained;
+        regex mode is honoured and an invalid pattern matches nothing)."""
+        try:
+            if text is None:
+                text = self.find_edit.text()
+            self._console_search_text = (text or "").strip()
+        except Exception:
+            self._console_search_text = ""
+        try:
+            self._refresh_search_regex()
+        except Exception:
+            pass
+        try:
+            self._rebuild_console()
+        except Exception:
+            try:
+                self._apply_find()
+            except Exception:
+                pass
+
+    # Backwards/alias entry points for the console search box.
+    def _apply_search(self, text=None):
+        return self._apply_console_search(text)
+
+    def _apply_console_filter(self, text=None):
+        return self._apply_console_search(text)
+
+    def _filter_console(self, text=None):
+        return self._apply_console_search(text)
+
+    def _search_console(self, text=None):
+        return self._apply_console_search(text)
 
     def _apply_find(self):
         selections = []
-        text = self.find_edit.text()
-        if text:
+        try:
+            target = self._console_find_target()
+        except Exception:
+            target = None
+        if target is not None:
             doc = self.log.document()
             cursor = QTextCursor(doc)
             fmt = QTextCharFormat()
             fmt.setBackground(QColor(C["warn_dim"]))
             fmt.setForeground(QColor(C["warn"]))
+            guard = 0
             while not cursor.isNull() and not cursor.atEnd():
-                cursor = doc.find(text, cursor)
-                if cursor.isNull():
+                found = doc.find(target, cursor)
+                if found.isNull():
                     break
+                guard += 1
+                if guard > 200000:
+                    break
+                if found.selectionStart() == found.selectionEnd():
+                    # zero-width match — advance to avoid an infinite loop
+                    nxt = QTextCursor(doc)
+                    nxt.setPosition(found.selectionEnd() + 1)
+                    if nxt.position() <= cursor.position():
+                        break
+                    cursor = nxt
+                    continue
                 sel = QTextEdit.ExtraSelection()
-                sel.cursor = cursor
+                sel.cursor = found
                 sel.format = fmt
                 selections.append(sel)
+                cursor = found
         self.log.setExtraSelections(selections)
 
     def _find_nav(self, direction):
-        text = self.find_edit.text()
-        if not text:
+        try:
+            target = self._console_find_target()
+        except Exception:
+            target = None
+        if target is None:
             return
         doc = self.log.document()
         cur = self.log.textCursor()
         if direction > 0:
-            found = doc.find(text, cur)
+            found = doc.find(target, cur)
             if found.isNull():
-                found = doc.find(text, QTextCursor(doc))
+                found = doc.find(target, QTextCursor(doc))
         else:
             start = QTextCursor(doc)
             start.setPosition(cur.selectionStart())
-            found = doc.find(text, start, QTextDocument.FindFlag.FindBackward)
+            found = doc.find(target, start, QTextDocument.FindFlag.FindBackward)
             if found.isNull():
                 c = QTextCursor(doc)
                 c.movePosition(QTextCursor.MoveOperation.End)
-                found = doc.find(text, c, QTextDocument.FindFlag.FindBackward)
+                found = doc.find(target, c, QTextDocument.FindFlag.FindBackward)
         if not found.isNull():
             self.log.setTextCursor(found)
 
@@ -11211,6 +9201,260 @@ class FlashPilotWindow(QMainWindow):
     def _set_metric(self, name, value):
         if name in self.info:
             self.info[name].set(value)
+
+    def _open_qr_generator(self):
+        """QR Provision — the single MDM-via-QR entry point.
+
+        Shows the TestDPC provisioning QR large by default; a dropdown at
+        the bottom-left lists the two optional DPCs (Google Device Policy,
+        FlashPilot). Picking one renders and shows its own QR. Payloads go
+        through the Rust mdm_qr flow (spec-exact keys); a local APK is
+        served when present."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, \
+            QLabel as _QL, QComboBox
+        from PyQt6.QtCore import QTimer as _QTimer
+        dlg = QDialog(self)
+        dlg.setWindowTitle("QR Provision")
+        dlg.setModal(False)
+        dlg.setMinimumSize(440, 680)
+        dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(18, 18, 18, 18)
+        v.setSpacing(10)
+
+        head = _QL("📷  QR Provision")
+        head.setStyleSheet("font-size:14px; font-weight:800;")
+        v.addWidget(head)
+        sub = _QL(
+            "Provisions a device owner from the setup wizard (tap the "
+            "Welcome screen 6 times fast to open the QR scanner). The DPC "
+            "completes setup and enables ADB; FRP/MDM clears once authorized.")
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        v.addWidget(sub)
+
+        img = _QL()
+        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img.setFixedHeight(300)
+        img.setStyleSheet("background:#ffffff; border-radius:10px;")
+        img.hide()
+        v.addWidget(img)
+
+        # Bottom-left: the two optional DPCs. TestDPC is the default QR, so
+        # it is not listed — the box shows its placeholder until a pick.
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(8)
+        opt_lbl = _QL("Other QR options")
+        opt_lbl.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:700;")
+        opt_row.addWidget(opt_lbl)
+        dpc = QComboBox()
+        dpc.setPlaceholderText("TestDPC (default)")
+        dpc.addItem("Google Device Policy", "adp")
+        dpc.addItem("FlashPilot DPC", "ours")
+        dpc.setCurrentIndex(-1)
+        self._style_combo(dpc)
+        opt_row.addWidget(dpc, 1)
+        v.addLayout(opt_row)
+
+        info = _QL()
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        v.addWidget(info)
+        path_lbl = _QL()
+        path_lbl.setWordWrap(True)
+        path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        path_lbl.setStyleSheet(f"color:{C['mute']}; font-size:10px; font-family:monospace;")
+        v.addWidget(path_lbl)
+        v.addStretch(1)
+        # Tracks which QR is on screen so re-picking the same dropdown entry
+        # can return to the default TestDPC QR.
+        _shown = {"choice": "testdpc"}
+
+        def work(choice):
+            import os as _os
+            from ..core import bridge as _bridge
+            specs = {
+                "testdpc": (
+                    "com.afwsamples.testdpc/.DeviceAdminReceiver",
+                    "mdm_qr/serve/testdpc.apk",
+                    "https://play.google.com/store/apps/details?id=com.afwsamples.testdpc"),
+                "adp": (
+                    "com.google.android.apps.work.oobconfig/.DevAdminReceiver",
+                    "",
+                    "https://play.google.com/store/apps/details?id=com.google.android.apps.work.oobconfig"),
+                "ours": (
+                    "org.flashpilot.dpc/.FpAdminReceiver",
+                    "mdm_qr/serve/flashpilot-dpc.apk",
+                    ""),
+            }
+            component, local_apk, play_url = specs[choice]
+            env = dict(_os.environ)
+            env["MDM_COMPONENT"] = component
+            env["MDM_QR_OUT_DIR"] = "mdm_qr"
+            have_apk = bool(local_apk) and _os.path.isfile(local_apk)
+            if have_apk:
+                # LAN URL for the local APK + the v1 cert checksum the flow
+                # puts into the QR extras.
+                try:
+                    env["FRP_DPC_APK_URL"] = (
+                        f"http://{self._lan_ip()}:{self._QR_PORT}/"
+                        f"{_os.path.basename(local_apk)}")
+                    env["FRP_DPC_CERT_HASH"] = self._apk_cert_hash(local_apk)
+                except Exception:
+                    pass
+            elif play_url:
+                env["FRP_DPC_APK_URL"] = play_url
+            if choice == "ours":
+                mail = _os.environ.get("FP_ACCESS_EMAIL", "flashpilot@local")
+                env["FRP_DPC_EXTRAS_JSON"] = (
+                    '{"android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE":'
+                    f'{{"fp_email":"{mail}"}}}}')
+            out = _bridge._run(["flow-run", "mdm_qr"], timeout=60, env=env)
+            if have_apk:
+                self._serve_qr_dir("mdm_qr/serve")
+            return choice, have_apk, out
+
+        def on_done(res):
+            choice, have_apk, out = res
+            for line in (out or "").splitlines():
+                self._ui.line.emit(line)
+            # The flow prints the exact SVG path ("qr (svg): …").
+            svg = ""
+            for line in (out or "").splitlines():
+                if "qr (svg):" in line:
+                    svg = line.split("qr (svg):", 1)[1].strip()
+            if not svg:
+                svg = "mdm_qr/provisioning_qr_mdm.svg"
+            import os as _os
+            if not _os.path.isfile(svg):
+                info.setText("Generation failed — see console.")
+                return
+            pix = self._render_svg(svg, 300)
+            if pix is not None:
+                img.setPixmap(pix)
+                img.show()
+            else:
+                info.setText(f"QR written but not displayable:\n{svg}")
+            _os_name = {"testdpc": "TestDPC", "adp": "Google Device Policy",
+                        "ours": "FlashPilot DPC"}[choice]
+            lines = [
+                f"QR shown: {_os_name}"
+                + (" (default)" if choice == "testdpc" else " (optional)"),
+                "",
+                "ON THE PHONE (setup wizard, same Wi-Fi as this PC):",
+                "1. At the Welcome screen tap the same spot 6 times fast —"
+                " the QR scanner opens (do NOT press Next).",
+                "2. Scan this QR — the DPC installs as device owner.",
+                "3. It completes setup + enables ADB (FlashPilot does it alone;"
+                " TestDPC: finish provisioning in its screen).",
+                "4. Tap OK on the ADB prompt, then run FRP/MDM remove.",
+            ]
+            if have_apk:
+                lines.append(f"APK served on :{self._QR_PORT} (verified live).")
+            info.setText("\n".join(lines))
+            path_lbl.setText(svg)
+
+        def on_err(e):
+            info.setText(f"Generation failed: {e}")
+
+        def do_gen(choice):
+            info.setText("Generating …")
+            dpc.setEnabled(False)
+            import threading as _th
+
+            def runner():
+                try:
+                    res = work(choice)
+                    self._ui.ui.emit(lambda: on_done(res))
+                except Exception as e:  # noqa: BLE001
+                    self._ui.ui.emit(lambda e=e: on_err(e))
+                finally:
+                    self._ui.ui.emit(lambda: dpc.setEnabled(True))
+            _th.Thread(target=runner, daemon=True).start()
+
+        def _picked(_idx=0):
+            choice = dpc.currentData()
+            if not choice:
+                return
+            if choice == _shown["choice"]:
+                # Picking the same option again goes back to the default QR.
+                dpc.setCurrentIndex(-1)
+                _shown["choice"] = "testdpc"
+                do_gen("testdpc")
+                return
+            _shown["choice"] = choice
+            do_gen(choice)
+        dpc.activated.connect(_picked)
+
+        # Default: show the TestDPC QR immediately.
+        _QTimer.singleShot(0, lambda: do_gen("testdpc"))
+        dlg.show()
+
+    _QR_PORT = 8000
+
+    def _lan_ip(self):
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(2)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _apk_cert_hash(self, apk):
+        """SHA-256 (base64url) of the APK's v1 signing cert — the same
+        chain build.sh and the Rust flow use (openssl needs -out for DER)."""
+        import base64, hashlib, subprocess, tempfile, os as _os
+        rsa = subprocess.run(["unzip", "-p", apk, "META-INF/*.RSA"],
+                             capture_output=True).stdout
+        if not rsa:
+            return ""
+        tmp = tempfile.NamedTemporaryFile(suffix=".der", delete=False)
+        tmp.close()
+        subprocess.run(["openssl", "pkcs7", "-inform", "DER", "-in", "/dev/stdin",
+                        "-print_certs", "-outform", "DER", "-out", tmp.name],
+                       input=rsa, capture_output=True)
+        cert = open(tmp.name, "rb").read()
+        _os.unlink(tmp.name)
+        if not cert:
+            return ""
+        h = hashlib.sha256(cert).digest()
+        return base64.urlsafe_b64encode(h).decode().rstrip("=")
+
+    def _serve_qr_dir(self, directory):
+        """Spawn the static server for the phone download (skip if up)."""
+        import socket, subprocess
+        try:
+            s = socket.create_connection(("127.0.0.1", self._QR_PORT), timeout=0.5)
+            s.close()
+            return  # already serving
+        except Exception:
+            pass
+        subprocess.Popen(
+            ["python3", "-m", "http.server", str(self._QR_PORT),
+             "--directory", directory],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+
+    def _render_svg(self, path, size):
+        """SVG -> QPixmap via QtSvg (QPixmap can't rasterize SVG alone)."""
+        try:
+            from PyQt6.QtSvg import QSvgRenderer
+            from PyQt6.QtGui import QPixmap, QPainter
+            r = QSvgRenderer(path)
+            if not r.isValid():
+                return None
+            pix = QPixmap(size, size)
+            pix.fill(Qt.GlobalColor.white)
+            p = QPainter(pix)
+            r.render(p)
+            p.end()
+            return pix
+        except Exception:
+            return None
 
     def _show_qr_dialog(self, data):
         """Pop a dark-themed dialog showing the generated provisioning QR(s).
@@ -11280,21 +9524,28 @@ class FlashPilotWindow(QMainWindow):
 
         def show(index=0):
             path = sel.itemData(index) if sel else qrs[0][1]
-            pix = QPixmap(path)
-            if not pix.isNull():
-                pix = pix.scaled(
-                    300, 300,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+            # Flow-generated QRs are SVG: QPixmap alone cannot rasterize
+            # them — use the QSvgRenderer helper first, PNG as fallback.
+            pix = self._render_svg(path, 300)
+            if pix is not None:
                 img.setPixmap(pix)
                 img.setVisible(True)
             else:
-                img.clear()
-                img.setVisible(False)
-                hint.setText(f"Could not load QR image:\n{path}")
-                path_lbl.setText(path)
-                return
+                pix = QPixmap(path)
+                if not pix.isNull():
+                    pix = pix.scaled(
+                        300, 300,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    img.setPixmap(pix)
+                    img.setVisible(True)
+                else:
+                    img.clear()
+                    img.setVisible(False)
+                    hint.setText(f"Could not load QR image:\n{path}")
+                    path_lbl.setText(path)
+                    return
             name = (sel.itemText(index) if sel else qrs[0][0]).lower()
             hint.setText(
                 "Scan this QR from the phone's setup wizard (4-dot grid / "
@@ -12579,8 +10830,15 @@ class FlashPilotWindow(QMainWindow):
                     return
             except Exception:
                 pass
-        self._monitor.stop()
+        self._monitor.stop(join_timeout=2.0)
         self._adb_timer.stop()
+        # Flush any coalesced console lines before persisting/closing.
+        try:
+            self._flush_console()
+        except Exception:
+            pass
+        # Console dock state: height / collapsed / maximised.
+        self._save_console_state()
         # Window memory: size/position/maximized restore on the next launch.
         try:
             self.settings.setValue("win_maximized", self.isMaximized())
@@ -12594,6 +10852,10 @@ class FlashPilotWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "_toasts"):
             self._toasts._relayout()
+        if hasattr(self, "_splitter"):
+            self._apply_default_dock_split()
+        if hasattr(self, "_body_splitter"):
+            self._apply_default_body_split()
 
     # ----------------------------- device scan ----------------------------
     def refresh_device(self):
@@ -12606,9 +10868,24 @@ class FlashPilotWindow(QMainWindow):
                 self._ui.status.emit(f"bridge error: {e}")
                 return
 
-            samsung = [d for d in usb if d.get("is_samsung")]
-            mtk_devs = [d for d in usb if d.get("vid") == mtk.MTK_VID]
-            fastboot = [d for d in usb if _is_fastboot(d)]
+            # Buckets come from the Rust-classified merged rows (no VID
+            # tables down here); the raw detect_usb dicts, matched by
+            # bus:addr, supply the full descriptor dump.
+            buckets = device_pages.buckets_from_rows(
+                device_pages.connected_rows())
+            raw = {(d.get("bus"), d.get("address")): d
+                   for d in usb if isinstance(d, dict)}
+
+            def _dump(rows):
+                out = []
+                for r in rows:
+                    d = raw.get((r.get("bus"), r.get("address")), r)
+                    out.extend(_fmt_usb_full(d))
+                return out
+
+            samsung = buckets["samsung"]
+            mtk_devs = buckets["mtk"]
+            fastboot = buckets["fastboot"]
             try:
                 adb_devs = bridge.adb_status()
             except bridge.BridgeError as e:
@@ -12616,8 +10893,7 @@ class FlashPilotWindow(QMainWindow):
                 adb_devs = []
             if fastboot:
                 lines.append("FASTBOOT USB DEVICE(S):")
-                for d in fastboot:
-                    lines.extend(_fmt_usb_full(d))
+                lines.extend(_dump(fastboot))
                 lines.append("")
                 lines.append(f">>> MODE: {_detect_mode([], [], adb_devs, fastboot)}")
                 lines.append(
@@ -12625,14 +10901,15 @@ class FlashPilotWindow(QMainWindow):
                 )
             elif samsung:
                 lines.append("SAMSUNG USB DEVICE(S):")
-                for d in samsung:
-                    lines.extend(_fmt_usb_full(d))
+                lines.extend(_dump(samsung))
                 lines.append("")
                 mode = _detect_mode(samsung, mtk_devs, adb_devs, fastboot)
                 lines.append(f">>> MODE: {mode}")
                 if "DIAG" in mode and not any(
-                    i["class"] == 255 and i["subclass"] == 66
-                    for d in samsung for i in d["interfaces"]
+                    i.get("class") == 255 and i.get("subclass") == 66
+                    for key in [(d.get("bus"), d.get("address")) for d in samsung]
+                    for i in raw.get(key, {}).get("interfaces", [])
+                    if isinstance(i, dict)
                 ):
                     lines.append(
                         "  model hint: AT+DEVCONINFO only answers inside test mode "
@@ -12640,16 +10917,16 @@ class FlashPilotWindow(QMainWindow):
                         "debugging for ADB getprop"
                     )
             elif mtk_devs:
-                d = mtk_devs[0]
-                mfr = (d.get("manufacturer") or "").lower()
-                prod = (d.get("product") or "").lower()
+                r0 = mtk_devs[0]
+                rd0 = raw.get((r0.get("bus"), r0.get("address")), r0)
+                mfr = (rd0.get("manufacturer") or "").lower()
+                prod = (rd0.get("product") or "").lower()
                 is_samsung_mtk = "samsung" in mfr or "samsung" in prod
                 if is_samsung_mtk:
                     lines.append("SAMSUNG (MTK) DEVICE(S):")
                 else:
                     lines.append("MEDIATEK DEVICE(S):")
-                for d in mtk_devs:
-                    lines.extend(_fmt_usb_full(d))
+                lines.extend(_dump(mtk_devs))
                 lines.append("")
                 mode = _detect_mode([], mtk_devs, adb_devs, fastboot)
                 lines.append(f">>> MODE: {mode}")
@@ -12664,7 +10941,7 @@ class FlashPilotWindow(QMainWindow):
                         "  MediaTek low-level device detected. Use MTK Tools / BROM operations."
                     )
             else:
-                lines.append("No Samsung device over USB (plug it in, check cable/port)")
+                lines.append("No phone detected over USB (plug it in, check cable/port)")
 
             if hid:
                 lines.append("HID targets (download mode):")
@@ -12693,7 +10970,7 @@ class FlashPilotWindow(QMainWindow):
                         f"switch_to_diag() exposes the AT port"
                     )
                 else:
-                    lines.append("AT/control: — idle (no Samsung device connected)")
+                    lines.append("AT/control: — idle (Samsung MTP/AT only)")
             except mtp.MtpError as e:
                 lines.append(f"AT/control: error - {e}")
 
@@ -13600,11 +11877,27 @@ class FlashPilotWindow(QMainWindow):
             self._ui.line.emit("\n[blocked] flash aborted - select a firmware slot first")
             return
 
+        # The native flow reads the selected slots from the environment
+        # (ODIN_<SLOT>_TAR); export the full paths, and clear slots the user
+        # emptied so a previously-flashed archive can never be reused.
+        for name, edit in self.slot_inputs.items():
+            key = f"ODIN_{name}_TAR"
+            val = edit.text().strip()
+            if val:
+                os.environ[key] = val
+            else:
+                os.environ.pop(key, None)
+        # EFS clear is consumed per-partition by the native engine.
+        if hasattr(self, "erase_nv_cb"):
+            os.environ["ODIN_EFS_CLEAR"] = "1" if self.erase_nv_cb.isChecked() else "0"
+
         detail = "\n".join(f"    {n} <- {f}" for n, f in picked)
         self._confirm_overlay(
             "Flash Firmware",
             "This will OVERWRITE the following partitions on your device.\n\n"
             f"{detail}\n\n"
+            "Flashed in order BL -> AP -> CP -> CSC -> USERDATA with the native "
+            "Odin engine (archive check, PIT model gate, verify-after-write).\n\n"
             "DO NOT unplug the phone and keep the battery above 50% until the "
             "flash finishes. A failed bootloader flash can permanently brick "
             "the device.",
@@ -13930,6 +12223,58 @@ class FlashPilotWindow(QMainWindow):
         except Exception:
             pass
 
+    def _gate_transport(self, method, device_key=None):
+        """Pre-flight: refuse to start when no connected phone exposes the
+        flow's transport (instead of a long wait-then-fail). No job is
+        created, no lock is taken. Returns True when the run may start.
+
+        QR-entry flows bootstrap the session and unknown requirements run
+        unconditionally — both are exempt. A pinned device_key is checked
+        against its own row; ambient runs check the union."""
+        try:
+            need = device_pages.required_transports(method)
+        except Exception:
+            return True
+        if not need:
+            return True
+        try:
+            rows = device_pages.connected_rows()
+        except Exception:
+            return True
+        ok = False
+        if device_key:
+            for r in rows:
+                if r.get("key") == device_key or r.get("usb_key") == device_key:
+                    have = set(str(t).upper() for t in (r.get("transports") or []))
+                    ok = bool(need & have)
+                    break
+        else:
+            for r in rows:
+                have = set(str(t).upper() for t in (r.get("transports") or []))
+                if need & have:
+                    ok = True
+                    break
+        if ok:
+            return True
+        want = "/".join(sorted(need))
+        hints = {
+            "ADB": "enable USB debugging on the phone and tap Allow",
+            "FASTBOOT": "reboot the phone to bootloader (Vol Down+Power)",
+            "EDL": "reboot the phone to EDL 9008",
+            "MTP": "reboot the phone to system (MTP)",
+            "SPD": "reboot the phone to SPD download mode",
+            "MTK": "power off, hold Vol-/+, plug USB (BROM)",
+            "MTK BROM": "power off, hold Vol-/+, plug USB (BROM)",
+        }
+        hint = "; ".join(hints.get(t, f"connect a phone in {t} mode") for t in sorted(need))
+        self._ui.line.emit(f"[warn] no {want} phone connected — not starting ({method})")
+        try:
+            self._toasts.show_warn(f"No {want} device",
+                                   f"{method}: {hint}, then retry.")
+        except Exception:
+            pass
+        return False
+
     def _run_ops_flow(self, job, mode, method, label, device_key=None,
                       feature=None):
         """Run a Samsung Operations flow directly from its button - no
@@ -13938,13 +12283,15 @@ class FlashPilotWindow(QMainWindow):
         other phones may run operations in parallel.
         ``feature`` is the experimental feature id when the caller came
         through the ownership overlay; only a matching per-run token sets
-        ctx['experimental_ack'] (no cross-feature bleed, no stale auth)."""
+           ctx['experimental_ack'] (no cross-feature bleed, no stale auth)."""
         if device_key is None:
             picked = self._pick_device(job, mode)
             if picked == "__cancelled__":
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
             device_key = picked
+        if not self._gate_transport(method, device_key):
+            return
         if not self._gate_job_action(job, mode, device_key):
             return
         if not _flow_start(label, destructive=True, key=device_key):
@@ -14066,8 +12413,14 @@ class FlashPilotWindow(QMainWindow):
             if flux:
                 flux.set_state("RUNNING")
 
+            transcript = []
+
             def emit(line):
                 # Per-job log isolation (job owns its lines) + shared console.
+                try:
+                    transcript.append(str(line))
+                except Exception:
+                    pass
                 try:
                     if flux:
                         flux.append_log(str(line))
@@ -14088,6 +12441,15 @@ class FlashPilotWindow(QMainWindow):
                 with _devices.device_scope(device_key):
                     flow = core.flow_for(job, mode, method)
                     flow.run(ctx, emit)
+                # A clean return is not enough: the Rust flow can print a
+                # failure and still exit 0. Never announce success in that
+                # case (previously a green "completed" toast was emitted
+                # unconditionally).
+                failed = _flow_failure_markers(transcript)
+                if failed:
+                    raise core.FlowFailed(
+                        method, tail=failed[-8:],
+                        reason=f"flow '{method}' reported failure in its transcript")
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):
@@ -14238,9 +12600,10 @@ class FlashPilotWindow(QMainWindow):
             self._coach_no_device(mode)
 
     def _moto_unlock_provision(self, ctx, method):
-        """Unlock-code provision for the Motorola token/unlock flows: the
-        UNLOCK TOKEN input on the model page flows into ctx['unlock_code']
-        (the MOTO_UNLOCK_CODE env provision is the CLI fallback)."""
+        """Unlock-code provision for the fastboot unlock flows: the Fastboot
+        Hub's code field (the user's own per-device code, typed at runtime)
+        flows into ctx['unlock_code']; the MOTO_UNLOCK_CODE env provision
+        is the CLI fallback. Nothing is ever hardcoded."""
         if method not in ("moto_frp_fastboot", "fastboot_unlock"):
             return
         token_edit = getattr(self, "_moto_unlock_code", None)
@@ -14266,6 +12629,8 @@ class FlashPilotWindow(QMainWindow):
                 self._ui.line.emit("[info] device choice cancelled.")
                 return
             device_key = picked
+        if not self._gate_transport(method, device_key):
+            return
         if not self._gate_job_action(job, mode, device_key):
             return
         if not _flow_start(label, destructive=True, key=device_key):
@@ -14300,7 +12665,13 @@ class FlashPilotWindow(QMainWindow):
             if flux:
                 flux.set_state("RUNNING")
 
+            transcript = []
+
             def emit(line):
+                try:
+                    transcript.append(str(line))
+                except Exception:
+                    pass
                 try:
                     if flux:
                         flux.append_log(str(line))
@@ -14332,6 +12703,15 @@ class FlashPilotWindow(QMainWindow):
                 with _devices.device_scope(device_key):
                     flow = core.flow_for(job, mode, method)
                     flow.run(ctx, emit)
+                # A clean return is not enough: the Rust flow can print a
+                # failure and still exit 0. Never announce success in that
+                # case (previously a green "completed" toast was emitted
+                # unconditionally).
+                failed = _flow_failure_markers(transcript)
+                if failed:
+                    raise core.FlowFailed(
+                        method, tail=failed[-8:],
+                        reason=f"flow '{method}' reported failure in its transcript")
                 if ctx.get("mdm_qr_pngs"):
                     self._ui.qr.emit(ctx["mdm_qr_pngs"])
                 elif ctx.get("mdm_qr_png"):

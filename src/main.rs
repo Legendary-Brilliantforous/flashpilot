@@ -6,27 +6,28 @@ mod config;
 mod device;
 mod devices;
 mod error;
+mod fastboot;
+mod flows;
+mod fwtar;
 mod hid;
+mod hostinfo;
+mod imgtools;
+mod moto_flash;
 mod mtk;
 mod mtk_da;
-mod mtk_exploit;
 mod mtk_daloader;
+mod mtk_exploit;
 mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
+mod pac;
+mod pit;
+mod qualcomm;
 mod sam_download;
 mod sam_errors;
 mod sam_setup;
-mod hostinfo;
-mod qualcomm;
-mod spd;
-mod fastboot;
-mod flows;
-mod imgtools;
-mod pac;
 mod sparse;
-mod fwtar;
-mod pit;
+mod spd;
 mod usb;
 mod util;
 
@@ -41,7 +42,9 @@ fn main() {
         eprintln!("  detect-merged          filter phones + merge USB/ADB into unified rows");
         eprintln!("  setup-check            diagnose udev rules / permissions / ModemManager / usbmuxd setup");
         eprintln!("  hid-list               list HID interfaces on Samsung devices");
-        eprintln!("  hid-open <path> <out>  send hex bytes <out> to HID report, print response hex");
+        eprintln!(
+            "  hid-open <path> <out>  send hex bytes <out> to HID report, print response hex"
+        );
         eprintln!("  bulk-list              list bulk endpoints on Samsung devices");
         eprintln!("  bulk-send <t> <hex> [n] raw bulk write/read on a Samsung device");
         eprintln!("  bulk-session <t> <cmd>...  persistent session: w<hex> write, r<n> read");
@@ -53,19 +56,34 @@ fn main() {
         eprintln!("  mtk-backup <t> <da> <scatter> <out_dir>  backup partitions");
         eprintln!("  mtk-frp <t> <da> <scatter>  FRP bypass (wipe frp/nvdata)");
         eprintln!("  mtk-adb-enable <t> <da> <scatter>  attempt ADB enable");
-        eprintln!("  mtk-reboot <t> <da> <mode>  reboot device (0=normal,1=bl,2=rec,3=fastboot,4=brom)");
+        eprintln!(
+            "  mtk-reboot <t> <da> <mode>  reboot device (0=normal,1=bl,2=rec,3=fastboot,4=brom)"
+        );
         eprintln!("  mtk-factory <t>        enter factory/dealer mode");
         eprintln!("  mtk-emergency <t>      detect emergency/download mode devices");
         eprintln!("  mtk-bypass <t> <da> <mode> [scatter] [skip_auth]  unified bypass (standard|brom_exploit|da_auth_bypass|factory|emergency|sla_bypass)");
+        eprintln!(
+            "  mtk-payload-check      show which bypass_utility payloads are installed (no device)"
+        );
         eprintln!("  mtk-dealer <t> <da>    dealer mode (auth, unlock, FRP erase, secure config)");
         eprintln!("  mtk-emergency-mode <t> <da>  emergency mode (full partition access)");
         eprintln!("  mtk-exploit <t> <type> [payload]  BROM exploit (mtk_bypass|kamakiri2|dump_preloader|patch_da|custom)");
         eprintln!("  mtk-gpt <t> <da>       list device GPT partition table by name (no scatter)");
-        eprintln!("  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)");
+        eprintln!(
+            "  mtk-flash-part <t> <da> <part=file>...  write partitions by name (no scatter)"
+        );
         eprintln!("  mtk-flash-samsung <t> <da> <fw_dir>  flash Samsung firmware dir (AP/BL etc, no scatter, via GPT)");
-        eprintln!("  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)");
+        eprintln!(
+            "  mtk-read-part <t> <da> <part> <out>      read one partition by name (no scatter)"
+        );
         eprintln!("  mtk-verify-part <t> <da> <part=file>...  verify-after-write: read back + SHA-256 compare");
         eprintln!("  mtk-frp-gpt <t> <da>  FRP bypass resolving lock partitions from device GPT (no scatter)");
+        eprintln!(
+            "  mtk-frp-brom <t> <da_dir>  FRP bypass via BROM with bundled DA containers (any MTK)"
+        );
+        eprintln!("  mtk-backup-gpt <t> <auto|da.bin|da_dir> <out_dir>  dump every GPT partition + manifest.json");
+        eprintln!("  mtk-flash-auto <t> <folder> [--scatter P] [--da auto|da.bin|da_dir]  discover scatter and flash");
+        eprintln!("  mtk-screen-lock <t> <auto|da.bin|da_dir> [--wipe-userdata]  erase lock credential stores");
         eprintln!("  qcom-detect            detect Qualcomm EDL devices");
         eprintln!("  spd-detect             detect Spreadtrum/UNISOC download devices");
         eprintln!("  spd-info <t>           full SPD device info (read-only, safe)");
@@ -74,19 +92,21 @@ fn main() {
         eprintln!("  spd-backup <t> <fdl1> <fdl1_addr> <fdl2> <fdl2_addr> <out_dir>  list partitions + dump");
         eprintln!("  spd-partitions <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]  list Android partition table");
         eprintln!("  spd-flash <t> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr] <part=file>...  write partitions/regions");
+        eprintln!("  spd-flash-pac <t> <pac> [--mode flash|frp|backup|erase] [--out <dir>] [--fdl1-addr 0x..] [--fdl2-addr 0x..] [--no-verify]  one-PAC session");
         eprintln!("  spd-readback <t> <fdl1> <a1> <fdl2> [a2] <out.pac> [parts]  dump flash to a .pac archive");
         eprintln!("  spd-boot <t> <fdl1> <a1> [fdl2] [a2] <recovery|fastboot|normal>  reboot to target via misc BCB");
         eprintln!("  spd-spl-patch <t> <fdl1> <a1> <fdl2> [a2] <part> <out> [--hint 0xA,0xB]  SPL signcheck bypass + DHTB rehash");
         eprintln!("  spd-magic-pack <in> <out> [--load-base 0xA] --patch off=word  signature-preserving runtime patch (magic64)");
         eprintln!("  spd-reset <t>          reset device to normal mode");
         eprintln!("  qcom-sahara <t>        handshake with Qualcomm EDL device (Sahara)");
-        eprintln!("  qcom-firehose <t> <prog>  start Firehose session with programmer");
-        eprintln!("  qcom-flash <t> <prog> <xml> <fw_dir>  flash via Firehose rawprogram.xml");
+        eprintln!("  qcom-firehose <t> <programmer|auto> [--storage auto|emmc|ufs]  start Firehose session with programmer");
+        eprintln!("  qcom-flash <t> <programmer|auto> <rawprogram.xml> <fw_dir> [--storage auto|emmc|ufs]  flash via Firehose rawprogram.xml");
         eprintln!("  qcom-flash-one <t> <part> <img> <sector> <count>  flash one partition (Path+Duration wiring)");
         eprintln!("  qcom-verify-part <t> <part=file>...  verify-after-write: read back + SHA-256 compare");
-        eprintln!("  qcom-backup <t> <prog> <out>  backup partitions via Firehose");
-        eprintln!("  qcom-partitions <t>    get partition table via Firehose");
+        eprintln!("  qcom-backup <t> <programmer|auto> <out> [--storage auto|emmc|ufs]  backup every LUN's partitions + manifest.json");
+        eprintln!("  qcom-partitions <t>    get partition table via Firehose (all LUNs)");
         eprintln!("  qcom-reboot <t> <mode> reboot device (normal|edl|recovery|fastboot)");
+        eprintln!("  qcom-frp-reset <t> [--programmer <path|auto>] [--wipe-data] [--storage auto|emmc|ufs]");
         eprintln!("  qcom-info <t>          get device info via Sahara");
         eprintln!("  config-show            show AppConfig / MtkConfig / SamsungConfig defaults (wires config types)");
         eprintln!("  mtk-crash-brom <bus:addr>  crash PRELOADER (2000) into BootROM\n");
@@ -97,7 +117,9 @@ fn main() {
         eprintln!("  adb-devices            native ADB scan as `adb devices -l` JSON lines");
         eprintln!("  flow-list              JSON registry of every flow (key, label, job, mode)");
         eprintln!("  flow-run <key> [serial] [--code C] [--partition P] [--file F]");
-        eprintln!("  adb-shell <s|-> <ms> <cmd...>  native `adb shell` on serial (or first device)");
+        eprintln!(
+            "  adb-shell <s|-> <ms> <cmd...>  native `adb shell` on serial (or first device)"
+        );
         eprintln!("  adb-pull <s|-> <ms> <remote> <local>  native `adb pull` via sync");
         eprintln!("  adb-push <s|-> <ms> <local> <remote>  native `adb push` via sync");
         eprintln!("  fastboot-devices       list USB devices exposing a fastboot interface (JSON)");
@@ -111,18 +133,22 @@ fn main() {
         eprintln!("  pac-extract <file> <dir>  extract PAC payloads (JSON file list)");
         eprintln!("  pac-pack <dir> <out> [product]  pack folder into PAC");
         eprintln!("  boot-info <img>        Android boot image header + prop list (JSON)");
-        eprintln!("  boot-patch-adb <in> <out>  patch boot ramdisk props for ADB (JSON summary)");
+        eprintln!("  boot-patch-adb <in> <out> [--prop-file P]  patch boot ramdisk props for ADB (JSON summary)");
         eprintln!("  vbmeta-patch <in> <out> [flags]  set AVB flags (JSON, false when not AVB)");
         eprintln!("  usb-config <t> <idx>   set USB configuration <idx> on target");
         eprintln!("  usb-detach-kernel <t>  detach kernel drivers (cdc_acm) from all interfaces");
         eprintln!("  at-send <t> <cmd> [ms]  send AT command over CDC ACM, read reply");
-        eprintln!("  at-auto-detect        auto-detect Samsung CDC ACM diag port (no target needed)");
+        eprintln!(
+            "  at-auto-detect        auto-detect Samsung CDC ACM diag port (no target needed)"
+        );
         eprintln!("  at-kg-unlock <t> [ms] KG lock bypass via AT+KSTRINGB/KGLOCK sequence");
         eprintln!("  at-fuzz <t> <p1,p2> [ms] fuzz AT prefixes (e.g. KSTRINGB,KGLOCK,DEVCONINFO)");
         eprintln!("  at-mdm-disable <t> [ms] MDM disable via AT+MDMCONFIG");
         eprintln!("  at-carrier-unlock <t> [ms] carrier unlock via AT+CARRIERLOCK");
         eprintln!("  unified-flash <t> <image>  auto-detect chip VID and dispatch flash");
-        eprintln!("  ai-fingerprint <t>        AI heuristic VID/PID/interface fingerprint for clones");
+        eprintln!(
+            "  ai-fingerprint <t>        AI heuristic VID/PID/interface fingerprint for clones"
+        );
         eprintln!("  mtp-info <t> [ms]      MTP GetDeviceInfo: ops/events/properties supported");
         eprintln!("  odin-connect <t>       open Odin session to Samsung device");
         eprintln!("  odin-agent <t>         long-lived Odin session (JSON lines on stdin)");
@@ -132,7 +158,9 @@ fn main() {
         eprintln!("  odin-model <t>         get device model string");
         eprintln!("  odin-flash <t> <pit> <partition> <image>  flash single partition");
         eprintln!("  odin-send-pit <t> <pit>  send PIT to device");
-        eprintln!("  odin-flash-multi <t> <pit> <reboot> <part=file>...  flash multiple partitions");
+        eprintln!(
+            "  odin-flash-multi <t> <pit> <reboot> <part=file>...  flash multiple partitions"
+        );
         exit(2);
     }
 
@@ -168,12 +196,15 @@ fn main() {
         }
         "bulk-session" => {
             if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge bulk-session <vid:pid@bus:addr> <w<hex>|r<n>...>");
+                eprintln!(
+                    "usage: flashpilot-bridge bulk-session <vid:pid@bus:addr> <w<hex>|r<n>...>"
+                );
                 exit(2);
             }
             bulk::bulk_session(&args[2], &args[3..])
         }
         "mtk-detect" => mtk::detect_mtk(),
+        "mtk-payload-check" => Ok(mtk_exploit::payload_check()),
         "mtk-da-upload" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge mtk-da-upload <target> <da_file>");
@@ -240,9 +271,12 @@ fn main() {
         }
         "mtk-flash-samsung" => {
             if args.len() < 5 {
-                eprintln!("usage: flashpilot-bridge mtk-flash-samsung <target> <da_file> <firmware_dir>");
+                eprintln!(
+                    "usage: flashpilot-bridge mtk-flash-samsung <target> <da_file> <firmware_dir>"
+                );
                 exit(2);
-            }            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
+            }
+            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
         }
         "mtk-frp-brom" => {
             if args.len() < 4 {
@@ -252,6 +286,95 @@ fn main() {
                 exit(2);
             }
             mtk_da::mtk_frp_brom_auto(&args[2], &args[3])
+        }
+        "mtk-backup-gpt" => {
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge mtk-backup-gpt <target> <auto|da.bin|da_dir> <out_dir>");
+                eprintln!("  Dumps every device GPT partition plus <out_dir>/manifest.json");
+                eprintln!("  (name/offset/size/sha256).");
+                exit(2);
+            }
+            mtk_da::mtk_backup_gpt(&args[2], &args[3], &args[4])
+        }
+        "mtk-flash-auto" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge mtk-flash-auto <target> <folder> [--scatter <path>] [--da <auto|da.bin|da_dir>] [--include-boot-regions] [--format-all] [--erase-userdata]");
+                eprintln!("  Discovers the scatter in <folder> (a *.txt with 'partition_index'");
+                eprintln!("  and 'partition_name') unless --scatter is given; DA defaults to the");
+                eprintln!("  bundled containers. Boot-area entries are skipped unless");
+                eprintln!("  --include-boot-regions (then written to the DA's boot1/boot2 only).");
+                eprintln!("  --format-all erases each target before download (SPFT 'Format All +");
+                eprintln!("  Download'); --erase-userdata adds userdata/cache. Sparse/LZ4 images");
+                eprintln!("  are normalized; A/B names fall back to <name>_a/<name>_b.");
+                exit(2);
+            }
+            let mut scatter: Option<String> = None;
+            let mut da: Option<String> = None;
+            let mut flash_opts = mtk_da::FlashOptions::default();
+            let mut i = 4;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--scatter" => {
+                        i += 1;
+                        if i >= args.len() {
+                            eprintln!("error: --scatter needs a path");
+                            exit(2);
+                        }
+                        scatter = Some(args[i].clone());
+                    }
+                    "--da" => {
+                        i += 1;
+                        if i >= args.len() {
+                            eprintln!("error: --da needs a spec (auto|da.bin|da_dir)");
+                            exit(2);
+                        }
+                        da = Some(args[i].clone());
+                    }
+                    "--include-boot-regions" => flash_opts.include_boot_regions = true,
+                    "--format-all" => flash_opts.format_all = true,
+                    "--erase-userdata" => {
+                        flash_opts.erase_userdata = true;
+                        flash_opts.format_all = true; // only meaningful together
+                    }
+                    other => {
+                        eprintln!(
+                            "error: unknown option '{other}' (expected --scatter <path>, \
+                             --da <spec>, --include-boot-regions, --format-all, --erase-userdata)"
+                        );
+                        exit(2);
+                    }
+                }
+                i += 1;
+            }
+            mtk_da::mtk_flash_auto(
+                &args[2],
+                &args[3],
+                scatter.as_deref(),
+                da.as_deref(),
+                &flash_opts,
+            )
+        }
+        "mtk-screen-lock" => {
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge mtk-screen-lock <target> <auto|da.bin|da_dir> [--wipe-userdata]");
+                eprintln!(
+                    "  Erases metadata/persistent/keystore/oemkeystore/protect1/protect2/misc"
+                );
+                eprintln!("  (never frp). --wipe-userdata also erases userdata/cache/nvdata:");
+                eprintln!("  that is factory-reset grade and destroys all user data.");
+                exit(2);
+            }
+            let mut wipe = false;
+            for arg in &args[4..] {
+                match arg.as_str() {
+                    "--wipe-userdata" => wipe = true,
+                    other => {
+                        eprintln!("error: unknown option '{other}' (expected --wipe-userdata)");
+                        exit(2);
+                    }
+                }
+            }
+            mtk_da::mtk_screen_lock(&args[2], &args[3], wipe)
         }
         "mtk-read-part" => {
             if args.len() < 6 {
@@ -295,7 +418,9 @@ fn main() {
         }
         "mtk-adb-enable" => {
             if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge mtk-adb-enable <target> <da_file> <scatter_file>");
+                eprintln!(
+                    "usage: flashpilot-bridge mtk-adb-enable <target> <da_file> <scatter_file>"
+                );
                 exit(2);
             }
             mtk_da::mtk_adb_enable(&args[2], &args[3], &args[4])
@@ -315,9 +440,7 @@ fn main() {
             }
             mtk_da::mtk_enter_factory_mode(&args[2])
         }
-        "mtk-emergency" => {
-            mtk_da::mtk_detect_emergency_mode()
-        }
+        "mtk-emergency" => mtk_da::mtk_detect_emergency_mode(),
         "mtk-bypass" => {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge mtk-bypass <target> <da_file> <mode> [scatter_file] [skip_auth]");
@@ -346,21 +469,23 @@ fn main() {
             if args.len() < 4 {
                 eprintln!("usage: flashpilot-bridge mtk-exploit <target> <type> [payload_file]");
                 eprintln!("  types:");
-                eprintln!("    mtk_bypass     handshake + kamakiri2 + dump+patch preloader (recommended)");
+                eprintln!(
+                    "    mtk_bypass     handshake + kamakiri2 + dump+patch preloader (recommended)"
+                );
                 eprintln!("    kamakiri2      run the CVE-2020-11152 linecoding exploit only");
                 eprintln!("    dump_preloader handshake + dump preloader from RAM");
                 eprintln!("    patch_da       patch a DA/preloader file in place (payload_file)");
                 eprintln!("                   optional 3rd arg: da1 (default) | da2 | parse");
-                eprintln!("    custom         upload a custom payload via kamakiri2 (payload_file)");
+                eprintln!(
+                    "    custom         upload a custom payload via kamakiri2 (payload_file)"
+                );
                 exit(2);
             }
             let payload = args.get(4).map(|s| s.as_str());
             let payload2 = args.get(5).map(|s| s.as_str());
             match args[3].as_str() {
                 "patch_da" => {
-                    let err = |e: String| {
-                        Err(crate::error::BridgeError::InvalidArgument(e))
-                    };
+                    let err = |e: String| Err(crate::error::BridgeError::InvalidArgument(e));
                     match payload {
                         Some(path) => match std::fs::read(path) {
                             Ok(data) => {
@@ -400,14 +525,12 @@ fn main() {
                         None => err("patch_da requires a payload_file".to_string()),
                     }
                 }
-                "kamakiri2" | "custom" => {
-                    match payload {
-                        Some(p) => mtk_exploit::brom_run_payload(&args[2], p),
-                        None => Err(crate::error::BridgeError::InvalidArgument(
-                            "kamakiri2/custom requires a payload_file".to_string(),
-                        )),
-                    }
-                }
+                "kamakiri2" | "custom" => match payload {
+                    Some(p) => mtk_exploit::brom_run_payload(&args[2], p),
+                    None => Err(crate::error::BridgeError::InvalidArgument(
+                        "kamakiri2/custom requires a payload_file".to_string(),
+                    )),
+                },
                 _ => mtk_exploit::brom_bypass(&args[2]),
             }
         }
@@ -424,31 +547,76 @@ fn main() {
         }
         "qcom-firehose" => {
             if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge qcom-firehose <target> <programmer>");
+                eprintln!("usage: flashpilot-bridge qcom-firehose <target> <programmer|auto> [--storage auto|emmc|ufs]");
                 exit(2);
             }
-            qualcomm::qcom_firehose_start(&args[2], &args[3])
+            (|| -> crate::error::Result<String> {
+                let opts = parse_qcom_options(&args[4..])?;
+                if !opts.entries.is_empty() {
+                    return Err(crate::error::BridgeError::InvalidArgument(format!(
+                        "unexpected argument '{}'",
+                        opts.entries[0]
+                    )));
+                }
+                let storage = qualcomm::StorageType::parse(&opts.storage)?;
+                qualcomm::qcom_firehose_start_v(&args[2], &args[3], storage)
+            })()
         }
         "qcom-flash" => {
-            if args.len() < 5 {
-                eprintln!("usage: flashpilot-bridge qcom-flash <target> <programmer> <rawprogram.xml> <fw_dir>");
+            if args.len() < 6 {
+                eprintln!("usage: flashpilot-bridge qcom-flash <target> <programmer|auto> <rawprogram.xml> <fw_dir> [--storage auto|emmc|ufs]");
                 exit(2);
             }
-            qualcomm::qcom_flash_firmware(&args[2], &args[3], &args[4], &args[5])
+            (|| -> crate::error::Result<String> {
+                let opts = parse_qcom_options(&args[6..])?;
+                if !opts.entries.is_empty() {
+                    return Err(crate::error::BridgeError::InvalidArgument(format!(
+                        "unexpected argument '{}'",
+                        opts.entries[0]
+                    )));
+                }
+                let storage = qualcomm::StorageType::parse(&opts.storage)?;
+                qualcomm::qcom_flash_firmware_v(
+                    &args[2],
+                    Some(&args[3]),
+                    &args[4],
+                    &args[5],
+                    storage,
+                )
+            })()
         }
         "qcom-flash-one" => {
             if args.len() < 7 {
                 eprintln!("usage: flashpilot-bridge qcom-flash-one <target> <partition> <image> <start_sector> <num_sectors> [--no-verify]");
                 exit(2);
             }
-            let start: u64 = args[5].parse().map_err(|_| { eprintln!("bad start_sector: {}", args[5]); exit(2); }).unwrap_or(0);
-            let count: u64 = args[6].parse().map_err(|_| { eprintln!("bad num_sectors: {}", args[6]); exit(2); }).unwrap_or(0);
+            let start: u64 = args[5]
+                .parse()
+                .map_err(|_| {
+                    eprintln!("bad start_sector: {}", args[5]);
+                    exit(2);
+                })
+                .unwrap_or(0);
+            let count: u64 = args[6]
+                .parse()
+                .map_err(|_| {
+                    eprintln!("bad num_sectors: {}", args[6]);
+                    exit(2);
+                })
+                .unwrap_or(0);
             // Verify-after-write ON by default; --no-verify restores the
             // legacy write+reset behavior. Also: malformed sector numbers
             // are errors, never silent zeros (a zero-sector write is a
             // brick vector).
             let verify = !args.iter().skip(7).any(|a| a == "--no-verify");
-            qualcomm::qcom_flash_one_v(&args[2], &args[3], std::path::Path::new(&args[4]), start, count, verify)
+            qualcomm::qcom_flash_one_v(
+                &args[2],
+                &args[3],
+                std::path::Path::new(&args[4]),
+                start,
+                count,
+                verify,
+            )
         }
         "qcom-verify-part" => {
             // qcom-verify-part <target> <partition=file>...
@@ -456,17 +624,22 @@ fn main() {
                 eprintln!("usage: flashpilot-bridge qcom-verify-part <target> <partition=file>...");
                 exit(2);
             }
-            let target = args[2].clone();
-            let mut entries = Vec::new();
-            for e in &args[3..] {
-                if let Some((part, file)) = e.split_once('=') {
-                    entries.push((part.to_string(), file.to_string()));
-                } else {
-                    eprintln!("usage: entry must be partition=file, got '{e}'");
-                    exit(2);
+            (|| -> crate::error::Result<String> {
+                let target = args[2].clone();
+                let opts = parse_qcom_options(&args[3..])?;
+                let mut entries = Vec::new();
+                for e in &opts.entries {
+                    match e.split_once('=') {
+                        Some((part, file)) => entries.push((part.to_string(), file.to_string())),
+                        None => {
+                            return Err(crate::error::BridgeError::InvalidArgument(format!(
+                                "entry must be partition=file, got '{e}'"
+                            )))
+                        }
+                    }
                 }
-            }
-            qualcomm::qcom_verify_part_cli(&target, &entries)
+                qualcomm::qcom_verify_part_cli(&target, &entries)
+            })()
         }
         "config-show" => {
             let ctx = config::app_config_for_operation(None);
@@ -496,9 +669,15 @@ fn main() {
             let (bus, addr) = match (loc.first(), loc.get(1)) {
                 (Some(b), Some(a)) => match (b.parse::<u8>(), a.parse::<u8>()) {
                     (Ok(b), Ok(a)) => (b, a),
-                    _ => { eprintln!("error: bad bus:addr"); exit(2); }
+                    _ => {
+                        eprintln!("error: bad bus:addr");
+                        exit(2);
+                    }
                 },
-                _ => { eprintln!("error: target must be 'bus:addr'"); exit(2); }
+                _ => {
+                    eprintln!("error: target must be 'bus:addr'");
+                    exit(2);
+                }
             };
             mtk_exploit::preloader_crash_to_brom(bus, addr)
         }
@@ -519,7 +698,8 @@ fn main() {
             (|| -> crate::error::Result<String> {
                 let dev = mtk_da::find_mtk_dev(&args[2])?;
                 let (iface, in_ep, out_ep) = mtk::find_bulk(&dev).ok_or("no bulk endpoints")?;
-                let sess = mtk::brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
+                let sess =
+                    mtk::brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
                 mtk::brom_mem_probe(&sess)
             })()
         }
@@ -531,11 +711,21 @@ fn main() {
             mtk::mtk_reset_device_cli(&args[2])
         }
         "qcom-backup" => {
-            if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge qcom-backup <target> <programmer> <out_dir>");
+            if args.len() < 5 {
+                eprintln!("usage: flashpilot-bridge qcom-backup <target> <programmer|auto> <out_dir> [--storage auto|emmc|ufs]");
                 exit(2);
             }
-            qualcomm::qcom_backup(&args[2], &args[3], &args[4])
+            (|| -> crate::error::Result<String> {
+                let opts = parse_qcom_options(&args[5..])?;
+                if !opts.entries.is_empty() {
+                    return Err(crate::error::BridgeError::InvalidArgument(format!(
+                        "unexpected argument '{}'",
+                        opts.entries[0]
+                    )));
+                }
+                let storage = qualcomm::StorageType::parse(&opts.storage)?;
+                qualcomm::qcom_backup_v(&args[2], Some(&args[3]), &args[4], storage)
+            })()
         }
         "qcom-partitions" => {
             if args.len() < 3 {
@@ -560,10 +750,25 @@ fn main() {
         }
         "qcom-frp-reset" => {
             if args.len() < 3 {
-                eprintln!("usage: flashpilot-bridge qcom-frp-reset <target>");
+                eprintln!("usage: flashpilot-bridge qcom-frp-reset <target> [--programmer <path|auto>] [--wipe-data] [--storage auto|emmc|ufs]");
                 exit(2);
             }
-            qualcomm::qcom_frp_reset(&args[2])
+            (|| -> crate::error::Result<String> {
+                let opts = parse_qcom_options(&args[3..])?;
+                if !opts.entries.is_empty() {
+                    return Err(crate::error::BridgeError::InvalidArgument(format!(
+                        "unexpected argument '{}'",
+                        opts.entries[0]
+                    )));
+                }
+                let storage = qualcomm::StorageType::parse(&opts.storage)?;
+                qualcomm::qcom_frp_reset_v(
+                    &args[2],
+                    opts.programmer.as_deref(),
+                    opts.wipe_data,
+                    storage,
+                )
+            })()
         }
         "spd-detect" => spd::spd_detect_cli(),
         "spd-info" => {
@@ -584,9 +789,9 @@ fn main() {
                     exit(2);
                 });
             let fdl2 = args.get(5).map(|s| s.as_str());
-            let fdl2_addr = args.get(6).map(|s| {
-                u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
-            });
+            let fdl2_addr = args
+                .get(6)
+                .map(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0));
             spd::spd_format_cli(&args[2], &args[3], fdl1_addr, fdl2, fdl2_addr)
         }
         "spd-frp" => {
@@ -600,9 +805,9 @@ fn main() {
                     exit(2);
                 });
             let fdl2 = args.get(5).map(|s| s.as_str());
-            let fdl2_addr = args.get(6).map(|s| {
-                u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
-            });
+            let fdl2_addr = args
+                .get(6)
+                .map(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0));
             spd::spd_frp_cli(&args[2], &args[3], fdl1_addr, fdl2, fdl2_addr)
         }
         "spd-backup" => {
@@ -645,7 +850,8 @@ fn main() {
             }
             let target = args[2].clone();
             let fdl1 = args[3].clone();
-            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let fdl1_addr =
+                u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
             let fdl2 = args[5].clone();
             let fdl2_addr = u32::from_str_radix(args[6].trim_start_matches("0x"), 16).ok();
             let out_pac = args[7].clone();
@@ -660,7 +866,8 @@ fn main() {
             }
             let target = args[2].clone();
             let fdl1 = args[3].clone();
-            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let fdl1_addr =
+                u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
             let fdl2 = args[5].clone();
             let mut idx = 6;
             let fdl2_addr = if !args[idx].starts_with("--")
@@ -678,15 +885,15 @@ fn main() {
             for a in &args[idx + 2..] {
                 if let Some(h) = a.strip_prefix("--hint") {
                     for tok in h.trim_start_matches('=').split(',') {
-                        if let Ok(v) = u32::from_str_radix(tok.trim().trim_start_matches("0x"), 16) {
+                        if let Ok(v) = u32::from_str_radix(tok.trim().trim_start_matches("0x"), 16)
+                        {
                             hints.push(v);
                         }
                     }
                 }
             }
             spd::spd_spl_patch_cli(
-                &target, &fdl1, fdl1_addr, &fdl2, fdl2_addr,
-                &part, &out_img, &hints,
+                &target, &fdl1, fdl1_addr, &fdl2, fdl2_addr, &part, &out_img, &hints,
             )
         }
         "spd-magic-pack" => {
@@ -703,9 +910,8 @@ fn main() {
             while i < args.len() {
                 let a = &args[i];
                 if a == "--load-base" && i + 1 < args.len() {
-                    load_base = u32::from_str_radix(
-                        args[i + 1].trim_start_matches("0x"), 16,
-                    ).unwrap_or(0xB500_0000);
+                    load_base = u32::from_str_radix(args[i + 1].trim_start_matches("0x"), 16)
+                        .unwrap_or(0xB500_0000);
                     i += 2;
                 } else if let Some(rest) = a.strip_prefix("--patch") {
                     let spec = rest.trim_start_matches('=').to_string();
@@ -743,14 +949,17 @@ fn main() {
             }
             let target = args[2].clone();
             let fdl1 = args[3].clone();
-            let fdl1_addr = u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
+            let fdl1_addr =
+                u32::from_str_radix(args[4].trim_start_matches("0x"), 16).unwrap_or(0x4000_4000);
             let mut rest = &args[5..];
             let mut fdl2: Option<String> = None;
             let mut fdl2_addr: Option<u32> = None;
             if !rest.is_empty() && !matches!(rest[0].as_str(), "recovery" | "fastboot" | "normal") {
                 fdl2 = Some(rest[0].clone());
                 rest = &rest[1..];
-                if !rest.is_empty() && !matches!(rest[0].as_str(), "recovery" | "fastboot" | "normal") {
+                if !rest.is_empty()
+                    && !matches!(rest[0].as_str(), "recovery" | "fastboot" | "normal")
+                {
                     fdl2_addr = u32::from_str_radix(rest[0].trim_start_matches("0x"), 16).ok();
                     rest = &rest[1..];
                 }
@@ -773,13 +982,12 @@ fn main() {
             // or the token is "none") we treat it as the fdl2 path.
             let mut fdl2: Option<String> = None;
             let mut fdl2_addr: Option<u32> = None;
-            if !rest.is_empty()
-                && !rest[0].contains('=')
-                && rest[0] != "none"
-            {
+            if !rest.is_empty() && !rest[0].contains('=') && rest[0] != "none" {
                 fdl2 = Some(rest.remove(0));
                 if !rest.is_empty() && !rest[0].contains('=') {
-                    fdl2_addr = Some(u32::from_str_radix(&rest[0].trim_start_matches("0x"), 16).unwrap_or(0));
+                    fdl2_addr = Some(
+                        u32::from_str_radix(&rest[0].trim_start_matches("0x"), 16).unwrap_or(0),
+                    );
                     rest.remove(0);
                 }
             }
@@ -799,7 +1007,80 @@ fn main() {
                     exit(2);
                 }
             }
-            spd::spd_flash_cli_v(&target, &fdl1, fdl1_addr, fdl2.as_deref(), fdl2_addr, &entries, verify)
+            spd::spd_flash_cli_v(
+                &target,
+                &fdl1,
+                fdl1_addr,
+                fdl2.as_deref(),
+                fdl2_addr,
+                &entries,
+                verify,
+            )
+        }
+        "spd-flash-pac" => {
+            // spd-flash-pac <target> <pac> [--mode flash|frp|backup|erase]
+            //                [--out <dir>] [--fdl1-addr 0x..] [--fdl2-addr 0x..] [--no-verify]
+            if args.len() < 4 {
+                eprintln!("usage: flashpilot-bridge spd-flash-pac <target> <pac> [--mode flash|frp|backup|erase] [--out <dir>] [--frp-image <img>] [--extra part=file]... [--fdl1-addr 0x..] [--fdl2-addr 0x..] [--no-verify]");
+                exit(2);
+            }
+            let target = args[2].clone();
+            let pac = args[3].clone();
+            let mut opts = spd::PacOptions::default();
+            let mut i = 4usize;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--mode" => {
+                        i += 1;
+                        let raw = args.get(i).map(String::as_str).unwrap_or("");
+                        match spd::PacMode::parse(raw) {
+                            Ok(m) => opts.mode = m,
+                            Err(e) => {
+                                eprintln!("{e}");
+                                exit(2);
+                            }
+                        }
+                    }
+                    "--out" => {
+                        i += 1;
+                        opts.out = args.get(i).cloned();
+                    }
+                    "--fdl1-addr" => {
+                        i += 1;
+                        opts.fdl1_addr = args
+                            .get(i)
+                            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+                    }
+                    "--fdl2-addr" => {
+                        i += 1;
+                        opts.fdl2_addr = args
+                            .get(i)
+                            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+                    }
+                    "--frp-image" => {
+                        i += 1;
+                        opts.frp_image = args.get(i).cloned();
+                    }
+                    "--extra" => {
+                        i += 1;
+                        let raw = args.get(i).map(String::as_str).unwrap_or("");
+                        match spd::parse_part_file(raw) {
+                            Ok(pair) => opts.extras.push(pair),
+                            Err(e) => {
+                                eprintln!("{e}");
+                                exit(2);
+                            }
+                        }
+                    }
+                    "--no-verify" => opts.verify = false,
+                    other => {
+                        eprintln!("unknown spd-flash-pac option '{other}'");
+                        exit(2);
+                    }
+                }
+                i += 1;
+            }
+            spd::spd_flash_pac_cli(&target, &pac, &opts)
         }
         "adb-devices" => {
             // --no-probe: zero-touch presence listing (server rows +
@@ -838,7 +1119,9 @@ fn main() {
         }
         "adb-shell-server" => {
             if args.len() < 5 {
-                eprintln!("usage: flashpilot-bridge adb-shell-server <serial> <timeout_ms> <cmd...>");
+                eprintln!(
+                    "usage: flashpilot-bridge adb-shell-server <serial> <timeout_ms> <cmd...>"
+                );
                 exit(2);
             }
             let timeout_ms: u64 = match args[3].parse() {
@@ -852,7 +1135,9 @@ fn main() {
         }
         "adb-pull" => {
             if args.len() != 6 {
-                eprintln!("usage: flashpilot-bridge adb-pull <serial|-> <timeout_ms> <remote> <local>");
+                eprintln!(
+                    "usage: flashpilot-bridge adb-pull <serial|-> <timeout_ms> <remote> <local>"
+                );
                 exit(2);
             }
             let timeout_ms: u64 = match args[3].parse() {
@@ -866,7 +1151,9 @@ fn main() {
         }
         "adb-push" => {
             if args.len() != 6 {
-                eprintln!("usage: flashpilot-bridge adb-push <serial|-> <timeout_ms> <local> <remote>");
+                eprintln!(
+                    "usage: flashpilot-bridge adb-push <serial|-> <timeout_ms> <local> <remote>"
+                );
                 exit(2);
             }
             let timeout_ms: u64 = match args[3].parse() {
@@ -944,11 +1231,23 @@ fn main() {
             imgtools::boot_info_cli(&args[2])
         }
         "boot-patch-adb" => {
-            if args.len() != 4 {
-                eprintln!("usage: flashpilot-bridge boot-patch-adb <in.img> <out.img>");
+            if args.len() < 4 {
+                eprintln!(
+                    "usage: flashpilot-bridge boot-patch-adb <in.img> <out.img> [--prop-file P]"
+                );
                 exit(2);
             }
-            imgtools::boot_patch_adb_cli(&args[2], &args[3])
+            let mut prop: Option<&str> = None;
+            let mut i = 4;
+            while i < args.len() {
+                if args[i] == "--prop-file" && i + 1 < args.len() {
+                    prop = Some(&args[i + 1]);
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            imgtools::boot_patch_adb_cli(&args[2], &args[3], prop)
         }
         "vbmeta-patch" => {
             if args.len() < 4 || args.len() > 5 {
@@ -1130,7 +1429,9 @@ fn main() {
         }
         "verify-target" => {
             if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge verify-target <vid:pid@bus:addr|bus:addr> <serial|->");
+                eprintln!(
+                    "usage: flashpilot-bridge verify-target <vid:pid@bus:addr|bus:addr> <serial|->"
+                );
                 eprintln!("  Zero-touch identity check: the stored target must still");
                 eprintln!("  belong to the same device (serial match). A different");
                 eprintln!("  serial at the address = device replaced — never follow.");
@@ -1157,10 +1458,29 @@ fn main() {
                 eprintln!("usage: flashpilot-bridge detect-merged [--vid 0xXXXX]");
                 exit(2);
             }
-            let vid_filter = args.iter().skip(2).find(|s| s.starts_with("--vid")).and_then(|s| {
-                s.strip_prefix("--vid=").or_else(|| s.strip_prefix("--vid")).and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
-            });
+            let vid_filter = args
+                .iter()
+                .skip(2)
+                .find(|s| s.starts_with("--vid"))
+                .and_then(|s| {
+                    s.strip_prefix("--vid=")
+                        .or_else(|| s.strip_prefix("--vid"))
+                        .and_then(|s| u16::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                });
             devices::list_devices_filtered_vid(vid_filter)
+        }
+        "resolve-transport" => {
+            if args.len() != 3 {
+                eprintln!("usage: flashpilot-bridge resolve-transport <device-key>");
+                exit(2);
+            }
+            match device::StableDeviceIdentity::parse(&args[2]) {
+                None => Err(crate::error::BridgeError::InvalidArgument(
+                    "unparseable device key".to_string(),
+                )),
+                Some(ident) => device::resolve_transport(&ident)
+                    .map(|t| format!("{:04x}:{:04x}@{}:{}", t.vid, t.pid, t.bus, t.addr)),
+            }
         }
         "odin-agent" => {
             if args.len() < 3 {
@@ -1172,7 +1492,9 @@ fn main() {
         "actions-for" => {
             if args.len() < 3 {
                 eprintln!("usage: flashpilot-bridge actions-for <device-key>");
-                eprintln!("  device-key: adb:<serial> | usb:<port-path> | usb:<vid>:<pid>@<bus>:<addr>");
+                eprintln!(
+                    "  device-key: adb:<serial> | usb:<port-path> | usb:<vid>:<pid>@<bus>:<addr>"
+                );
                 exit(2);
             }
             device::actions_for_key(&args[2])
@@ -1228,7 +1550,9 @@ fn main() {
             // reference it ran against, so concurrent-device logs answer
             // "which device did this fail on". Explicit allowlist — file
             // paths must never be sniffed as device targets.
-            if let Some(dev) = device_arg(args.get(1).map(|s| s.as_str()).unwrap_or(""), args.get(2)) {
+            if let Some(dev) =
+                device_arg(args.get(1).map(|s| s.as_str()).unwrap_or(""), args.get(2))
+            {
                 eprintln!("error: {e} [device {dev}]");
             } else {
                 eprintln!("error: {e}");
@@ -1242,6 +1566,62 @@ fn main() {
             exit(1);
         }
     }
+}
+
+/// Options shared by the Qualcomm EDL subcommands. Everything that is not a
+/// flag lands in `entries` so per-command positionals keep working.
+#[derive(Debug, Default)]
+struct QcomCliOptions {
+    programmer: Option<String>,
+    storage: String,
+    wipe_data: bool,
+    entries: Vec<String>,
+}
+
+fn parse_qcom_options(raw: &[String]) -> crate::error::Result<QcomCliOptions> {
+    let mut opts = QcomCliOptions {
+        storage: "auto".to_string(),
+        ..Default::default()
+    };
+    let mut i = 0;
+    while i < raw.len() {
+        let arg = &raw[i];
+        match arg.as_str() {
+            "--wipe-data" => opts.wipe_data = true,
+            "--programmer" => {
+                i += 1;
+                let value = raw.get(i).ok_or_else(|| {
+                    crate::error::BridgeError::InvalidArgument(
+                        "--programmer needs a path or 'auto'".to_string(),
+                    )
+                })?;
+                opts.programmer = Some(value.clone());
+            }
+            "--storage" => {
+                i += 1;
+                let value = raw.get(i).ok_or_else(|| {
+                    crate::error::BridgeError::InvalidArgument(
+                        "--storage needs auto|emmc|ufs".to_string(),
+                    )
+                })?;
+                opts.storage = value.clone();
+            }
+            other if other.starts_with("--programmer=") => {
+                opts.programmer = Some(other["--programmer=".len()..].to_string());
+            }
+            other if other.starts_with("--storage=") => {
+                opts.storage = other["--storage=".len()..].to_string();
+            }
+            other if other.starts_with("--") => {
+                return Err(crate::error::BridgeError::InvalidArgument(format!(
+                    "unknown option '{other}'"
+                )));
+            }
+            other => opts.entries.push(other.to_string()),
+        }
+        i += 1;
+    }
+    Ok(opts)
 }
 
 /// `args[2]` is a device reference for these commands (target, serial or
@@ -1264,6 +1644,9 @@ fn device_arg(cmd: &str, arg2: Option<&String>) -> Option<String> {
             | "mtk-frp"
             | "mtk-frp-gpt"
             | "mtk-frp-brom"
+            | "mtk-backup-gpt"
+            | "mtk-flash-auto"
+            | "mtk-screen-lock"
             | "mtk-adb-enable"
             | "mtk-reboot"
             | "mtk-factory"
@@ -1295,6 +1678,7 @@ fn device_arg(cmd: &str, arg2: Option<&String>) -> Option<String> {
             | "spd-readback"
             | "spd-boot"
             | "spd-flash"
+            | "spd-flash-pac"
             | "adb-shell"
             | "adb-pull"
             | "adb-push"
@@ -1324,5 +1708,50 @@ fn device_arg(cmd: &str, arg2: Option<&String>) -> Option<String> {
         arg2.cloned()
     } else {
         None
+    }
+}
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn qcom_options_parse_programmer_storage_and_wipe() {
+        let raw: Vec<String> = [
+            "--programmer",
+            "/tmp/prog.mbn",
+            "--storage=ufs",
+            "--wipe-data",
+            "frp=frp.img",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let opts = parse_qcom_options(&raw).unwrap();
+        assert_eq!(opts.programmer.as_deref(), Some("/tmp/prog.mbn"));
+        assert_eq!(opts.storage, "ufs");
+        assert!(opts.wipe_data);
+        assert_eq!(opts.entries, ["frp=frp.img"]);
+    }
+
+    #[test]
+    fn qcom_options_default_to_auto_and_reject_unknown_flags() {
+        let opts = parse_qcom_options(&[]).unwrap();
+        assert_eq!(opts.storage, "auto");
+        assert!(opts.programmer.is_none());
+        assert!(!opts.wipe_data);
+        assert!(opts.entries.is_empty());
+
+        let unknown = vec!["--bogus".to_string()];
+        assert!(parse_qcom_options(&unknown).is_err());
+        let missing_value = vec!["--storage".to_string()];
+        assert!(parse_qcom_options(&missing_value).is_err());
+        let auto_programmer = vec!["--programmer=auto".to_string()];
+        assert_eq!(
+            parse_qcom_options(&auto_programmer)
+                .unwrap()
+                .programmer
+                .as_deref(),
+            Some("auto")
+        );
     }
 }

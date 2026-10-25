@@ -48,7 +48,7 @@ Knowledge from this tree already landed in the code:
 | PenangF note + unlock-data URL order (0/3/2) in the standard token flow | Retired with the token flow (`moto_oem_unlock_token` removed); kept here as protocol reference |
 | Samsung DVIF download-mode read (115200 8N1, `DVIF` query, `KEY=VALUE` pairs) | Research note only — never implemented (no `dvif` code exists) |
 | MTK model→SoC mapping (G14→T616, G35→T760, G54→MT6855, ...) | `supported_devices.json` motorola entries |
-| Stock firmware mirrors (lolinet, year-based) | `operations/flashing/mediatek/README.md` |
+| Stock firmware mirrors (lolinet, year-based) | `operations/flashing/README.md` |
 
 Tests: the old `tests/test_moto_tool_flows.py` was removed; coverage lives in the per-area suites (`tests/test_frp_flow.py`, `tests/test_devices.py`, cargo `flows::tests`). Not implemented (needs external
 per-device assets or their paid server): Valeria patched/stock LK images,
