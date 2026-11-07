@@ -1,5 +1,5 @@
 # Note 50 / 11 Pro — MDM
-Chip: T612 / SD
-Engine: spd
-MDM actions: mdm_unlock, mdm_diagnostics, kg_state_check
-Notes: 
+Çip: T612 / SD
+Motor: spd
+MDM eylemleri: mdm_unlock, mdm_diagnostics, kg_state_check
+Notlar:

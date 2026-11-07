@@ -58,6 +58,7 @@ def _isolated_qsettings():
             "~/.config/FlashPilot/FlashingTool.conf). Fix the XDG_CONFIG_HOME "
             "redirect in tests/conftest.py before running these tests."
         )
+    QSettings("FlashPilot", "FlashingTool").setValue("language", "en")
 
 
 # --- shared window harness -------------------------------------------------

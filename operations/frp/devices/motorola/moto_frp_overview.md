@@ -1,65 +1,37 @@
-# Motorola / Lenovo — FRP reset (FlashPilot implementation)
+# Motorola / Lenovo — FRP sıfırlama (FlashPilot uygulaması)
 
-Status: implemented
-Chip: Qualcomm Snapdragon (most Moto G/E/Edge series) or MediaTek (some G/Edge)
+Durum: uygulandı
+Çip: Qualcomm Snapdragon (çoğu Moto G/E/Edge serisi) veya MediaTek (bazı G/Edge)
 VID: 22b8 (Motorola)
-Transports: ADB, FASTBOOT
+Taşıyıcılar: ADB, FASTBOOT
 
-## Flows
+## Akışlar
 
-| Flow key | Transport | What it does |
+| Akış anahtarı | Taşıyıcı | Ne yapar |
 |---|---|---|
-| `moto_frp_adb` | ADB | Zeroes the `frp` secure setting, marks setup complete / device provisioned, removes the persisted FRP store, disables Google + Motorola setup wizards. |
-| `moto_frp_fastboot` | FASTBOOT | CVE-2016-10277 (initroot) chain: version + `fsg-id` UTAG gates, kernel-cmdline injection of a user-supplied initramfs (`--file` + `--partition` scratch address, never shipped), `continue` into root ADB, then the ADB wipe. |
-| `frp_fake_login` / `frp_fake_login_testdpc` / `frp_fake_login_adp` | Wizard → ADB | QR provisioning with our DPC / TestDPC / Android Device Policy: enrolls as device owner in the setup wizard (6-tap QR scanner), completes setup, enables ADB, then clears FRP once authorized. |
+| `moto_frp_adb` | ADB | `frp` güvenli ayarını sıfırlar, kurulumun tamamlandığını / cihazın sağlandığını işaretler, kalıcı FRP deposunu kaldırır, Google + Motorola kurulum sihirbazlarını devre dışı bırakır. |
+| `moto_frp_fastboot` | FASTBOOT | CVE-2016-10277 (initroot) zinciri: sürüm + `fsg-id` UTAG kapıları, kullanıcı tarafından sağlanan initramfs eklenmesiyle çekirdek komut satırı enjeksiyonu (`--file` + `--partition` çalışma adresi, hiç piyasaya sürülmedi), ardından kök ADB'ye geçiş ve ADB silme. |
+| `frp_fake_login` / `frp_fake_login_testdpc` / `frp_fake_login_adp` | Sihirbaz → ADB | QR sağlama ile DPC / TestDPC / Android Device Policy kullanımı: kurulum sihirbazında cihaz sahibi olarak kaydolur (6 dokunuşlu QR tarayıcı), kurulumu tamamlar, ADB'yi etkinleştirir ve yetki verildiğinde FRP'yi temizler. |
 
-The unlock-token flow (`moto_oem_unlock_token`) is retired: the 20-char
-code is per-device and server-issued, so a tool-level token strategy is a
-dead end. Bootloader unlock still runs through `fastboot_unlock --code`
-once the Android-side OEM-unlocking toggle is on.
+Kilit açma token akışı (`moto_oem_unlock_token`) kaldırıldı: 20 karakterlik kod cihaz başına özeldir ve sunucu tarafından üretilir; bu nedenle araç düzeyinde token stratejisi işe yaramaz bir yoldur. Önyükleyici kilidini açma işlemi yine `fastboot_unlock --code` üzerinden çalışır, Android tarafındaki OEM kilit açma anahtarı açık olduktan sonra.
 
-These flows are **brand-wide, not per-model**: they appear under Motorola →
-All Motorola / Lenovo (universal) and every Moto model page, with the vendor
-detected at runtime. The fastboot legs run over the **native Rust fastboot
-transport** (`fastboot-cmd`, target-pinned `vid:pid@bus:addr`, kernel-driver
-detach) and fall back to the system `fastboot` binary only when the bridge
-has no matching device.
+Bu akışlar **marka genelidir, model bazlı değildir**: Motorola → Tüm Motorola / Lenovo (evrensel) altında görünürler ve her Moto modeli sayfasında yer alırlar; satıcı çalışma zamanında tespit edilir. Fastboot kolları **yerel Rust fastboot taşıyıcısı** üzerinden çalışır (`fastboot-cmd`, hedef sabitlenmiş `vid:pid@bus:addr`, kernel sürücüsü ayrımı) ve köprü eşleşen cihaz bulamadığında yalnızca sistem `fastboot` ikili dosyasına geri döner.
 
-## Technique notes (clean-room, derived from public Motorola fastboot/ADB behavior)
+## Teknik notlar (temiz oda, kamuya açık Motorola fastboot/ADB davranışlarından türetilmiş)
 
-- **ADB path** is the same class of provisioning reset used on other Android
-  devices (`settings put secure frp 0`, `user_setup_complete`, `device_provisioned`,
-  `setup_wizard_has_run`, removal of `/data/system/frp`, and setup-wizard disable).
-  Motorola additionally exposes a `com.motorola.setupwizard` package to disable.
-  This only works when an ADB shell is already authorized.
+- **ADB yolu**, diğer Android cihazlarda kullanılan aynı türden bir sağlama sıfırlama yöntemidir (`settings put secure frp 0`, `user_setup_complete`, `device_provisioned`, `setup_wizard_has_run`, `/data/system/frp` kaldırma ve kurulum sihirbazını devre dışı bırakma). Motorola ayrıca `com.motorola.setupwizard` paketini devre dışı bırakma imkânı sunar. Bu yalnızca yetkili bir ADB kabuğu zaten varsa çalışır.
 
-- **Fastboot path** is the CVE-2016-10277 (initroot) chain, staged with
-  honest gates: bootloader-version check, `fsg-id` UTAG liveness read
-  (`protected="false"` or stop), user-supplied per-device initramfs, then
-  `oem config fsg-id a initrd=<addr>,<size>` + download-to-buffer +
-  `continue` into a root ADB session that wipes FRP. Public research:
-  alephsecurity/initroot. Newer bootloaders content-filter the injection —
-  the flow reports that instead of pretending.
-- **QR path** skips the Google/FRP check by provisioning a device owner
-  before it: scan the generated QR on the wizard's Welcome screen, accept
-  enrollment, tap OK on the ADB prompt, and the flow clears FRP.
+- **Fastboot yolu** CVE-2016-10277 (initroot) zinciridir; dürüst kapılarla aşamalı biçimde çalışır: önyükleyici sürüm kontrolü, `fsg-id` UTAG canlılığı okuma (`protected="false"` veya dur), kullanıcı tarafından sağlanan cihaz bazlı initramfs, ardından `oem config fsg-id a initrd=<addr>,<size>` + tampon içeriğine indirme + kök ADB oturumuna `continue` giriş. Kamuya açık araştırma: alephsecurity/initroot. Daha yeni önyükleyiciler enjeksiyonu içerik filtresiyle engeller — akış bunun yerine bunu bildirir.
+- **QR yolu**, Google/FRP kontrolünü atlayarak cihaz sahibi sağlama yapar: oluşturulan QR'yi kurulum sihirbazının Hoş Geldiniz ekranında tarayın, kaydı kabul edin, ADB isteminde Tamam'ı dokunun, akış yetki verildiğinde FRP'yi temizler.
 
-## Honest limits
+## Dürüst sınırlar
 
-- A **bootloader unlock code is server-issued per device** (Motorola
-  portal; Verizon/AT&T/Tracfone models are not eligible). No local tool —
-  FlashPilot included — can generate it offline. `fastboot_unlock --code`
-  automates the two-step confirm but needs the Android-side OEM-unlocking
-  toggle ON first.
-- The **initrd injection is patched on newer bootloaders** (2020+ builds
-  content-filter `initrd=` even with an unprotected UTAG). The flow reads
-  the UTAG and says so; the QR path is the realistic alternative there.
-- Some **carrier variants disable `oem unlock` entirely**; on those, the ADB
-  path is the only route, and it requires an already-authorized ADB shell.
-- FRP removal on a device you don't own or aren't authorized to service may be
-  illegal in your jurisdiction.
+- **Önyükleyici kilit açma kodu cihaz bazlı olarak sunucudan üretilir** (Motorola portalı; Verizon/AT&T/Tracfone modelleri uygun değildir). Çevrimdışı üretebilecek hiçbir yerel araç — FlashPilot dahil — yoktur. `fastboot_unlock --code` iki adımlı onayı otomatikleştirir ancak Android tarafındaki OEM kilit açma anahtarı önce AÇIK olmalıdır.
+- **initrd enjeksiyonu daha yeni önyükleyicilerde düzeltilmiştir** (2020+ derlemelerde `initrd=` bile korunmasız UTAG ile birlikte içerik filtresi uygulanır). Akış UTAG'ı okur ve bunu raporlar; realist alternatif QR yoludur.
+- Bazı **taşıyıcı varyantları `oem unlock` özelliğini tamamen devre dışı bırakır**; bu durumda ADB yolu tek rota olur ve zaten yetkili bir ADB kabuğu gerekir.
+- Sizinkine ait olmayan veya bakımını yetkisiz biçimde yaptığınız bir cihazda FRP kaldırma, yargı alanınıza göre yasadışı olabilir.
 
-## Related device notes
+## İlgili cihaz notları
 
-- `moto_g6.md` — Moto G6 (SDM450), legacy Android 8/9 browser/emergency FRP.
-- `../mdm/devices/motorola/` — Motorola MDM flows.
+- `moto_g6.md` — Moto G6 (SDM450), eski Android 8/9 tarayıcı/acil durum FRP.
+- `../mdm/devices/motorola/` — Motorola MDM akışları.

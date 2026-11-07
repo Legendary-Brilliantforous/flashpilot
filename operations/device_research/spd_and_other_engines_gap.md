@@ -1,143 +1,142 @@
-# SPD/Unisoc and other engines — capability register
+# SPD/Unisoc ve diğer motorlar — yetenek kaydı
 
-**Scope:** FlashPilot's Spreadtrum/Unisoc transport plus the engines it
-deliberately does not implement (LG, Apple restore, vendor-specific flashers).
-Static analysis plus corpus review; no device was touched.
-
----
-
-## 1. Executive summary
-
-- FlashPilot implements the SPD/Unisoc download path natively: FDL upload,
-  partition list/format/backup/readback, FRP wipe, factory reset, SPL patch,
-  magic pack, boot-to-download.
-- The corpus carries **94 SPD rows**; **45 are in the database**, 49 are not
-  (mostly iTel).
-- Everything else in this space — LGUP/KDZ, Huawei update tooling, Apple
-  restore — is out of scope on Linux, and that is a design decision, not a
-  backlog item.
+**Kapsam:** FlashPilot'in Spreadtrum/Unisoc taşıma yolu ve kasıtlı olarak
+uygulamadığı motorlar (LG, Apple restore, satıcıya özgü flasher'lar). Statik analiz
+ve corpus incelemesi; cihaz dokunulmadı.
 
 ---
 
-## 2. What the engine does
+## 1. Özet
 
-### 2.1 Entry points (`src/spd.rs`)
+- FlashPilot SPD/Unisoc indirme yolunu doğrudan uygular: FDL yükleme,
+  bölüm listeleme/biçimlendirme/yedekleme/okuma, FRP silme, fabrika sıfırlama,
+  SPL yamalama, magic pack, indirme moduna başlatma.
+- Corpus **94 SPD satırı** taşır; **45'i veritabanında**, 49'u değil (çoğunlukla iTel).
+- Bu alandaki geri kalan her şey — LGUP/KDZ, Huawei update araçları, Apple
+  restore — Linux üzerinde kapsam dışıdır; bu tasarım kararıdır, backlog maddesi değildir.
 
-| Function | Purpose |
+---
+
+## 2. Motor ne yapar
+
+### 2.1 Giriş noktaları (`src/spd.rs`)
+
+| Fonksiyon | Amaç |
 |----------|---------|
-| `detect_spd()` | detect SPD/Unisoc devices (VID 0x1782) |
-| `spd_detect_cli()` | CLI detection |
-| `spd_info_cli()` | chip, version, security state |
-| `spd_partitions_cli()` | list partitions |
-| `spd_flash_cli()` / `spd_flash_cli_v()` | flash firmware |
-| `spd_format_cli()` | format partitions |
-| `spd_backup_cli()` | back up partitions |
-| `spd_readback_cli()` | readback partitions |
-| `spd_frp_cli()` | FRP wipe (frp, nvdata, persistent) |
-| `spd_reset_cli()` | factory reset |
-| `spd_spl_patch_cli()` | SPL patch (bypass security checks) |
-| `spd_magic_pack_cli()` | build a custom pack |
-| `spd_boot_cli()` | boot to download mode |
+| `detect_spd()` | SPD/Unisoc cihazlarını algıla (VID 0x1782) |
+| `spd_detect_cli()` | CLI algılama |
+| `spd_info_cli()` | yonga, sürüm, güvenlik durumu |
+| `spd_partitions_cli()` | bölümleri listele |
+| `spd_flash_cli()` / `spd_flash_cli_v()` | firmware flash et |
+| `spd_format_cli()` | bölümleri biçimlendir |
+| `spd_backup_cli()` | bölümleri yedekle |
+| `spd_readback_cli()` | bölümleri geri oku |
+| `spd_frp_cli()` | FRP silme (frp, nvdata, persistent) |
+| `spd_reset_cli()` | fabrika sıfırlama |
+| `spd_spl_patch_cli()` | SPL yamalama (güvenlik kontrollerini atla) |
+| `spd_magic_pack_cli()` | özel paket oluştur |
+| `spd_boot_cli()` | indirme moduna başlat |
 
-### 2.2 Commands
+### 2.2 Komutlar
 
-| Command | Operation |
+| Komut | İşlem |
 |---------|-----------|
-| `spd-detect` | detect SPD/Unisoc devices |
-| `spd-info` | device info |
-| `spd-partitions` | list partitions |
-| `spd-flash` | flash firmware |
-| `spd-format` | format partitions |
-| `spd-backup` | back up partitions |
-| `spd-readback` | readback partitions |
+| `spd-detect` | SPD/Unisoc cihazlarını algıla |
+| `spd-info` | cihaz bilgisi |
+| `spd-partitions` | bölümleri listele |
+| `spd-flash` | firmware flash et |
+| `spd-format` | bölümleri biçimlendir |
+| `spd-backup` | bölümleri yedekle |
+| `spd-readback` | bölümlerin geri okumasını al |
 | `spd-frp` | FRP bypass |
-| `spd-reset` | factory reset |
-| `spd-spl-patch` | SPL patch |
-| `spd-magic-pack` | magic pack creation |
-| `spd-boot` | boot to download mode |
+| `spd-reset` | fabrika sıfırlama |
+| `spd-spl-patch` | SPL yamalama |
+| `spd-magic-pack` | magic pack oluşturma |
+| `spd-boot` | indirme moduna başlat |
 
-### 2.3 Protocol coverage
+### 2.3 Protokol kapsamı
 
-- **Detection** — VID `0x1782`, download-mode PIDs (0x0001, 0x0002).
-- **FDL upload** — FDL1/FDL2 staging, BSL handshake, baud switch.
-- **Partition work** — list, format, backup, readback, exec.
-- **Security** — SPL patch (erase/rewrite of the signature check region),
-  magic-pack construction for signed-pack devices.
-- **IMEI** — reuses the shared MTK/SPD flow helpers; there is no SPD-specific
-  NV writer.
-- **NVRAM** — backup via `SP_META_*`-equivalent operations.
+- **Algılama** — VID `0x1782`, indirme modu PIDs (0x0001, 0x0002).
+- **FDL yükleme** — FDL1/FDL2 aşama, BSL el sıkışması, baud switch.
+- **Bölüm işleri** — listeleme, biçimlendirme, yedekleme, okuma, işlem.
+- **Güvenlik** — SPL yamalama (imza denetimi bölgesinin silinmesi/yeniden yazılması),
+  imzalı paket cihazları için magic-pack oluşturma.
+- **IMEI** — paylaşılan MTK/SPD akış yardımcılarını yeniden kullanır; özel SPD NV
+  yazıcısı yoktur.
+- **NVRAM** — `SP_META_*` eşdeğer işlemleriyle yedekleme.
 
-### 2.4 Device coverage
+### 2.4 Cihaz kapsamı
 
-Any Unisoc device that exposes download mode is reachable once FDL1/FDL2 and
-firmware are supplied. The database carries 59 SPD models, notably:
+FDL1/FDL2 ve firmware sağlandığında indirme modunda görünen her Unisoc cihaz
+ulaşılabilir. Veritabanı 59 SPD modeli taşır, özellikle:
 
 - Samsung A03/A03s/A03 Core (T606/SC9863A)
-- Tecno/Infinix T6xx models
-- Oppo/Realme budget models (SC9863A)
-- iTel (24 models, all SPD)
-- Nokia and Lava Unisoc models
+- Tecno/Infinix T6xx modelleri
+- Oppo/Realme bütçe modelleri (SC9863A)
+- iTel (24 model, hepsi SPD)
+- Nokia ve Lava Unisoc modelleri
 
 ---
 
 ## 3. Samsung / Odin
 
-Odin is implemented natively (`odin-*`), including PIT read/write, tar and
-multi-file flash (BL/AP/CP/CSC), and an MTK variant path. Samsung FRP, factory
-reset, ADB enable and Knox/KG operations ride `src/flows.rs` and are
-audit-logged.
+Odin doğrudan uygulanmıştır (`odin-*`), PIT okuma/yazma, tar ve çok dosyalı flash
+(BL/AP/CP/CSC) ve MTK varyant yolu dahil. Samsung FRP, fabrika sıfırlama, ADB
+etkinleştirme ve Knox/KG işlemleri `src/flows.rs` içinde çalışır ve denetim
+günlüğüne kaydedilir.
 
-Gaps:
+Boşluklar:
 
-- **Write-PIT is destructive and lightly tested.** It needs a mandatory PIT
-  backup and a second confirmation before it is considered safe.
-- **No Heimdall interop.** Not needed — the native path covers the same devices
-  without the `libusb` quirks Heimdall carries.
-- **No LGUP/KDZ.** LG firmware arrives as KDZ archives and needs LG's own
-  protocol; LG has also exited the phone business, so the database bucket was
-  removed.
+- **Write-PIT yıkıcı ve hafif test edilmiştir.** Zorunlu PIT yedeği ve güvenli
+  sayılmadan önce ikinci onay gerektirir.
+- **Heimdall interop yok.** Gerek yok — yerel yol aynı cihazları Heimdall'ın
+  `libusb` gariplikleri olmadan kapsar.
+- **LGUP/KDZ yok.** LG firmware KDZ arşivi olarak gelir ve LG'nin kendi protokolünü
+  gerektirir; LG ayrıca telefon işinden çıktı, bu yüzden veritabanı bucket'ı
+  kaldırıldı.
 
 ## 4. Apple
 
-`apple-detect` and `apple-info` cover normal/recovery/DFU enumeration. There is
-no restore/update flow: that requires a signed IPSW chain and is out of scope.
+`apple-detect` ve `apple-info` normal/recovery/DFU numaralandırmasını kapsar. Geri
+yükleme/güncelleme akışı yok: bunun için imzalanmış IPSW zinciri gerekir ve kapsam
+dışıdır.
 
-## 5. Vendor-specific flashers
+## 5. Satıcıya özgü flasher'lar
 
-| Area | Status | Rationale |
+| Alan | Durum | Gerekçe |
 |---|---|---|
-| LGUP/KDZ | absent | Windows-only, dead vendor |
-| Huawei `update.app` / Kirin flashing | absent | Needs vendor signing; Kirin FRP is an open research gap instead |
-| Xiaomi fastboot ROM | covered by `fastboot-*` + `unified-flash` | No vendor tooling needed |
-| Motorola blank-flash | `moto_flash.rs` path | Native |
-| Apple restore | absent | Signed IPSW chain |
+| LGUP/KDZ | yok | Windows-only, ölü satıcı |
+| Huawei `update.app` / Kirin flashing | yok | Satıcı imzası gerekir; Kirin FRP açık araştırma boşluğudur |
+| Xiaomi fastboot ROM | `fastboot-*` + `unified-flash` ile kapsanır | Satıcı aracı gerekmez |
+| Motorola blank-flash | `moto_flash.rs` yolu | Yerel |
+| Apple restore | yok | İmzalanmış IPSW zinciri |
 
-The pattern is consistent: implement the transport, require the user to supply
-firmware, never bundle a vendor EXE.
+Desen tutarlıdır: taşıma yolunu uygula, kullanıcıdan firmware sağlar, hiçbir satıcı
+EXE'sini paketleme.
 
 ---
 
-## 6. Gaps and risks
+## 6. Boşluklar ve riskler
 
-| Gap | Impact | Effort |
+| Boşluk | Etki | Çaba |
 |---|---|---|
-| SPL patch hardware-unverified | Advertised operation may fail on secured devices | M |
-| 49 SPD catalogue rows unimported | iTel-heavy list understates coverage | S |
-| No SPD-specific NV/IMEI writer | IMEI work depends on shared helpers | M |
-| Write-PIT safety | One bad PIT can hard-brick | S/M |
-| No SPD 5G (T7xx) validation | Newer Unisoc parts may need a different FDL stage | M |
+| SPL patch donanım doğrulanmadı | Reklamı yapılan işlem güvenli cihazlarda başarısız olabilir | M |
+| 49 SPD katalog satırı ithal edilmedi | iTel ağırlıklı liste kapsamı küçümser | S |
+| SPD özel NV/IMEI yazıcısı yok | IMEI işi paylaşılan yardımcılara bağlı | M |
+| Write-PIT güvenliği | Bir yanlış PIT cihazı hard-brick edebilir | S/M |
+| SPD 5G (T7xx) doğrulaması yok | Daha yeni Unisoc parçaları farklı FDL aşaması gerektirebilir | M |
 
-## 7. Recommendations
+## 7. Öneriler
 
-1. Import the remaining 49 SPD rows (mostly iTel A12–A60 / Vision / S-series).
-2. Validate SPL patch on a secured SC9863A device before promoting it from
-   `partial`.
-3. Add PIT backup + double confirmation around `odin-send-pit`.
-4. Add a SPD NV/IMEI writer behind the existing token gate and audit log.
-5. Add SPD 5G (T7xx) to the FDL matrix once a device is available.
+1. Kalan 49 SPD satırını (çoğunlukla iTel A12–A60 / Vision / S-serisi) ithal et.
+2. Güvenli bir SC9863A cihazında SPL patch'i doğrularken `partial` statüsünden
+   çıkarma.
+3. `odin-send-pit` etrafına PIT yedeği + çift onay ekle.
+4. Mevcut token kuralı ve denetim günlüğü arkasında SPD NV/IMEI yazıcısı ekle.
+5. Cihaz mevcutsa SPD 5G (T7xx)'yi FDL matrisi içine ekle.
 
-## 8. Conclusion
+## 8. Sonuç
 
-SPD/Unisoc coverage is protocol-complete for the 4G parts FlashPilot targets.
-The remaining work is validation and device-list breadth; the non-goals (LG,
-Huawei vendor flashing, Apple restore) stay non-goals.
+SPD/Unisoc kapsamı FlashPilot'in hedeflediği 4G parçaları için protokol olarak
+tamdır. Kalan iş doğrulama ve cihaz listesi genişliğidir; amaç dışı işler (LG,
+Huawei satıcı flashing, Apple restore) amaç dışı kalmaya devam eder.

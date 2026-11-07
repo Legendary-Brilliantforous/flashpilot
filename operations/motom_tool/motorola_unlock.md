@@ -1,26 +1,24 @@
 # motorola_unlock.md — Motorola unlock, Valeria, patcher, firmware
 
-How Moto-M Tool 4.2.2 does the official Motorola bootloader unlock, the
-server-driven "Valeria" LK-swap unlock/FRP, the ROM patcher, firmware
-mirrors, and QR-based ADB enrollment.
+Moto-M Tool 4.2.2'nin resmî Motorola bootloader unlock, sunucu odaklı "Valeria" LK-swap unlock/FRP, ROM patcher, firmware mirrorlar ve QR tabanlı ADB kaydı nasıl yaptığını açıklar.
 
-## Official Motorola web unlock (`start_unlock`, L2643)
+## Resmî Motorola web unlock (`start_unlock`, L2643)
 
-### Flow
+### Akış
 
 ```
 start_unlock
- └─ update_labels(state_mode='locked')          # fills device_info, sets is_penangf_device
- └─ data = get_unlock_data(is_penangf_device)   # must have ≥4 segments
- ├─ [PenangF] → start_penangf_unlock(data)      # see below
+ └─ update_labels(state_mode='locked')          # cihaz bilgisi doldurur, is_penangf_device ayarlar
+ └─ data = get_unlock_data(is_penangf_device)   # ≥4 parçaya sahip olmalı
+ ├─ [PenangF] → start_penangf_unlock(data)      # aşağıya bak
  └─ [Normal Motorola]
      1. GET https://en-us.support.motorola.com/cc/productRegistration/
               verifyPhone/{data[0]}/{data[3]}/{data[2]}/
-        headers: {'Cookie': '; '.join(f'{k}={v}')}     # session cookies
-        200 + 'Phone qualifies' in body → OK; 'Not qualified' → abort
+        headers: {'Cookie': '; '.join(f'{k}={v}')}     # oturum çerezleri
+        200 + body içinde 'Phone qualifies' varsa OK; 'Not qualified' → iptal
      2. cookies = load_cookies()                       # GitHub blob + Fernet
      3. send_request_and_set_timestamp (thread):
-        - sync_time_windows()                          # Windows NTP resync
+        - sync_time_windows()                          # Windows NTP yeniden eşitleme
         - request_timestamp = now(UTC)
         - GET .../unlockPhone/{data[0]}/{data[3]}/{data[2]}/ with Cookie header
         - 200 → success_timestamp = now
@@ -33,42 +31,30 @@ start_unlock
         success = ('successful' AND 'unlocked') in output OR 'already unlocked'
 ```
 
-### Key facts
+### Önemli gerçekler
 
-- The URL templates use data order **0/3/2** (not 0/1/2) from the
-  4-segment `#`-split of `fastboot oem get_unlock_data` output
-  (`get_unlock_data`, L2490; regex `^\(bootloader\)\s(.*)$` MULTILINE,
-  strip `Unlock data:`, split `#`).
-- **IMAP is dead code**: `IMAP_SERVER = 'imap.gmail.com'` (L77) and
-  `load_config()` (Fernet-encrypted Gmail `email`+`app_password`, L2302)
-  are never called in v4.2.2. Older versions read OTP e-mail via IMAP;
-  v4.2.2 replaced that with the paid `/get-unlock-candidates` call. An
-  open-source reimplementation can read the OTP mail directly via IMAP
-  with a user-supplied app password.
-- Cookies come from
-  `https://raw.githubusercontent.com/Maikyxd/Cookie/main/cookies_moto3.json`
-  (fallback `cookies_moto1.json`), Fernet-decrypted with the server key
-  (`GET /get-key` → `{'key': ...}`), then `json.loads` (`load_cookies`, L2331).
-- PenangF devices (Moto G23/G13, `ro.product.device == 'penangf'`)
-  use `fastboot oem get_key` instead (`get_unlock_data(is_penangf_device)`).
+- URL şablonları data sırası **0/3/2** kullanır (0/1/2 değil) `fastboot oem get_unlock_data` çıktısının 4 parçasından (`get_unlock_data`, L2490; regex `^\(bootloader\)\s(.*)$` MULTILINE, `Unlock data:` temizleme, `#` ile split).
+- **IMAP ölü koddur**: `IMAP_SERVER = 'imap.gmail.com'` (L77) ve `load_config()` (Fernet ile şifrelenmiş Gmail `email`+`app_password`, L2302) v4.2.2'de asla çağrılmaz. Daha eski sürümler OTP e-postasını IMAP aracılığıyla okur; v4.2.2 bunu ücretli `/get-unlock-candidates` çağrısıyla değiştirdi. Açık kaynak yeniden uygulama, kullanıcı tarafından sağlanan app password ile OTP e-postasını doğrudan IMAP üzerinden okuyabilir.
+- Çerezler `https://raw.githubusercontent.com/Maikyxd/Cookie/main/cookies_moto3.json` (yedek `cookies_moto1.json`) kaynağından gelir, Fernet ile sunucu anahtarıyla şifresi çözülür (`GET /get-key` → `{'key': ...}`), ardından `json.loads` ile parse edilir (`load_cookies`, L2331).
+- PenangF cihazlar (Moto G23/G13, `ro.product.device == 'penangf'`) `fastboot oem get_key` kullanır (`get_unlock_data(is_penangf_device)`).
 
 ### PenangF unlock (`start_penangf_unlock`, L4062)
 
 ```
-key = unlock_data.strip()                # exactly 32 hex chars
+key = unlock_data.strip()                # tam 32 hex karakter
 POST /generate-oem-key  {"key": "<32-char>"}  ← {'oem_key': '...'}
-fastboot oem key <oem_key>               # must print OKAY
-fastboot flashing unlock                 # must print OKAY
+fastboot oem key <oem_key>               # OKAY yazmalı
+fastboot flashing unlock                 # OKAY yazmalı
 fastboot reboot
 ```
 
-## Valeria — server-driven LK-swap unlock/FRP (`run_valeria_operation`, L3325)
+## Valeria — sunucu odaklı LK-swap unlock/FRP (`run_valeria_operation`, L3325)
 
-Endpoint: `POST https://studiomaiky.com/val-protocol` with
-`{'action': <action>, **payload}`, public headers
+Uç nokta: `POST https://studiomaiky.com/val-protocol` ile
+`{'action': <action>, **payload}`, herkese açık başlıklar
 (`HWID/TIMESTAMP/VERSION-HASH`).
 
-### Payload (all actions)
+### Yük (tüm eylemler)
 
 ```python
 {'operation': 'unlock'|'frp'|'unlock_frp',
@@ -81,19 +67,19 @@ Endpoint: `POST https://studiomaiky.com/val-protocol` with
    'read_sv':      fastboot oem read_sv output }}
 ```
 
-### Actions
+### Eylemler
 
-| Action | Sent | Received |
+| Eylem | Gönderilen | Alınan |
 |---|---|---|
 | `quote` | payload | `{'operation_id', 'cost'/'required_credits', ...}` (timeout 180); UI confirm dialog |
 | `check_credits` | payload | `{'required_credits', 'available_credits'}` |
-| `patched_lk` | payload | **raw binary patched LK** (streamed, 256 KB chunks) |
+| `patched_lk` | payload | **ham ikili yamalanmış LK** (streamed, 256 KB parçalar) |
 | `frp_command` | payload | `{'command': 'fastboot ...', 'charged_credits'}` |
 | `unlock_key` | payload | `{'key': '...', 'charged_credits'}` |
-| `original_lk` | payload | **raw binary stock LK** (for restore) |
+| `original_lk` | payload | **ham ikili stok LK** (geri yükleme için) |
 | `upload_log` | `{'operation_id', 'log_text', 'status'}` | best-effort (timeout 30) |
 
-### Operation flow
+### İşlem akışı
 
 ```
 1. update_labels (fastboot device info)
@@ -102,31 +88,29 @@ Endpoint: `POST https://studiomaiky.com/val-protocol` with
    - frp & unlocked bootloader → stop; frp & FRP not active → stop
    - MTK gate: fastboot oem partition → must contain 'nvram'   (L2820)
 3. quote → check_credits → patched_lk
-4. flash patched LK → lk_a/lk_b/lk (pick by current-slot; L3144)
+4. flash patched LK → lk_a/lk_b/lk (mevcut slot seçilir; L3144)
 5. fastboot reboot bootloader (wait ≤90 s)
 6. [frp]      frp_command → run server command (120 s) → check frp-state;
               still active → restore original LK + reboot; else success
    [unlock*]  unlock_key → fastboot oem unlock <key> (user: Vol-down + power)
-              tolerance on success strings ('bootloader is unlocked',
-              'rebooting to fastboot' etc., L3206) → wait disconnect ≤8 s,
+              success string tolerance ('bootloader is unlocked',
+              'rebooting to fastboot' vb., L3206) → wait disconnect ≤8 s,
               reconnect ≤90 s → check state → not unlocked → restore LK
 7. restore original_lk on EVERY exit path (_valeria_restore_original, L3240)
 8. upload_log (logs/valeria_{ts}.log)
 ```
 
-LK flashing uses pyfastboot streaming (`_valeria_flash_lk`, L3176):
+LK flashing, pyfastboot streaming ile yapılır (`_valeria_flash_lk`, L3176):
 `_protocol.SendCommand(b'download', b'%08x' % size)` +
 `HandleDataSending(source, size, info_cb)` + `Flash(partition)` —
-effectively `fastboot download` + `fastboot flash lk_a` without RAM blowup.
+özünde `fastboot download` + `fastboot flash lk_a` ancak RAM patlamadan.
 
-State sets (L2769): `VALERIA_UNLOCKED_STATES = {'1','yes','true','enable',
+Durum setleri (L2769): `VALERIA_UNLOCKED_STATES = {'1','yes','true','enable',
 'unlocked','engineering','oem_unlocked','flashing_unlocked','non-secure'}`;
 `VALERIA_LOCKED_STATES = {'0','no','false','locked','secure','oem_locked',
 'flashing_locked'}`.
 
-**Design point**: the patched LK (which bypasses signature verification)
-is flashed only transiently — stock LK is restored on every path. The
-patched/stock LK images come from the server per-device.
+**Tasarım noktası**: yamalanmış LK (imza doğrulamasını atlatır) sadece geçici olarak yazılır — stok LK her yolda geri yüklenir. Yamalı/stok LK imajları sunucudan cihaz bazlı gelir.
 
 ## ROM patcher (`_patcher_patch_rom_flow`, L3859)
 
@@ -149,20 +133,14 @@ patched/stock LK images come from the server per-device.
 12. write mtool_rom.json = {'rom_id': ..., 'encrypted_files': [basenames]}
 ```
 
-### Encryption scheme (`_patcher_encrypt_file_in_place`, L3817)
+### Şifreleme şeması (`_patcher_encrypt_file_in_place`, L3817)
 
-- **AES-256-CTR**, fresh `os.urandom(16)` nonce written as the **first
-  16 bytes** of the file, then raw ciphertext; streamed in 4 MiB chunks
-  (`_PATCHER_AES_CHUNK_SIZE = 4194304`); atomic `os.replace`.
-- Inverse (`_patcher_decrypt_file_chunks`, L3844): read 16-byte nonce →
-  CTR decryptor → chunked decrypt.
-- Flash patched ROM (`_patcher_flash_rom_flow`, L4011): require
-  `mtool_rom.json` → `POST /patcher-rom {'action': 'get_key', 'rom_id',
-  'codename'}` → `{'decrypt_key'}` → flash all flashfile.xml steps in
-  order via pyfastboot streaming; super chunks re-packed as sparse
-  streaming (`_produce_super_subimages`, L7295).
+- **AES-256-CTR**, yeni `os.urandom(16)` nonce dosyanın **ilk 16 baytı** olarak yazılır, ardından ham ciphertext; 4 MiB parçalar halinde akışlı (`_PATCHER_AES_CHUNK_SIZE = 4194304`); atomik `os.replace`.
+- Ters işlem (`_patcher_decrypt_file_chunks`, L3844): 16 bayt nonce oku → CTR decryptor → parça parça decrypt.
+- Yamalı ROM flash (`_patcher_flash_rom_flow`, L4011): `mtool_rom.json` gerektirir → `POST /patcher-rom {'action': 'get_key', 'rom_id',
+  'codename'}` → `{'decrypt_key'}` → tüm flashfile.xml adımlarını pyfastboot streaming ile sırayla flash eder; super parçaları sparse streaming olarak yeniden paketlenir (`_produce_super_subimages`, L7295).
 
-### Generated flashfile XML (scatter → flashfile, L3443)
+### Üretilen flashfile XML (scatter → flashfile, L3443)
 
 ```xml
 <flashing><header>
@@ -176,40 +154,35 @@ patched/stock LK images come from the server per-device.
         + <step operation="erase" partition="metadata"/> </steps>
 ```
 
-Sparse image constants (L6983): magic `0xED26FF3A`, 28-byte file header,
-12-byte chunk header, chunk types RAW=51905, FILL=51906, DONTCARE=51907,
+Sparse görüntü sabitleri (L6983): sihir `0xED26FF3A`, 28 bayt dosya başlığı,
+12 bayt chunk başlığı, chunk türleri RAW=51905, FILL=51906, DONTCARE=51907,
 CRC32=51908.
 
-## Firmware mirrors (`get_base_url`, L6270)
+## Firmware mirrorlar (`get_base_url`, L6270)
 
-By model year (from model name like "Moto G54 5G" → year parsed from
-codename):
+Model yılına göre ("Moto G54 5G" gibi model adından kodename üzerinden):
 
 ```
 ≥2022:  https://mirrors.lolinet.com
 2020–2021: https://mirrors-obs-1.lolinet.com
-≤2019:  https://mirrors-obs-2.lolinet.com
+≤2019: https://mirrors-obs-2.lolinet.com
 ```
 
-`download_firmware` (L6296): workdir `./Cleanfirm`; carriers tried in
-order `[<device carrier>, 'RETUS', 'RETAIL']`; index URL
+`download_firmware` (L6296): çalışma dizini `./Cleanfirm`; taşıyıcılar sıralı denenir `[<device carrier>, 'RETUS', 'RETAIL']`; indeks URL
 `{base}/firmware/lenomola/{year}/{codename}/official/{carrier}/`;
 BeautifulSoup scrape → `a[href$='.zip']`; build-version regex
-`([A-Za-z0-9]+\.[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)` else oldest; aiohttp
-download with Range resume (`sync_download_with_aiohttp`, L715).
+`([A-Za-z0-9]+\.[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+)` değilse en eski; aiohttp indirme ile Range resume (`sync_download_with_aiohttp`, L715).
 
 Blankflash (L6507): `{base}/firmware/lenomola/{year}/{codename}/blankflash/`
-→ pick newest by `lastmod` → download to `./Blankflash/<codename>/` →
-extract (zip/py7zr) → run `blank-flash.bat` via `cmd /c` → after 5 s
-thread fires `fastboot reboot`.
+→ en yeni `lastmod` seçilir → `./Blankflash/<codename>/` içine indirilir → çıkarılır (zip/py7zr) → `blank-flash.bat` çalıştırılır (`cmd /c`) → 5 s sonra thread `fastboot reboot` tetikler.
 
-## QR code / ADB enrollment (`generate_qr`, L6688; `get_temporary_link`, L6653)
+## QR kodu / ADB kaydı (`generate_qr`, L6688; `get_temporary_link`, L6653)
 
 ```
 GET /get-download-link  → {'url': '<temporary APK link>'}
 ```
 
-QR payload (Android device-owner provisioning JSON):
+QR yükü (Android cihaz-sahibi provisioning JSON):
 
 ```json
 {"android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME":
@@ -221,99 +194,63 @@ QR payload (Android device-owner provisioning JSON):
  "android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE": {}}
 ```
 
-The checksum is a hardcoded base64url SHA-256 of the enrolled APK.
-`generate_qr`: `qrcode.QRCode(box_size=10, border=2)`, colors from the
-two dominant colors of `motoicon.ico`, icon centered at ¼ size, 500×500
-output. Window titles: "Scan to Enable ADB" / "Scan In Setup Wizard".
+Checksum sabitlenmiş base64url SHA-256'sıdır. `generate_qr`: `qrcode.QRCode(box_size=10, border=2)`, renkler `motoicon.ico` içindeki iki baskın rengin tonları, simge ¼ boyutunda ortalanır, 500×500 çıktı. Pencere başlıkları: "Scan to Enable ADB" / "Scan In Setup Wizard".
 
-FlashPilot's own MDM QR flow lives in `python/gui/` + `build/mdm_qr/`
-— same provisioning-keys idea, own app.
+FlashPilot'ın kendi MDM QR akışı `python/gui/` + `build/mdm_qr/` içinde yaşar — aynı provisioning-anahtar fikri, kendi uygulaması.
 
-## CVE-2016-10277 / initroot — the fastboot FRP strategy (FlashPilot, own research)
+## CVE-2016-10277 / initroot — fastboot FRP stratejisi (FlashPilot, kendi araştırması)
 
-The unlock-token path is retired: the 20-char code is per-device,
-server-issued (Motorola portal), and cannot be generated or generalized —
-a tool-level token strategy is a dead end for real devices.
+Unlock-token yolu emekliye ayrıldı: 20 karakterlik kod cihaz bazlı, sunucu tarafından verilmiş (Motorola portalı), üretilemez veya genellenemez — araç düzeyi token stratejisi gerçek cihazlarda bir çıkmaz.
 
-The strategy instead uses **CVE-2016-10277** (public research:
-alephsecurity/initroot — Roee Hay / Aleph Research, HCL Technologies;
-kernel cmdline injection in the Motorola bootloader via the unprotected
-`fsg-id` UTAG):
+Strateji bunun yerine **CVE-2016-10277** kullanır (genel araştırma: alephsecurity/initroot — Roee Hay / Aleph Research, HCL Technologies; Motorola bootloader içindeki `fsg-id` UTAG üzerinden kernel cmdline enjeksiyonu):
 
 ```
-1. fastboot oem config fsg-id ""                       # read UTAG — gate
+1. fastboot oem config fsg-id ""                       # UTAG oku — gate
 2. fastboot oem config fsg-id "a initrd=<ADDR>,<SIZE>"  # cmdline injection
-3. fastboot flash foo initroot-<device>.cpio.gz         # buffers at ADDR
-   (write "fails" with Invalid partition name — EXPECTED: the payload
-   stays resident in the bootloader's download buffer)
-4. fastboot continue                                    # boots the injection
-   → kernel loads the injected initramfs → ADB daemon as root (uid 0),
-   no authorization prompt, dm-verity disabled
+3. fastboot flash foo initroot-<device>.cpio.gz         # ADDR'de bufferlanır
+   (Invalid partition name hatası beklenir — amaç payload bootloader indir bufferında kalmaktır)
+4. fastboot continue                                    # enjeksiyonu başlatır
+   → kernel injected initramfs'i yükler → ADB daemon root (uid 0),
+   yetkilendirme istemi yok, dm-verity devre dışı
 5. root ADB: dd if=/dev/zero of=/dev/block/bootdevice/by-name/frp
-   + reboot → FRP gone
+   + reboot → FRP yok
 ```
 
-Honest gates implemented in `flow_moto_frp_fastboot` (Rust):
+Dürüst gate'ler `flow_moto_frp_fastboot` içinde uygulanmıştır (Rust):
 
-- **Version gate**: `getvar version-bootloader` — the injection targets the
-  Kernel-3.10/3.18 bootloader family (Moto G4/G5/X/Z era). Newer bootloaders
-  (G6 and later) commonly protect the UTAG; the flow reads it and reports.
-- **UTAG liveness gate**: `oem config fsg-id` must read back
-  `protected="false"`, or the flow stops and says the CVE is patched here.
-- **No shipped exploit images**: the per-device initramfs
-  (`initroot-<device>.cpio.gz`) is NEVER distributed with the app — the flow
-  requires `--file <initramfs> --partition <scratch_addr>` and points at the
-  public research for producing one (scratch addresses are device-specific:
-  0xA2100000 cedric, 0x92000000 athene, per the initroot README).
+- **Version gate**: `getvar version-bootloader` — enjeksiyon Kernel-3.10/3.18 bootloader ailesine hedeflenir (Moto G4/G5/X/Z dönemi). Daha yeni bootloader'lar (G6 ve sonrası) UTAG'ı genellikle korur; akış bunu okur ve raporlar.
 
-How the app handles exploit-based strategies (framework for future CVEs):
+- **UTAG liveness gate**: `oem config fsg-id` geri okumada `protected="false"` döndürmeli; aksi halde akış durur ve CVE'nin burada yamalanmış olduğunu söyler.
+- **No shipped exploit images**: cihaz bazlı initramfs (`initroot-<device>.cpio.gz`) asla uygulama ile dağıtılmaz — akış `--file <initramfs> --partition <scratch_addr>` bekler ve üretimi için kamuya açık araştırmaya işaret eder (scratch adresleri cihaz bazlıdır: 0xA2100000 cedric, 0x92000000 athene, initroot README'ye göre).
 
-1. **Stage the chain** — each step is its own flow step in the transcript;
-   the user sees every command before it runs.
-2. **Gate honestly** — every prerequisite the exploit needs gets an explicit
-   check (UTAG protection, bootloader version, per-device payload present);
-   a failed gate STOPS with guidance instead of pretending success.
-3. **Never ship the payload** — model-specific exploit artifacts stay out of
-   the app; flows accept user-supplied paths and document the public source.
-4. **Fallback always stated** — when an exploit gate fails, the flow names
-   the realistic alternative (e.g. the ADB path once ADB is enabled) and the
-   research backlog gets the next vector to validate.
+Exploit tabanlı stratejileri nasıl ele alır (gelecek CVE'ler için çerçeve):
 
-## Fake-login via own DPC (FlashPilot, own implementation)
+1. **Aşama zincirini hazırla** — her adım, transkript içindeki kendi akış adımıdır; kullanıcı her komutu çalıştırmadan önce görür.
+2. **Dürüst kapı kullan** — exploit için gereken her ön koşul açıkça kontrol edilir (UTAG koruması, bootloader sürümü, cihaz bazlı yük mevcutluğu); başarısız kapı, başarı gibi davranmak yerine rehberlik içeren şekilde DURUR.
+3. **Payload asla teslim etme** — model özel exploit varlıkları uygulamanın içinde kalmaz; akış kullanıcı tarafından sağlanan yolları kabul eder ve kamu kaynaklarını belgeler.
+4. **Yedek her zaman belirtilir** — bir exploit kapısı başarısız olursa akış gerçekçi alternatifi adlandırır (ör. ADB etkinleştirildikten sonra ADB yolu) ve araştırma backlog'u sonraki doğrulanan vektör için hazır tutar.
 
-TestDPC-style flows depend on Google's sample app from the Play Store.
-FlashPilot ships its own minimal device-owner app instead:
+## Kendi DPC üzerinden sahte giriş (FlashPilot, kendi uygulaması)
 
-- Source: `android/FlashPilotDPC/` (`org.flashpilot.dpc`, minSdk 24,
-  targetSdk 28 to match the G6 era). No support libs, no resources beyond
-  the admin XML — builds with SDK cmdline tools only
+TestDPC tarzı akışlar Google'ın Play Store örnek uygulamasına bağımlıdır.
+FlashPilot bunun yerine kendi minimal device-owner uygulamasını sunar:
+
+- Kaynak: `android/FlashPilotDPC/` (`org.flashpilot.dpc`, minSdk 24,
+  targetSdk 28, G6 çağının uyumuna göre). Destek kütüphanesi yok; yönetici XML dışında kaynak yok — SDK cmdline araçlarıyla derlenir
   (`android/FlashPilotDPC/build.sh`: aapt2 -> javac -> d8 ->
   zipalign -> apksigner).
-- `FpAdminReceiver.completeSetup()` (idempotent) is the "fake login":
+- `FpAdminReceiver.completeSetup()` (idempotent) "sahte giriş" işlevi görür:
   `USER_SETUP_COMPLETE=1` (Secure), `DEVICE_PROVISIONED=1` (Global),
-  `ADB_ENABLED=1` (Global), hides `com.google.android.setupwizard` +
-  `com.motorola.setupwizard` via `setApplicationHidden`, and calls
-  `setUserSetupComplete()`. Runs automatically on
-  `ACTION_PROFILE_PROVISIONING_COMPLETE` and manually from the
-  MainActivity button.
-- Flow `frp_fake_login` (Rust): resolves the APK (`--file` / FRP_DPC_APK
-  env / default `mdm_qr/serve/flashpilot-dpc.apk`, honest error with build
-  instructions when absent), computes the v1 signing-cert checksum
-  (SHA-256, base64url) for the QR, detects the LAN IP for the download URL
-  (FRP_DPC_APK_URL overrides), emits the QR via the shared provisioning
-  helper, serves the APK dir on :8000 (best-effort, reuses a live server),
-  waits up to 10 min for the authorized ADB session the DPC enables, then
-  runs the standard FRP-clear steps and reboots.
-- GUI: Motorola FRP REMOVE gains a "Fake Login · QR" row dispatching the
-  flow under ("Remove FRP", "ADB").
+  `ADB_ENABLED=1` (Global), `com.google.android.setupwizard` +
+  `com.motorola.setupwizard` gizler ve `setApplicationHidden` çağırır,
+  ardından `setUserSetupComplete()` çağırır. `ACTION_PROFILE_PROVISIONING_COMPLETE` üzerinde otomatik çalışır ve MainActivity düğmesinden manuel olarak da çalıştırılabilir.
+- Akış `frp_fake_login` (Rust): APK'yı çözer (`--file` / FRP_DPC_APK ortamı / varsayılan `mdm_qr/serve/flashpilot-dpc.apk`, eksik olursa yapıcı talimatlarla dürüst hata), QR için v1 imza sertifikası checksum'ini (SHA-256, base64url) hesaplar, indirme URL'si için LAN IP'yi tespit eder (FRP_DPC_APK_URL geçersiz kılmayı destekler), QR'ı paylaşılan provisioning yardımcı ile üretir, APK dizinini :8000 portunda servis eder (best-effort, canlı sunucuyu yeniden kullanır), DPC'nin etkinleştirdiği yetkili ADB oturumunu 10 dakika kadar bekler, ardından standart FRP-temizleme adımlarını çalıştırır ve yeniden başlatır.
+- GUI: Motorola FRP REMOVE menüsünde "Fake Login · QR" satırı, akışı ("Remove FRP", "ADB") altında çalıştırır.
 
-## Staged fastboot payloads — FRP remove without a server (FlashPilot, own implementation)
+## Aşamalı fastboot yükleri — sunucu olmadan FRP kaldırma (FlashPilot, kendi uygulaması)
 
-The G6 (ali) has no EDL path: `oem edl` is unsupported, the 05c6:9026
-composite is diag/Android-side (not Sahara), and the EDL flow
-(`moto_edl_adb`) is retired — its key now errors with a pointer to
-`moto_fb_frp`. What remains is fastboot, Moto-M shape, all local.
-Flow `moto_fb_frp` (registry: Remove FRP / FASTBOOT; GUI: Motorola →
+G6 (ali) için EDL yolu yok: `oem edl` desteklenmiyor, 05c6:9026 bileşim diag/Android tarafı (Sahara değil), ve EDL akışı (`moto_edl_adb`) emekliye ayrıldı — anahtarı artık `moto_fb_frp` işaret eden bir işaretçiye dönüştü. Kalan şey fastboot, Moto-M şekli, tümü yerel.
+Akış `moto_fb_frp` (kayıt: Remove FRP / FASTBOOT; GUI: Motorola →
 FRP REMOVE → Fastboot Staged FRP):
 
 ```
@@ -329,19 +266,9 @@ Exhausted (no ADB in 3 cycles): honest stop naming QR fake-login
   (frp_fake_login*), which needs no exploit at all.
 ```
 
-Lesson from the first live run (Oct 2026): the initial version kept
-flashing after refusals and then wiped userdata anyway — a wipe with
-zero benefit. Now a device-FAILED flash sets a flag that SKIPS all
-later erase steps (stated in-transcript), and the erase banner prints
-before anything runs. Live result on ali: 8.0 set refused throughout
-on downgrade/validation (9.0 fuses), modem/fsg/dsp/logo OK, userdata
-wiped, cycles saw nothing on USB — exited honestly naming QR.
+İlk canlı çalıştırmanın dersleri (Ekim 2026): ilk sürüm, reddetmeler sonrası yazmaya devam etti ve ardından veri bölgesini silmeye çalıştı — yararı olmayan bir silme. Şimdi bir cihaz-FAILED flash bayrağı koyar ve sonraki tüm silme adımlarını atlar (transkript içinde anlatılır), silme banner'ı hiçbir şey çalıştırılmadan önce yazdırılır. Live result on ali: 8.0 set refused throughout on downgrade/validation (9.0 fuses), modem/fsg/dsp/logo OK, userdata wiped, cycles saw nothing on USB — exited honestly naming QR.
 
-Scope stated plainly in-flow and here: every command is a documented
-local fastboot/ADB command. Moto-M's per-boot payload bytes come from
-their server and were never visible client-side, so they are NOT
-replicated — and a clean signed flash plus reboots does not itself
-enable ADB. The flow never pretends otherwise.
+Akış ve burada net şekilde belirtilen kapsam: her komut belgelenmiş yerel fastboot/ADB komutudur. Moto-M'nin per-boot payload baytları sunucudan gelir ve istemci tarafında görünmezdi, bu yüzden kopyalanmadılar — ve temiz imzalı flash + yeniden başlatma kendiliğinden ADB'yi etkinleştirmez. Akış bunun gibi davranmaz.
 
 Why fastboot writes are closed on ali (all proven live on the G6,
 MBM-2.1-32ffece02ed-200416, oem_locked) — kept as the record:
@@ -372,55 +299,33 @@ Supporting pieces (all local, all verified against real ali files):
   Sahara upload) were removed with the retired flow; the findings stay
   above as the record.
 
-Honest gates: the staged flow needs --firmware-dir (signed stock); a
-version-mismatched set aborts on the device's own downgrade/validation
-lines. If no ADB appears in 3 cycles, it stops and names QR fake-login.
+Dürüst kapılar: aşamalı akış `--firmware-dir` gerektirir (imzalı stok); sürüm uyuşmazlığı olan bir set, cihazın kendi downgrade/validation satırları nedeniyle iptal olur. 3 döngü içinde ADB görünmezse durur ve QR fake-login'i adlandırır.
 
-## Live probing notes (Moto G6 ali, MBM-2.1-32ffece02ed-200416, oem_locked)
+## Canlı tarama notları (Moto G6 ali, MBM-2.1-32ffece02ed-200416, oem_locked)
 
-`fastboot oem help` on this bootloader lists: config, hw, partition,
+Bu bootloader üzerinde `fastboot oem help` şunları listeler: config, hw, partition,
 fb_mode_set/clear, bp-tools-on/off, qcom-on/off, unlock, lock,
-get_unlock_data, cid_prov_req, read_sv, off-mode-charge, show_screen —
-no EDL command. Live results:
+get_unlock_data, cid_prov_req, read_sv, off-mode-charge, show_screen — EDL komutu yok. Canlı sonuçlar:
 
 - `fastboot oem edl` → `FAILED ('edl' is not a supported oem command)`.
-- `fastboot oem qcom-on` / `qcom-off` → OKAY but no USB change while in
-  fastboot (no 05c6 switch, no ttyUSB); reverted cleanly.
-- `fastboot boot` → refused (locked); initrd `fsg-id` injection →
-  content-filtered on this 2020 build; unlock code valid but blocked
-  by the Android-side OEM-unlock toggle.
-- The earlier `05c6:9026` composite is a diag/Android-side mode, not
-  Sahara — Firehose needs true 9008/900E.
+- `fastboot oem qcom-on` / `qcom-off` → OKAY ama fastboot içinde USB değişmez (05c6 anahtarı yok, ttyUSB yok); temiz şekilde geri alındı.
+- `fastboot boot` → reddedildi (locked); initrd `fsg-id` enjeksiyonu → bu 2020 build üzerinde filtrelendi; unlock kodu geçerli ama Android tarafı OEM-unlock anahtarı tarafından engellendi.
+- Önceki `05c6:9026` bileşimi bir diag/Android tarafı modudur, Sahara değildir — Firehose gerçek 9008/900E gerekir.
 
-So on this unit every software EDL entry is closed; the staged flow
-runs up to the EDL gate and waits. Entry is a test-point (or EDL cable)
-step, then the chain proceeds unattended.
+Yani bu ünite üzerinde her yazılım EDL girişi kapalıdır; aşamalı akış EDL kapısına kadar çalışır ve bekler. Giriş bir test noktası (veya EDL kablosu) adımıdır, ardından zincir sessizce devam eder.
 
-## Three-DPC fake-login (FlashPilot, own implementation)
+## Üçlü DPC sahte giriş (FlashPilot, kendi uygulaması)
 
-The software offers three device-owner choices for QR provisioning, all
-routed through one flow (`frp_fake_login`, `--dpc ours|testdpc|adp`,
-FRP_DPC_CHOICE env, one registry row each):
+Yazılım, QR provisioning için üç device-owner seçeneği sunar; tümü tek bir akış üzerinden çalıştırılır (`frp_fake_login`, `--dpc ours|testdpc|adp`, FRP_DPC_CHOICE env, her biri için ayrı kayıt satırı):
 
 1. **ours** — `org.flashpilot.dpc/.FpAdminReceiver`
    (`android/FlashPilotDPC/`, APK `mdm_qr/serve/flashpilot-dpc.apk`).
-   Performs the fake login itself on enrollment. minSdk 26, targetSdk 28
-   (Android 8 through 14): version-guarded calls (suspend with hidden
-   fallback, DPM + direct ADB writes, `setUserSetupComplete` only on 28+,
-   `android:exported` set for 31+). Email-gated activity: the access email
-   is baked at build time (`FP_ACCESS_EMAIL`, default `flashpilot@local`
-   -> generated `AccessConfig.java`); the QR carries it in
-   `PROVISIONING_ADMIN_EXTRAS_BUNDLE.fp_email` so the app pre-fills it,
-   and entering it unlocks provisioning. Device-owner auto-run skips the
-   gate (enrollment itself is the authorization).
-2. **testdpc** — `com.afwserv.testdpc/.DeviceAdminReceiver`, local
-   `mdm_qr/serve/testdpc.apk` preferred (LAN URL + v1 cert checksum),
-   Play Store URL fallback when the file is absent.
+   Kayıt sırasında sahte girişi kendisi yapar. minSdk 26, targetSdk 28
+   (Android 8 ile 14 arası): sürüm korumalı çağrılar (gizli yedek ile askıya alma, DPM + doğrudan ADB yazıları, `setUserSetupComplete` yalnızca 28+ üzerinde, `android:exported` 31+ için ayarlanmış). E-posta kapısı: erişim e-postası derleme zamanında gömülüdür (`FP_ACCESS_EMAIL`, varsayılan `flashpilot@local` -> oluşturulan `AccessConfig.java`); QR bunu `PROVISIONING_ADMIN_EXTRAS_BUNDLE.fp_email` içinde taşır, böylece uygulama önceden doldurur ve girilmesi provisioning'i açar. Cihaz-sahibi otomatik çalıştırma kapıyı atlar (kayıtın kendisi yetkilendirmedir).
+2. **testdpc** — `com.afwserv.testdpc/.DeviceAdminReceiver`, yerel
+   `mdm_qr/serve/testdpc.apk` tercih edilir (LAN URL + v1 sertifika checksum), dosya yoksa Play Store URL yedeği.
 3. **adp** — `com.google.android.apps.work.oobconfig/.DevAdminReceiver`
-   (Android Device Policy), Play Store URL (no local APK, no cert, no
-   serve step).
+   (Android Device Policy), Play Store URL (yerel APK yok, sertifika yok, servis adımı yok).
 
-"Set it online on the PC": the flow serves a local APK dir on :8000
-(best-effort, reuses a live server) and polls until the port answers
-before printing the phone steps, so the download URL is verified live.
-Extras merge via FRP_DPC_EXTRAS_JSON (generic, backward-compatible).
+"Bilgisayarda çevrimiçi ayarla": akış :8000 üzerinde yerel APK dizinini servis eder (best-effort, canlı sunucuyu yeniden kullanır) ve telefon adımlarını yazdırmadan önce portun yanıt vermesini bekler; böylece indirme URL'si canlı doğrulanır.
+Extras, FRP_DPC_EXTRAS_JSON ile birleştirilir (genel, geriye dönük uyumlu).

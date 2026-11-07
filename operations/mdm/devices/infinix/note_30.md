@@ -1,5 +1,5 @@
 # Note 30 — MDM
-Chip: Helio G99
-Engine: mtk
-MDM actions: mdm_unlock, mdm_diagnostics, kg_state_check
-Notes: 
+Çip: Helio G99
+Motor: mtk
+MDM eylemleri: mdm_unlock, mdm_diagnostics, kg_state_check
+Notlar:

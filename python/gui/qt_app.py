@@ -90,6 +90,7 @@ from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
 from .nav import NavRail, OemChipBar
+from .i18n import install_qt_hooks, set_language, translate
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, SPACE, RADIUS, _BASE_QSS, _get_base_qss,
     _btn_primary, _card_qss, _btn_ghost, _btn_danger, _console_qss,
@@ -1307,8 +1308,8 @@ class FlashPilotWindow(
     QMainWindow,
 ):
     def __init__(self):
+        install_qt_hooks()
         super().__init__()
-        self.setWindowTitle("FlashPilot")
 
         self._cached_model = None
         self._cached_adb_status = None
@@ -1349,6 +1350,8 @@ class FlashPilotWindow(
         self._combo_styled = False
         self._anim_enabled = True
         self.settings = QSettings("FlashPilot", "FlashingTool")
+        set_language(self.settings.value("language", "tr"))
+        self.setWindowTitle("FlashPilot")
 
         # apply persisted accent theme before any widget styles are generated
         theme = self.settings.value("theme", "Neon Circuit")
@@ -7797,6 +7800,13 @@ class FlashPilotWindow(
     def _apply_scan_interval(self, v):
         self.settings.setValue("scan_interval", int(v))
         self._monitor.set_interval(int(v))
+
+    def _apply_language(self, index):
+        language_code = self._s_language.itemData(index)
+        if language_code not in {"tr", "en"}:
+            return
+        self.settings.setValue("language", language_code)
+        set_language(language_code)
 
     def _apply_autoscan(self, on):
         self.settings.setValue("autoscan", on)

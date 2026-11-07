@@ -1,91 +1,84 @@
-# motom_tool/ — Moto-M Tool v4.2.2 research notes
+# motom_tool/ — Moto-M Tool v4.2.2 araştırma notları
 
-Reverse-engineering notes for **Moto-M Tool 4.2.2** (by "Maiky",
-`studiomaiky.com`), a commercial Windows Android flashing/repair suite.
-Extracted and analyzed on 2026-09-29 from `Moto-M Tool Setup.exe`
-(123 MB, Inno Setup 6.6.1). Purpose: interoperability research — the
-protocol knowledge below feeds FlashPilot's MTK/SPD/Samsung/FRP/MDM
-engines. Use it on devices you own or are authorized to service.
+**Moto-M Tool 4.2.2** için tersine mühendislik notları ("Maiky",
+`studiomaiky.com` tarafından), ticari bir Windows Android flashing/repair
+paketi. 2026-09-29 tarihinde `Moto-M Tool Setup.exe` dosyasından
+çıkarıldı ve analiz edildi (123 MB, Inno Setup 6.6.1). Amaç: birlikte çalışabilirlik araştırması — aşağıdaki protokol bilgisi FlashPilot'ın MTK/SPD/Samsung/FRP/MDM motorlarını besler. Yalnızca sahip olduğunuz veya servis için yetkilendirildiğiniz cihazlarda kullanın.
 
-## What the tool actually is
+## Araç aslında ne?
 
-Not a native app. The stack is:
+Yerel uygulama değil. Yığın şu şekilde:
 
-| Layer | Tech | Notes |
+| Katman | Teknoloji | Notlar |
 |---|---|---|
-| Installer | Inno Setup 6.6.1 (LZMA) | AppId `E8A3A650-81D6-48FD-948F-B83091909F51` |
-| Main exe | PyInstaller (Python 3.11, `pyiboot01_bootstrap`) | 56 MB onefile; `Moto-M Tool_MTK_Dll_V2.py` is the whole app (~12.9k lines decompiled) |
-| Obfuscation | PyArmor 8 (`pyarmor_runtime_004990`, product `MotoMTool`) | AES-128-CBC armored bytecode; statically unpacked (see "How it was unpacked") |
-| GUI | CustomTkinter (dark theme `#1a1a1a`) | 6 tabs: Fastboot Operations, SPD Module, Support Area, Patcher Module, ADB Module, MTK Module (Beta) |
-| MTK engine | .NET DLL `MToolMTK.dll` via **pythonnet** (`clr`) | Class `SharpMTKClient.MtkDllSession`; DLL does BROM/DA protocol |
-| SPD engine | .NET DLL `MToolSPD.dll` via pythonnet + external `spd.dll` CLI | Exploit-based FDL injection |
-| Bundled tools | adb/fastboot (platform-tools), busybox, sqlite3, mke2fs/make_f2fs, etc1tool, hprof-conv | Shells out to these |
+| Yükleyici | Inno Setup 6.6.1 (LZMA) | AppId `E8A3A650-81D6-48FD-948F-B83091909F51` |
+| Ana exe | PyInstaller (Python 3.11, `pyiboot01_bootstrap`) | 56 MB onefile; `Moto-M Tool_MTK_Dll_V2.py` tüm uygulama (~12.9k satır decompile edilmiştir) |
+| Kötü amaçlı/karartma | PyArmor 8 (`pyarmor_runtime_004990`, ürün `MotoMTool`) | AES-128-CBC zırhlı bayt kodu; statik olarak açıldı (bkz. "Nasıl açıldı") |
+| GUI | CustomTkinter (koyu tema `#1a1a1a`) | 6 sekme: Fastboot Operations, SPD Module, Support Area, Patcher Module, ADB Module, MTK Module (Beta) |
+| MTK motoru | .NET DLL `MToolMTK.dll` via **pythonnet** (`clr`) | Sınıf `SharpMTKClient.MtkDllSession`; DLL BROM/DA protokolü yapar |
+| SPD motoru | .NET DLL `MToolSPD.dll` via pythonnet + harici `spd.dll` CLI | Exploit tabanlı FDL enjeksiyonu |
+| Dahili araçlar | adb/fastboot (platform-tools), busybox, sqlite3, mke2fs/make_f2fs, etc1tool, hprof-conv | Bunlara kabuk üzerinden erişiyor |
 
-Everything sensitive (Fernet keys, unlock codes, patched LK images,
-loader archives) is **server-mediated** against `https://studiomaiky.com`
-— the client is a thin orchestrator. See [server_protocol.md](./server_protocol.md).
+Her şeyin hassas kısmı (Fernet anahtarları, unlock kodları, yamalanmış LK imajları,
+loader arşivleri) **sunucu aracılığıyla** `https://studiomaiky.com` üzerinde tutuluyor — istemci ince bir orkestratör. Bkz. [server_protocol.md](./server_protocol.md).
 
-## Files in this tree
+## Bu ağaçtaki dosyalar
 
-| File | Contents |
+| Dosya | İçerik |
 |---|---|
-| [mtk.md](./mtk.md) | MediaTek domain: MtkDllSession bridge, crash-to-BROM, payloads, unlock flows |
-| [spd.md](./spd.md) | Spreadtrum/UNISOC domain: BSL handshake, exploit payloads, FDL addresses, unlock |
-| [samsung.md](./samsung.md) | Samsung: KG lock/bypass, PayJoy MDM, Exynos boot repair (DVIF), AT commands |
-| [motorola_unlock.md](./motorola_unlock.md) | Official Motorola web unlock, Valeria LK-swap, ROM patcher, firmware mirrors |
-| [server_protocol.md](./server_protocol.md) | All endpoints, auth/licensing model, HWID fingerprint, resource updates |
-| [dll_protocol.md](./dll_protocol.md) | Shipped DLL internals: MTool_EROFS decompile (EROFS/ext4/F2FS patcher API), native spd.dll CLI command set |
+| [mtk.md](./mtk.md) | MediaTek alanı: MtkDllSession köprüsü, crash-to-BROM, yükleyiciler, unlock akışları |
+| [spd.md](./spd.md) | Spreadtrum/UNISOC alanı: BSL el sıkışması, exploit yükleyiciler, FDL adresleri, unlock |
+| [samsung.md](./samsung.md) | Samsung: KG kilit/bypass, PayJoy MDM, Exynos boot repair (DVIF), AT komutları |
+| [motorola_unlock.md](./motorola_unlock.md) | Resmî Motorola web unlock, Valeria LK-swap, ROM patcher, firmware mirrors |
+| [server_protocol.md](./server_protocol.md) | Tüm uç noktalar, kimlik doğrulama/lisanslama modeli, HWID parmak izi, kaynak güncelleme protokolü |
+| [dll_protocol.md](./dll_protocol.md) | Dağıtılan DLL iç yapıları: MTool_EROFS decompile (EROFS/ext4/F2FS patcher API), native spd.dll CLI komut kümesi |
 
-## Implemented in FlashPilot
+## FlashPilot içinde uygulandı
 
-Knowledge from this tree already landed in the code:
+Bu ağaçtan gelen bilgiler kodda zaten kullanıldı:
 
-| Knowledge | Where |
+| Bilgi | Nerede |
 |---|---|
-| PenangF unlock (`oem get_key` → external credential → `oem key` + `flashing unlock`) | Research note only — never implemented (no such flow; verify with `flow-list`) |
-| Motorola fastboot factory reset (`oem fb_mode_set` → erase userdata/cache/**debug_token** → `oem fb_mode_clear`) | Research note only — never implemented as a flow (factory reset runs via the `factory_reset` ADB flow / fastboot erase rows) |
-| MTK OEM VIDs (Sony 0x0fce, LG 0x1004, OPPO 0x22d9, InFocus 0x9bb5) under which an MTK preloader/BROM re-enumerates | Partially: `find_mtk()` in `python/core/mtk.py`; no `MTK_OEM_VIDS` table exists |
-| PenangF note + unlock-data URL order (0/3/2) in the standard token flow | Retired with the token flow (`moto_oem_unlock_token` removed); kept here as protocol reference |
-| Samsung DVIF download-mode read (115200 8N1, `DVIF` query, `KEY=VALUE` pairs) | Research note only — never implemented (no `dvif` code exists) |
-| MTK model→SoC mapping (G14→T616, G35→T760, G54→MT6855, ...) | `supported_devices.json` motorola entries |
-| Stock firmware mirrors (lolinet, year-based) | `operations/flashing/README.md` |
+| PenangF unlock (`oem get_key` → harici kimlik → `oem key` + `flashing unlock`) | Sadece araştırma notu — uygulanmadı (öyle bir akış yok; `flow-list` ile doğrulayın) |
+| Motorola fastboot fabrika sıfırlama (`oem fb_mode_set` → userdata/cache/**debug_token** silme → `oem fb_mode_clear`) | Sadece araştırma notu — akış olarak uygulanmadı (fabrika sıfırlama `factory_reset` ADB akışı / fastboot erase satırları ile çalışır) |
+| MTK OEM VIDs (Sony 0x0fce, LG 0x1004, OPPO 0x22d9, InFocus 0x9bb5) altında MTK preloader/BROM yeniden numaralanır | Kısmen: `find_mtk()` içinde `python/core/mtk.py`; `MTK_OEM_VIDS` tablosu yok |
+| PenangF notu + unlock-data URL sırası (0/3/2) standart token akışında | Token akışıyla birlikte emekliye ayrıldı (`moto_oem_unlock_token` kaldırıldı); burada protokol referansı olarak tutuldu |
+| Samsung DVIF download-mode okuma (115200 8N1, `DVIF` sorgusu, `KEY=VALUE` çiftleri) | Sadece araştırma notu — uygulanmadı (`dvif` kodu yok) |
+| MTK model→SoC eşlemesi (G14→T616, G35→T760, G54→MT6855, ...) | `supported_devices.json` motorola girdileri |
+| Stok firmware mirrorları (lolinet, year-based) | `operations/flashing/README.md` |
 
-Tests: the old `tests/test_moto_tool_flows.py` was removed; coverage lives in the per-area suites (`tests/test_frp_flow.py`, `tests/test_devices.py`, cargo `flows::tests`). Not implemented (needs external
-per-device assets or their paid server): Valeria patched/stock LK images,
-KG exploit binary, `mtk.img` reset image, SPD loader archives, unlock
-candidates, EROFS patcher, ExynosCli presets.
+Testler: eski `tests/test_moto_tool_flows.py` kaldırıldı; kapsam per-area testlerde yaşıyor (`tests/test_frp_flow.py`, `tests/test_devices.py`, cargo `flows::tests`). Uygulanmadı (harici cihaz varlıklarına veya ücretli sunucuya ihtiyaç duyar): Valeria patched/stock LK imajları, KG exploit ikili dosyası, `mtk.img` reset imajı, SPD loader arşivleri, unlock adayları, EROFS patcher, ExynosCli hazır ayarlar.
 
-## How it was unpacked (for future re-analysis)
+## Nasıl açıldı (gelecekte yeniden analiz için)
 
 ```bash
-# 1. Inno Setup 6.6.1 — innoextract 1.9 is too old; use innounp-2 under Wine
-#    (jrathlev/InnoUnpacker-Windows-GUI release "innounp-2.zip")
-wine innounp2/innounp.exe -x -dZ:\\home\\<u>\\motom "Z:\\...\\Moto-M Tool Setup.exe"
+# 1. Inno Setup 6.6.1 — innoextract 1.9 çok eski; Wine altında innounp-2 kullan
+#    (jrathlev/InnoUnpacker-Windows-GUI sürümü "innounp-2.zip")
+wine innounp2/innounp.exe -x -dZ:\home\<u>\motom "Z:\...\Moto-M Tool Setup.exe"
 
 # 2. PyInstaller (Python 3.11) — pyinstxtractor.py (extremecoders-re)
 python3 pyinstxtractor.py "Moto-M Tool.exe"
 
-# 3. Fix pyc headers (extraction leaves zero-filled 16-byte headers)
-#    Python 3.11 magic: a7 0d 0d 0a + 12 zero bytes
+# 3. pyc başlıklarını düzelt (çıkarma sıfır dolu 16 bayt başlık bırakır)
+#    Python 3.11 sihir: a7 0d 0d 0a + 12 sıfır bayt
 
-# 4. PyArmor 8 static unpack (Lil-House/Pyarmor-Static-Unpack-1shot)
-#    PATCH required: oneshot/detect.py raises body_len cap >0xFFFFF to
-#    0x10000000 (the 1.2 MB armored blob exceeds the default cap)
+# 4. PyArmor 8 statik açma (Lil-House/Pyarmor-Static-Unpack-1shot)
+#    PATCH gerekli: oneshot/detect.py vücut_len sınırı >0xFFFFF'yi
+#    0x10000000'a yükseltir (1.2 MB zırhlı blob varsayılan sınırı aşar)
 python3 oneshot/shot.py <extracted_dir> -o unpacked
-#    → *.1shot.cdc.py (decompiled) + *.1shot.das (bytecode disassembly)
-#    Runtime facts: AES key 124a39ad996db52f6662215344b403c8, nonce 692e4d6f746f4d546f6f6cdb
+#    → *.1shot.cdc.py (decompile) + *.1shot.das (bayt kodu ayrıştırma)
+#    Çalışma gerçekleri: AES anahtarı 124a39ad996db52f6662215344b403c8, nonce 692e4d6f746f4d546f6f6cdb
 
-# 5. src/auto_crash is a Cython .pyd (compressed strings) — not decompilable;
-#    protocol inferred from exported symbols + call sites.
+# 5. src/auto_crash bir Cython .pyd (sıkıştırılmış dizeler) — decompile edilemez;
+#    protokol dışa aktarılan semboller + çağrı noktalarıyla çıkarıldı.
 ```
 
-Working scratch copy of the full decompile lives outside the repo at
-`/home/elijah/motom_research/unpacked/` (12,879 lines, `.1shot.cdc.py`).
+Tam decompilenin çalışma kopyası repo dışında `/home/elijah/motom_research/unpacked/` klasöründe yer alıyor
+(12,879 satır, `.1shot.cdc.py`).
 
-## Source references
+## Kaynak referansları
 
-Line numbers below point into
-`Moto-M Tool_MTK_Dll_V2.pyc.1shot.cdc.py` (the decompiled module).
-`das` references point into the `.1shot.das` bytecode disassembly where
-the decompile was incomplete. Decompiled code can be incomplete — the
-`.das` file is the ground truth for control flow.
+Aşağıdaki satır numaraları `Moto-M Tool_MTK_Dll_V2.pyc.1shot.cdc.py` dosyasına işaret eder
+(decompile edilen modül).
+`das` referansları `.1shot.das` bayt kodu ayrıştırmasına işaret eder; orada decompile tamamlanmamışsa
+tek gerçek kontrol akışı odur. Decompile edilmiş kod eksik olabilir — `.das` dosyası asıl gerçek kaynaktır.

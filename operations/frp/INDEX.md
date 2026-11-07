@@ -1,101 +1,75 @@
-# operations/frp/ — Factory Reset Protection (Android only)
+# operations/frp/ — Fabrika Reset Koruması (Yalnızca Android)
 
-> Apple devices have no FRP (Apple uses Activation Lock / iCloud instead) —
-> see `operations/apple/`.
+> Apple cihazlarında FRP yoktur (Apple Activation Lock / iCloud kullanır) —
+> bakınız `operations/apple/`.
 
-This directory holds **per-engine documentation trees** for FRP bypass.
-The actual code lives in `src/flows.rs` (Rust). When you have a real
-recipe for a device (chip, FDL pair, partition offsets, etc.) you drop a
-short research note in `devices/<brand>/<model>.md`. The README at the
-root of this file maps every FRP flow in the codebase to where it lives
-and what it needs.
+Bu dizin, FRP atlatma için **motor bazlı belge ağaçlarını** içerir.
+Asıl kod `src/flows.rs` (Rust) içinde yer alır. Gerçek bir cihaz için
+bir tarifiniz olduğunda (çip, FDL çifti, bölüm ofsetleri vb.) `devices/<brand>/<model>.md`
+ içinde kısa bir araştırma notu bırakın. Bu kök README, kod tabanındaki her FRP akışının
+nerede yaşadığını ve neye ihtiyaç duyduğunu haritalar.
 
-## Engine map
+## Motor haritası
 
-| Engine | When to use | Code | Bridge CLI |
+| Motor | Ne zaman kullanılır | Kod | Bridge CLI |
 |---|---|---|---|
-| **Generic (ADB)** | First attempt on any phone with USB debugging on | Rust flows (`adb_frp`, `frp_*` rows in `src/flows.rs`) | `flow-run adb_frp` / `adb shell ...` via `bridge.adb_shell` |
-| **MTK BROM** | MediaTek (Helio / Dimensity / MT6765) — power off → hold Vol-/+ → plug USB | Rust flows (`mtk_*` rows in `src/flows.rs`) | `flow-run mtk_brom_info` (CLI: `mtk-detect`, `mtk-da-upload`, `mtk-frp`, `mtk-bypass`) |
-| **MTK DA** | MTK BROM that survived DA upload (lock-state chips) | Rust flows (`mtk_brom_backup`, `mtk_auth_flash`) | `flow-run mtk_brom_backup` |
-| **Qualcomm EDL** | 9008 emergency download (Snapdragon) | Rust flows (`edl_*`, `qcom_*` rows) | `flow-run edl_frp` (CLI: `qcom-*`) |
-| **Samsung Exynos** | A14 (Exynos 850/1330), A15/A16 — Odin download mode is flashing only, NOT for FRP | Rust `frp_*` rows (Samsung account-bypass) | (mostly on-device, no bridge) |
-| **Samsung MTK (A05/A06)** | A05/A06 with Helio G85 — uses MTK BROM (above) | Rust flows (`mtk_brom_info`, `mtk_brom_backup`) | `flow-run mtk_brom_backup` |
-| **UNISOC/SPD** | 1782:4d00 FDL1+FDL2 (SC9863A, T606/UMS9230) | Rust flows (`spd_*` rows) + `src/spd.rs` | `flow-run spd_detect_info` (CLI: `spd-detect`, `spd-frp`, `spd-format`, `spd-magic-pack`) |
-| **HiSilicon Kirin** | 12d1 — no open flow yet (not reverse-engineered) | (none yet) | (none) |
+| **Genel (ADB)** | USB hata ayıklama açık olan herhangi bir telefonda ilk deneme | Rust akışları (`adb_frp`, `src/flows.rs` içindeki `frp_*` satırları) | `flow-run adb_frp` / `bridge.adb_shell` üzerinden `adb shell ...` |
+| **MTK BROM** | MediaTek (Helio / Dimensity / MT6765) — kapat → Ses-/+ basılı tut → USB tak | Rust akışları (`src/flows.rs` içindeki `mtk_*` satırları) | `flow-run mtk_brom_info` (CLI: `mtk-detect`, `mtk-da-upload`, `mtk-frp`, `mtk-bypass`) |
+| **MTK DA** | DA yüklemesini atlatmayı başaran MTK BROM (kilit durumu çipleri) | Rust akışları (`mtk_brom_backup`, `mtk_auth_flash`) | `flow-run mtk_brom_backup` |
+| **Qualcomm EDL** | 9008 acil indirme (Snapdragon) | Rust akışları (`edl_*`, `qcom_*` satırları) | `flow-run edl_frp` (CLI: `qcom-*`) |
+| **Samsung Exynos** | A14 (Exynos 850/1330), A15/A16 — Odin indirme modu yalnızca flaşlama içindir, FRP için DEĞİL | Rust `frp_*` satırları (Samsung hesap-atlatma) | (çoğunlukla cihaz üzerinde, bridge yok) |
+| **Samsung MTK (A05/A06)** | Helio G85 içeren A05/A06 — yukarıdaki MTK BROM kullanır | Rust akışları (`mtk_brom_info`, `mtk_brom_backup`) | `flow-run mtk_brom_backup` |
+| **UNISOC/SPD** | 1782:4d00 FDL1+FDL2 (SC9863A, T606/UMS9230) | Rust akışları (`spd_*` satırları) + `src/spd.rs` | `flow-run spd_detect_info` (CLI: `spd-detect`, `spd-frp`, `spd-format`, `spd-magic-pack`) |
+| **HiSilicon Kirin** | 12d1 — açık akış yok (tersine mühendislik yapılmadı) | (henüz yok) | (yok) |
 
-(The old `python/core/flows/*.py` engine modules never shipped; `mtk-brom-backup`
-is the `mtk_brom_backup` flow row. Verify any key with `flow-list`.)
+(Eski `python/core/flows/*.py` motor modülleri hiç piyasaya sürülmedi; `mtk-brom-backup`
+`mtk_brom_backup` akış satırının karşılığıdır. Herhangi bir anahtar `flow-list` ile doğrulayın.)
 
-## Flow key → function map
+## Akış anahtarı → işlev haritası
 
-Every flow the GUI's FRP actions can call. Keys are Rust registry rows
-(`src/flows.rs`, `flow-list` to verify); the GUI routes them by
-(job, mode) and the bridge runs them via `flow-run <key> [target]`.
+GUI'nin FRP eylemleri tarafından çağrılabilen her akış. Anahtarlar Rust kayıt satırlarıdır
+(`src/flows.rs`, doğrulamak için `flow-list`); GUI bunları
+(job, mode) ile yönlendirir ve bridge bunları `flow-run <key> [target]` ile çalıştırır.
 
-| Flow key | Engine | What it does |
+| Akış anahtarı | Motor | Ne yapar |
 |---|---|---|
-| `adb_frp` | Generic ADB | `settings put secure frp 0` + disable setup wizards + clear GMS data |
-| `frp_browser` | Generic ADB | Open `chrome://settings/` on-device via intent |
-| `frp_emergency` | Generic ADB | Open Settings via Emergency-call dialer (on-device) |
-| `frp_settings` | Generic ADB | Open Settings via notification-shade path (on-device) |
-| `frp_fake_login` (+`_testdpc`, `+_adp`) | Generic ADB | QR provisioning with a device-owner DPC, then FRP clear |
-| `at_info` | Samsung MTP/AT | Read mode + devconinfo via AT channel (Samsung pre-Android 8) |
-| `at_method` | Samsung MTP/AT | AT+DEBUGLVC to enable ADB over the diag port |
-| `download_frp` | Samsung Download mode | CSC/Combination firmware FRP remove (PIT safety contract) |
-| `odin_enable_adb` | Samsung Download mode | Enable ADB from download mode via Odin tarball |
-| `mtk_combo_flash` | MTK Download | Combination firmware flash (PIT + DA) |
-| `mtk_recovery_reset` | MTK Download | Recovery-mode factory reset |
-| `mtk_brom_info` | MTK BROM | Read chip id / handshake (needed before any BROM flash) |
-| `mtk_brom_backup` | MTK BROM | Dump partitions via BROM DA |
-| `edl_frp` | Qualcomm EDL | Sahara + Firehose erase (05c6:9008) |
-| `qcom_detect_info` | Qualcomm EDL | Detect + info (read-only) |
-| `frp_qr_provision` | Generic ADB | QR provisioning (TestDPC path) |
+| `adb_frp` | Genel ADB | `settings put secure frp 0` + kurulum sihirbazlarını devre dışı bırak + GMS verilerini temizle |
+| `frp_browser` | Genel ADB | Cihaz üzerinde `chrome://settings/` adresini intent ile aç |
+| `frp_emergency` | Genel ADB | Acil arama çeviricisi üzerinden Ayarlar'ı aç (cihaz üzerinde) |
+| `frp_settings` | Genel ADB | Bildirim gölgesi yolu üzerinden Ayarlar'ı aç (cihaz üzerinde) |
+| `frp_fake_login` (+`_testdpc`, `+_adp`) | Genel ADB | QR sağlama ile cihaz sahibi DPC, ardından FRP temizleme |
+| `at_info` | Samsung MTP/AT | AT kanalı üzerinden mod + devconinfo oku (Samsung Android 8 öncesi) |
+| `at_method` | Samsung MTP/AT | diag port üzerinden ADB'yi etkinleştirmek için AT+DEBUGLVC |
+| `download_frp` | Samsung Download modu | CSC/Bileşim yazılımı FRP kaldırma (PIT güvenlik sözleşmesi) |
+| `odin_enable_adb` | Samsung Download modu | Odin tarbalı indirme modundan ADB'yi etkinleştir |
+| `mtk_combo_flash` | MTK Download | Bileşim yazılımı flaşı (PIT + DA) |
+| `mtk_recovery_reset` | MTK Download | Kurtarma modunda fabrika sıfırlama |
+| `mtk_brom_info` | MTK BROM | Çip kimliği / el sıkışma oku (herhangi bir BROM flaşından önce gerekir) |
+| `mtk_brom_backup` | MTK BROM | BROM DA ile bölümleri dök |
+| `edl_frp` | Qualcomm EDL | Sahara + Firehose silme (05c6:9008) |
+| `qcom_detect_info` | Qualcomm EDL | Tespit + bilgi (salt okunur) |
+| `frp_qr_provision` | Genel ADB | QR sağlama (TestDPC yolu) |
 
-(Retired: the old `flow_*`-prefixed key names and
-`python/core/flows/*.py` never shipped — keys have no `flow_` prefix.)
+(Kaldırılmış: eski `flow_*` ön ekli anahtar adları ve
+`python/core/flows/*.py` hiç piyasaya sürülmedi — anahtarların `flow_` öneki yoktur.)
 
-## How a new per-model recipe lands here
+## Yeni bir model bazlı tarifin buraya gelme şekli
 
-1. **Run a real device dump** (see `scripts/dump-connected.sh` for the
-   ADB-side path, or `flashpilot-bridge spd-format` for the BROM-side path
-   on Unisoc). The dump goes to `build/cache/dumps/<model>_<codename>/`.
+1. **Gerçek bir cihaz dökümü çalıştırın** (`scripts/dump-connected.sh` dosyasını ADB tarafı yolu için görün, veya Unisoc üzerinde BROM tarafı için `flashpilot-bridge spd-format` kullanın). Döküm `build/cache/dumps/<model>_<codename>/` içine gider.
 
-2. **From the dump, identify** the engine + chip + the FRP partition
-   name (almost always `frp`, `frp_a`, or `userdata` on Android 11+).
+2. **Dökümden motoru, çipi ve FRP bölüm adını belirleyin** (neredeyse her zaman Android 11+ üzerinde `frp`, `frp_a` veya `userdata`).
 
-3. **Add the device entry** to `python/gui/supported_devices.json` under
-   the right brand, with `actions: ["frp", "info", "backup", "flash"]`
-   and `status: "researched"`. (The existing per-engine flow will pick
-   it up automatically — no new flow is needed unless the engine itself
-   is missing.)
+3. **Cihaz girişini ekleyin** `python/gui/supported_devices.json` içinde doğru markaya göre, `actions: ["frp", "info", "backup", "flash"]` ve `status: "researched"` ile. (Mevcut motor bazlı akış otomatik olarak alınır — motorun kendisi eksik değilse yeni akış gerekmez.)
 
-4. **Drop a short research note** in `operations/frp/devices/<brand>/<model>.md`
-   with the chip, engine, partition, build fingerprint, and a
-   one-liner confirming the recipe (e.g. "mmcblk0p4 = frp, instant
-   BROM DA erase, no combo needed"). See
-   `operations/frp/devices/nokia/nokia_g20.md` for the format.
+4. **Kısa bir araştırma notu bırakın** `operations/frp/devices/<brand>/<model>.md` içinde
+çip, motor, bölüm, derleme parmak izi ve tarife onay veren tek satırlık açıklama ile (ör. "mmcblk0p4 = frp, anında BROM DA silme, combo gerekmez"). Biçim için `operations/frp/devices/nokia/nokia_g20.md` dosyasına bakın.
 
-5. **If the engine itself doesn't have a flow** for this chipset, register
-   the flow in `src/flows.rs` (a `flow!(...)` row) and add the CLI
-   dispatch in `src/<engine>.rs` + `src/main.rs`.
+5. **Motorun kendisinde akış yoksa** bu çipset için akışı `src/flows.rs` içinde kaydedin (`flow!(...)` satırı) ve CLI dağıtımını `src/<engine>.rs` + `src/main.rs` içine ekleyin.
 
-## Why the per-chip files are gone
+## Çip bazlı dosyalar neden kayboldu
 
-Earlier refactors split the god `frp.py` into per-chip files under
-`operations/frp/chips/` and per-engine files under
-`operations/frp/{mtk,qualcomm,unisoc,samsung}_frp/`. An older revision of
-this INDEX claimed dead docstubs and a `python/core/flows/brom.py` dispatch
-— that module never shipped. The real per-chip dispatch is the Rust flow
-registry (`src/flows.rs`: `mtk_*`/`qcom_*`/`spd_*` rows, `flow-list` to
-verify); this INDEX.md is the map so a new dev knows where the
-engine-specific code actually lives.
+Daha önceki yeniden düzenlemeler gökçe `frp.py` dosyasını `operations/frp/chips/` altındaki çip bazlı dosyalara ve `operations/frp/{mtk,qualcomm,unisoc,samsung}_frp/` altındaki motor bazlı dosyalara böldü. Bu INDEX'in eski sürümünde ölü docsutları ve `python/core/flows/brom.py` dağıtımı iddia edilmişti — bu modül asla piyasaya sürülmedi. Gerçek çip bazlı dağıtım Rust akış kayıt defteridir (`src/flows.rs`: `mtk_*`/`qcom_*`/`spd_*` satırları, doğrulama için `flow-list`); bu INDEX.md yeni geliştiricinin hangi motor bazlı kodun gerçekten yaşam alanı olduğunu bilmesi için haritadır.
 
-## Why the per-engine Python shims are gone
+## Motor bazlı Python şimlerinin neden kayboldu
 
-`operations/frp/mtk_frp/mtk_frp.py` (and its 4 siblings) imported
-functions from `python.core.flows.brom` and re-exported them under a
-**second** `FLOWS = {}` dict that the GUI never reads. They collided
-with the canonical `FLOWS` in `python/core/flows/__init__.py` and would
-have masked the real ones if the GUI ever did read them. Replaced with
-a README in each engine folder that points at the real Python
-modules.
+`operations/frp/mtk_frp/mtk_frp.py` (ve 4 kardeşi) `python.core.flows.brom` içinden işlevler içe aktarıp bunları **ikinci** bir `FLOWS = {}` sözlüğü altında yeniden dışa aktarıyordu. GUI bunları asla okumuyordu. Canonical `FLOWS` ile çakıştı ve GUI bunları okusaydı gerçek olanları maskeleyebilirdi. Her motor klasöründe gerçek Python modüllerine işaret eden bir README ile değiştirildi.

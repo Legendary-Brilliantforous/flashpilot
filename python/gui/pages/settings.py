@@ -111,6 +111,20 @@ class SettingsPageMixin:
         lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(12)
 
+        language_box = self._settings_box("Language", lay)
+        self._s_language = QComboBox()
+        self._s_language.addItem("Türkçe", "tr")
+        self._s_language.addItem("English", "en")
+        language_index = self._s_language.findData(
+            self.settings.value("language", "tr"))
+        self._s_language.setCurrentIndex(max(0, language_index))
+        self._s_language.currentIndexChanged.connect(self._apply_language)
+        self._settings_row(
+            language_box, "Application language",
+            "Choose the language used by menus, dialogs, and help text.",
+            self._s_language,
+        )
+
         bl = self._settings_box("SCAN & BEHAVIOUR", lay)
         self._s_interval = QSpinBox()
         self._s_interval.setRange(1, 30)

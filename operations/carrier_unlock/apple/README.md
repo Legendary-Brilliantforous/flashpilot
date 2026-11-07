@@ -1,10 +1,10 @@
 # carrier_unlock/apple
-Apple device under carrier lock + enterprise locks.
+Taşıyıcı kilitli + kurumsal kilitli Apple cihaz.
 
-Sub-operations:
-- enterprise_remote_lock/ — MDM remote lock (enterprise)
+Alt işlemler:
+- enterprise_remote_lock/ — MDM uzaktan kilit (kurumsal)
 - lost_mode_remove/ — Find My Lost Mode
-- passcode_lock_remove/ — Passcode (4/6-digit, Face/Touch)
+- passcode_lock_remove/ — Parola (4/6 haneli, Face/Touch)
 
-Files: apple_carrier.py / apple_carrier.rs
-Devices: see frp/devices/apple/ + mdm/devices/apple/
+Dosyalar: apple_carrier.py / apple_carrier.rs
+Cihazlar: see frp/devices/apple/ + mdm/devices/apple/

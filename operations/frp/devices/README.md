@@ -1,45 +1,38 @@
 # operations/frp/devices/
 
-Per-device FRP research notes. **One file per model** — the filename
-matches the model name from `python/gui/supported_devices.json`
-(sluggified: lowercase, `/` and spaces → `_`).
+Cihaz bazlı FRP araştırma notları. **Model başına bir dosya** — dosya adı
+`python/gui/supported_devices.json` içindeki model adıyla eşleşir
+(sluggified: küçük harf, `/` ve boşluk → `_`).
 
-These notes hold **research that's not in `supported_devices.json`** —
-real recipes discovered on a live device. Don't duplicate the JSON
-content (model, chip, engine, status) here; link to the JSON entry
-for that, and put only the new knowledge (dump paths, partition
-offsets, secret codes, BROM-BROM-erased-partition name, etc.).
+Bu notlar, `supported_devices.json` içinde bulunmayan **araştırmaları** tutar —
+canlı cihazda bulunan gerçek tarifler. JSON içeriğini (model, çip, motor, durum) burada tekrarlamayın; o girişe bağlantı verin ve yalnızca yeni bilgiyi koyun (döküm yolları, bölüm ofsetleri, gizli kodlar, BROM-BROM tarafından silinen bölüm adı vb.).
 
-## When to add a file here
+## Buraya hangi durumda dosya eklenir
 
-You just dumped firmware (or successfully removed FRP) on a real device
-and learned something that the next person with the same device needs
-to know. Example: a specific `mmcblk0p4 = frp` partition name, a
-custom BROM pinout, an OEM-specific gadget to disable, a build-fingerprint
-quirk that breaks the generic flow.
+Gerçek bir cihazdan yazılım döktünüz (veya FRP'yi başarıyla kaldırdınız) ve aynı cihazla çalışan bir sonraki kişiye lazım olacak bir şey öğrendiniz. Örnek: belirli bir `mmcblk0p4 = frp` bölüm adı, özel bir BROM pinout, devre dışı bırakılacak OEM-özel cihaz, genel akışı bozan derleme-parmak izi tuhaflığı.
 
-## File format
+## Dosya formatı
 
 ```markdown
-# <Marketing Model Name> — <Family or Codename> — FRP
-Chip: <chip>             (matches supported_devices.json chip field)
-Engine: <engine>         (mtk | spd | qcom | odin | apple-excluded)
-VID: 0x<vid>             (USB vendor id)
-Status: <status>         (researched | planned — copy from the JSON)
-Actions: <list>          (the actions the JSON advertises for this model)
+# <Pazarlama Model Adı> — <Aile veya Kod Adı> — FRP
+Çip: <çip>             (supported_devices.json çip alanıyla eşleşir)
+Motor: <motor>         (mtk | spd | qcom | odin | apple-excluded)
+VID: 0x<vid>           (USB satıcı kimliği)
+Durum: <durum>         (researched | planned — JSON'dan kopyalanır)
+Eylemler: <liste>      (JSON tarafından bu model için ilan edilen eylemler)
 
-# Field-discovered recipe (the part NOT in supported_devices.json)
-FRP: <partition>         e.g. "mmcblk0p4 = frp, instant BROM DA erase, no combo"
-Dump: <path>             e.g. "build/cache/dumps/<Model>_<Coden>/ (system 1.5G, product 1.6G, vendor 175M)"
-Build: <fingerprint>     e.g. "<vendor>/<model>:<android>:<build>/<incremental>"
-Notes: <free-form>        caveats, OEM-specific behaviors, links to the working dump
+# Alan tarafından keşfedilen tarif (supported_devices.json içinde olmayan kısım)
+FRP: <bölüm>          örn. "mmcblk0p4 = frp, anında BROM DA silme, combo gerekmez"
+Döküm: <yol>          örn. "build/cache/dumps/<Model>_<Kod>/ (system 1.5G, product 1.6G, vendor 175M)"
+Derleme: <parmak izi>  örn. "<vendor>/<model>:<android>:<build>/<incremental>"
+Notlar: <serbest metin>  uyarılar, OEM-özel davranışlar, çalışan döküm bağlantıları
 ```
 
-## Real examples in this directory
+## Bu dizindeki gerçek örnekler
 
-- `nokia/nokia_g20.md` — full Nokia G20 reverse-engineering note: chip,
-  dump paths, build fingerprint, the exact BROM recipe that works.
-- `itel/a14_a18.md` — Itel A14/A18 *#*#49#*#* secret code (field-tested).
+- `nokia/nokia_g20.md` — tam Nokia G20 tersine mühendislik notu: çip,
+  döküm yolları, derleme parmak izi, çalışan kesin BROM tarifi.
+- `itel/a14_a18.md` — Itel A14/A18 *#*#49#*#* gizli kodu (alanda test edilmiş).
 - `samsung/galaxy_a14_sm_a145f_m_p_sm_a146b_p.md` — Helio G80 vs Exynos
-  variant caveat (the chip / engine depends on which variant you have;
-  check the variant code in `*#1234#`).
+  varyant uyarısı (çip / motor hangi varyantınıza göre değişir;
+  varyant kodunu `*#1234#` üzerinden kontrol edin).

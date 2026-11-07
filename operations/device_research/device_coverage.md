@@ -1,114 +1,114 @@
-# Device catalogue research — coverage vs FlashPilot's device database
+# Cihaz kataloğu araştırması — FlashPilot cihaz veritabanı karşısında kapsam
 
-This directory holds FlashPilot's own device/protocol research corpus: a
-normalized 1,396-row device catalogue, per-engine gap registers, and the MTK
-chip/payload matrix. Everything here comes from parsing the catalogue and
-FlashPilot's shipped database (`python/gui/supported_devices.json`). Nothing
-was measured on hardware.
+Bu dizin, FlashPilot'in kendi cihaz/protokol araştırma külliyatını barındırır:
+normalleştirilmiş 1.396 satırlık cihaz kataloğu, motor bazlı gap register'ları ve
+MTK yonga/payload matrisi. Bunların tümü katalogun ayrıştırılması ve
+FlashPilot'in sevk edilen veritabanı (`python/gui/supported_devices.json`) üzerinden
+elde edilmiştir. Donanım üzerinde hiçbir ölçüm yapılmamıştır.
 
-Companion file: [`device_catalogue.json`](./device_catalogue.json) — 1,396
-normalized `{brand, model, engine, connection, storage}` rows. It carries no
-per-row provenance: the catalogue **is** the research input, and the shipped
-product database (`python/gui/supported_devices.json`) is the FlashPilot-branded
-output.
+Eşlik eden dosya: [`device_catalogue.json`](./device_catalogue.json) — 1.396
+normalleştirilmiş `{brand, model, engine, connection, storage}` satırı. Satır başına
+provenans taşımıyor: katalog **araştırma girdisidir** ve sevk edilen ürün
+databası (`python/gui/supported_devices.json`) FlashPilot markalı çıktıdır.
 
-## TL;DR
+## Özet
 
-| Metric | Value |
+| Metrik | Değer |
 |---|---|
-| Catalogue rows | **1,396** |
-| Distinct brands | **35** |
-| Engine split | MTK 739 (53%), QCOM 280 (20%), SPD/UNISOC 94 (7%), Odin 71 (5%), unknown 212 (15%) |
-| FlashPilot device database | **719 models / 21 brand buckets** (650 researched, 69 planned) |
-| Catalogue rows represented in the database | **745 (53%)** |
-| Catalogue rows not yet imported | **651 (47%)** |
-| MTK scatter layouts analysed | 28 real scatters → 33 storage layouts, 7 SoCs, 166 distinct partition names |
+| Katalog satırı | **1.396** |
+| Farklı marka | **35** |
+| Motor dağılımı | MTK 739 (%53), QCOM 280 (%20), SPD/UNISOC 94 (%7), Odin 71 (%5), bilinmeyen 212 (%15) |
+| FlashPilot cihaz veritabanı | **719 model / 21 marka bucket** (650 araştırılmış, 69 planlı) |
+| Veritabanında temsil edilen katalog satırı | **745 (%53)** |
+| Henüz ithal edilmeyen katalog satırı | **651 (%47)** |
+| Analiz edilen MTK scatter düzeni | 28 gerçek scatter → 33 depolama düzeni, 7 SoC, 166 farklı bölüm adı |
 
-The catalogue is a 2016–2022 mass-market device map (Samsung A-series up to
-A71, Redmi Note up to 11, Tecno Spark up to 8, Oppo A up to A96). FlashPilot's
-database is 719 entries biased toward 2023–2025 hardware. They are not
-supersets of each other: roughly half the catalogue has been folded into the
-database, and the residual gap is concentrated in pre-2020 Samsung, legacy
-MediaTek budget parts, Kirin-era Huawei, and 12 brands with no bucket at all.
+Katalog, 2016–2022 orta seviye pazarlık cihaz haritasıdır (A71'e kadar Samsung
+A serisi, 11'e kadar Redmi Note, 8'e kadar Tecno Spark, A96'ya kadar Oppo A).
+FlashPilot veritabanı 719 girdiden oluşur ve 2023–2025 donanımına daha çok eğilimlidir.
+Bunlar birbirinin üst kümesi değildir: katalogun yaklaşık yarısı veritabanına
+katılmıştır ve geriye kalan boşluk, 2020 öncesi Samsung, eski MediaTek bütçe
+parçaları, Kirin dönemi Huawei ve hiç bucket'ı olmayan 12 marka üzerinde
+yoğunlaşır.
 
-## 1. How the catalogue was assembled
+## 1. Katalog nasıl oluşturuldu
 
-The raw corpus arrived as 27 export files (16 brand JSON files plus 11 plain
-text model lists). It was normalized to one row per device with five fields:
+Ham corpus, 27 export dosyasından oluşuyordu (16 marka JSON dosyası ve 11 düz
+metin model listesi). Bunlar beş alanlı tek bir cihaz satırına dönüştürüldü:
 
-| Field | Source |
+| Alan | Kaynak |
 |---|---|
-| `brand` | Device-name prefix, not the file name (one export was a 21-brand catch-all) |
-| `model` | Marketing name, with model codes kept inline where the export had them |
-| `engine` | Transport flags first (`Edl` → qcom, `spd` → spd, `Odin` → odin, `Brom`/`auth`/`Preloader` → mtk), platform family as fallback |
-| `connection` | Verbatim transport hints, `; `-joined when a row carried several |
-| `storage` | Verbatim note field — **not** reliable as a storage type (see §3) |
+| `brand` | Cihaz adı öneki, dosya adı değil (bir export 21 markalık genel bir toplamaydı) |
+| `model` | Pazarlama adı; export içinde model kodları da satırda tutuldu |
+| `engine` | Önce taşıma bayrakları (`Edl` → qcom, `spd` → spd, `Odin` → odin, `Brom`/`auth`/`Preloader` → mtk), sonra platform ailesi yedeği |
+| `connection` | Ham taşıma ipuçları, bir satır birden fazla taşıma bilgisi taşıyorsa `; ` ile birleştirildi |
+| `storage` | Ham not alanı — **depolama türü değildir** (bkz. §3) |
 
-Export-side totals:
+Export tarafı toplamları:
 
-| Metric | Value |
+| Metrik | Değer |
 |---|---|
-| JSON export files | 16 |
-| Raw objects | 1,280 |
-| Header/placeholder rows (`Devices : Auto`, etc.) | 13 |
-| Actual device rows | 1,267 |
-| Unique `(brand, model)` pairs | **1,184** (6.3% duplication) |
-| `.txt` model lists | 11 files, 303 rows |
-| `.txt` rows not present in the JSON | **216** raw → **212** after in-list dedupe |
-| **Catalogue total** | **1,396** (1,184 + 212) |
+| JSON export dosyası | 16 |
+| Ham nesne | 1,280 |
+| Başlık/yer tutucu satır (`Devices : Auto`, vb.) | 13 |
+| Gerçek cihaz satırı | 1,267 |
+| Benzersiz `(brand, model)` çiftleri | **1,184** (%6.3 tekrar) |
+| `.txt` model listesi | 11 dosya, 303 satır |
+| JSON içinde bulunmayan `.txt` satırlar | **216** ham → **212** iç liste tekilleştirme sonrası |
+| **Katalog toplamı** | **1,396** (1,184 + 212) |
 
-Duplicate rate is low; the pairs that repeat are Meizu (present in two exports)
-and Asus (present in two exports). A stricter full-tuple dedupe yields 1,210
-instead of 1,184; the catalogue uses the `(brand, model)` basis so that rows
-with different transport flags are not silently merged.
+Tekrarlama oranı düşüktür; tekrar eden çiftler Meizu (iki export'ta da görünür) ve
+Asus (iki export'ta da görünür). Daha katı tam tuple tekilleştirme ile 1,210
+elde edilir; katalog `(brand, model)` temelli çalışır, böylece farklı taşıma
+bayrakları olan satırlar sessizce birleştirilmez.
 
-### Composition notes that affect any import
+### İthalatı etkileyen bileşen notları
 
-- **One export was a catch-all, not a brand file.** 262 of its rows are the only
-  source for iTel, Alcatel, TCL, Lava, BLU, HTC, Motorola, Allview, Coolpad,
-  Micromax, Wiko, Ulefone, Yezz, Blackview, ZTE, Amazon, Archos, T-Mobile,
-  OnePlus and Symphony. Brand must be derived from the device-name prefix.
-- **19 Huawei rows are SoC records, not phones** (`HiSilicon kirin 620` …
-  `kirin 970 v3`). They carry real platform/FRP information, so they stay in the
-  catalogue, but they must not be counted as device coverage.
-- **Realme is split along SoC lines, not brand lines.** The Oppo export holds
-  more Realme rows (62) than the Realme export (43), and the Realme export is
-  MediaTek-only. One row is mis-cased (`Realme7i`) and needs prefix
-  normalization before it can be classified.
-- **Five JSON files begin with a UTF-8 BOM and one contains a raw control
-  character.** A naive `json.load` silently drops them; parse with
-  `utf-8-sig` / `strict=False` or the corpus looks 30% smaller than it is.
+- **Bir export marka dosyası değil genel toplamdı.** Satırlarının 262'si iTel,
+  Alcatel, TCL, Lava, BLU, HTC, Motorola, Allview, Coolpad, Micromax, Wiko,
+  Ulefone, Yezz, Blackview, ZTE, Amazon, Archos, T-Mobile, OnePlus ve Symphony
+  için tek kaynaktır. Marka cihaz adı ön ekinden türetilmelidir.
+- **19 Huawei satırı SoC kaydı, cihaz değil** (`HiSilicon kirin 620` …
+  `kirin 970 v3`). Gerçek platform/FRP bilgisi taşırlar; bu yüzden katalogta
+  kalırlar ama cihaz kapsamı hesabına dahil edilmezler.
+- **Realme, marka hatları yerine SoC hatlarıyla bölünmüş.** Oppo export'ı,
+  Realme export'ından daha fazla Realme satırı (62) taşır ve Realme export'ı
+  yalnızca MediaTek içindir. Bir satır yanlış büyük/küçük harf kullanımına sahip
+  (`Realme7i`) ve sınıflandırma öncesi önek normalizasyonu gerekir.
+- **Beş JSON dosyası UTF-8 BOM ile başlar ve biri ham kontrol karakter içerir.**
+  Naif `json.load` bunları sessizce düşürür; parse `utf-8-sig` / `strict=False`
+  ile yapılmazsa corpus %30 daha küçük görünür.
 
-## 2. Schema quirks of the raw exports
+## 2. Ham exportların şema gariplikleri
 
-Keys are inconsistent between files. Union across all 1,267 device rows:
+Anahtarlar dosyalar arasında tutarsızdır. Tüm 1,267 cihaz satırına dair birleşim:
 
-| Key | Rows | Meaning |
+| Anahtar | Satır | Anlam |
 |---|---:|---|
-| `Devices` | 1264 | product name (with brand prefix) |
-| `Models` | 1264 | model code(s) — sometimes a codename (`dandelion`), sometimes a comma list |
-| `Platform` | 1264 | SoC string, free-form (`MT6765`, `Helio G85`, `Snapdragon 662`, `kirin 970`) |
-| `Conn` | 888 | `auth` (554), blank (258), `enable adb` (55), `usb 1.0` (19), `SAVE`, `Harmony` |
-| `Brom` | 844 | `Brom` (730), blank (103), `Preloader` (11) |
-| `Edl` | 220 | Qualcomm EDL available |
+| `Devices` | 1264 | ürün adı (marka ön ekiyle) |
+| `Models` | 1264 | model kodu(ları) — bazen takma ad (`dandelion`), bazen virgülle ayrılmış liste |
+| `Platform` | 1264 | SoC dizesi, serbest biçimli (`MT6765`, `Helio G85`, `Snapdragon 662`, `kirin 970`) |
+| `Conn` | 888 | `auth` (554), boş (258), `enable adb` (55), `usb 1.0` (19), `SAVE`, `Harmony` |
+| `Brom` | 844 | `Brom` (730), boş (103), `Preloader` (11) |
+| `Edl` | 220 | Qualcomm EDL mevcut |
 | `Beta` | 182 | `Beta` (49), `Sideload` (49), `FS` (37), `TP` (29), `[SIDELOAD]` (18) |
 | `spd` | 94 | Spreadtrum/UNISOC |
-| `Storage` | 82 | `UFS` (30), `FRP` (17), `TP` (16), `Test` (10), `eMMC 5.1` (3), junk values |
+| `Storage` | 82 | `UFS` (30), `FRP` (17), `TP` (16), `Test` (10), `eMMC 5.1` (3), gereksiz değerler |
 | `Odin` | 56 | Samsung Odin |
-| `""` (empty key) | 67 | malformed trailing comma in the export |
+| `""` (boş anahtar) | 67 | export içindeki bozuk sondaki virgül |
 
-`Storage` is **not** a storage field in practice — `FRP`, `TP`, `Test`,
-`factory` and `MIUI 12` all appear in it. Treat it as free text. The real
-transport hints are `Conn`/`Brom`/`Edl`/`spd`/`Odin`, and those are what the
-`engine` column is derived from in the catalogue.
+`Storage` pratikte **depolama alanı değildir** — `FRP`, `TP`, `Test`, `factory` ve
+`MIUI 12` hepsi burada görünür. Bunu serbest metin olarak değerlendirin. Gerçek
+taşıma ipuçları `Conn`/`Brom`/`Edl`/`spd`/`Odin` olup katalog içinde `engine`
+kolonunu bunlardan türetiriz.
 
-## 3. Per-brand coverage
+## 3. Marka bazlı kapsama
 
-`Catalogue` = rows in `device_catalogue.json` for that brand. Engine columns are
-rows carrying that transport. `In DB` = catalogue rows that resolve to a model in
-`python/gui/supported_devices.json` (§6). `Gap` = rows not yet represented.
+`Catalogue` = `device_catalogue.json` içinde o markaya ait satırlar. Motor sütunları
+o taşıma türünü taşıyan satırları gösterir. `In DB` = `python/gui/supported_devices.json`
+ile eşleşen katalog satırları (§6). `Gap` = henüz temsil edilmeyen satırlar.
 
-| Brand | Catalogue rows | MTK | QCOM | SPD | Odin | Unknown | In DB | Gap |
+| Marka | Katalog satırı | MTK | QCOM | SPD | Odin | Bilinmeyen | Veritabanı | Boşluk |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Xiaomi | 210 | 44 | 111 | 0 | 0 | 55 | 132 | 78 |
 | Oppo | 157 | 81 | 66 | 0 | 0 | 10 | 93 | 64 |
@@ -126,7 +126,7 @@ rows carrying that transport. `In DB` = catalogue rows that resolve to a model i
 | Meizu | 20 | 20 | 0 | 0 | 0 | 0 | 4 | 16 |
 | TCL | 17 | 17 | 0 | 0 | 0 | 0 | 10 | 7 |
 | Lava | 16 | 14 | 0 | 2 | 0 | 0 | 15 | 1 |
-| Nokia | 16 | 12 | 0 | 2 | 0 | 2 | 10 | 6 |
+| Nokia | 16 | 12 | 0 | 2 | 0 | 0 | 10 | 6 |
 | BLU | 13 | 13 | 0 | 0 | 0 | 0 | 10 | 3 |
 | HTC | 13 | 13 | 0 | 0 | 0 | 0 | 0 | 13 |
 | Motorola | 11 | 11 | 0 | 0 | 0 | 0 | 10 | 1 |
@@ -145,30 +145,30 @@ rows carrying that transport. `In DB` = catalogue rows that resolve to a model i
 | OnePlus | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | T-Mobile | 2 | 2 | 0 | 0 | 0 | 0 | 2 | 0 |
 | Symphony | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
-| **Total** | **1,396** | **739** | **280** | **94** | **71** | **212** | **745** | **651** |
+| **Toplam** | **1,396** | **739** | **280** | **94** | **71** | **212** | **745** | **651** |
 
-Note that `In DB` counts *catalogue rows*, so a single database entry can absorb
-several SKU rows (e.g. one `itel A14` entry covers `A14`, `A14 Max` and
-`A14 Plus`).
+Not: `In DB` kolonunda *katalog satırları* sayılır; tek bir veritabanı girdisi
+birden fazla SKU satırını toplayabilir (ör. tek bir `itel A14` girdisi `A14`,
+`A14 Max` ve `A14 Plus`'ı kapsar).
 
-Twelve brands have **no FlashPilot bucket at all** (148 rows): LG 38, Alcatel 31,
-HTC 13, Allview 10, Coolpad 9, Micromax 9, Vsmart 9, Yezz 6, Asus 5, Amazon 4,
-Archos 3, Symphony 1. LG is deliberately excluded — the brand exited the phone
-business — and the rest are cheap additions because they are almost all
-single-transport MediaTek rows. A further 18 rows are partial gaps in brands that
-*do* have a bucket (Meizu 16, Blackview 4, BLU 3, …).
+On iki marka tamamen **FlashPilot bucket'ı olmadan** kalır (148 satır): LG 38,
+Alcatel 31, HTC 13, Allview 10, Coolpad 9, Micromax 9, Vsmart 9, Yezz 6, Asus 5,
+Amazon 4, Archos 3, Symphony 1. LG kasıtlı olarak hariç tutuldu — marka telefon
+işinden çıktı — geri kalanı neredeyse tamamı tek taşıma türü MTK satırlarıdır.
+Daha sonra 18 satır, bucket'ı olan markalarda kısmi boşluk oluşturur (Meizu 16,
+Blackview 4, BLU 3, …).
 
-## 4. MediaTek scatter research
+## 4. MediaTek scatter araştırması
 
-28 real MediaTek scatter layouts were analysed (plus six Qualcomm FlashTool XML
-wrappers that are discussed in §4.3). Five scatters contain **two storage layouts
-each** (eMMC + UFS blocks in one file), giving **33 layouts** total.
+28 gerçek MediaTek scatter düzeni analiz edildi (artı §4.3'te tartışılan altı
+Qualcomm FlashTool XML sarmalayıcısı). Beş scatter, her biri iki depolama düzeni
+(EMMC + UFS blokları) içerdiği için toplam **33 düzen** oluştu.
 
-The header `storage:` line of a scatter is unreliable: one layout declares
-`storage: UFS` in its header while 23 of its 24 partitions are
-`HW_STORAGE_EMMC`. Only the per-partition `storage:` key can be trusted.
+Bir scatter'ın `storage:` başlığı güvenilmezdir: bir düzen başlıkta `storage:
+UFS` bildirirken 24 bölümün 23'ü `HW_STORAGE_EMMC`'dir. Güvenilen tek şey bölüm
+bazlı `storage:` anahtarıdır.
 
-| File | Platform | Project | Storage | Partitions |
+| Dosya | Platform | Proje | Depolama | Bölümler |
 |---|---|---|---|---:|
 | `01c.txt` | MT6739 | — | EMMC | 49 |
 | `02.txt` | MT6739 | — | EMMC | 51 |
@@ -176,9 +176,9 @@ The header `storage:` line of a scatter is unreliable: one layout declares
 | `10s.txt` | MT6765 | `s96116ca1` | EMMC | 42 |
 | `12.txt` | MT6765 | `k65v1_64_bsp_titan_rat` | EMMC | 52 |
 | `22.txt` | MT6768 | — | EMMC | 51 |
-| `Android_scatter.txt` | MT6580 | `mtk_android` | UFS (header) / EMMC (23 of 24 parts) | 24 |
+| `Android_scatter.txt` | MT6580 | `mtk_android` | UFS (başlık) / EMMC (24 bölümün 23'ü) | 24 |
 | `MT6735_Android_scatter.txt` | MT6735 | — | EMMC + UFS | 1 + 1 |
-| `_Android_scatter.txt` | *(blank)* | — | EMMC + UFS | 1 + 1 |
+| `_Android_scatter.txt` | *(boş)* | — | EMMC + UFS | 1 + 1 |
 | `ambio.txt` | MT6765 | `k65v1_64_bsp` | EMMC | 58 |
 | `aqibong.txt` | MT6765 | `k65v1_64_bsp` | EMMC | 58 |
 | `biji.txt` | MT6768 | `lancelot` | EMMC | 50 |
@@ -199,103 +199,101 @@ The header `storage:` line of a scatter is unreliable: one layout declares
 | `toket.txt` | MT6768 | `merlin` | EMMC | 50 |
 | `tri.txt` | MT6765 | `oppo6762_18540` | EMMC | 45 |
 
-### 4.1 SoC coverage
+### 4.1 SoC kapsamı
 
-| SoC | Files | Partition counts |
+| SoC | Dosya | Bölüm sayısı |
 |---|---:|---|
 | MT6765 (Helio P35/G35) | 16 | 42–58 |
 | MT6768 (Helio P65/G85) | 4 | 50–54 |
 | MT6739 | 2 | 49–51 |
-| MT6785 (Helio G95) | 2 | 50/65 (×2 storages) |
+| MT6785 (Helio G95) | 2 | 50/65 (×2 depolama) |
 | MT6580 | 1 | 24 |
 | MT6735 | 1 | 1 (stub) |
-| MT6877 (Dimensity 900) | 1 | 65 (×2 storages) |
-| *(blank)* | 1 | 1 (stub) |
+| MT6877 (Dimensity 900) | 1 | 65 (×2 depolama) |
+| *(boş)* | 1 | 1 (stub) |
 
-**Only seven SoCs**, and the distribution is extremely lopsided: 16 of 28 scatters
-are MT6765. This is a Helio P35/G35/G85 corpus, not a Dimensity one.
+**Yalnızca yedi SoC** var ve dağılım aşırı dengesiz: 28 scatter'ın 16'sı MT6765.
+Bu Dimensity değil, Helio P35/G35/G85 külliyatıdır.
 
-### 4.2 Stub scatters
+### 4.2 Stub scatter'lar
 
-`_Android_scatter.txt` and `MT6735_Android_scatter.txt` are **stubs** — a single
-`preloader` entry with a hardcoded absolute Windows path that does not exist in
-this project. They are templates, not device layouts, and must not be counted as
-coverage.
+`_Android_scatter.txt` ve `MT6735_Android_scatter.txt` **stub**'dır — bu projede
+var olmayan sabit mutlak Windows yoluna sahip tek bir `preloader` girdisi vardır.
+Bunlar düzen değil şablondur ve kapsama sayılmamalıdır.
 
-### 4.3 Partition layout signal
+### 4.3 Bölüm düzen sinyali
 
-33 layouts, **166 distinct partition names**. The invariant core (present in
-≥85% of layouts) is only 10 names:
+33 düzen, **166 farklı bölüm adı**. Değişmeyen çekirdek (≥%85 düzenlerde mevcut)
+yalnızca 10 addır:
 
 ```
 preloader  pgpt  para  expdb  metadata  protect1  protect2  seccfg  proinfo  userdata
 ```
 
-Everything else is OEM/SoC-specific. Notable groups:
+Geri kalanı OEM/SoC'a özeldir. Dikkat çekici gruplar:
 
-| Group | Partitions | Where seen |
+| Grup | Bölümler | Nerede görüldü |
 |---|---|---|
-| Retrofit dynamic | `super` (20/33), `vbmeta` (22/33), `vbmeta_system` (13/33), `vendor_boot` (4/33), `dtbo` (21/33) | Android 10+ layouts |
-| A/B slots | `boot_a`/`boot_b` (5/33), `vbmeta_a`/`vbmeta_b`, `lk_a`/`lk_b`, `tee_a`/`tee_b` | `kak.txt` (17 `_a` pairs), `ambio`/`aqibong`/`crew` (14 each), `dualima` |
-| Oppo/Realme reserves | `opporeserve1/2/3` (7 files), `oplusreserve1/2/3` (3 files), `oppo_custom`, `oplus_custom` | `due/empat/engkah/lime/pipit/seke/tri` (oppo), `ambio/aqibong/crew` (oplus) |
-| Samsung-derived | `md_udc` (18/33), `gsort` (8), `ffu` (6), `cust` (9), `countrycode` (2), `blk1` (2), `rescue` (2) | MT6785/MT6877 layouts |
-| MTK NV/security | `nvram`, `nvdata`, `nvcfg`, `protect1/2`, `seccfg`, `proinfo`, `otp`, `efuse`, `sec1` | ubiquitous |
-| FRP target | `frp` (27/33) | ubiquitous |
+| Retrofit dinamik | `super` (20/33), `vbmeta` (22/33), `vbmeta_system` (13/33), `vendor_boot` (4/33), `dtbo` (21/33) | Android 10+ düzenleri |
+| A/B slotlar | `boot_a`/`boot_b` (5/33), `vbmeta_a`/`vbmeta_b`, `lk_a`/`lk_b`, `tee_a`/`tee_b` | `kak.txt` (17 `_a` çifti), `ambio`/`aqibong`/`crew` (14'er), `dualima` |
+| Oppo/Realme rezervleri | `opporeserve1/2/3` (7 dosya), `oplusreserve1/2/3` (3 dosya), `oppo_custom`, `oplus_custom` | `due/empat/engkah/lime/pipit/seke/tri` (oppo), `ambio/aqibong/crew` (oplus) |
+| Samsung türevi | `md_udc` (18/33), `gsort` (8), `ffu` (6), `cust` (9), `countrycode` (2), `blk1` (2), `rescue` (2) | MT6785/MT6877 düzenleri |
+| MTK NV/güvenlik | `nvram`, `nvdata`, `nvcfg`, `protect1/2`, `seccfg`, `proinfo`, `otp`, `efuse`, `sec1` | evrensel |
+| FRP hedefi | `frp` (27/33) | evrensel |
 
-Practical consequence for FlashPilot: **a generic MTK partition map cannot be
-assumed.** `frp` is present in 27/33 layouts, but the surrounding layout differs
-enough (`opporeserve*` vs `oplusreserve*` vs Samsung `md_udc`/`gsort`) that the
-MTK flow must keep resolving partitions by name at runtime rather than by index.
+Pratik sonuç: **genel MTK bölüm haritası varsayılmaz.** `frp` 33 düzenin 27'sinde
+mevcut, ancak çevre düzen index yerine bölüm adıyla çözülmelidir, çünkü ortam çok
+farklıdır (`opporeserve*` vs `oplusreserve*` vs Samsung `md_udc`/`gsort`).
 
-### 4.4 Qualcomm side
+### 4.4 Qualcomm tarafı
 
-Six `rawprogram*.txt` files are **not** Qualcomm rawprogram XML despite the
-name — they are MediaTek FlashTool `<flashtool-config version="2.0">` wrappers
-that point back at the scatters above:
+Adları `rawprogram*.txt` olsa da altı dosya **Qualcomm rawprogram XML'i değildir**;
+MediaTek FlashTool `<flashtool-config version="2.0">` sarmalayıcısıdır ve
+yukarıdaki scatter'lara geri işaret eder:
 
-| File | Chip | Storage | Scatter referenced |
+| Dosya | Yonga | Depolama | Referans scatter |
 |---|---|---|---|
 | `rawprogram1.txt` | MT6739 | EMMC | `01c.txt` |
 | `rawprogram2.txt` | MT6739 | EMMC | `02.txt` |
 | `rawprogram3.txt` | MT6765 | EMMC | `03s.txt` |
-| `rawprogram4.txt` | — | — | corrupt 1,332-byte blob (not XML) |
+| `rawprogram4.txt` | — | — | bozuk 1,332 baytlık blob (XML değil) |
 | `rawprogram5.txt` | MT6765 | EMMC | `12.txt` |
 | `rawprogram6.txt` | MT6768 | EMMC | `22.txt` |
 
-The catalogue's 280 Qualcomm rows are therefore **not** backed by any
-rawprogram/patch XML in this corpus; they rely on user-supplied Firehose
-programmers.
+Kataloğun 280 Qualcomm satırı bu corpus içindeki herhangi bir
+rawprogram/patch XML'e dayanmaz; kullanıcı tarafından sağlanan Firehose
+programcılara güvenmektedir.
 
-## 5. The plain-text model lists
+## 5. Düz metin model listeleri
 
-11 text lists, 303 rows, **216 rows that appear in no JSON export** (212 after
-removing 4 in-list duplicates). They are not duplicates — they are a separate,
-older list (mostly 2016–2020 Huawei/Honor, Xiaomi/Redmi and iTel).
+11 metin listesi, 303 satır, **JSON export'ında görünmeyen 216 satır** (4 iç liste
+tekilleştirmesini kaldırınca 212). Bunlar kopya değil ayrı, daha eski bir listedir
+(çoğunlukla 2016–2020 Huawei/Honor, Xiaomi/Redmi ve iTel).
 
-| List | Rows | Brand | Notes |
+| Liste | Satır | Marka | Notlar |
 |---|---:|---|---|
-| `H.txt` | 59 | Huawei / Honor | Model codes only (`lld-al10`, `BKL-AL20`, `ANE-LX1`), some tablets (`Mediapad`, `Meta 7/8/9/10/20` — "Mate" misspelled) |
-| `X.txt` | 64 | Xiaomi / Redmi / POCO | Mixes marketing name + codename (`Redmi NOTE 7 (violet)`, `POCO X3 Pro (vayu)`) |
-| `itel.txt` | 60 | iTel | Clean marketing names, `Select Model...` placeholder on line 1 |
-| `V.txt` | 38 | Vivo / iQOO | Marketing names + `PD####` codes; one `Vivo NEX` duplicated with trailing space |
-| `S.txt` | 28 | Samsung | `Samsung A03 SM-A035F SPD` — the only place a transport is spelled out in a text list |
-| `Oppo.txt` | 27 | Oppo **+ Realme** | Mixed: `OPPO A76 (CPH2375)` … `REALME 9 (RMX3521)` |
-| `O.txt` | 14 | Oppo | Overlaps `Oppo.txt`; also carries 2 Realme rows (one misspelled `Relme Q3 Pro 5G`) |
+| `H.txt` | 59 | Huawei / Honor | Sadece model kodları (`lld-al10`, `BKL-AL20`, `ANE-LX1`), bazı tabletler (`Mediapad`, `Meta 7/8/9/10/20` — "Mate" yanlış yazılmış) |
+| `X.txt` | 64 | Xiaomi / Redmi / POCO | Pazarlama adı + takma ad karışımı (`Redmi NOTE 7 (violet)`, `POCO X3 Pro (vayu)`) |
+| `itel.txt` | 60 | iTel | Temiz pazarlama isimleri, satır 1'de `Select Model...` yer tutucu |
+| `V.txt` | 38 | Vivo / iQOO | Pazarlama isimleri + `PD####` kodları; biri `Vivo NEX` sondaki boşlukla çoğaltılmış |
+| `S.txt` | 28 | Samsung | `Samsung A03 SM-A035F SPD` — metin listelerindeki tek taşıma türü açıklaması |
+| `Oppo.txt` | 27 | Oppo **+ Realme** | Karışık: `OPPO A76 (CPH2375)` … `REALME 9 (RMX3521)` |
+| `O.txt` | 14 | Oppo | `Oppo.txt` ile örtüşür; ayrıca 2 Realme satırı taşır (bir tanesi `Relme Q3 Pro 5G` şeklinde yanlış yazılmış) |
 | `VS.txt` | 4 | Vsmart | `V140A`, `V430A`, `V620A`, `V640A` |
 | `L.txt` | 5 | LG | `Q51`, `Stylo 6`, `K51`, `V50 ThinQ`, `V60 ThinQ` |
 | `N.txt` | 2 | Nokia | `3.2`, `3.4 TA-1288/TA-1283` |
 | `I.txt` | 3 | iTel | `S42`, `A22`, `A22 Pro` |
 
-Cross-check: only **39 of 303** rows share a model code with the JSON exports.
-The text lists are complementary, not redundant, and are included in
-`device_catalogue.json` with `engine: "unknown"` where no platform is given.
+Karşılaştırma: 303 satırın yalnızca **39**'u JSON export'ındaki model koduyla ortaklık
+gösterir. Metin listeleri tamamlayıcıdır, yedek değildir; platform bilgisi yoksa
+`device_catalogue.json` içinde `engine: "unknown"` olarak tutulurlar.
 
-## 6. FlashPilot's device database
+## 6. FlashPilot'in cihaz veritabanı
 
-`python/gui/supported_devices.json` — 21 brand buckets, **719 models** (650
+`python/gui/supported_devices.json` — 21 marka bucket, **719 model** (650
 `researched`, 69 `planned`):
 
-| Bucket | Models | Engines |
+| Bucket | Modeller | Motorlar |
 |---|---:|---|
 | xiaomi | 112 | mtk 90, qcom 22 |
 | oppo | 80 | mtk 48, qcom 32 |
@@ -319,97 +317,97 @@ The text lists are complementary, not redundant, and are included in
 | meizu | 4 | mtk 4 |
 | asus_sharp | 3 | qcom 3 |
 
-Engine split of the database: **mtk 512, qcom 135, spd 59, odin 6, apple 6,
+Veritabanının motor dağılımı: **mtk 512, qcom 135, spd 59, odin 6, apple 6,
 motorola 1**.
 
-## 7. Coverage comparison
+## 7. Kapsama karşılaştırması
 
-### 7.1 Matching method and its limits
+### 7.1 Eşleştirme yöntemi ve sınırları
 
-Matching was deliberately conservative, in this order:
+Eşleştirme kasıtlı olarak muhafazakâr yapılmıştır, şu sırayla:
 
-1. **Model code** — normalize `SM-A155F`, `CPH2219`, `RMX3081`, `TA-1277`,
-   `LM-K520`, `PD1901` (strip punctuation/case) and require an exact
-   intersection. Strongest signal.
-2. **Exact product name** — brand prefix, model code and noise words
-   (`dual`, `sim`, `5G`, `Pro`) removed, then exact match on the remainder.
-3. **Token-prefix** — one name is a complete token-prefix of the other, with no
-   unmatched *number* between them (so `A14` ≠ `A14 Plus` is rejected, but
-   `Y5p` = `Y5P (DRA-LXX)` is accepted).
+1. **Model kodu** — `SM-A155F`, `CPH2219`, `RMX3081`, `TA-1277`,
+   `LM-K520`, `PD1901` biçimlerini normalleştir (noktalama/harf büyüklüğünü
+   kaldır) ve tam kesişim gerektir. En güçlü sinyal.
+2. **Tam ürün adı** — marka öneki, model kodu ve gürültü kelimeleri (`dual`,
+   `sim`, `5G`, `Pro`) kaldırıldıktan sonra kalan kısım üzerinde tam eşleşme.
+3. **Token-prefix** — bir isim diğerinin tam token-prefix'idir; arasında eşleşmeyen
+   *sayı* olmamalıdır (yani `A14` ≠ `A14 Plus` reddedilir ama `Y5p` = `Y5P (DRA-LXX)`
+   kabul edilir).
 
-Brand keys are mapped explicitly (Honor→`huawei`, Lenovo/Motorola→`motorola` and
-`lenovo`, TCL/ZTE→`tcl_zte`, Asus→`asus_sharp`, dead brands→`others`).
+Marka anahtarları açıkça eşlenir (Honor→`huawei`, Lenovo/Motorola→`motorola` ve
+`lenovo`, TCL/ZTE→`tcl_zte`, Asus→`asus_sharp`, ölü markalar→`others`).
 
-Limits, stated plainly:
+Sınırlar açıkça şöyle:
 
-- Catalogue names are `Devices` + `Models` concatenations
-  (`Samsung Galaxy A5 2016 (SM-A510F)`); the database uses short names
-  (`Galaxy A15`). A human would match more; the script does not guess.
-- The database has **one entry per generation**, the catalogue has **one entry
-  per SKU**. `Galaxy A15` therefore corresponds to no single catalogue row,
-  because the catalogue's newest Samsung A-series row is the A71/A52.
-- 212 text-only rows have no platform and often no model code, so they can only
-  be matched by name — and most are pre-2020 devices absent from the database.
-- 19 HiSilicon pseudo-rows and 2 stub scatters are not devices. Huawei's 135
-  catalogue rows are therefore ~116 phones + 19 SoC rows.
+- Katalog adları `Devices` + `Models` birleştirmeleridir
+  (`Samsung Galaxy A5 2016 (SM-A510F)`); veritabanı kısa adlar kullanır
+  (`Galaxy A15`). İnsan daha çok eşleşme yapardı; script tahmin etmez.
+- Veritabanı **tek nesil başına bir giriş** taşır, katalog ise **tek SKU başına
+  bir giriş** taşır. `Galaxy A15` dolayısıyla tek bir katalog satırına karşılık
+  gelmez; çünkü katalogun en yeni Samsung A serisi satırı A71/A52'dir.
+- 212 metin-only satırın platformu yoktur ve çoğu model kodu da yoktur; bunlar
+  yalnızca isimle eşlenebilir — çoğu 2020 öncesi cihazdır ve veritabanında yoktur.
+- 19 HiSilicon sahte satırı ve 2 stub scatter cihaz değildir. Huawei'nin 135
+  katalog satırı bu yüzden yaklaşık 116 telefon + 19 SoC satırıdır.
 
-Result: **745 of 1,396 catalogue rows (53%) resolve to a database model**, via
-719 database entries. Of the 651 remaining rows: MTK 276, unknown-platform 181,
-QCOM 101, SPD 49, Odin 44. The 181 unknown-platform rows are almost entirely
-text-list entries (§5) that were never given a chip.
+Sonuç: **1,396 katalog satırının 745'i (%53) veritabanı modeline çözümlenir**, 719
+veritabanı girdisi üzerinden. Geriye kalan 651 satırın dağılımı: MTK 276,
+bilinmeyen platform 181, QCOM 101, SPD 49, Odin 44. 181 bilinmeyen platform satırı
+çoğunlukla metin listesi girdileridir (§5) ve hiç yonga almamıştır.
 
-### 7.2 Structurally interesting remaining gaps
+### 7.2 Yapısal olarak ilginç kalan boşluklar
 
-Not just "more of the same":
+Sadece “daha fazlası” değil:
 
-| Gap | Catalogue evidence | Why it matters for FlashPilot |
+| Boşluk | Katalog kanıtı | FlashPilot için neden önemli |
 |---|---|---|
-| **Pre-2020 Samsung A/M/C/J series** | 131 Samsung rows; modern end stops at A71/A52, huge A3/A5/A7/A9 2016–2018 and C5/C7/C9 coverage | FlashPilot's Samsung bucket is 2023–2025 heavy. These are the devices a repair shop actually sees. |
-| **Tecno/Infinix MTK volume** | Tecno 85 (79 MTK), Infinix 56 (52 MTK) — Camon 11–18, Spark 2–8, Hot 6–12, Note 3–11 | 22 + 9 rows still unimported despite per-row SoC strings. |
-| **Oppo/Realme MTK layouts** | Oppo 157 (81 MTK), Realme 71 (49 MTK) with `opporeserve*` partition sets | Directly informs the MTK flow's partition resolver on Oppo/Realme FRP (which partitions to avoid). |
-| **iTel SPD breadth** | 107 iTel rows, 65 SPD (SC7731/SC7731E/SC9832E/SC9863A), 42 unknown-platform text rows | The full A12–A60 / Vision / S-series map; 78 rows still missing. |
-| **Huawei/Honor Kirin FRP** | 19 HiSilicon chip-level rows (kirin 620–970) + 116 Huawei/Honor phones | FlashPilot's Huawei bucket is MediaTek/Qualcomm only. The Kirin TP/FRP path is uncovered. |
-| **12 brands with no bucket** | 148 rows across LG, Alcatel, HTC, Allview, Coolpad, Micromax, Vsmart, Yezz, Asus (legacy), Amazon, Archos, Symphony | Almost all MediaTek with the platform already given — lowest-risk imports. |
-| **Qualcomm EDL breadth** | 280 rows with an `Edl` flag, 215 explicit `Edl:Edl` | 101 QCOM rows not yet in the database form a ready-made EDL candidate set. |
+| **2020 öncesi Samsung A/M/C/J serisi** | 131 Samsung satırı; modern uç A71/A52'yle biter, 2016–2018 A3/A5/A7/A9 kapsamı çok geniştir | FlashPilot Samsung bucket'ı 2023–2025 ağırlıklı. Bunlar tamir atölyelerinde görülen cihazlar. |
+| **Tecno/Infinix MTK hacmi** | Tecno 85 (79 MTK), Infinix 56 (52 MTK) — Camon 11–18, Spark 2–8, Hot 6–12, Note 3–11 | 22 + 9 satır hâlâ ithal edilmedi, vaikka her satır SoC dizesi taşıyor. |
+| **Oppo/Realme MTK düzenleri** | Oppo 157 (81 MTK), Realme 71 (49 MTK) ve `opporeserve*` bölüm setleri | MTK akışının Oppo/Realme FRP bölüm çözücüsü için doğrudan önemli (hangi bölümleri kaçınmalı). |
+| **iTel SPD genişliği** | 107 iTel satırı, 65 SPD (SC7731/SC7731E/SC9832E/SC9863A), 42 bilinmeyen platform metin satırı | A12–A60 / Vision / S serisi tam haritası; 78 satır hâlâ eksik. |
+| **Huawei/Honor Kirin FRP** | 19 HiSilicon yonga düzeyi satırı (kirin 620–970) + 116 Huawei/Honor telefonu | FlashPilot Huawei bucket'ı yalnızca MediaTek/Qualcomm. Kirin TP/FRP yolu kapalı. |
+| **Bucket'ı olmayan 12 marka** | LG, Alcatel, HTC, Allview, Coolpad, Micromax, Vsmart, Yezz, Asus (eski), Amazon, Archos, Symphony üzerinde 148 satır | Hemen hemen hepsi MTK, platform verisi zaten var — en düşük risk ithalat. |
+| **Qualcomm EDL genişliği** | `Edl` bayrağı taşıyan 280 satır, 215'i açıkça `Edl:Edl` | Veritabanında henüz olmayan 101 QCOM satırı hazır EDL aday seti oluşturur. |
 
-### 7.3 What FlashPilot covers that the catalogue does not
+### 7.3 FlashPilot'in katalogdan daha çok kapsadığı alanlar
 
-Grouped, for the 69 `planned` models plus the curated core:
+69 `planned` model ve seçilmiş çekirdek için özetlenmiş şekilde:
 
-| Category | Count | Examples |
+| Kategori | Sayı | Örnekler |
 |---|---:|---|
 | 2023–2025 Samsung | 8 | Galaxy A05, A06, A14, A15, A15 5G, A16, A16 5G |
-| Apple (all) | 6 | iPhone 6s → iPhone 12, SE 2020 — the catalogue has **no Apple data at all** |
+| Apple (tamamı) | 6 | iPhone 6s → iPhone 12, SE 2020 — katalogda **Apple verisi yok** |
 | 2023+ Xiaomi/Redmi/POCO | 8 | Redmi 12, 13C, Note 12, Note 13 4G/5G, Poco C65/M6/X6 |
 | 2023+ Oppo/Realme | 10 | Oppo A17/A18/A38/A58, Reno 10/11, Realme C53/C55/Note 50/11 Pro |
 | 2023+ Tecno/Infinix | 9 | Tecno Pop 8, Spark 10/10C/20, Camon 20; Infinix Hot 30i/40, Smart 8, Note 30 |
-| OnePlus | 5 | Nord N20/N30/CE3, 11R, 12R — the catalogue has only 2 OnePlus rows |
+| OnePlus | 5 | Nord N20/N30/CE3, 11R, 12R — katalogda yalnızca 2 OnePlus satırı var |
 | Motorola modern | 6 | Moto G13/G24/G34/G84, Edge 40 |
 | ZTE Blade / TCL 2023 | 5 | ZTE Blade A54/A72, TCL 40 SE, 305 |
 | Asus/Sharp 2022+ | 3 | Zenfone 9/10, Aquos sense7 |
 | Nokia 2021+ | 4 | G21, G42, C32, 3.4 |
 
-Two honest caveats:
+İki dürüst uyarı:
 
-- **The catalogue is older, but wider.** Its newest rows are ~2022 (Oppo Reno 6,
-  Redmi Note 11, Tecno Camon 18). FlashPilot's `planned` list is newer. Neither
-  is a superset.
-- **Some "gaps" are naming artifacts.** `Galaxy A15` vs `Galaxy A71` is a real
-  generation gap; `Nokia G21` vs `Nokia G20` is adjacent but a different device.
-  A few are pure spelling (`Pocophone` vs `Poco`, `Relme`, `Meta` for Mate). A
-  human-curated pass closes the spelling cases but not the generation gaps.
+- **Katalog daha eski ama daha geniştir.** En yeni satırları ~2022 civarıdır (Oppo
+  Reno 6, Redmi Note 11, Tecno Camon 18). FlashPilot'in `planned` listesi daha yeni.
+  İkisi de üst küme değildir.
+- **Bazı “boşluklar” adlandırma artefaklarıdır.** `Galaxy A15` ile `Galaxy A71`
+  gerçek nesil farkı; `Nokia G21` ile `Nokia G20` bitişik ama farklı cihazdır. Bazıları
+  saf yazım hatasıdır (`Pocophone` vs `Poco`, `Relme`, `Meta` for Mate). İnsan
+doğrulamalı bir geçiş bu yazım vakalarını kapatır, nesil boşluklarını değil.
 
-### 7.4 Generation ceilings (sanity check)
+### 7.4 Nesil tavanları (sağlamlık kontrolü)
 
-Highest model number per family in the catalogue — the clearest statement of how
-old the data is:
+Katalogdaki her aile için en yüksek model numarası — verinin ne kadar eski olduğunu
+en net gösteren ifade:
 
-| Family | Catalogue ceiling | FlashPilot's newest |
+| Aile | Katalog tavanı | FlashPilot'in en yenisi |
 |---|---:|---|
 | Samsung Galaxy A | A71 | A16 |
-| Samsung Galaxy M | M32 | (no M-series entries) |
+| Samsung Galaxy M | M32 | (M serisi girişi yok) |
 | Redmi Note | Note 11 | Note 13 |
-| Redmi (numeric) | 9 (plus 10X/20X) | 13C |
+| Redmi (sayısal) | 9 (artı 10X/20X) | 13C |
 | Oppo A | A96 | A58 |
 | Oppo Reno | Reno 6 | Reno 11 |
 | Vivo Y | Y95 | Y36 |
@@ -422,50 +420,49 @@ old the data is:
 | Nokia G | G20 | G42 |
 | Honor | Honor 50 | Honor 90 |
 
-## 8. Import rules used for the database
+## 8. Veritabanı için kullanılan ithalat kuralları
 
-- **Engine** from transport flags: `Edl` → `qcom`, `spd` → `spd`, `Odin` →
-  `odin`, otherwise `mtk`. `Conn=auth`/`Brom` stay as per-row connection state.
-- **Identity**: cleaned device line as `model`, model codes kept in parentheses;
-  `vid` fixed by engine (mtk `0e8d`, qcom `05c6`, spd `1782`, odin `04e8`).
-  Samsung MediaTek rows keep a dual `04e8|0e8d`.
-- **Excluded on import**: dead-brand rows (LG/HTC/BlackBerry/…), 2016–2017-era
-  SoCs (MT65xx/MT6735/6737/MT6750/53/55/679x, SD410/425/430/450/615/625,
-  SC7731x), Exynos/Odin rows, and UI placeholder lines (`* : Auto`).
-- **Status**: imported rows are `researched` because the engine-level flows are
-  wired; per-model `actions` still ride the row for the model-page tooltip.
-- **No `source` field.** The database deliberately carries no per-row
-  provenance; the catalogue is the research input, the database is the product.
+- **Motor** taşıma bayraklarından gelir: `Edl` → `qcom`, `spd` → `spd`, `Odin` →
+  `odin`, aksi halde `mtk`. `Conn=auth`/`Brom` satırın bağlantı durumunu korur.
+- **Kimlik**: temizlenen cihaz satırı `model` olarak; model kodları parantez içinde
+  tutulur; `vid` motor bazlı sabittir (mtk `0e8d`, qcom `05c6`, spd `1782`, odin `04e8`).
+  Samsung MediaTek satırları çift `04e8|0e8d` taşır.
+- **İthalat dışı**: ölü marka satırları (LG/HTC/BlackBerry/…), 2016–2017 dönem SoC'leri
+  (MT65xx/MT6735/6737/MT6750/53/55/679x, SD410/425/430/450/615/625,
+  SC7731x), Exynos/Odin satırları ve arayüz yer tutucuları (`* : Auto`).
+- **Durum**: ithal edilen satırlar `researched`'tır çünkü motor seviyesindeki akışlar
+  bağlanmıştır; model sayfası tooltip'lerinin `actions` alanı yine satıra dayanır.
+- **`source` alanı yok.** Veritabanı kasıtlı olarak satır başına provenans taşımıyor;
+  katalog araştırma girdisidir, veritabanı ürün çıktısıdır.
 
-## 9. What to do next
+## 9. Sonraki adımlar
 
-Ordered by value per unit of work:
+Değer / iş hacmi sırasına göre:
 
-1. **Import the remaining 148 rows from the 12 unbucketed brands** as
-   `status: "planned"`. They are almost all MediaTek, the platform is given per
-   row, and there is no naming-collision risk. Lowest risk, largest brand-count
-   gain.
-2. **Use the catalogue's per-row `Platform` as the chip field** for
-   Tecno/Infinix/iTel/Oppo/Realme. This is the single most useful column in the
-   corpus: nearly every device row carries a concrete SoC string (only a handful
-   are blank), versus 719 hand-written database `chip` values.
-3. **Adopt the `opporeserve*` / `oplusreserve*` partition sets** into the MTK
-   flow's partition-resolver tests. These are real Oppo/Realme layouts, and the
-   A/B + `super` layouts cover the Android 10+ case.
-4. **Do not trust `Storage`.** It contains `FRP`, `TP`, `Test`, `factory`,
-   `MIUI 12`. Storage must come from the scatter, not from the export.
-5. **Treat the two stub scatters as templates only** — a single `preloader` row
-   with a dead absolute path is not a device layout.
-6. **Ignore the `rawprogram*` files for Qualcomm.** They are MediaTek FlashTool
-   XML; the corpus ships no Qualcomm rawprogram XML.
-7. **Do not import the 19 HiSilicon rows as devices** — they are chip-level
-   FRP/TP entries. Useful as `chip` metadata, wrong as `model`.
+1. **12 bucket'ı olmayan markadan kalan 148 satırı** `status: "planned"` olarak
+   ithal et. Hemen hemen hepsi MediaTek, platform satır başına verilmiş ve ad
+   çakışma riski düşüktür. En düşük risk, en büyük marka sayısı kazancı.
+2. **Katalogun satır başına `Platform` alanını yonga alanı olarak kullan.** Bu,
+   corpus içindeki en yararlı sütundur: neredeyse her cihaz satırı somut bir SoC
+   dizesi taşır (çok azı boş), 719 elle yazılmış veritabanı `chip` değerine kıyasla
+   çok daha yararlıdır.
+3. **MTK akışının bölüm çözücü testine `opporeserve*` / `oplusreserve*` bölüm
+   setlerini uygula.** Bunlar gerçek Oppo/Realme düzenleri; A/B + `super`
+   düzenleri Android 10+ durumunu kapsar.
+4. **`Storage`'a güvenme.** İçinde `FRP`, `TP`, `Test`, `factory`, `MIUI 12`
+   bulunur. Depolama, export'tan değil scatter'dan gelmelidir.
+5. **İki stub scatter'ı yalnızca şablon olarak gör.** Tek `preloader` satırı ve ölü
+   mutlak yol, cihaz düzeni değildir.
+6. **Qualcomm için `rawprogram*` dosyalarını görmezden gel.** Bunlar MediaTek
+  FlashTool XML'leri; corpus içinde Qualcomm rawprogram XML yoktur.
+7. **19 HiSilicon satırını cihaz olarak ithal etme** — bunlar yonga düzeyi FRP/TP
+   girdileridir. `chip` metadata olarak yararlıdır, `model` olarak yanlıştır.
 
-## 10. Validation
+## 10. Doğrulama
 
 ```bash
 python3 -c "import json;json.load(open('operations/device_research/device_catalogue.json'))"
 ```
 
-Counts in this document were regenerated against the catalogue at the time of
-writing: 1,396 catalogue rows, 35 brands, 719 database models, 745 matched rows.
+Bu dokümandaki sayımlar yazıldığı tarihte kataloga göre yeniden üretildi: 1,396
+katalog satırı, 35 marka, 719 veritabanı modeli, 745 eşleşen satır.
