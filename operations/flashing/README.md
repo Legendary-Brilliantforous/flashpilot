@@ -1,20 +1,19 @@
-# flashing/ — Device flashing engines
-One folder per engine, model-aware.
+# flashing/ — Cihaz yazma (flashing) motorları
+Motor başına bir klasör, model farkındalığı.
 
 ```
 flashing/
-  samsung/   — Odin / PIT / sam_flash.rs (split of src/odin.rs 1960 lines) + vbmeta patch
+  samsung/   — Odin / PIT / sam_flash.rs (src/odin.rs 1960 satırının bölünmüş hali) + vbmeta yamalama
   mediatek/  — MTK DA / scatter / GPT (src/mtk.rs 946, mtk_da.rs 1846, mtk_exploit.rs 824)
   qualcomm/  — QCOM Sahara/Firehose (src/qualcomm/{sahara,firehose,mbn,gpt,mod}.rs)
-  unisoc/    — SPD FDL + PAC (src/spd.rs 2496, `pac_extract`/`pac_pack` + `ofp_extract` rows in `src/flows.rs`; the old `python/core/pac.py` was retired with the Python engine)
-  pit/       — PIT intelligence (python/core/pit.py 636 lines, pitstore, odin4 verifier)
+  unisoc/    — SPD FDL + PAC (src/spd.rs 2496, `pac_extract`/`pac_pack` + `ofp_extract` satırları `src/flows.rs`; eski `python/core/pac.py` Python motoru ile birlikte emekliye ayrıldı)
+  pit/       — PIT zekâsı (python/core/pit.py 636 satır, pitstore, odin4 doğrulayıcı)
 ```
-Big files will be split per-feature: sam_flash.rs -> samsung/{pit.rs, odin_session.rs, vbmeta.rs, flash.rs}
+Büyük dosyalar özellik bazında bölünecek: sam_flash.rs -> samsung/{pit.rs, odin_session.rs, vbmeta.rs, flash.rs}
 
-Per-engine capability registers (commands, prerequisites, device-page
-wiring, open gaps) live in `../device_research/feature_logic_matrix.md`;
-the MTK per-SoC tables are in `../device_research/mtk_chip_matrix.md`.
+Motor bazlı yetenek kayıtları (komutlar, ön koşullar, cihaz sayfası
+bağlantıları, açık boşluklar) `../device_research/feature_logic_matrix.md` içinde yaşar;
+MTK SoC bazlı tablolar `../device_research/mtk_chip_matrix.md` içinde.
 
-Bundled payloads: `payloads/mtk` (mtkclient DA/payloads, GPLv3) and
-`payloads/qcom` (firehose programmers + SoC index). Unisoc FDL1/FDL2 are
-read out of the PAC, so no loader store is shipped.
+Dahil edilen yükler: `payloads/mtk` (mtkclient DA/payloadler, GPLv3) ve
+`payloads/qcom` (firehose programcıları + SoC dizini). Unisoc FDL1/FDL2 PAC içinden okunur, bu nedenle yükleyici deposu teslim edilmez.

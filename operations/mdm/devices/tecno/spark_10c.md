@@ -1,5 +1,5 @@
 # Spark 10C — MDM
-Chip: Unisoc UMS9230 (T606)
-Engine: spd
-MDM actions: mdm_unlock, mdm_diagnostics, kg_state_check
-Notes: Spark 10C = KI5k codename, Unisoc UMS9230, Android 12 (API 31), TECNO/TECNO-KI5k. ADB researched live (serial 10545373A6137053). Per-model reverse-engineered flows: FRP/MDM/Screen-Lock (ADB + BROM) plus enable_adb and device_check. Flash routes to the SPD tab for FDL1/FDL2.
+Çip: Unisoc UMS9230 (T606)
+Motor: spd
+MDM eylemleri: mdm_unlock, mdm_diagnostics, kg_state_check
+Notlar: Spark 10C = KI5k kod adı, Unisoc UMS9230, Android 12 (API 31), TECNO/TECNO-KI5k. ADB canlı olarak araştırıldı (seri 10545373A6137053). Model bazlı tersine mühendislik edilmiş akışlar: FRP/MDM/Ekran Kilidi (ADB + BROM) ve ayrıca `enable_adb` ile `device_check`. Flaş yolları FDL1/FDL2 için SPD sekmesine yönlendirilir.

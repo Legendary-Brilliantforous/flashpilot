@@ -1,14 +1,13 @@
-# dll_protocol.md — .NET DLL + native CLI internals
+# dll_protocol.md — .NET DLL + native CLI iç yapıları
 
-The MTK/SPD engines of Moto-M Tool ride on a .NET assembly
-(`MToolMTK.dll`/`MToolSPD.dll`, downloaded on demand — not shipped) and a
-native x86 CLI (`spd.dll`). What IS shipped and decompiled here:
+Moto-M Tool'un MTK/SPD motorları bir .NET derlemesi
+(`MToolMTK.dll`/`MToolSPD.dll`, isteğe bağlı indirilir — yükleyici içinde gelmez) ve bir native x86 CLI (`spd.dll`) üzerine kuruludur. Burada gerçekten teslim edilen ve decompile edilenler:
 
-- `MTool_EROFS.dll` — .NET, fully decompiled (ILSpy 8.2) → `MTool.EROFS`
-  + `SuperExt4Reader` (63 source files)
-- `spd.dll` / `spd2.dll` / `spd3.dll` — native PE32 CLI, strings-analyzed
+- `MTool_EROFS.dll` — .NET, tam decompile edildi (ILSpy 8.2) → `MTool.EROFS`
+  + `SuperExt4Reader` (63 kaynak dosya)
+- `spd.dll` / `spd2.dll` / `spd3.dll` — native PE32 CLI, string analizi
 
-## MToolErofsApi (the shipped EROFS patcher)
+## MToolErofsApi (teslim edilen EROFS patcher)
 
 ```csharp
 public static class MToolErofsApi {
@@ -20,108 +19,92 @@ public static class MToolErofsApi {
 }
 ```
 
-### PatchBuild — build.prop signature injection
+### PatchBuild — build.prop imza enjeksiyonu
 
-- Default signature: `"Moto-M Tool Power"`.
-- `BuildPropPatcher.Scan(explorer, signature)` → matches of `ro.build.id`
-  / `ro.build.display.id` lines across all partitions in the super image.
-- `AnalyzeSettingsDisplaySource` → finds where `android.os.Build.DISPLAY`
-  comes from: either a static `ro.build.display.id` prop (selected
-  directly) or a **runtime assignment** (`ro.build.display.id` set at
-  runtime — then `PatchRuntimeDisplayAssignments` patches the source
-  props feeding it).
-- `Patch(explorer, scan, allowCompressedErofs: true)` — rewrites the
-  prop **inside compressed EROFS** too (the reader handles
-  EROFS + ext4 + F2FS).
-- Result: `MToolPatchResult { Operation: "patch-build", Success, Error,
+- Varsayılan imza: `"Moto-M Tool Power"`.
+- `BuildPropPatcher.Scan(explorer, signature)` → `ro.build.id`
+  / `ro.build.display.id` satırları için tüm bölümlerde eşleşmeler bulur.
+- `AnalyzeSettingsDisplaySource` → `android.os.Build.DISPLAY` nereden geldiğini bulur: ya statik bir `ro.build.display.id` özelliği (doğrudan seçilir) ya da bir **çalışma anı ataması** (`ro.build.display.id` çalışma anında atanır — sonra `PatchRuntimeDisplayAssignments` besleyen kaynak özelliği yamalar).
+- `Patch(explorer, scan, allowCompressedErofs: true)` — özelliği sıkıştırılmış EROFS içinde bile yeniden yazar (okuyucu EROFS + ext4 + F2FS yönetir).
+- Sonuç: `MToolPatchResult { Operation: "patch-build", Success, Error,
   Signature, SelectedTarget: "<partition>:<file> <key>", FileSystem,
   PatchedFiles[], Warnings[] }`.
 
-### PatchHosts — /etc/hosts rewrite
+### PatchHosts — /etc/hosts yeniden yazma
 
-- `HostsPatcher.Analyze(explorer, rulesPath, "127.0.0.1")` → plan with
-  targets per `<partition>:<file>` (the usual `/system/etc/hosts`).
+- `HostsPatcher.Analyze(explorer, rulesPath, "127.0.0.1")` → her `<partition>:<file>` için hedef planı (genelde `/system/etc/hosts`).
 - `Patch(explorer, plan, allowCompressed: true, patchAllTargets: false)`
-  — patches the FIRST target by default; `patchAllTargets` for all.
-- The rules file is the classic ad-block/redirect hosts format
-  (`127.0.0.1 domain`), delivered by the server (`get_assets` →
-  `hosts_rules`).
+  — varsayılan olarak ilk hedefi yamalar; `patchAllTargets` hepsini yapar.
+- Kural dosyası klasik reklam engelleme/yönlendirme hosts formatıdır
+  (`127.0.0.1 alan`), sunucu tarafından teslim edilir (`get_assets` → `hosts_rules`).
 
-### RemoveApks — batch APK removal from the system image
+### RemoveApks — sistem imajından toplu APK kaldırma
 
-- Input JSON: `{ "<partition>": ["path/to/app.apk", ...], ... }`.
-- `ApkBatchRemover.Scan` → candidates; `Delete` → batch removal
-  (EROFS/ext4). Result lists removed vs warned + not-found.
+- Girdi JSON: `{ "<partition>": ["path/to/app.apk", ...], ... }`.
+- `ApkBatchRemover.Scan` → adayları bulur; `Delete` → toplu kaldırma
+  (EROFS/ext4). Sonuç kaldırılan vs uyarı + bulunamayan listelerini döndürür.
 
-### OpenExplorer — image/chunk handling
+### OpenExplorer — görüntü/parça işleme
 
 ```
-Directory OR '*sparsechunk.*' file
+Directory OR '*sparsechunk.*' dosyası
     → PartitionExplorer.OpenMultiChunk(
-          MultiChunkSparseStream.FindAndSortChunks(path))   # sparse set sorted by index
+          MultiChunkSparseStream.FindAndSortChunks(path))   # sparse set sıralı indeks
 plain image file
     → new PartitionExplorer(path)
 ```
 
-`SuperExt4Reader` internals (shipped, decompiled): EROFS super block +
-compact/extended inodes + LZ4 cluster configs (`ZErofsLz4Cfgs`), ext4
-reader, F2FS utils, `PartitionExplorer` for multi-partition super
-images, `GetFileLayoutInfo(partition, path).FileSystem` to report which
-FS a file lives in.
+`SuperExt4Reader` iç yapıları (teslim edilmiş, decompile edilmiş): EROFS süper bloğu +
+compact/extended inode + LZ4 küme yapılandırmaları (`ZErofsLz4Cfgs`), ext4 okuyucu, F2FS yardımcıları,
+`PartitionExplorer` çoklu bölüm süper imajları için, `GetFileLayoutInfo(partition, path).FileSystem` dosyanın hangi FS'te olduğunu bildirir.
 
-This is the "custom signature" ROM patching knowledge
-(see [motorola_unlock.md](./motorola_unlock.md) § ROM patcher): the
-signature ends up in `ro.build.display.id` inside the (possibly
-compressed-EROFS) super image, hosts get redirected, and listed APKs
-are stripped — all without ever unpacking the image to disk.
+Bu, "özel imza" ROM yamalama bilgisidir
+(bkz. [motorola_unlock.md](./motorola_unlock.md) § ROM patcher): imza `ro.build.display.id` içinde görünür (muhtemelen sıkıştırılmış-EROFS) süper imajda yer alır, hosts yönlendirilir ve listelenen APK'lar kaldırılır — tüm bunlar imajı diske asla çıkarmadan yapılır.
 
-## spd.dll — native exploit CLI (command set)
+## spd.dll — native exploit CLI (komut kümesi)
 
-`spd.dll` (also `spd2/3.dll` backup variants) is the native x86
-Spreadtrum/UNISOC exploit runner invoked as a child process (see
-[spd.md](./spd.md)). Full command surface from the binary:
+`spd.dll` (aynı zamanda `spd2/3.dll` yedek varyasyonları) native x86
+Spreadtrum/UNISOC exploit çalıştırıcısıdır; alt süreç olarak çağrılır (bkz.
+[spd.md](./spd.md)). İkili dosyanın tam komut yüzeyi:
 
 ```
-fdl FILE addr                    upload FDL stage to load address
-exec                             execute FDL2
-exec_addr ADDR                   exploit exec at address
-erase_part part_name/part_id     erase partition
-write_part part_name/part_id F   write partition
-read_parts partition_list_file   read partitions
-write_parts save_location        write all partitions
-partition_list FILE              XML partition list
-preset_modem                     modem preset
-chip_uid                         read chip UID
-reset                            reset device
+fdl FILE addr                    FDL aşamasını yükleme adresine yükler
+exec                             FDL2 çalıştırır
+exec_addr ADDR                   adreste exploit çalıştırır
+erase_part part_name/part_id     bölümü siler
+write_part part_name/part_id F   bölüme yazar
+read_parts partition_list_file   bölümleri okur
+write_parts save_location        tüm bölümleri yazar
+partition_list FILE              XML bölüm listesi
+preset_modem                     modem ön ayarı
+chip_uid                         çip UID oku
+reset                            cihazı sıfırlar
 ```
 
-Protocol markers in the binary (the BSL conversation):
+İkili içindeki protokol işaretleyicileri (BSL konuşması):
 
 ```
-CMD_CONNECT bootrom / CMD_CONNECT FDL1    # connection phases
-CHECK_BAUD FDL1 / CHANGE_BAUD FDL1 to %d  # baud negotiation
-KEEP_CHARGE FDL1                          # charge-only flag
+CMD_CONNECT bootrom / CMD_CONNECT FDL1    # bağlantı aşamaları
+CHECK_BAUD FDL1 / CHANGE_BAUD FDL1 to %d  # baud anlaşması
+KEEP_CHARGE FDL1                          # şarj-only bayrağı
 EXEC FDL2 / "FDL2 ALREADY EXECUTED, SKIP"
 "BOOT COMPLETED: Device is now in FDL2 mode."
 BSL_REP_VER / BSL_REP_LOG / BSL_REP_READ_CHIP_UID
-ENABLE_WRITE_RAW_DATA / DISABLE_WRITE_RAW_DATA in SPRD4
+enable_write_raw_data / disable_write_raw_data in SPRD4
 "Warning: disable dm-verity needs a write-verification-disabled FDL2"
 ```
 
-Output formats: partition tables as
+Çıktı formatları: bölüm tabloları olarak
 `%-3d %-20s 0x%08llX 0x%08llX 0x%010llX %.2f MB` + `[END_OF_PARTITIONS]`,
-XML dumps (`partition_%lld.xml`), per-part progress
+XML dökümleri (`partition_%lld.xml`), bölüm bazlı ilerleme
 (`Write Part Done: %s, target: 0x%llx, written: 0x%llx`).
-Checksum checks: `bad checksum (0x%04x, expected 0x%04x [or 0x%04x])`.
+Checksum kontrolleri: `bad checksum (0x%04x, expected 0x%04x [or 0x%04x])`.
 
-The escaping/framing and CRC details of this protocol are documented in
-[spd.md](./spd.md) (from the pure-Python `spd_do_handshake`).
+Kaçış/çerçeveleme ve CRC detayları bu protokolün [spd.md](./spd.md) içinde anlatılmıştır
+(saf-Python `spd_do_handshake` üzerinden).
 
-## Not decompilable here
+## Burada decompile edilemeyenler
 
-- `MToolMTK.dll` / `MToolSPD.dll` — server-downloaded (auth-gated), not
-  shipped in the installer. Their Python-side API surface is documented
-  in [mtk.md](./mtk.md) / [spd.md](./spd.md).
-- `Channel9.dll` — native PE32, minor (log channel helper).
-- `src/auto_crash` — Cython-compiled (compressed strings); symbol
-  surface documented in [mtk.md](./mtk.md).
+- `MToolMTK.dll` / `MToolSPD.dll` — sunucu tarafından indirilir (kimlik doğrulamalı), yükleyicide gelmez. Python tarafı API yüzeyi [mtk.md](./mtk.md) / [spd.md](./spd.md) içinde belgelenmiştir.
+- `Channel9.dll` — native PE32, küçük (log kanal yardımcı programı).
+- `src/auto_crash` — Cython derlenmiş (sıkıştırılmış dizeler); sembol yüzeyi [mtk.md](./mtk.md) içinde belgelenmiştir.

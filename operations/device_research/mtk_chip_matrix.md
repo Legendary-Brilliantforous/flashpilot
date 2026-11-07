@@ -1,33 +1,33 @@
-# MTK chip support matrix
+# MTK yonga destek matrisi
 
-Planning record for FlashPilot's MTK chip-coverage expansion, cross-checked
-against upstream `bkerler/mtkclient` (`mtkclient/config/brom_config.py`, main)
-and against the per-SoC parameter set published by the MIT-licensed
-`chaanel/bypass_utility` project.
+FlashPilot'in MTK yonga kapsama alanını genişletme planı kaydı; üst akış
+`bkerler/mtkclient` (`mtkclient/config/brom_config.py`, ana dal) ve MIT lisanslı
+`chaanel/bypass_utility` projesi tarafından yayınlanan SoC bazlı parametre setiyle
+karşılaştırılarak hazırlanmıştır.
 
-| | Chips |
+| | Yonga |
 |---|---|
-| Before | 17 |
-| Added — kamakiri2 (Group A) | 17 |
-| Added — bypass_utility (Group B) | 18 |
-| **After** | **52** |
+| Önce | 17 |
+| Eklendi — kamakiri2 (Grup A) | 17 |
+| Eklendi — bypass_utility (Grup B) | 18 |
+| **Sonra** | **52** |
 
-Two exploit engines are now selected per chip:
+Şimdi her yonga için iki exploit motoru seçilir:
 
-- **kamakiri2** — CVE-2020-11152 line-coding overflow; needs `send_ptr` and
-  `brom_reg_ptr`. Covers 2020-era and newer SoCs.
-- **bypass_utility** — watchdog-adjacent pointer write + `0xE0` upload + USB
-  control-transfer jump. Port of `chaanel/bypass_utility` (MIT). Covers older
-  SoCs that predate CVE-2020-11152.
+- **kamakiri2** — CVE-2020-11152 satır kodlama taşması; `send_ptr` ve
+  `brom_reg_ptr` gerektirir. 2020 dönemi ve sonrası SoC'leri kapsar.
+- **bypass_utility** — watchdog'a bitişik işaretçi yazımı + `0xE0` yükleme + USB
+  kontrol transfer atlaması. `chaanel/bypass_utility` (MIT) portu. CVE-2020-11152
+  öncesi daha eski SoC'leri kapsar.
 
-`MtkChipConfig::exploit` selects the engine; `payload` names the bundled BootROM
-payload used by `BypassUtility`.
+`MtkChipConfig::exploit` motoru seçer; `payload`, `BypassUtility` tarafından
+kullanılan paketlenmiş BootROM payload'ını adlandırır.
 
 ---
 
-## Existing 17 (kamakiri2, unchanged)
+## Mevcut 17 (kamakiri2, değişmeden)
 
-| hw | Name | watchdog |
+| hw | Ad | watchdog |
 |---|---|---|
 | `0x699` | MT6739/MT6731/MT8765 | `0x10007000` |
 | `0x766` | MT6765/MT8768T | `0x10007000` |
@@ -44,50 +44,51 @@ payload used by `BypassUtility`.
 | `0x959` | MT6877/MT8791N | `0x10007000` |
 | `0x1129` | MT6855 | `0x1c007000` |
 | `0x1209` | MT6835V | `0x1C007000` |
-| `0x6899` | MT6899 | `0x1C010000` ⚠ see note |
+| `0x6899` | MT6899 | `0x1C010000` ⚠ not: bakınız |
 | `0x6781` | MT6781 | `0x10007000` |
 
-> ⚠ **MT6899 watchdog** disagrees with upstream (`0x1C00B000`). Upstream also
-> comments out its `send_ptr`/`brom_register_access`, so this entry is
-> speculative either way. Needs hardware confirmation — see
+> ⚠ **MT6899 watchdog** üst akışla çelişiyor (`0x1C00B000`). Üst akış ayrıca
+> `send_ptr`/`brom_register_access` için yorum satırı ekliyor; bu giriş her iki
+yönde de spekülatiftir. Donanım doğrulaması gerekiyor — bkz.
 > `mtk_gap_analysis.md` §7.2.
 
 ---
 
-## Group A — 17 additions, kamakiri2
+## Grup A — 17 ekleme, kamakiri2
 
-All `send_ptr`/`brom_reg_ptr` values verified against upstream mtkclient.
-Four (`0x717`, `0x8127`, `0x8163`, `0x8590`) are also present in
-bypass_utility's published config with identical values; the other 13 are
-upstream-only.
+Tüm `send_ptr`/`brom_reg_ptr` değerleri üst akış mtkclient ile doğrulandı.
+Dört tanesi (`0x717`, `0x8127`, `0x8163`, `0x8590`) ayrıca bypass_utility'nin
+yayınlanmış konfigürasyonunda da aynı değerlerle yer alıyor; diğer 13 tanesi
+yalnızca üst akıştan geliyor.
 
-| hw | Name | watchdog | send_ptr | brom_reg_ptr | var1 | Cross-check |
+| hw | Ad | watchdog | send_ptr | brom_reg_ptr | var1 | Karşılaştırma |
 |---|---|---|---|---|---|---|
-| `0x717` | MT6761/MT6762/MT3369/MT8766B/MT8761/AC8259/AC8257 | `0x10007000` | `0xbc8c` | `0xc158` | `0x25` | upstream + bypass_utility |
-| `0x8127` | MT8127/MT3367/AC8227L | `0x10007000` | `0xb2b8` | `0xb740` | `0xA` | upstream + bypass_utility |
-| `0x8163` | MT8163 | `0x10007000` | `0xc12c` | `0xc5c8` | `0xB1` | upstream + bypass_utility |
-| `0x8590` | MT8590/MT7683/MT8521/MT7623 | `0x10007000` | `0xbbe4` | `0xc06c` | `0xA` | upstream + bypass_utility |
-| `0x571` | MT0571 | `0x10007000` | `0xba68` | `0x40befc` | `0xA` | upstream |
-| `0x1172` | MT6895 | `0x1c007000` | `0xE79C` | `0xec5c` | `0xA` | upstream |
-| `0x1203` | MT6897 | `0x1c007000` | `0xE79C` | `0xec5c` | `0xA` | upstream |
-| `0x1208` | MT6789/MT8781V | `0x10007000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x1229` | MT6886 | `0x1c007000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x1236` | MT6989W | `0x1C00B000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x1296` | MT6985 | `0x1C007000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x1357` | MT6991 | `0x1c010000` | `0xE79C` | `0xec5c` | `0xA` | upstream |
-| `0x1375` | MT6878 | `0x1C00A000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x1471` | MT6993 | `0x1c010000` | `0xE79C` | `0xfa0c` | `0xA` | upstream |
-| `0x2625` | MT2625 | `0x10007000` | `0xba68` | `0x40befc` | `0xA` | upstream |
-| `0x6516` | MT6516 | `0x10003000` | `0x40ba68` | `0x40befc` | `0xA` | upstream |
-| `0x8512` | MT8512 | `0x10007000` | `0xcc44` | `0xd194` | `0xA` | upstream |
+| `0x717` | MT6761/MT6762/MT3369/MT8766B/MT8761/AC8259/AC8257 | `0x10007000` | `0xbc8c` | `0xc158` | `0x25` | üst akış + bypass_utility |
+| `0x8127` | MT8127/MT3367/AC8227L | `0x10007000` | `0xb2b8` | `0xb740` | `0xA` | üst akış + bypass_utility |
+| `0x8163` | MT8163 | `0x10007000` | `0xc12c` | `0xc5c8` | `0xB1` | üst akış + bypass_utility |
+| `0x8590` | MT8590/MT7683/MT8521/MT7623 | `0x10007000` | `0xbbe4` | `0xc06c` | `0xA` | üst akış + bypass_utility |
+| `0x571` | MT0571 | `0x10007000` | `0xba68` | `0x40befc` | `0xA` | üst akış |
+| `0x1172` | MT6895 | `0x1c007000` | `0xE79C` | `0xec5c` | `0xA` | üst akış |
+| `0x1203` | MT6897 | `0x1c007000` | `0xE79C` | `0xec5c` | `0xA` | üst akış |
+| `0x1208` | MT6789/MT8781V | `0x10007000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x1229` | MT6886 | `0x1c007000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x1236` | MT6989W | `0x1C00B000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x1296` | MT6985 | `0x1C007000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x1357` | MT6991 | `0x1c010000` | `0xE79C` | `0xec5c` | `0xA` | üst akış |
+| `0x1375` | MT6878 | `0x1C00A000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x1471` | MT6993 | `0x1c010000` | `0xE79C` | `0xfa0c` | `0xA` | üst akış |
+| `0x2625` | MT2625 | `0x10007000` | `0xba68` | `0x40befc` | `0xA` | üst akış |
+| `0x6516` | MT6516 | `0x10003000` | `0x40ba68` | `0x40befc` | `0xA` | üst akış |
+| `0x8512` | MT8512 | `0x10007000` | `0xcc44` | `0xd194` | `0xA` | üst akış |
 
 ---
 
-## Group B — 18 additions, bypass_utility
+## Grup B — 18 ekleme, bypass_utility
 
-These predate CVE-2020-11152, so kamakiri2 cannot reach them.
+Bunlar CVE-2020-11152 öncesi cihazlardır; bu nedenle kamakiri2 bunlara
+ulaşamaz.
 
-| hw | Name | watchdog | payload_addr | var1 | var0 | payload |
+| hw | Ad | watchdog | payload_addr | var1 | var0 | payload |
 |---|---|---|---|---|---|---|
 | `0x279` | MT6797/MT6767 | `0x10007000` | `0x100A00` | `0xA` | — | `mt6797_payload.bin` |
 | `0x321` | MT6735/MT8735A | `0x10212000` | `0x100A00` | `0x28` | `0x10` | `mt6735_payload.bin` |
@@ -108,75 +109,75 @@ These predate CVE-2020-11152, so kamakiri2 cannot reach them.
 | `0x8172` | **MT8173** | `0x10007000` | `0x120A00` | `0xA` | — | `mt8173_payload.bin` |
 | `0x8695` | MT8695 | `0x10007000` | `0x100A00` | `0xA` | — | `mt8695_payload.bin` |
 
-> **`0x8172` naming:** some Windows tuning tables name the payload
-> `mt8172_payload.bin` and never ship it. Upstream maps hw `0x8172` to MT8173 and
-> loads `mt8173_payload.bin`; that mapping is used here.
+> **`0x8172` adı:** bazı Windows ayar tabloları payload'ı `mt8172_payload.bin`
+> olarak adlandırır ve hiç göndermez. Üst akış `0x8172` hw kodunu MT8173'e
+> eşleyip `mt8173_payload.bin` yükler; bu eşleme burada kullanılır.
 
 ---
 
-## The bypass_utility sequence
+## bypass_utility dizisi
 
-Ported from `chaanel/bypass_utility` `src/exploit.py`:
+`chaanel/bypass_utility` `src/exploit.py` dosyasından taşındı:
 
 ```text
 addr = watchdog + 0x50
 write32(addr, payload_address)
 
-# prime the BROM read path
+# BROM okuma yolunu hazırla
 if var0 is Some(v):
-    read32(addr - v, (v + 4) / 4)          # one read
+    read32(addr - v, (v + 4) / 4)          # tek okuma
 else:
     for i in 0..15:
         n = 15 - i
-        read32(addr - n*4, n + 1)          # 15 descending reads,
-                                           # first (addr-60, 16), last (addr-4, 2)
+        read32(addr - n*4, n + 1)          # 15 azalan okuma,
+                                           # ilk (addr-60, 16), son (addr-4, 2)
 
 echo(0xE0)
 echo_dword(payload.len())
-status = read_exact(2)                     # must be 00 00
+status = read_exact(2)                     # mutlaka 00 00 olmalı
 write(payload)
-read_exact(4)                              # discard clear
-control_transfer(0xA1, 0, 0, var1, len 0)  # jump
-read_exact(4)                              # success pattern
+read_exact(4)                              # temizlemeyi atla
+control_transfer(0xA1, 0, 0, var1, len 0)  # atlama
+read_exact(4)                              # başarı deseni
 ```
 
-The priming sequence is implemented as a pure helper so the address/count
-arithmetic is unit-testable without hardware.
+Priming dizisi saf bir yardımcı işlev olarak uygulandı; böylece adres/sayı
+daritmetiği donanım olmadan birim testi yapılabilir.
 
 ---
 
-## Payload provenance and licensing
+## Payload kaynağı ve lisans
 
-- Payloads are `mt*_payload.bin` / `generic_*_payload.bin` from
-  **`bkerler/mtkclient`** (GPLv3).
-- They are aggregated under `payloads/mtk/` as separate works invoked at
-  runtime — not linked into the MIT-licensed crate. See
-  `payloads/mtk/README.md`.
-- Resolution order: `MTK_PAYLOAD_DIR` →
-  `$XDG_DATA_HOME/flashpilot/payloads/mtk` (or
-  `~/.local/share/flashpilot/payloads/mtk`, no root needed) →
+- Payload'lar **`bkerler/mtkclient`** kaynağından gelen `mt*_payload.bin` /
+  `generic_*_payload.bin` dosyalarıdır (GPLv3).
+- Bunlar `payloads/mtk/` altında ayrı katkılar olarak toplanır; MIT lisanslı
+  crate'e bağlanmazlar. Bakınız `payloads/mtk/README.md`.
+- Çözümleme sırası: `MTK_PAYLOAD_DIR` →
+  `$XDG_DATA_HOME/flashpilot/payloads/mtk` (veya
+  `~/.local/share/flashpilot/payloads/mtk`, root gerekmez) →
   `<exe_dir>/payloads/mtk`.
-- The `.deb` installs the bundle to
-  `/usr/lib/flashpilot/payloads/mtk`; `build.rs` copies it next to
-  `target/<profile>/` for in-source runs, so release binaries never bake in a
-  build-machine path.
-- `flashpilot-bridge mtk-payload-check` lists every bypass chip and whether
-  its payload resolves — no device required. On a protected chip a missing
-  payload is a hard error (exit 1) naming the file and all three fix paths; an
-  unprotected chip still works, because it needs no auth bypass.
-- FlashPilot still ships no DA/loader images; those remain user-supplied.
+- `.deb` paketi bundle'ı `/usr/lib/flashpilot/payloads/mtk` konumuna kurar;
+  `build.rs` bunu `target/<profile>/` yanına kopyalar, böylece yayın derlemeleri
+  build makinesinin yolunu kodlamaz.
+- `flashpilot-bridge mtk-payload-check` her bypass yongasını ve payload çözünürlüğünü
+  listeler — cihaz gerekmez. Korunan bir yongada eksik payload hard hata (exit 1)
+  verir; dosya adını ve üç düzeltme yolunu belirtir; korunmayan bir yonga için
+  auth bypass gerektirmediği için çalışmaya devam eder.
+- FlashPilot hala DA/loader görselleri teslim etmez; bunlar kullanıcı tarafından
+  sağlanır.
 
-## Caveats
+## Uyarılar
 
-1. **No hardware validation.** Every added entry is table data from upstream
-   mtkclient and bypass_utility.
-   The exploit engines themselves are unchanged on the kamakiri2 side; the
-   bypass_utility path is new and unproven on a device.
-2. **MT6899 watchdog** remains unresolved (§7.2).
-3. **Older SoCs may need more than the pointers.** Some pre-2014 parts also
-   require blacklist patching or a different crash method; the table carries
-   only what bypass_utility's config uses.
-4. The `ptr_usbdl`/`ptr_da` fields used by Windows tuning tables were
-   deliberately **not** imported — they are a different abstraction from
-   mtkclient's `send_ptr`/`brom_register_access`, and mixing the two silently
-   breaks the exploit.
+1. **Donanım doğrulaması yok.** Eklenen her girdi üst akış mtkclient ve
+   bypass_utility'den alınan tablo verileridir. Exploit motorları kendi
+   başlarına kamakiri2 tarafında değişmeden kalır; bypass_utility yolu yeni ve
+   donanım üzerinde kanıtlanmamıştır.
+2. **MT6899 watchdog** çözülmedi (§7.2).
+3. **Daha eski SoC'ler daha fazla işaretçiye ihtiyaç duyabilir.** 2014 öncesi
+   bazı parçalar ayrıca blacklist patch'i veya farklı bir crash yöntemi de
+   gerektirir; tablo yalnızca bypass_utility konfigürasyonunda kullanılan
+   verileri taşır.
+4. Windows ayar tablolarındaki `ptr_usbdl`/`ptr_da` alanları kasıtlı olarak
+   **ithal edilmedi** — bunlar mtkclient'in `send_ptr`/`brom_register_access`
+   soyutlamasından farklı bir kavramdır ve bunları karıştırmak exploit'i sessizce
+   bozar.

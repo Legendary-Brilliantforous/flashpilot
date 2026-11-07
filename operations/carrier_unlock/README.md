@@ -1,15 +1,15 @@
 # carrier_unlock/
-Carrier / SIM lock (SIM-lock / NVDATA patch).
+Taşıyıcı / SIM kilidi (SIM-kilit / NVDATA yaması).
 
-Sources: Rust flows (`src/flows.rs` registry, `flow-run` CLI): `carrier_lock_status`, `carrier_lock_mtk`, `qcn_imei_repair`, `imei_repair_mtk/spd`
-Rust: mtkDA nvdata paths, qualcomm qcn imei repair (src/qualcomm/*)
-(The old `python/core/qcn.py` engine module and `python/core/flows/brom.py` were retired/never shipped; the logic lives in the Rust flows.)
+Kaynaklar: Rust akışları (`src/flows.rs` kaydı, `flow-run` CLI): `carrier_lock_status`, `carrier_lock_mtk`, `qcn_imei_repair`, `imei_repair_mtk/spd`
+Rust: mtkDA nvdata yolları, qualcomm qcn imei onarımı (src/qualcomm/*)
+(Eski `python/core/qcn.py` motor modülü ve `python/core/flows/brom.py` emekliye ayrıldı/asla teslim edilmedi; mantık Rust akışlarında yaşıyor.)
 
 ```
 carrier_unlock/
-  apple/  — Apple carrier / SIM (device recipes, VID 05ac) — lock removes are under apple/ now
-  mtk/    — MTK NVDATA patch (Android, future)
-  qcom/   — QCOM QCN patch (Android, future)
+  apple/  — Apple taşıyıcı / SIM (cihaz tarifleri, VID 05ac) — kilit kaldırmalar artık apple/ altında
+  mtk/    — MTK NVDATA yaması (Android, gelecek)
+  qcom/   — QCOM QCN yaması (Android, gelecek)
 ```
 
-Apple lock removes (enterprise_remote_lock, lost_mode_remove, passcode_lock_remove) moved to `apple/` as requested.
+Apple kilit kaldırmalar (enterprise_remote_lock, lost_mode_remove, passcode_lock_remove) istenen şekilde `apple/` içine taşındı.

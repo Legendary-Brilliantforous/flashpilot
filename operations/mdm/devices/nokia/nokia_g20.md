@@ -1,5 +1,5 @@
 # Nokia G20 — MT6765 — MDM
-Chip: MT6765
-Engine: mtk
-MDM: via ADB smart unlock (dpm/cmd) + recovery no-wipe, KG not applicable (Nokia no Knox)
-Dump: same as FRP, RNN_sprout
+Çip: MT6765
+Motor: mtk
+MDM: ADB akıllı kilit açma (dpm/cmd) + kurtarma modu no-wipe ile, KG geçerli değil (Nokia'da Knox yok)
+Döküm: FRP ile aynı, RNN_sprout

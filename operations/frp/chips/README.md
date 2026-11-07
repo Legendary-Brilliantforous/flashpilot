@@ -1,24 +1,24 @@
 # operations/frp/chips/
 #
-# Per-chip FRP handlers LIVE in the Rust engine, not here.
-# This directory exists so the FRP tree has a place to land
-# chip-specific notes / research dumps; dispatch is per-flow:
+# Çip bazlı FRP işleyicileri burada değil, Rust motorunda yaşar.
+# Bu dizin, FRP ağacının çip özel notlar / araştırma dökümleri için
+# yer bulması içindir; dağıtım akış bazlıdır:
 #
-#   MediaTek (Helio / Dimensity / MT6765 / etc.)  →  `mtk_*` rows in src/flows.rs
-#   Qualcomm (Snapdragon / SD 695 / SD 8 Gen1)   →  `edl_*` / `qcom_*` rows in src/flows.rs
-#   Samsung Exynos (850 / 1330)                   →  Odin flashing only (no FRP erase path)
-#   UNISOC / Spreadtrum (SC9863A / T606 / UMS9230) →  `spd_*` rows in src/flows.rs
-#   HiSilicon (Kirin 710)                          →  no flow yet (HW not reverse-engineered)
+#   MediaTek (Helio / Dimensity / MT6765 / vb.)  →  `mtk_*` satırları `src/flows.rs` içinde
+#   Qualcomm (Snapdragon / SD 695 / SD 8 Gen1)   →  `edl_*` / `qcom_*` satırları `src/flows.rs` içinde
+#   Samsung Exynos (850 / 1330)                   →  Odin flaşlama yalnızca (FRP silme yolu yok)
+#   UNISOC / Spreadtrum (SC9863A / T606 / UMS9230) →  `spd_*` satırları `src/flows.rs` içinde
+#   HiSilicon (Kirin 710)                          →  akış yok (HW tersine mühendislik yapılmadı)
 #
-# (Retired: `python/core/flows/{brom,frp,oem_odin}.py` never shipped.)
+# (Kaldırılmış: `python/core/flows/{brom,frp,oem_odin}.py` hiç piyasaya sürülmedi.)
 #
-# For a per-device lookup (model → chip → engine → action), see
-# operations/frp/INDEX.md and python/gui/supported_devices.json.
+# Model bazlı arama için (model → çip → motor → eylem), bakınız
+# operations/frp/INDEX.md ve python/gui/supported_devices.json.
 #
-# To add a chip-specific recipe:
-#   1. Add the chip entry to supported_devices.json (chip + engine)
-#   2. If the engine needs a new flow, register it in src/flows.rs
-#      and verify with `flashpilot-bridge flow-list`
-#   3. Drop a research note here only if the device needs a manual
-#      workaround that the generic flow doesn't cover (offset, timing,
-#      pinout). Keep it short and link to the flow.
+# Çip bazlı tarif eklemek için:
+#   1. Çip girişini supported_devices.json içine ekleyin (çip + motor)
+#   2. Motor yeni bir akış gerektiriyorsa, bunu src/flows.rs içinde kaydedin
+#      ve `flashpilot-bridge flow-list` ile doğrulayın
+#   3. Yalnızca cihazın genel akışın kapsamadığı manuel bir geçici çözüm
+#      gerektirdiği durumda burada araştırma notu bırakın (ofset, zamanlama,
+#      pinout). Kısa tutun ve akışa bağlantı verin

@@ -1,17 +1,16 @@
-# Device hub — layout decisions
+# Cihaz merkezi — düzen kararları
 
-Notes on how FlashPilot's GUI presents devices and actions, and why it is laid
-out this way. It supersedes the earlier UI study, which described another
-product's managed layer and contained no reusable code — only a few layout
-lessons, recorded here.
+FlashPilot'in GUI'nin cihazları ve eylemleri nasıl sunduğuna dair notlar ve neden
+böyle düzenlendiği. Bu, daha önceki UI çalışmasını geçersiz kılar; o çalışma başka
+bir ürünün yönetilen katmanını anlatır ve yeniden kullanılabilir kod taşımaz; yalnızca
+az sayıda düzen öğrenisini kayıt eder.
 
-Source of truth: `python/gui/devices.py`, `python/gui/nav.py`,
-`python/gui/qt_app.py`, `python/gui/widgets/action_row.py`,
-`python/gui/theme.py`.
+Kaynak gerçekliği: `python/gui/devices.py`, `python/gui/nav.py`,
+`python/gui/qt_app.py`, `python/gui/widgets/action_row.py`, `python/gui/theme.py`.
 
 ---
 
-## 1. Shape of the app
+## 1. Uygulamanın şekli
 
 ```
 ┌──────────────┬──────────────────────────────────────────────────────┐
@@ -26,99 +25,96 @@ Source of truth: `python/gui/devices.py`, `python/gui/nav.py`,
 └──────────────┴──────────────────────────────────────────────────────┘
 ```
 
-The rail is the primary axis: one entry per OEM (built from
-`supported_devices.json`) plus one per engine section. It is not a menu tree —
-there is no modal "select operation" dialog anywhere in the flow.
+Rail ana eksendir: `supported_devices.json`'dan inşa edilmiş OEM başına bir giriş
+ve motor bölümü başına bir giriş. Menü ağacı değil — akışta hiçbir yerde modal
+“işlem seç” diyaloğu yoktur.
 
-## 2. Three-level drill-down
+## 2. Üç seviyeli drill-down
 
-1. **Brand** — rail entry, or a card in the brand grid. Cards are built from the
-   database, not hardcoded, so adding a bucket adds a card with no UI change.
-2. **Model** — a scrollable grid of model cards. Each card shows the model name
-   and a sub-label carrying the mode/engine chip (`mtk`, `qcom`, `spd`, `odin`,
-   `apple`) plus the chipset string.
-3. **Model board** — a stack of full-width `ActionRow` cards, one per action the
-   engine supports, plus a back affordance. This is the only place from which an
-   operation can be launched.
+1. **Marka** — rail girişi ya da marka grid'inde bir kart. Kartlar veritabanından
+   oluşturulur; hardcoded değildir; bucket eklemek UI değişikliği gerektirmez.
+2. **Model** — kaydırılabilir model kartları grid'i. Her kart model adını ve alt
+   etiket olarak mod/motor çipi (`mtk`, `qcom`, `spd`, `odin`, `apple`) ile yonga
+   dizesini gösterir.
+3. **Model board** — her eylem için tam genişlikte `ActionRow` kartı, ardından geri
+   dönüş bağlantısı. İşletim sadece buradan başlatılır.
 
-The board is reached with a back stack, so the user never loses the model they
-were on when an operation fails.
+Board, geri dönüş yığınıyla erişilir; böylece işlem başarısız olsa bile kullanıcı
+üzerinde olduğu modeli kaybetmez.
 
-## 3. Capability gating, not role gating
+## 3. Rol kısıtlaması değil yetenek kısıtlaması
 
-Rules that the board enforces:
+Board'un zorladığı kurallar:
 
-- **Lit, not hidden.** An action the engine supports is rendered even when the
-  device is not currently connected; it is disabled until the required transport
-  appears. Hiding unsupported actions made testers think the app had lost a
-  feature.
-- **Transport-aware.** `apply_applicability()` walks the visible rows and
-  disables any whose `required_transports()` set is not satisfied by the live
-  device (e.g. an FRP ADB path needs `ADB`, an Odin flash needs `ODIN`).
-- **Status-aware.** `status: "planned"` models render every action disabled and
-  the card is visibly marked; the model still appears so the research list is
-  honest about its size.
-- **Honest tooltips.** Every row carries the bridge command that will run, e.g.
-  `qcom-detect`, `mtk-frp-brom`. A row that names no command is a bug.
+- **Yanıp sönen ama gizlenmeyen.** Motorun desteklediği eylem, cihaz bağlı olmasa
+  bile render edilir; gerekli taşıma görünene kadar devre dışı kalır. Desteklenmeyen
+  eylemleri gizlemek testçileri uygulama bir özelliği kaybetmiş zannetmeye götürürdü.
+- **Taşıma farkında.** `apply_applicability()` görünür satırları gezip canlı cihaz
+  tarafından karşılanmayan `required_transports()` kümesiyle eşleşmeyen satırları
+  devre dışı bırakır (ör. FRP ADB yolu `ADB` gerektirir, Odin flash `ODIN` gerektirir).
+- **Durum farkında.** `status: "planned"` modeller tüm eylemleri devre dışı gösterir
+  ve kart görünür şekilde işaretlenir; model hâlâ görünür kalır, çünkü araştırma
+  listesi dürüst kalmalıdır.
+- **Dürüst tooltip'lar.** Her satır çalışacak köprü komutunu taşır, örn.
+  `qcom-detect`, `mtk-frp-brom`. Komut adı olmayan satır hata sayılır.
 
-## 4. Visual language
+## 4. Görsel dil
 
-- **Risk edge.** Each `ActionRow` paints a 3 px left edge: `err` for
-  wipe/destructive actions, `accent_hi` otherwise. Same language as
-  `MethodCard.set_risk` in the flow browser, so "red edge = this deletes
-  something" is learned once.
-- **One-line descriptions.** Row descriptions are elided, never wrapped; a long
-  flow label used to force the board wider than its pane.
-- **Chips.** Engine/mode chips use the `chip_blue` / `chip_text` tokens; the
-  same chip appears on the connected-device bar so the label is consistent
-  between "this model is MTK" and "this attached device is in BROM".
-- **Focus ring.** Rows are `StrongFocus` and activate on Enter/Return/Space, so
-  the board is usable without a mouse.
-- **Tokens only.** No literal colours in page code; everything comes from
-  `theme.C`, which is also what the themes swap (`Slate Professional`, etc.).
+- **Risk kenarı.** Her `ActionRow`, 3 piksel sol kenar çizer: silme/bozucu eylemler
+  için `err`, diğerleri için `accent_hi`. Bu, flow browser içinde `MethodCard.set_risk`
+  ile aynı dildir; böylece “kırmızı kenar = bu bir şey siler” tek bir kez öğrenilir.
+- **Tek satırlık açıklamalar.** Satır açıklamaları kırpılır, asla sarılmaz; uzun akış
+  etiketi panelden daha geniş olmasına neden olabilirdi.
+- **Çipler.** Motor/mod çipleri `chip_blue` / `chip_text` token'larını kullanır; aynı
+  çip bağlı cihaz çubuğunda da görünür, böylece “bu model MTK” ile “bu ekli cihaz
+  BROM’da” etiketleri tutarlı kalır.
+- **Odak halkası.** Satırlar `StrongFocus` ve Enter/Return/Space ile etkinleşir; böylece
+  fare olmadan da kullanılabilir.
+- **Yalnızca token'lar.** Sayfa kodunda literal renk yok; her şey `theme.C`'den gelir,
+  tema değiştirmeleri de burada yapılır (`Slate Professional`, vb.).
 
-## 5. Connected-device bar
+## 5. Bağlı cihaz çubuğu
 
-`buckets_from_rows()` groups live USB rows into `samsung`, `mtk`, `spd`, `qcom`,
-`adb`, `fastboot` buckets; the bar shows per-bucket counts and the current mode
-label from `mode_hint`. Selecting a bucket filters the device list, which is how
-a bench with five phones attached stays legible.
+`buckets_from_rows()`, canlı USB satırlarını `samsung`, `mtk`, `spd`, `qcom`,
+`adb`, `fastboot` bucket'larına gruplar; çubuk her bucket için sayıları ve
+`mode_hint`'tan alınan mevcut mod etiketini gösterir. Bucket seçimi cihaz listesini
+filtreler; bu şekilde beş telefon takılı bir çalışma masası okunabilir kalır.
 
-`connected_rows()` is cached and invalidated on USB events rather than polled
-per repaint.
+`connected_rows()` önbelleğe alınır ve USB olaylarında geçersiz kılınır; her yeniden
+çizimde poll edilmez.
 
-## 6. Hub pages
+## 6. Hub sayfaları
 
-Beyond the brand drill-down there are three transport-first hubs:
+Marka drill-down'un dışında üç taşıma-öncelikli hub vardır:
 
-| Hub | Purpose |
+| Hub | Amaç |
 |---|---|
-| `build_adb_hub_page` | actions available over plain ADB (FRP, info, reboot, shell) |
-| `build_fastboot_hub_page` | fastboot actions (boot image, vbmeta, slot queries) |
-| `build_easylogin_hub_page` | one-tap flows that chain several transports |
+| `build_adb_hub_page` | düz ADB üzerinden mevcut eylemler (FRP, bilgi, reboot, shell) |
+| `build_fastboot_hub_page` | fastboot eylemleri (boot image, vbmeta, slot sorguları) |
+| `build_easylogin_hub_page` | birkaç taşıma zincirleme bir-tık akışlar |
 
-These exist because some operations are transport-first, not model-first: a user
-with an unknown device in ADB should not have to find a brand card first.
+Bunlar mevcut çünkü bazı işlemler model-öncelikli değil taşıma-önceliklidir: ADB
+üzerinde bilinmeyen bir cihazı kullanırken önce marka kartı bulmak gerekmez.
 
-## 7. Deliberate non-features
+## 7. Kasıtlı olmayan özellikler
 
-Decisions taken against the common layout in commercial suites:
+Ticari yazılımlarda yaygın olan düzen karşısında alınan kararlar:
 
-| Not built | Why |
+| İnşa edilmedi | Neden |
 |---|---|
-| Licence/activation dialog | No activation exists; a fake one would be dishonest UI |
-| Server-side loader download | Every flash uses local, user-supplied firmware |
-| Nested "choose operation" modals | The model board is the chooser; modals lose context |
-| Status text built from subprocess substring matching | Structured bridge output drives state instead |
-| Hidden disabled actions | Replaced with lit-but-disabled + tooltip |
+| Lisans/aktivasyon diyaloğu | Aktivasyon yok; sahte biri dürüst olmayan UI olur |
+| Sunucu tarafı loader indirme | Her flash yerel, kullanıcı tarafından sağlanan firmware kullanır |
+| İç içe “işlem seç” modalları | Model board seçim yeridir; modal bağlam kaybeder |
+| Alt süreç substring eşleşmesinden status metni | Yapılandırılmış köprü çıktısı durum bilgisi üretir |
+| Gizli devre dışı eylemler | Yanan ama devre dışı + tooltip ile değiştirildi |
 
-## 8. Known gaps
+## 8. Bilinen boşluklar
 
-1. **No device picker for an ambiguous bus.** The bridge refuses to guess
-   (`find_mtk_dev("auto")`), but the UI has no way to disambiguate.
-2. **Permission failures look like absence.** A missing udev rule should surface
-   as "no access to 0e8d:0003", not "no device".
-3. **Model search is linear.** The 719-model database deserves a filter box
-   before it grows further.
+1. **Belirsiz bus için cihaz seçici yok.** Köprü tahmin etmez (`find_mtk_dev("auto")`),
+   ama UI ayrıştırma yolu sunmaz.
+2. **İzin hataları yokluk gibi görünür.** Eksik udev kuralı “cihaz yok” yerine
+   “0e8d:0003 erişimi yok” olarak gösterilmelidir.
+3. **Model araması lineerdir.** 719 model veritabanı için filtre kutusu daha da
+   büyümeden gelmelidir.
 
-These are tracked in `usb_detection_gap.md` §4 and `feature_logic_matrix.md` §9.
+Bunlar `usb_detection_gap.md` §4 ve `feature_logic_matrix.md` §9 içinde izlenir.

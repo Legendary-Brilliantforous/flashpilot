@@ -1,5 +1,5 @@
 # Aquos sense7 — MDM
-Chip: SD 695
-Engine: qcom
-MDM actions: mdm_unlock, mdm_diagnostics, kg_state_check
-Notes: 
+Çip: SD 695
+Motor: qcom
+MDM eylemleri: mdm_unlock, mdm_diagnostics, kg_state_check
+Notlar:

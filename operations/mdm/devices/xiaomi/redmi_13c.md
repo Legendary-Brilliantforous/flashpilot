@@ -1,5 +1,5 @@
 # Redmi 13C — MDM
-Chip: T603
-Engine: spd
-MDM actions: mdm_unlock, mdm_diagnostics, kg_state_check
-Notes: Same shell as Poco C65.
+Çip: T603
+Motor: spd
+MDM eylemleri: mdm_unlock, mdm_diagnostics, kg_state_check
+Notlar: Poco C65 ile aynı kabuk.
