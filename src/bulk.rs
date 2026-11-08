@@ -55,15 +55,12 @@ pub fn list_bulk_targets() -> Result<String> {
     Ok(json)
 }
 
-/// Open a persistent bulk session: connect, claim, then process commands
-/// given as hex args. Commands: "w<hex>" write, "r<n>" read n bytes (timeout 5s).
-/// Returns a JSON list of per-command results, then releases the interface.
-pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
-    // Use collected Samsung devices to validate target exists before opening,
-    // improving stability against stale bus/addr vs vid/pid mismatches.
-    // Explicit @bus:addr targets may use ANY vendor (MTK/SPD probing etc.);
-    // the 0e8d/1782 stacks need raw bulk access too.
-    let devices = usb::collect_devices(None)?;
+/// Parse `vid:pid@bus:addr` into `(vid, bus, addr)`.
+///
+/// Pure and deliberately done BEFORE any USB enumeration: a malformed target
+/// must always surface as `InvalidArgument`, even on hosts where libusb cannot
+/// initialise at all (headless CI, containers without `/dev/bus/usb`).
+fn parse_bulk_target(target: &str) -> Result<(u16, u8, u8)> {
     let wanted: Vec<&str> = target.split('@').collect();
     if wanted.len() != 2 {
         return Err(BridgeError::InvalidArgument(
@@ -73,19 +70,32 @@ pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
     let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
         .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
     let loc: Vec<&str> = wanted[1].split(':').collect();
-    let (bus, addr): (u8, u8) = match (loc.first(), loc.get(1)) {
-        (Some(b), Some(a)) => (
+    match (loc.first(), loc.get(1)) {
+        (Some(b), Some(a)) => Ok((
+            vid,
             b.parse()
                 .map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?,
             a.parse()
                 .map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?,
-        ),
-        _ => {
-            return Err(BridgeError::InvalidArgument(
-                "target must be vid:pid@bus:addr".into(),
-            ))
-        }
-    };
+        )),
+        _ => Err(BridgeError::InvalidArgument(
+            "target must be vid:pid@bus:addr".into(),
+        )),
+    }
+}
+
+/// Open a persistent bulk session: connect, claim, then process commands
+/// given as hex args. Commands: "w<hex>" write, "r<n>" read n bytes (timeout 5s).
+/// Returns a JSON list of per-command results, then releases the interface.
+pub fn bulk_session(target: &str, cmds: &[String]) -> Result<String> {
+    // Validate the textual target first (no USB needed), then enumerate.
+    let (vid, bus, addr) = parse_bulk_target(target)?;
+
+    // Use collected devices to validate the target exists before opening,
+    // improving stability against stale bus/addr vs vid/pid mismatches.
+    // Explicit @bus:addr targets may use ANY vendor (MTK/SPD probing etc.);
+    // the 0e8d/1782 stacks need raw bulk access too.
+    let devices = usb::collect_devices(None)?;
 
     let target_dev = devices
         .iter()
@@ -226,32 +236,13 @@ fn find_bulk_iface<'a>(dev: &'a DeviceInfo) -> Option<&'a InterfaceInfo> {
 pub fn bulk_send(target: &str, hex: &str, read_len: usize) -> Result<String> {
     let bytes = hex_decode(hex)?;
 
-    // Actually use collected Samsung devices to validate target before open.
+    // Validate the textual target first (no USB needed), then enumerate.
+    let (vid, bus, addr) = parse_bulk_target(target)?;
+
+    // Use collected devices to validate the target exists before opening.
     // Explicit @bus:addr targets may use ANY vendor (MTK/SPD probing etc.);
     // the 0e8d/1782 stacks need raw bulk access too.
     let devices = usb::collect_devices(None)?;
-    let wanted: Vec<&str> = target.split('@').collect();
-    if wanted.len() != 2 {
-        return Err(BridgeError::InvalidArgument(
-            "target must be vid:pid@bus:addr".into(),
-        ));
-    }
-    let vid = u16::from_str_radix(wanted[0].split(':').next().unwrap_or(""), 16)
-        .map_err(|e| BridgeError::InvalidArgument(format!("bad vid: {e}")))?;
-    let loc: Vec<&str> = wanted[1].split(':').collect();
-    let (bus, addr): (u8, u8) = match (loc.first(), loc.get(1)) {
-        (Some(b), Some(a)) => (
-            b.parse()
-                .map_err(|e| BridgeError::InvalidArgument(format!("bad bus: {e}")))?,
-            a.parse()
-                .map_err(|e| BridgeError::InvalidArgument(format!("bad addr: {e}")))?,
-        ),
-        _ => {
-            return Err(BridgeError::InvalidArgument(
-                "target must be vid:pid@bus:addr".into(),
-            ))
-        }
-    };
 
     let target_dev = devices
         .iter()
@@ -339,8 +330,12 @@ mod tests {
     #[test]
     fn colonless_bus_addr_is_error_not_panic() {
         // Regression: wanted[1] without ':' used to index loc[1] and panic.
-        // collect_devices() runs first and succeeds headless (empty list),
-        // so a malformed target must surface as InvalidArgument.
+        // The target is validated before USB enumeration, so this is a pure
+        // InvalidArgument even on a host where libusb cannot initialise.
+        assert!(matches!(
+            parse_bulk_target("04e8:685d@2"),
+            Err(BridgeError::InvalidArgument(_))
+        ));
         let err = bulk_send("04e8:685d@2", "aa", 64).unwrap_err();
         assert!(
             matches!(err, BridgeError::InvalidArgument(_)),
@@ -355,10 +350,30 @@ mod tests {
 
     #[test]
     fn missing_at_separator_is_error_not_panic() {
+        assert!(matches!(
+            parse_bulk_target("04e8:685d"),
+            Err(BridgeError::InvalidArgument(_))
+        ));
         let err = bulk_send("04e8:685d", "aa", 64).unwrap_err();
         assert!(
             matches!(err, BridgeError::InvalidArgument(_)),
             "unexpected: {err}"
         );
+    }
+
+    #[test]
+    fn well_formed_target_parses_without_usb() {
+        assert!(matches!(
+            parse_bulk_target("04e8:685d@1:2"),
+            Ok((0x04e8, 1, 2))
+        ));
+        assert!(matches!(
+            parse_bulk_target("04e8:685d@1:x"),
+            Err(BridgeError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            parse_bulk_target("zzzz:685d@1:2"),
+            Err(BridgeError::InvalidArgument(_))
+        ));
     }
 }

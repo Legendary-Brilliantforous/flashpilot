@@ -50,25 +50,29 @@ fn udev_rule_for(vid: &str) -> bool {
     false
 }
 
+/// True if `user` appears in `group`'s member list of an `/etc/group`
+/// formatted `content`. Pure so membership parsing is testable anywhere.
+fn group_has_member(content: &str, group: &str, user: &str) -> bool {
+    if user.is_empty() {
+        return false;
+    }
+    content.lines().any(|line| {
+        // group:passwd:gid:members
+        let parts: Vec<&str> = line.split(':').collect();
+        parts.len() >= 4 && parts[0] == group && parts[3].split(',').any(|m| m.trim() == user)
+    })
+}
+
 /// True if the current user is in the given group (or is root).
 fn user_in_group(group: &str) -> bool {
     if std::env::var("USER").map(|u| u == "root").unwrap_or(false) {
         return true;
     }
+    let user = std::env::var("USER").unwrap_or_default();
     for dir in ["/etc/group"] {
         let content = read_file(dir);
-        for line in content.lines() {
-            if let Some((_name, rest)) = line.split_once(':') {
-                // group:passwd:gid:members
-                let parts: Vec<&str> = line.split(':').collect();
-                if parts.len() >= 4 && parts[0] == group {
-                    let user = std::env::var("USER").unwrap_or_default();
-                    if parts[3].split(',').any(|m| m == user) {
-                        return true;
-                    }
-                }
-                let _ = rest;
-            }
+        if group_has_member(&content, group, &user) {
+            return true;
         }
     }
     false
@@ -152,15 +156,28 @@ mod tests {
 
     #[test]
     fn user_in_group_parses_etc_group() {
-        // plugdev exists on every Debian/Ubuntu system; root always passes.
-        assert!(
-            user_in_group("plugdev")
-                == (std::env::var("USER").map(|u| u == "root").unwrap_or(false) || {
-                    let content = read_file("/etc/group");
-                    content.lines().any(|l| l.starts_with("plugdev:"))
-                })
-                || user_in_group("plugdev")
-        );
+        // Deterministic: parse a known /etc/group shape instead of asserting
+        // against whatever the host happens to have (CI has plugdev but the
+        // runner user is not a member).
+        let sample = "\
+root:x:0:
+plugdev:x:46:alice,bob
+sudo:x:27:alice
+empty:x:99:
+malformed:x:98
+";
+        assert!(group_has_member(sample, "plugdev", "bob"));
+        assert!(group_has_member(sample, "plugdev", "alice"));
+        assert!(group_has_member(sample, "sudo", "alice"));
+        assert!(!group_has_member(sample, "plugdev", "carol"));
+        assert!(!group_has_member(sample, "audio", "alice"));
+        assert!(!group_has_member(sample, "empty", "alice"));
+        // Truncated lines and blank content must not match (or panic).
+        assert!(!group_has_member(sample, "malformed", "alice"));
+        assert!(!group_has_member("", "plugdev", "alice"));
+        assert!(!group_has_member(sample, "plugdev", ""));
+        // The live check must not panic whatever the host reports.
+        let _ = user_in_group("plugdev");
     }
 
     #[test]
