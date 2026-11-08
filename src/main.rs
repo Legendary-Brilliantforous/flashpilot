@@ -1,4 +1,5 @@
 mod adb;
+mod apk;
 mod apple;
 mod at;
 mod bulk;

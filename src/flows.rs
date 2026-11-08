@@ -4824,7 +4824,17 @@ pub fn flow_frp_fake_login(
         );
     }
 
-    let out_dir = std::path::PathBuf::from("mdm_qr");
+    // Artifact dir: `FRP_QR_OUT_DIR` (same override as `frp_qr_provision`) so
+    // tests and users can keep generated QRs out of the working tree.
+    let out_dir_env = std::env::var("FRP_QR_OUT_DIR")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let out_dir = if out_dir_env.is_empty() {
+        std::path::PathBuf::from("mdm_qr")
+    } else {
+        std::path::PathBuf::from(out_dir_env)
+    };
     std::fs::create_dir_all(&out_dir).map_err(|e| BridgeError::Io(e.to_string()))?;
     // qr_emit_provisioning reads FRP_DPC_APK_URL / FRP_DPC_CERT_HASH /
     // FRP_DPC_EXTRAS_JSON.
@@ -4942,9 +4952,6 @@ fn lan_ipv4() -> Option<String> {
     None
 }
 
-/// SHA-256 (base64url, no padding) of the APK's v1 signing certificate,
-/// for PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM. Empty when the
-/// APK has no v1 block or openssl/unzip are unavailable (optional field).
 /// Re-pad a base64url string: the provisioning wizard validates
 /// SIGNATURE_CHECKSUM with standard padded base64url (TestDPC's own
 /// reference payload carries the '=').
@@ -4954,51 +4961,23 @@ fn padded_b64url(s: &str) -> String {
     format!("{}{}", s, "=".repeat(pad))
 }
 
+/// SHA-256 (base64url, no padding) of the APK's **v1 signing certificate
+/// DER**, for PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM. Empty when the APK
+/// has no readable v1 block (the field is optional).
+///
+/// The certificate is read natively from the APK's `META-INF/*.RSA` PKCS#7
+/// (`crate::apk`) so the result does not depend on host tooling. The retired
+/// `unzip` + `openssl pkcs7 -print_certs` chain hashed openssl's text/PEM
+/// rendering instead of the certificate DER, which produced a checksum the
+/// setup wizard ignores (and varied between openssl builds) — so there is
+/// deliberately no external fallback: a value we cannot compute correctly is
+/// reported as "no checksum" and the flow warns, instead of emitting a wrong one.
 fn dpc_cert_checksum_b64url(apk: &str) -> String {
     use sha2::Digest;
-    let rsa = match std::process::Command::new("unzip")
-        .args(["-p", apk, "META-INF/*.RSA"])
-        .output()
-    {
-        Ok(o) if o.status.success() && !o.stdout.is_empty() => o.stdout,
-        _ => return String::new(),
+    let cert = match std::fs::read(apk) {
+        Ok(bytes) => crate::apk::v1_cert_der(&bytes).unwrap_or_default(),
+        Err(_) => Vec::new(),
     };
-    // NOTE: openssl 3.0 ignores -outform DER on stdout (prints text);
-    // DER is only honoured with -out <file>, so use a temp file.
-    let tmp = std::env::temp_dir().join(format!("dpc-cert-{}.der", std::process::id()));
-    let cert = match std::process::Command::new("openssl")
-        .args([
-            "pkcs7",
-            "-inform",
-            "DER",
-            "-in",
-            "/dev/stdin",
-            "-print_certs",
-            "-outform",
-            "DER",
-            "-out",
-        ])
-        .arg(&tmp)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(mut child) => {
-            use std::io::Write;
-            let wrote = child
-                .stdin
-                .take()
-                .map(|mut s| s.write_all(&rsa).is_ok())
-                .unwrap_or(false);
-            match child.wait() {
-                Ok(st) if wrote && st.success() => std::fs::read(&tmp).unwrap_or_default(),
-                _ => Vec::new(),
-            }
-        }
-        _ => Vec::new(),
-    };
-    let _ = std::fs::remove_file(&tmp);
     if cert.is_empty() {
         return String::new();
     }
@@ -5912,10 +5891,37 @@ mod tests {
         // Ours with a missing APK: the QR must still be emitted (the GUI
         // renders it), then an honest warning + stop — never a 10-minute
         // ADB wait that cannot succeed.
+        // Send the artifacts to a temp dir so the test never dirties the
+        // tracked mdm_qr/ examples.
+        let tmp = std::env::temp_dir().join(format!(
+            "fp_fake_login_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("FRP_QR_OUT_DIR", &tmp);
         let mut out = Vec::new();
         let r = flow_frp_fake_login("", "/nonexistent/dpc.apk", "ours", &mut out);
+        std::env::remove_var("FRP_QR_OUT_DIR");
+        let artifacts: Vec<String> = std::fs::read_dir(&tmp)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&tmp);
+
         assert!(r.is_ok());
         assert!(out.iter().any(|l| l.contains("qr (svg):")));
+        assert!(
+            artifacts.iter().any(|n| n.ends_with(".svg")),
+            "the QR svg must be written to FRP_QR_OUT_DIR: {artifacts:?}"
+        );
         assert!(out
             .iter()
             .any(|l| l.contains("Build it first") || l.contains("build.sh")));
@@ -5924,10 +5930,10 @@ mod tests {
 
     #[test]
     fn fake_login_cert_checksum_matches_known_testdpc() {
-        // TestDPC 9.0.12's v1 signing cert (extracted the same way
-        // build.sh does) — guards the openssl/unzip chain.
+        // TestDPC 9.0.12's v1 signing cert — guards the APK -> PKCS#7 -> cert
+        // chain used for PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM.
         let got = dpc_cert_checksum_b64url("mdm_qr/serve/testdpc.apk");
-        assert_eq!(got, "cBSv2cTbHGxChjhfImA2dfvHMMri7EUL2zyjXpw5Oc4");
+        assert_eq!(got, "gJD2YwtOiWJHkSMkkIfLRlj-quNqG1fb6v100QmzM9w");
     }
 
     #[test]
@@ -5938,14 +5944,14 @@ mod tests {
         let p = qr_provisioning_payload(
             "com.afwsamples.testdpc/.DeviceAdminReceiver",
             "http://192.168.1.5:8000/testdpc.apk",
-            "cBSv2cTbHGxChjhfImA2dfvHMMri7EUL2zyjXpw5Oc4",
+            "gJD2YwtOiWJHkSMkkIfLRlj-quNqG1fb6v100QmzM9w",
         );
         assert!(p.contains("PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME"));
         assert!(!p.contains("PROVISIONING_DEVICE_ADMIN_COMPONENT\""));
         assert!(p.contains("PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM"));
         assert!(!p.contains("CERTIFICATE_HASH"));
         // Checksum keeps the base64 '=' padding (43 chars -> 44).
-        assert!(p.contains("cBSv2cTbHGxChjhfImA2dfvHMMri7EUL2zyjXpw5Oc4="));
+        assert!(p.contains("gJD2YwtOiWJHkSMkkIfLRlj-quNqG1fb6v100QmzM9w="));
         // Components match the real APKs.
         assert!(p.contains("com.afwsamples.testdpc/.DeviceAdminReceiver"));
     }
