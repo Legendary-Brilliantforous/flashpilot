@@ -2,6 +2,8 @@
 
 > **An open-source Samsung firmware flashing & repair workbench for Linux — an Odin / Heimdall alternative for flashing Galaxy phones (Download/Odin mode), MediaTek (BROM/DA), Qualcomm (EDL) and Spreadtrum/UNISOC devices.**
 
+**Documentation languages:** **English** · [Français](docs/fr/README.md) · [Español](docs/es/README.md) · [Deutsch](docs/de/README.md) · [简体中文](docs/zh/README.md) · [Русский](docs/ru/README.md) · [Português](docs/pt/README.md) · [日本語](docs/ja/README.md) · [العربية](docs/ar/README.md) · [हिन्दी](docs/hi/README.md) · [Türkçe](docs/tr/README.md) · [Translation guide](docs/TRANSLATION.md)
+
 **Search keywords:** Samsung flashing tool · Odin alternative · Android firmware flashing Linux · Heimdall GUI · Galaxy phone repair · MTK BROM flash · Qualcomm EDL · FRP unlock · UNISOC flashing · device firmware tool · mobile repair · Android bootloader · USB flashing · Linux flashing suite · proprietary tool alternative
 
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)

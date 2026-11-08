@@ -1,5 +1,7 @@
 # FlashPilot — index
 
+**Documentation languages:** **English** · [Français](docs/fr/INDEX.md) · [Español](docs/es/INDEX.md) · [Deutsch](docs/de/INDEX.md) · [简体中文](docs/zh/INDEX.md) · [Русский](docs/ru/INDEX.md) · [Português](docs/pt/INDEX.md) · [日本語](docs/ja/INDEX.md) · [العربية](docs/ar/INDEX.md) · [हिन्दी](docs/hi/INDEX.md) · [Türkçe](docs/tr/INDEX.md) · [Translation guide](docs/TRANSLATION.md)
+
 The README has the marketing. This file is the engineering index — every
 folder, what it does, and where to start.
 
