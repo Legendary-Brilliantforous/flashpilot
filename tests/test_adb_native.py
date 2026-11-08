@@ -283,10 +283,22 @@ def test_monitor_backs_off_after_dry_native_probes(monkeypatch):
     the USB bus still sees ADB-capable hardware, every re-probe is another
     CNXN - on adbd-reset-on-CNXN devices each retry causes another USB
     re-enumeration (the address storm). The monitor must stop probing for
-    a backoff window instead of hammering every poll."""
+    a backoff window instead of hammering every poll.
+
+    The backoff deliberately only arms once the one-time `adb start-server`
+    attempt has finished (`_ADB_SERVER_READY`), so satisfy that precondition
+    here instead of racing the host's adb server: without it the probes keep
+    running by design and the assertion below would be flaky.
+    """
     import time
 
+    from python.gui import qt_app as _q
     from python.gui.qt_app import DeviceMonitor
+
+    # Never touch a real adb server during the test.
+    monkeypatch.setattr(_q.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(_q, "_ADB_SERVER_STARTED_STATE", True)
+    _q._ADB_SERVER_READY.set()
 
     calls = {"n": 0}
     fake_row = {
@@ -304,18 +316,23 @@ def test_monitor_backs_off_after_dry_native_probes(monkeypatch):
     # The monitor probes presence (zero-touch), not verified status.
     monkeypatch.setattr(bridge, "adb_presence_status", fake_status)
 
-    m = DeviceMonitor(interval=0.05)
+    m = DeviceMonitor(interval=0.02)
     m.start()
     try:
         deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and calls["n"] < 2:
-            time.sleep(0.05)
+        # Wait for the observable outcome (the backoff being armed) rather
+        # than for a probe count, which races the in-flight poll cycle.
+        while (time.monotonic() < deadline
+               and getattr(m, "_adb_probe_backoff_until", 0.0) == 0.0):
+            time.sleep(0.01)
+        assert getattr(m, "_adb_probe_backoff_until", 0.0) > 0.0, (
+            "two dry probes must arm the backoff")
         assert calls["n"] >= 2, "two dry probes should have happened"
         window = calls["n"]
-        time.sleep(1.0)  # well within the 45s backoff
+        time.sleep(0.5)  # well within the 45s backoff
         assert calls["n"] == window, "probes must stop during the backoff"
     finally:
-        m.stop()
+        m.stop(join_timeout=2.0)
 
 
 def test_bundled_mtk_da_dir_resolves(monkeypatch, tmp_path):
