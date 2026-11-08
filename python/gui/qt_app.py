@@ -270,6 +270,11 @@ def _flow_failure_markers(lines):
 # All module-level names containing "adb" alias this single shared state, so
 # tests/clients using any plausible flag name observe consistent behavior.
 _ADB_SERVER_STARTED_STATE = False
+# Signals that the (at most once) `adb start-server` attempt has finished,
+# successfully or not. The monitor's dry-probe backoff must not fire before
+# the server has had a chance to come up — otherwise a phone is blacklisted
+# for 45 s during the very window in which adb would have become visible.
+_ADB_SERVER_READY = threading.Event()
 
 
 def __getattr__(name):
@@ -328,7 +333,21 @@ class DeviceMonitor(QObject):
                     )
                 except Exception:
                     pass
-            threading.Thread(target=_start_adb_server, daemon=True).start()
+                finally:
+                    _ADB_SERVER_READY.set()
+            srv_thread = threading.Thread(target=_start_adb_server, daemon=True)
+            srv_thread.start()
+            # Wait briefly so the first poll already sees the server (if it is
+            # going to start). Never block startup indefinitely.
+            srv_thread.join(timeout=4.0)
+        else:
+            if adb_bin is None:
+                # No system adb binary available: never gate native probes on a
+                # server that will never exist.
+                _ADB_SERVER_READY.set()
+            else:
+                # Already started by another monitor; wait for it to finish.
+                _ADB_SERVER_READY.wait(timeout=4.0)
 
     def set_interval(self, seconds):
         """Update the scan interval without restarting the poll thread."""
@@ -436,7 +455,8 @@ class DeviceMonitor(QObject):
                     # soon as real rows come back.
                     if adb_devs:
                         self._adb_dry_streak = 0
-                    elif probed and has_usb_adb:
+                    elif (probed and has_usb_adb
+                          and _ADB_SERVER_READY.is_set()):
                         self._adb_dry_streak = getattr(self, "_adb_dry_streak", 0) + 1
                         if self._adb_dry_streak >= 2:
                             self._adb_probe_backoff_until = _time.monotonic() + 45.0
