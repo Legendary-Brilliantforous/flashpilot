@@ -12793,6 +12793,25 @@ def main():
     app = QApplication([])
     QApplication.setDesktopFileName("flashpilot")
     app.setWindowIcon(_app_icon())
+
+    # UI internationalisation: load a Qt translator for the configured
+    # language (if a compiled .qm exists under i18n/qm/). Falls back to
+    # English silently when no translation is available yet.
+    try:
+        from pathlib import Path
+        from PyQt6.QtCore import QSettings, QTranslator
+
+        _settings = QSettings("FlashPilot", "FlashingTool")
+        _lang = str(_settings.value("ui_language", "en") or "en")
+        if _lang and _lang != "en":
+            _tr = QTranslator()
+            _qm_dir = Path(__file__).resolve().parent.parent / "i18n" / "qm"
+            _qm = _qm_dir / f"flashpilot_{_lang}.qm"
+            if _qm.exists() and _tr.load(str(_qm)):
+                app.installTranslator(_tr)
+    except Exception:
+        pass
+
     splash = SplashScreen()
     splash.show()
 

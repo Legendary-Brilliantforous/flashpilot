@@ -171,8 +171,34 @@ class SettingsPageMixin:
             self._s_clear,
         )
 
+        bl = self._settings_box("LANGUAGE & REGION", lay)
+        self._s_language = QComboBox()
+        for code, label in (
+            ("en", "English"), ("fr", "Fran\u00e7ais"), ("es", "Espa\u00f1ol"),
+            ("de", "Deutsch"), ("zh", "Simplified Chinese"), ("ru", "Russian"),
+            ("pt", "Portugu\u00eas"),
+        ):
+            self._s_language.addItem(label, code)
+        cur = str(self.settings.value("ui_language", "en"))
+        for i in range(self._s_language.count()):
+            if self._s_language.itemData(i) == cur:
+                self._s_language.setCurrentIndex(i)
+        self._s_language.currentIndexChanged.connect(self._apply_ui_language)
+        self._settings_row(
+            bl, "Interface language",
+            "Display language for menus and buttons. Requires a restart.",
+            self._s_language,
+        )
+
         lay.addStretch(1)
         return page
+
+    def _apply_ui_language(self):
+        code = self._s_language.currentData()
+        try:
+            self.settings.setValue("ui_language", code)
+        except Exception:
+            pass
 
     def _build_settings_updates(self):
         page = QWidget()
