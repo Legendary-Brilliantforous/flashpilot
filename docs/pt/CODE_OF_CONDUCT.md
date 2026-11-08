@@ -1,6 +1,6 @@
 # Código de Conduta do Contributor Covenant
 
-Language switcher: [English](../../CODE_OF_CONDUCT.md) · [Français](../../fr/CODE_OF_CONDUCT.md) · [Español](../../es/CODE_OF_CONDUCT.md) · [Deutsch](../../de/CODE_OF_CONDUCT.md) · [简体中文](../../zh/CODE_OF_CONDUCT.md) · [Русский](../../ru/CODE_OF_CONDUCT.md) · **Português** · [日本語](../../ja/CODE_OF_CONDUCT.md) · [العربية](../../ar/CODE_OF_CONDUCT.md) · [हिन्दी](../../hi/CODE_OF_CONDUCT.md) · [Türkçe](../../tr/CODE_OF_CONDUCT.md)
+Language switcher: [English](../../CODE_OF_CONDUCT.md) · [Français](../fr/CODE_OF_CONDUCT.md) · [Español](../es/CODE_OF_CONDUCT.md) · [Deutsch](../de/CODE_OF_CONDUCT.md) · [简体中文](../zh/CODE_OF_CONDUCT.md) · [Русский](../ru/CODE_OF_CONDUCT.md) · **Português** · [日本語](../ja/CODE_OF_CONDUCT.md) · [العربية](../ar/CODE_OF_CONDUCT.md) · [हिन्दी](../hi/CODE_OF_CONDUCT.md) · [Türkçe](../tr/CODE_OF_CONDUCT.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

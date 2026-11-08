@@ -1,12 +1,22 @@
 # FlashPilot UI translations
 
-Qt `.qm` files for supported UI languages live in `i18n/qm/` (e.g. `flashpilot_fr.qm`).
+Runtime translations are **JSON dictionaries**, not Qt ``.qm`` files, so no
+external toolchain (pylupdate/lrelease) is required.
+
+Files:
+- `i18n/json/<lang>.json` with shape:
+  ```json
+  {"strings": {"English source": "translation"}}
+  ```
+- Empty/missing keys fall back to the English source text.
+
+Language codes: `en` (default), `fr`, `es`, `de`, `zh`, `ru`, `pt`,
+`ja`, `ar`, `hi`, `tr`.
 
 Workflow
-1. Extract source strings with `pylupdate5`/`pylupdate6` into `i18n/ts/flashpilot_<lang>.ts`.
-2. Translate the `.ts` (community + tooling).
-3. Compile with `lrelease` to `i18n/qm/flashpilot_<lang>.qm`.
-4. Set `ui_language` in Settings (or QSettings) to the code.
+1. Wrap user-facing literals in `self.tr(...)` / `tr(...)` in the GUI code.
+2. Add the matching source → translation entry in the target JSON file.
+3. Switch language in Settings (requires restart).
+4. Test with `QT_QPA_PLATFORM=offscreen` builds and `ui_language=<code>`.
 
-Supported UI language codes: `en` (default), `fr`, `es`, `de`, `zh`, `ru`, `pt`.
-Additional documentation-only languages: `ja`, `ar`, `hi`, `tr`.
+Contributions to these JSON dictionaries are very welcome.

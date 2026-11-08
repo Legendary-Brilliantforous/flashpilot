@@ -1,6 +1,6 @@
 # चेंजलॉग (Changelog)
 
-Language switcher: [English](../../CHANGELOG.md) · [Français](../../fr/CHANGELOG.md) · [Español](../../es/CHANGELOG.md) · [Deutsch](../../de/CHANGELOG.md) · [简体中文](../../zh/CHANGELOG.md) · [Русский](../../ru/CHANGELOG.md) · [Português](../../pt/CHANGELOG.md) · [日本語](../../ja/CHANGELOG.md) · [العربية](../../ar/CHANGELOG.md) · **हिन्दी** · [Türkçe](../../tr/CHANGELOG.md)
+Language switcher: [English](../../CHANGELOG.md) · [Français](../fr/CHANGELOG.md) · [Español](../es/CHANGELOG.md) · [Deutsch](../de/CHANGELOG.md) · [简体中文](../zh/CHANGELOG.md) · [Русский](../ru/CHANGELOG.md) · [Português](../pt/CHANGELOG.md) · [日本語](../ja/CHANGELOG.md) · [العربية](../ar/CHANGELOG.md) · **हिन्दी** · [Türkçe](../tr/CHANGELOG.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

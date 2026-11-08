@@ -1,6 +1,6 @@
 # 🔧 FlashPilot
 
-Language switcher: [English](../README.md) · [Français](../fr/README.md) · [Español](../es/README.md) · [Deutsch](../de/README.md) · [简体中文](../zh/README.md) · [Русский](../ru/README.md) · [Português](../pt/README.md) · [日本語](../ja/README.md) · [العربية](../ar/README.md) · **हिन्दी** · [Türkçe](../tr/README.md)
+Language switcher: [English](../../README.md) · [Français](../fr/README.md) · [Español](../es/README.md) · [Deutsch](../de/README.md) · [简体中文](../zh/README.md) · [Русский](../ru/README.md) · [Português](../pt/README.md) · [日本語](../ja/README.md) · [العربية](../ar/README.md) · **हिन्दी** · [Türkçe](../tr/README.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 
@@ -11,7 +11,7 @@ Language switcher: [English](../README.md) · [Français](../fr/README.md) · [E
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org)
 [![PyQt6](https://img.shields.io/badge/UI-PyQt6-41cd52)](https://www.riverbankcomputing.com/software/pyqt/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![CI](https://github.com/Legendary-Brilliantforous/flashpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Legendary-Brilliantforous/flashpilot/actions)
 [![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/flashpilot/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -62,7 +62,7 @@ Android रिपेयर की दुनिया बंद, केवल Win
 
 | Samsung ops | MediaTek workbench | Battery repair | SPD download |
 |---|---|---|---|
-| ![Samsung](docs/samsung.png) | ![MediaTek](docs/mtk.png) | ![Battery](docs/battery.png) | ![SPD](docs/spd.png) |
+| ![Samsung](../../docs/samsung.png) | ![MediaTek](../../docs/mtk.png) | ![Battery](../../docs/battery.png) | ![SPD](../../docs/spd.png) |
 
 ---
 
@@ -265,7 +265,7 @@ Yeh tool directly bootloaders se baat karta hai aur misuse hone par data wipe ya
 
 ## 📄 License
 
-MIT — dekho [LICENSE](LICENSE). Odin protocol constants Heimdall project (MIT) se derived hain, aur SPD BSL reference clean-room protocol write-ups (spd_cmd.h / Opus-Spreadtrum docs) se aata hai.
+MIT — dekho [LICENSE](../../LICENSE). Odin protocol constants Heimdall project (MIT) se derived hain, aur SPD BSL reference clean-room protocol write-ups (spd_cmd.h / Opus-Spreadtrum docs) se aata hai.
 
 ---
 

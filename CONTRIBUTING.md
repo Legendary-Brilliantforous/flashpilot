@@ -1,5 +1,7 @@
 # 🧑‍💻 Contributing to FlashPilot
 
+**Documentation languages:** **English** · [Français](docs/fr/CONTRIBUTING.md) · [Español](docs/es/CONTRIBUTING.md) · [Deutsch](docs/de/CONTRIBUTING.md) · [简体中文](docs/zh/CONTRIBUTING.md) · [Русский](docs/ru/CONTRIBUTING.md) · [Português](docs/pt/CONTRIBUTING.md) · [日本語](docs/ja/CONTRIBUTING.md) · [العربية](docs/ar/CONTRIBUTING.md) · [हिन्दी](docs/hi/CONTRIBUTING.md) · [Türkçe](docs/tr/CONTRIBUTING.md) · [Translation guide](docs/TRANSLATION.md)
+
 Thanks for stopping by! This project is built on reverse-engineered protocols and
 open knowledge — every contribution makes it more capable, more reliable, and
 closer to the paid Windows suites. You don't need to be a flashing expert to

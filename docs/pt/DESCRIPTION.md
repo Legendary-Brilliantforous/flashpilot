@@ -1,6 +1,6 @@
 # FlashPilot 1.2.1 — Estável
 
-Language switcher: [English](../../DESCRIPTION.md) · [Français](../../fr/DESCRIPTION.md) · [Español](../../es/DESCRIPTION.md) · [Deutsch](../../de/DESCRIPTION.md) · [简体中文](../../zh/DESCRIPTION.md) · [Русский](../../ru/DESCRIPTION.md) · **Português** · [日本語](../../ja/DESCRIPTION.md) · [العربية](../../ar/DESCRIPTION.md) · [हिन्दी](../../hi/DESCRIPTION.md) · [Türkçe](../../tr/DESCRIPTION.md)
+Language switcher: [English](../../DESCRIPTION.md) · [Français](../fr/DESCRIPTION.md) · [Español](../es/DESCRIPTION.md) · [Deutsch](../de/DESCRIPTION.md) · [简体中文](../zh/DESCRIPTION.md) · [Русский](../ru/DESCRIPTION.md) · **Português** · [日本語](../ja/DESCRIPTION.md) · [العربية](../ar/DESCRIPTION.md) · [हिन्दी](../hi/DESCRIPTION.md) · [Türkçe](../tr/DESCRIPTION.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

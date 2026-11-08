@@ -1,6 +1,6 @@
 # 🔧 FlashPilot
 
-Language switcher: [English](../README.md) · [Français](../fr/README.md) · [Español](../es/README.md) · [Deutsch](../de/README.md) · [简体中文](../zh/README.md) · [Русский](../ru/README.md) · [Português](../pt/README.md) · [日本語](../ja/README.md) · [العربية](../ar/README.md) · [हिन्दी](../hi/README.md) · **Türkçe**
+Language switcher: [English](../../README.md) · [Français](../fr/README.md) · [Español](../es/README.md) · [Deutsch](../de/README.md) · [简体中文](../zh/README.md) · [Русский](../ru/README.md) · [Português](../pt/README.md) · [日本語](../ja/README.md) · [العربية](../ar/README.md) · [हिन्दी](../hi/README.md) · **Türkçe**
 
 > English kanonik kaynaktır. Bu sayfa bir çeviridir; katkı memnuniyetle karşılanır — bkz. [`../TRANSLATION.md`](../TRANSLATION.md).
 
@@ -11,7 +11,7 @@ Language switcher: [English](../README.md) · [Français](../fr/README.md) · [E
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://www.python.org)
 [![PyQt6](https://img.shields.io/badge/UI-PyQt6-41cd52)](https://www.riverbankcomputing.com/software/pyqt/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](../../LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![CI](https://github.com/Legendary-Brilliantforous/flashpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Legendary-Brilliantforous/flashpilot/actions)
 [![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/flashpilot/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
@@ -62,7 +62,7 @@ Android onarım dünyası kapalı, yalnızca Windows'ta çalışan ticari araçl
 
 | Samsung işlemleri | MediaTek tezgahı | Pil onarımı | SPD indirme |
 |---|---|---|---|
-| ![Samsung](docs/samsung.png) | ![MediaTek](docs/mtk.png) | ![Pil](docs/battery.png) | ![SPD](docs/spd.png) |
+| ![Samsung](../../docs/samsung.png) | ![MediaTek](../../docs/mtk.png) | ![Pil](../../docs/battery.png) | ![SPD](../../docs/spd.png) |
 
 ---
 
@@ -265,7 +265,7 @@ Bu araç bootloader'larla doğrudan konuşur ve yanlış kullanılırsa veriyi s
 
 ## 📄 Lisans
 
-MIT — bkz. [LICENSE](LICENSE). Odin protokol sabitleri Heimdall projesinden (MIT) türetilmiştir; SPD BSL referansı temiz oda protokol yazımından (spd_cmd.h / Opus-Spreadtrum docs) gelir.
+MIT — bkz. [LICENSE](../../LICENSE). Odin protokol sabitleri Heimdall projesinden (MIT) türetilmiştir; SPD BSL referansı temiz oda protokol yazımından (spd_cmd.h / Opus-Spreadtrum docs) gelir.
 
 ---
 

@@ -1,4 +1,4 @@
-Language switcher: [English](../../CONTRIBUTING.md) · [Français](../../fr/CONTRIBUTING.md) · [Español](../../es/CONTRIBUTING.md) · **Deutsch** · [简体中文](../../zh/CONTRIBUTING.md) · [Русский](../../ru/CONTRIBUTING.md) · [Português](../../pt/CONTRIBUTING.md) · [日本語](../../ja/CONTRIBUTING.md) · [العربية](../../ar/CONTRIBUTING.md) · [हिन्दी](../../hi/CONTRIBUTING.md) · [Türkçe](../../tr/CONTRIBUTING.md)
+Language switcher: [English](../../CONTRIBUTING.md) · [Français](../fr/CONTRIBUTING.md) · [Español](../es/CONTRIBUTING.md) · **Deutsch** · [简体中文](../zh/CONTRIBUTING.md) · [Русский](../ru/CONTRIBUTING.md) · [Português](../pt/CONTRIBUTING.md) · [日本語](../ja/CONTRIBUTING.md) · [العربية](../ar/CONTRIBUTING.md) · [हिन्दी](../hi/CONTRIBUTING.md) · [Türkçe](../tr/CONTRIBUTING.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

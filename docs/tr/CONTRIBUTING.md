@@ -1,4 +1,4 @@
-Language switcher: [English](../../CONTRIBUTING.md) · [Français](../../fr/CONTRIBUTING.md) · [Español](../../es/CONTRIBUTING.md) · [Deutsch](../../de/CONTRIBUTING.md) · [简体中文](../../zh/CONTRIBUTING.md) · [Русский](../../ru/CONTRIBUTING.md) · [Português](../../pt/CONTRIBUTING.md) · [日本語](../../ja/CONTRIBUTING.md) · [العربية](../../ar/CONTRIBUTING.md) · [हिन्दी](../../hi/CONTRIBUTING.md) · **Türkçe**
+Language switcher: [English](../../CONTRIBUTING.md) · [Français](../fr/CONTRIBUTING.md) · [Español](../es/CONTRIBUTING.md) · [Deutsch](../de/CONTRIBUTING.md) · [简体中文](../zh/CONTRIBUTING.md) · [Русский](../ru/CONTRIBUTING.md) · [Português](../pt/CONTRIBUTING.md) · [日本語](../ja/CONTRIBUTING.md) · [العربية](../ar/CONTRIBUTING.md) · [हिन्दी](../hi/CONTRIBUTING.md) · **Türkçe**
 
 > English kanonik kaynaktır. Bu sayfa bir çeviridir; katkı memnuniyetle karşılanır — bkz. [`../TRANSLATION.md`](../TRANSLATION.md).
 

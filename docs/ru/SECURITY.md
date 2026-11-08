@@ -1,6 +1,6 @@
 # Политика безопасности
 
-Language switcher: [English](../../SECURITY.md) · [Français](../../fr/SECURITY.md) · [Español](../../es/SECURITY.md) · [Deutsch](../../de/SECURITY.md) · [简体中文](../../zh/SECURITY.md) · **Русский** · [Português](../../pt/SECURITY.md) · [日本語](../../ja/SECURITY.md) · [العربية](../../ar/SECURITY.md) · [हिन्दी](../../hi/SECURITY.md) · [Türkçe](../../tr/SECURITY.md)
+Language switcher: [English](../../SECURITY.md) · [Français](../fr/SECURITY.md) · [Español](../es/SECURITY.md) · [Deutsch](../de/SECURITY.md) · [简体中文](../zh/SECURITY.md) · **Русский** · [Português](../pt/SECURITY.md) · [日本語](../ja/SECURITY.md) · [العربية](../ar/SECURITY.md) · [हिन्दी](../hi/SECURITY.md) · [Türkçe](../tr/SECURITY.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

@@ -111,15 +111,15 @@ class SettingsPageMixin:
         lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(12)
 
-        bl = self._settings_box("SCAN & BEHAVIOUR", lay)
+        bl = self._settings_box(self.tr("SCAN & BEHAVIOUR"), lay)
         self._s_interval = QSpinBox()
         self._s_interval.setRange(1, 30)
         self._s_interval.setSuffix(" s")
         self._s_interval.setValue(int(self.settings.value("scan_interval", 3)))
         self._s_interval.valueChanged.connect(self._apply_scan_interval)
         self._settings_row(
-            bl, "USB / ADB auto-scan interval",
-            "How often the app re-checks the USB bus for connected devices.",
+            bl, self.tr("USB / ADB auto-scan interval"),
+            self.tr("How often the app re-checks the USB bus for connected devices."),
             self._s_interval,
         )
         self._s_autoscan = self._settings_switch()
@@ -128,20 +128,20 @@ class SettingsPageMixin:
         )
         self._s_autoscan.toggled.connect(self._apply_autoscan)
         self._settings_row(
-            bl, "Auto-scan on startup",
-            "Begin monitoring devices immediately when the app opens.",
+            bl, self.tr("Auto-scan on startup"),
+            self.tr("Begin monitoring devices immediately when the app opens."),
             self._s_autoscan,
         )
         self._s_toast = self._settings_switch()
         self._s_toast.setChecked(self.settings.value("toasts", "true", type=bool))
         self._s_toast.toggled.connect(self._apply_toasts)
         self._settings_row(
-            bl, "Desktop notifications",
-            "Show a toast when a device connects or disconnects.",
+            bl, self.tr("Desktop notifications"),
+            self.tr("Show a toast when a device connects or disconnects."),
             self._s_toast,
         )
 
-        bl = self._settings_box("DEFAULT PATHS", lay)
+        bl = self._settings_box(self.tr("DEFAULT PATHS"), lay)
         self._s_dir_row = QHBoxLayout()
         self._s_dir = QLineEdit(
             self.settings.value("default_dir", os.path.expanduser("~/Downloads"))
@@ -159,19 +159,19 @@ class SettingsPageMixin:
         bl.addLayout(self._s_dir_row)
         self._s_dir.editingFinished.connect(self._apply_default_dir)
 
-        bl = self._settings_box("FLASHING", lay)
+        bl = self._settings_box(self.tr("FLASHING"), lay)
         self._s_clear = self._settings_switch()
         self._s_clear.setChecked(
             self.settings.value("clear_on_run", "false", type=bool)
         )
         self._s_clear.toggled.connect(self._apply_clear_on_run)
         self._settings_row(
-            bl, "Clear console before each run",
-            "Automatically empty the log when you start an operation.",
+            bl, self.tr("Clear console before each run"),
+            self.tr("Automatically empty the log when you start an operation."),
             self._s_clear,
         )
 
-        bl = self._settings_box("LANGUAGE & REGION", lay)
+        bl = self._settings_box(self.tr("LANGUAGE & REGION"), lay)
         self._s_language = QComboBox()
         for code, label in (
             ("en", "English"), ("fr", "Fran\u00e7ais"), ("es", "Espa\u00f1ol"),
@@ -185,8 +185,8 @@ class SettingsPageMixin:
                 self._s_language.setCurrentIndex(i)
         self._s_language.currentIndexChanged.connect(self._apply_ui_language)
         self._settings_row(
-            bl, "Interface language",
-            "Display language for menus and buttons. Requires a restart.",
+            bl, self.tr("Interface language"),
+            self.tr("Display language for menus and buttons. Requires a restart."),
             self._s_language,
         )
 
@@ -206,15 +206,15 @@ class SettingsPageMixin:
         lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(12)
 
-        bl = self._settings_box("UPDATES & RELEASES", lay)
+        bl = self._settings_box(self.tr("UPDATES & RELEASES"), lay)
         self._auto_update_cb = self._settings_switch()
         self._auto_update_cb.setChecked(
             self.settings.value("auto_update_check", False, type=bool)
         )
         self._auto_update_cb.toggled.connect(lambda on: self.settings.setValue("auto_update_check", on))
         self._settings_row(
-            bl, "Auto-check for updates",
-            "Automatically check for new versions when FlashPilot starts.",
+            bl, self.tr("Auto-check for updates"),
+            self.tr("Automatically check for new versions when FlashPilot starts."),
             self._auto_update_cb,
         )
 
@@ -224,8 +224,8 @@ class SettingsPageMixin:
         )
         self._auto_download_cb.toggled.connect(lambda on: self.settings.setValue("auto_download_update", on))
         self._settings_row(
-            bl, "Automatically download updates",
-            "Download new updates in the background when available.",
+            bl, self.tr("Automatically download updates"),
+            self.tr("Download new updates in the background when available."),
             self._auto_download_cb,
         )
 
@@ -240,8 +240,8 @@ class SettingsPageMixin:
         self._check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._check_updates_btn.clicked.connect(self._manual_check_update)
         self._settings_row(
-            bl, "Manual version check",
-            "Query GitHub releases immediately for updates.",
+            bl, self.tr("Manual version check"),
+            self.tr("Query GitHub releases immediately for updates."),
             self._check_updates_btn,
         )
 
@@ -262,8 +262,8 @@ class SettingsPageMixin:
         )
         self._apply_patch_btn.clicked.connect(self._apply_python_patch_clicked)
         self._settings_row(
-            bl, "Light patch (python only)",
-            "Fast tier-1 update when only python code changed upstream.",
+            bl, self.tr("Light patch (python only)"),
+            self.tr("Fast tier-1 update when only python code changed upstream."),
             self._apply_patch_btn,
         )
 
@@ -274,8 +274,8 @@ class SettingsPageMixin:
         )
         self._beta_every_boot.toggled.connect(self._apply_beta_warning_mode)
         self._settings_row(
-            bl, "Beta warning on every boot",
-            "ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version.",
+            bl, self.tr("Beta warning on every boot"),
+            self.tr("ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version."),
             self._beta_every_boot,
         )
         prev_btn = QPushButton("Preview beta warning")
@@ -289,8 +289,8 @@ class SettingsPageMixin:
         prev_btn.clicked.connect(lambda: self._show_beta_risk_dialog(
             APP_VERSION, "", force=True))
         self._settings_row(
-            bl, "Preview beta warning",
-            "Show the full-screen beta risk dialog now (ignores 'accepted' state).",
+            bl, self.tr("Preview beta warning"),
+            self.tr("Show the full-screen beta risk dialog now (ignores 'accepted' state)."),
             prev_btn,
         )
 
@@ -314,7 +314,7 @@ class SettingsPageMixin:
         lay.setSpacing(18)
 
         # THEME — 10 cards only (no dropdown) — progressively advanced, fit-well
-        bl = self._settings_box("THEME — 10 professional accents (click a card)", lay)
+        bl = self._settings_box(self.tr("THEME — 10 professional accents (click a card)"), lay)
         # Hidden combo for back-compat (cards drive it)
         self._s_theme = QComboBox()
         self._s_theme.addItems(list(ACCENT_THEMES))
@@ -413,13 +413,13 @@ class SettingsPageMixin:
         bl.addWidget(hint)
 
         # ANIMATIONS — granular, not single switch
-        bl2 = self._settings_box("ANIMATIONS — granular", lay)
+        bl2 = self._settings_box(self.tr("ANIMATIONS — granular"), lay)
         self._s_anim = self._settings_switch()
         self._s_anim.setChecked(self.settings.value("animations", "true", type=bool))
         self._s_anim.toggled.connect(self._apply_animations)
         self._settings_row(
-            bl2, "Master animations",
-            "Global toggle — disables all motion when off.",
+            bl2, self.tr("Master animations"),
+            self.tr("Global toggle — disables all motion when off."),
             self._s_anim,
         )
         # Granular toggles — every toggle demos immediately when turned ON, stops when OFF
@@ -485,13 +485,13 @@ class SettingsPageMixin:
         self._s_blur.setChecked(self.settings.value("blur", "true", type=bool))
         self._s_blur.toggled.connect(self._apply_blur)
         self._settings_row(
-            bl2, "Window glow / shadow",
-            "Drop shadow and halo around the main window.",
+            bl2, self.tr("Window glow / shadow"),
+            self.tr("Drop shadow and halo around the main window."),
             self._s_blur,
         )
 
         # SHORTCUTS — table with all shortcuts, editable hint
-        bl3 = self._settings_box("SHORTCUTS", lay)
+        bl3 = self._settings_box(self.tr("SHORTCUTS"), lay)
         shortcuts = [
             ("F5 / Ctrl+R", "Re-scan USB / ADB"),
             ("Ctrl+Enter", "Run selected operation"),
@@ -521,19 +521,19 @@ class SettingsPageMixin:
         bl3.addWidget(sc_hint)
 
         # UI DENSITY / FONT — more UI improvements
-        bl4 = self._settings_box("UI DENSITY", lay)
+        bl4 = self._settings_box(self.tr("UI DENSITY"), lay)
         self._s_density = QComboBox()
         self._s_density.addItems(["Comfortable", "Compact", "Spacious"])
         self._s_density.setCurrentText(self.settings.value("density", "Comfortable"))
         self._style_combo(self._s_density)
         self._s_density.currentTextChanged.connect(lambda v: self.settings.setValue("density", v))
-        self._settings_row(bl4, "Layout density", "Compact saves vertical space, Spacious adds padding.", self._s_density)
+        self._settings_row(bl4, self.tr("Layout density"), self.tr("Compact saves vertical space, Spacious adds padding."), self._s_density)
         self._s_font = QSpinBox()
         self._s_font.setRange(8, 16)
         self._s_font.setValue(int(self.settings.value("font_size", 13)))
         self._s_font.setSuffix(" px")
         self._s_font.valueChanged.connect(lambda v: self.settings.setValue("font_size", int(v)))
-        self._settings_row(bl4, "Base font size", "Applies to console and cards (restart to fully apply).", self._s_font)
+        self._settings_row(bl4, self.tr("Base font size"), self.tr("Applies to console and cards (restart to fully apply)."), self._s_font)
 
         lay.addStretch(1)
         scroll.setWidget(host)
@@ -547,7 +547,7 @@ class SettingsPageMixin:
         lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(12)
 
-        bl = self._settings_box("ENGINE", lay)
+        bl = self._settings_box(self.tr("ENGINE"), lay)
         rows = [
             ("Engine", "Rust core (flashpilot-bridge) + PyQt6 shell"),
             ("Bridge binary", str(bridge.BRIDGE)),
@@ -566,7 +566,7 @@ class SettingsPageMixin:
             row.addWidget(val, 1)
             bl.addLayout(row)
 
-        bl = self._settings_box("ACTIONS", lay)
+        bl = self._settings_box(self.tr("ACTIONS"), lay)
         act = QHBoxLayout()
         act.setSpacing(10)
         b1 = QPushButton("Rebuild bridge (cargo)")
@@ -658,7 +658,7 @@ class SettingsPageMixin:
 
         lay.addWidget(card)
 
-        bl = self._settings_box("SHORTCUTS", lay)
+        bl = self._settings_box(self.tr("SHORTCUTS"), lay)
         for k, d in (
             ("F5", "Re-scan USB / ADB"),
             ("Ctrl+Enter", "Run the selected operation"),

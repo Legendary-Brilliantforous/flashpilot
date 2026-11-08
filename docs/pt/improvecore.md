@@ -1,6 +1,6 @@
 # ImproveCore — Melhorias do núcleo Rust
 
-Language switcher: [English](../../improvecore.md) · [Français](../../fr/improvecore.md) · [Español](../../es/improvecore.md) · [Deutsch](../../de/improvecore.md) · [简体中文](../../zh/improvecore.md) · [Русский](../../ru/improvecore.md) · **Português** · [日本語](../../ja/improvecore.md) · [العربية](../../ar/improvecore.md) · [हिन्दी](../../hi/improvecore.md) · [Türkçe](../../tr/improvecore.md)
+Language switcher: [English](../../improvecore.md) · [Français](../fr/improvecore.md) · [Español](../es/improvecore.md) · [Deutsch](../de/improvecore.md) · [简体中文](../zh/improvecore.md) · [Русский](../ru/improvecore.md) · **Português** · [日本語](../ja/improvecore.md) · [العربية](../ar/improvecore.md) · [हिन्दी](../hi/improvecore.md) · [Türkçe](../tr/improvecore.md)
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 

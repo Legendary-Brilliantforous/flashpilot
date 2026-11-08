@@ -1,4 +1,4 @@
-Language switcher: [English](../../SECURITY.md) · [Français](../../fr/SECURITY.md) · [Español](../../es/SECURITY.md) · [Deutsch](../../de/SECURITY.md) · [简体中文](../../zh/SECURITY.md) · [Русский](../../ru/SECURITY.md) · [Português](../../pt/SECURITY.md) · [日本語](../../ja/SECURITY.md) · [العربية](../../ar/SECURITY.md) · [हिन्दी](../../hi/SECURITY.md) · **Türkçe**
+Language switcher: [English](../../SECURITY.md) · [Français](../fr/SECURITY.md) · [Español](../es/SECURITY.md) · [Deutsch](../de/SECURITY.md) · [简体中文](../zh/SECURITY.md) · [Русский](../ru/SECURITY.md) · [Português](../pt/SECURITY.md) · [日本語](../ja/SECURITY.md) · [العربية](../ar/SECURITY.md) · [हिन्दी](../hi/SECURITY.md) · **Türkçe**
 
 > English kanonik kaynaktır. Bu sayfa bir çeviridir; katkı memnuniyetle karşılanır — bkz. [`../TRANSLATION.md`](../TRANSLATION.md).
 

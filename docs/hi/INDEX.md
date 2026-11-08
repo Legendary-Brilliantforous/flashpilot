@@ -1,6 +1,6 @@
 # FlashPilot — सूचकांक (Index)
 
-Language switcher: [English](../INDEX.md) · [Français](../fr/INDEX.md) · [Español](../es/INDEX.md) · [Deutsch](../de/INDEX.md) · [简体中文](../zh/INDEX.md) · [Русский](../ru/INDEX.md) · [Português](../pt/INDEX.md) · [日本語](../ja/INDEX.md) · [العربية](../ar/INDEX.md) · **हिन्दी** · [Türkçe](../tr/INDEX.md)
+Language switcher: [English](../../INDEX.md) · [Français](../fr/INDEX.md) · [Español](../es/INDEX.md) · [Deutsch](../de/INDEX.md) · [简体中文](../zh/INDEX.md) · [Русский](../ru/INDEX.md) · [Português](../pt/INDEX.md) · [日本語](../ja/INDEX.md) · [العربية](../ar/INDEX.md) · **हिन्दी** · [Türkçe](../tr/INDEX.md)
 
 > English canonical source है। यह पेज अनुवाद है; सहायता चाहिए — देखें [`../TRANSLATION.md`](../TRANSLATION.md).
 
