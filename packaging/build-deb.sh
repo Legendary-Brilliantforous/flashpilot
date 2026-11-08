@@ -24,7 +24,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="$(.venv/bin/python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
+# Resolve the version without assuming a repo .venv exists (CI builds the
+# package from a clean checkout): prefer .venv's interpreter, fall back to the
+# system one. tomllib needs 3.11+, which the package's python3 dependency
+# already requires.
+PYBIN="/usr/bin/python3"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    PYBIN="$ROOT/.venv/bin/python"
+fi
+VERSION="$("$PYBIN" -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 PYVER="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 PKG="flashpilot_${VERSION}_${ARCH}.deb"
