@@ -1963,6 +1963,10 @@ class FlashPilotWindow(
         self._body_splitter.setStretchFactor(1, 1)
         self._body_splitter.splitterMoved.connect(self._on_body_splitter_moved)
         self._body_splitter.setStyleSheet(_splitter_qss())
+        # The panel's floor is font-metric dependent (`_body_panel_floor`), and
+        # QSplitter clamps to the child's explicit minimumWidth — set it once the
+        # panel's content exists so a drag can never clip its controls.
+        self._conn.setMinimumWidth(self._body_panel_floor())
         body.addWidget(self._body_splitter, 1)
 
         # LEFT: connection panel + content page stack.
@@ -2087,7 +2091,12 @@ class FlashPilotWindow(
     # 228px (its metric tiles) and the page at its own natural width, under
     # which the page scrolls sideways rather than cutting its tabs/grid.
     _BODY_PANEL_DEFAULT_W = 232  # px — default device panel width
-    _BODY_PANEL_MIN_W = 228      # px — panel content minimum (tiles never clip)
+    # px — design baseline for the panel (measured with the bundled UI font).
+    # The effective floor is raised to the panel's own minimumSizeHint at
+    # runtime (`_body_panel_floor`), because the tiles are laid out from real
+    # font metrics: on systems without Inter the same controls need more width
+    # and a hard 228px would clip them.
+    _BODY_PANEL_MIN_W = 228
     _BODY_PANEL_MAX_W = 420      # px — widest the panel may be dragged
     _PAGE_VIEW_MIN_W = 240       # px — narrowest the page *viewport* may be dragged
 
@@ -2395,22 +2404,36 @@ class FlashPilotWindow(
         """Splitter handle styling from theme tokens (no hardcoded colours)."""
         self._splitter.setStyleSheet(_splitter_qss())
 
+    def _body_panel_floor(self):
+        """Effective minimum width of the device panel, in px.
+
+        ``_BODY_PANEL_MIN_W`` is the design baseline (it was measured with the
+        Inter UI font). The panel's tiles are laid out from real font metrics,
+        so on a machine where Inter is unavailable the same controls need more
+        room — and clamping to the baseline clips them. Raise the floor to
+        whatever the panel itself reports it needs, capped at the drag maximum.
+        """
+        floor = self._BODY_PANEL_MIN_W
+        conn = getattr(self, "_conn", None)
+        if conn is not None:
+            floor = max(floor, conn.minimumSizeHint().width())
+        return min(floor, self._BODY_PANEL_MAX_W)
+
     def _desired_device_panel_width(self, total):
         """Device panel width for `total` px: persisted width if sane, else 232.
 
         Always clamped into [min, max] *and* leaves the page its viewport floor,
         so the page can never be squeezed out by a saved or dragged value.
         """
+        floor = self._body_panel_floor()
         try:
             w = int(getattr(self, "_device_panel_width", None) or 0)
         except (TypeError, ValueError):
             w = 0
         if w <= 0:
             w = self._BODY_PANEL_DEFAULT_W
-        room = max(self._BODY_PANEL_MIN_W,
-                   total - self._PAGE_VIEW_MIN_W - 6)
-        return max(self._BODY_PANEL_MIN_W,
-                   min(w, self._BODY_PANEL_MAX_W, room))
+        room = max(floor, total - self._PAGE_VIEW_MIN_W - 6)
+        return max(floor, min(w, self._BODY_PANEL_MAX_W, room))
 
     def _apply_default_body_split(self):
         """Keep the device panel at its desired width across window resizes.
@@ -2436,6 +2459,12 @@ class FlashPilotWindow(
             return
         if getattr(self, "_body_user_moved", False):
             return
+        # Keep the widget floor and the computed floor in sync: QSplitter clamps
+        # drags to the child's explicit minimumWidth, so leaving it at the design
+        # baseline would let a drag clip the panel on wider font metrics.
+        floor = self._body_panel_floor()
+        if self._conn.minimumWidth() != floor:
+            self._conn.setMinimumWidth(floor)
         panel = self._desired_device_panel_width(splitter.width())
         page = max(1, splitter.width() - panel)
         if page >= self._PAGE_VIEW_MIN_W:

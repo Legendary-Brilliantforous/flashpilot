@@ -36,6 +36,36 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest  # noqa: E402  (must follow the environment setup above)
 
 
+def pytest_addoption(parser):
+    """`--hil` opts into the hardware-in-the-loop suite (tests/test_hil.py)."""
+    try:
+        parser.addoption(
+            "--hil",
+            action="store_true",
+            default=False,
+            help="run hardware-in-the-loop tests (needs attached devices)",
+        )
+    except ValueError:
+        pass  # already registered by a plugin
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip `hil`-marked tests unless the runner asked for them.
+
+    This hook must live in a conftest: pytest only loads hooks from conftest
+    files and plugins, so the copy that used to sit in tests/test_hil.py never
+    ran — the HIL tests therefore executed on CI, where libusb cannot even
+    enumerate (``USB error: Transfer failed: Other error``), and failed
+    instead of skipping.
+    """
+    if config.getoption("--hil", default=False):
+        return
+    skip = pytest.mark.skip(reason="HIL: needs --hil and attached devices")
+    for item in items:
+        if "hil" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_qsettings():
     """Fail loudly if QSettings ever stops resolving inside the temp dir.
