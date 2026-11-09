@@ -18,7 +18,6 @@ mod mtk;
 mod mtk_da;
 mod mtk_daloader;
 mod mtk_exploit;
-mod mtk_daloader;
 mod mtk_sla;
 mod mtk_sla_keys;
 mod mtp;
@@ -30,16 +29,8 @@ mod sam_errors;
 mod sam_setup;
 mod sparse;
 mod spd;
-mod fastboot;
-mod flows;
-mod imgtools;
-mod pac;
-mod sparse;
-mod fwtar;
-mod pit;
 mod usb;
 mod util;
-
 use std::process::exit;
 
 fn main() {
@@ -285,15 +276,6 @@ fn main() {
                 );
                 exit(2);
             }            mtk_da::mtk_flash_samsung(&args[2], &args[3], &args[4])
-        }
-        "mtk-frp-brom" => {
-            if args.len() < 4 {
-                eprintln!("usage: flashpilot-bridge mtk-frp-brom <target> <da_dir>");
-                eprintln!("  FRP bypass for ANY MediaTek device via BROM with the bundled");
-                eprintln!("  mtkclient DA containers (V5/V6) - no user-supplied DA needed.");
-                exit(2);
-            }
-            mtk_da::mtk_frp_brom_auto(&args[2], &args[3])
         }
         "mtk-frp-brom" => {
             if args.len() < 4 {

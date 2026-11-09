@@ -12,7 +12,7 @@
 #   /usr/lib/flashpilot/payloads/qcom/      Qualcomm firehose programmers + index
 #   /usr/lib/flashpilot/venv/               bundled Python venv (PyQt6 + segno)
 #   /usr/share/flashpilot/                  python/, main.py, scripts/, root/,
-#                                          pit/, docs/, LICENSE, README
+#                                          pit/, docs/, i18n/, LICENSE, README
 #   /usr/lib/udev/rules.d/60-odin4.rules   Samsung USB rules (no sudo flashing)
 #   /usr/share/applications/flashpilot.desktop
 #   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/flashpilot.png
@@ -170,6 +170,9 @@ cp -r scripts "$STAGE/usr/share/flashpilot/"
 rsync -a root/ "$STAGE/usr/share/flashpilot/root/"
 [ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
+# UI translation catalogs + manifest (runtime lookup expects them next to
+# python/, i.e. /usr/share/flashpilot/i18n/json/*.json).
+cp -r i18n "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
 find "$STAGE/usr/share/flashpilot" -name "__pycache__" -type d -prune -exec rm -rf {} +
 rm -rf "$STAGE/usr/share/flashpilot/tests"

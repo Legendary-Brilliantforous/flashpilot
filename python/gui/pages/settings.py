@@ -173,12 +173,13 @@ class SettingsPageMixin:
 
         bl = self._settings_box(self.tr("LANGUAGE & REGION"), lay)
         self._s_language = QComboBox()
-        for code, label in (
-            ("en", "English"), ("fr", "Fran\u00e7ais"), ("es", "Espa\u00f1ol"),
-            ("de", "Deutsch"), ("zh", "Simplified Chinese"), ("ru", "Russian"),
-            ("pt", "Portugu\u00eas"),
-        ):
-            self._s_language.addItem(label, code)
+        # The manifest is the single source of truth for which UI languages
+        # exist: adding a language means adding a catalog + a manifest entry,
+        # nothing here. Native names come from the manifest.
+        from ..i18n import available_languages
+
+        for row in available_languages():
+            self._s_language.addItem(row["name"], row["code"])
         cur = str(self.settings.value("ui_language", "en"))
         for i in range(self._s_language.count()):
             if self._s_language.itemData(i) == cur:
