@@ -32,6 +32,21 @@ pub const QCOM_ALL_PIDS: &[u16] = &[
     0x903A, // Modem
     0x6000, // QCOM modem
 ];
+/// Qualcomm PIDs that are DIAG composites, not Sahara EDL: 0x9006 is the
+/// documented "HS-USB Diagnostics 9006" and 0x9026 enumerates as a
+/// diag+modem+mass-storage composite (observed live). They get DIAG
+/// flows, never a Sahara hello.
+pub const QCOM_DIAG_PIDS: &[u16] = &[
+    0x9006,  // HS-USB Diagnostics 9006
+    0x9026,  // Diag composite
+];
+/// All Qualcomm PIDs that indicate Qualcomm chip (EDL + normal diag + modem)
+pub const QCOM_ALL_PIDS: &[u16] = &[
+    0x9008, 0x9006, 0x900E, 0x901D, 0x9025, 0x9026, 0x9046, 0x9066, 0x90DB,
+    0x9091, // DIAG
+    0x903A, // Modem
+    0x6000, // QCOM modem
+];
 
 /// Sahara protocol commands
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

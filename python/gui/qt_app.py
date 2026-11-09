@@ -211,6 +211,9 @@ def _flows_running():
         return len(_FLOW_LABELS)
 
 
+
+
+
 # ---------------------------------------------------------------------------
 # Design tokens - single source for the premium dark theme.
 # ---------------------------------------------------------------------------
@@ -798,6 +801,81 @@ def _apple_mode(d):
     if _has_mtp_iface(d):
         return "APPLE DEVICE (PTP/Image Transfer)"
     return "APPLE DEVICE (normal / other)"
+
+
+def _generic_android_mode(d):
+    """Human label for a generic (non-vendor) Android device."""
+    if not isinstance(d, dict):
+        return "ANDROID DEVICE"
+    pid = d.get("pid", 0)
+    vid = d.get("vid", 0)
+    if _has_adb_iface(d):
+        return "ANDROID DEVICE - ADB (debug composite)"
+    if any(i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3
+           for i in d.get("interfaces", [])):
+        return "ANDROID DEVICE - FASTBOOT (bootloader)"
+    if _has_mtp_iface(d):
+        return "ANDROID DEVICE - MTP (media transfer)"
+    prod = (d.get("product") or "").strip()
+    if prod:
+        return f"ANDROID DEVICE - {prod.upper()}"
+    return f"ANDROID DEVICE (VID 0x{vid:04X} PID 0x{pid:04X})"
+
+
+_APPLE_VID = 0x05AC
+_ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
+# MTK vendor IDs for the monitor buckets: the main 0x0E8D plus the OEM VIDs
+# under which an MTK preloader/BROM re-enumerates (a bare stage has no
+# interfaces, so VID membership is the only signal — TFT parity).
+_MTK_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
+_MOTOROLA_VID = 0x22B8
+
+
+def _is_apple(d):
+    """Apple devices enumerate under VID 0x05ac (iPhone/iPad/iPod)."""
+    return isinstance(d, dict) and d.get("vid") == _APPLE_VID
+
+
+def _apple_mode(d):
+    """Return a human label for an Apple USB device state."""
+    pid = d.get("pid", 0)
+    prod = (d.get("product") or "").lower()
+    if "recovery" in prod or "restore" in prod:
+        return "APPLE RECOVERY MODE (iTunes restore)"
+    if pid in (0x1222, 0x1227):
+        return "APPLE DFU MODE (Device Firmware Update)"
+    if _has_mtp_iface(d):
+        return "APPLE DEVICE (PTP/Image Transfer)"
+    return "APPLE DEVICE (normal / other)"
+
+
+def _is_generic_android(d):
+    """Best-effort: a non-vendor Android device (not Samsung/MTK/QCOM/SPD/Apple).
+
+    True when the device exposes the Android ADB gadget (255/66/1) or an MTP/
+    PTP image interface (class 6) under a non-vendor VID, or its product/
+    manufacturer hints at an Android phone."""
+    if not isinstance(d, dict):
+        return False
+    vid = d.get("vid", 0)
+    if vid in (0x04E8, 0x05C6, 0x0E8D, 0x1782, _APPLE_VID):
+        return False
+    if _has_adb_iface(d):
+        return True
+    if any(i.get("class") == 255 and i.get("subclass") == 66 for i in d.get("interfaces", [])):
+        return True
+    if _has_mtp_iface(d):
+        return True
+    if vid in _ANDROID_GENERIC_VIDS:
+        return True
+    prod = (d.get("product") or "").lower()
+    mfr = (d.get("manufacturer") or "").lower()
+    for kw in ("android", "phone", "tecno", "infinix", "itel", "xiaomi", "redmi",
+               "oppo", "vivo", "oneplus", "realme", "pixel", "nexus", "motorola",
+               "lenovo", "huawei", "honor", "asus", "transsion", "spark", "smartphone"):
+        if kw in prod or kw in mfr:
+            return True
+    return False
 
 
 def _generic_android_mode(d):
@@ -7975,6 +8053,156 @@ class FlashPilotWindow(
         self.settings.clear()
         self._toasts.show_info("Settings reset", "Values restored to defaults")
         self._switch_settings("general")
+
+    def _download_and_prompt_install(self, latest_url, stable_tag):
+        import threading
+
+        fpath = os.path.expanduser("~/flashpilot_update.deb")
+        self.show_toast("Downloading update", f"Downloading FlashPilot {stable_tag}...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit(f"[check] Downloading {stable_tag} ...")
+            except Exception:
+                pass
+
+        def _worker(url=latest_url, tag=stable_tag, dest=fpath):
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(url, dest)
+                if os.path.exists(dest):
+                    if hasattr(self, "_ui") and self._ui:
+                        try:
+                            self._ui.line.emit(f"[check] Downloaded {tag} to {dest}")
+                        except Exception:
+                            pass
+                        self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
+                else:
+                    self._ui.ui.emit(lambda: self.show_toast("Download failed", "File missing after download.", "error"))
+            except Exception as e:
+                try:
+                    if hasattr(self, "_ui") and self._ui:
+                        self._ui.line.emit(f"[check] Download failed: {e}")
+                        self._ui.ui.emit(lambda _e=e: self.show_toast("Download failed", str(_e), "error"))
+                    else:
+                        self.show_toast("Download failed", str(e), "error")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _prompt_install_update(self, stable_tag, fpath):
+        self._show_centered_notice(
+            "Update Downloaded",
+            f"FlashPilot {stable_tag} has been downloaded successfully.\n\nDo you want to install this update now?",
+            pill="INSTALL",
+            pill_grad=("#10b981", "#06b6d4"),
+            ok_label="Later",
+            secondary_label="Install Now",
+            secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
+        )
+
+    def _execute_sudo_install(self, fpath):
+        import threading
+
+        if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
+            self.show_toast("Installation Failed", "Update file not found.", "error")
+            return
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        password, ok = QInputDialog.getText(
+            self,
+            "Sudo Password Required",
+            "Enter your sudo password to install the FlashPilot update:",
+            QLineEdit.EchoMode.Password
+        )
+        if not (ok and password):
+            return
+        self.show_toast("Installing update", "Running sudo dpkg -i ...", "info")
+        if hasattr(self, "_ui") and self._ui:
+            try:
+                self._ui.line.emit("[check] Installing update (sudo dpkg -i) ...")
+            except Exception:
+                pass
+
+        def _worker(pw=password, dest=fpath):
+            import subprocess
+            try:
+                res = subprocess.run(
+                    ["sudo", "-S", "dpkg", "-i", dest],
+                    input=pw + "\n",
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+            except Exception as e:
+                self._ui.ui.emit(lambda _e=e: self.show_toast("Installation Failed", str(_e), "error"))
+                return
+            finally:
+                # Never keep the password referenced longer than needed.
+                pw = ""
+            if res.returncode == 0:
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit("[check] Update installed - restarting into the new version ...")
+                    except Exception:
+                        pass
+                self._ui.ui.emit(lambda: self.show_toast("Update Installed", "Restarting FlashPilot...", "success"))
+                QTimer.singleShot(1500, self._restart_application)
+            else:
+                err = (res.stderr or "").strip() or (res.stdout or "").strip() or "Installation failed"
+                # Avoid echoing a wrong-password sudo prompt verbatim forever; keep it short.
+                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast("Installation Failed", _e, "error"))
+                if hasattr(self, "_ui") and self._ui:
+                    try:
+                        self._ui.line.emit(f"[check] Install failed: {err[-500:]}")
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _restart_application(self):
+        import os
+        import sys
+        try:
+            from PyQt6.QtCore import QProcess
+            from PyQt6.QtWidgets import QApplication
+            # Installed .deb runs via /usr/bin/flashpilot (venv python + /usr/share/flashpilot/main.py).
+            # Prefer relaunching through the launcher so the new install is picked up,
+            # instead of re-execing the possibly-stale current interpreter path.
+            launcher = "/usr/bin/flashpilot"
+            try:
+                from python.core import APP_VERSION  # noqa: F401  (keeps import cheap/local)
+            except Exception:
+                pass
+            using_installed_tree = os.path.exists("/usr/share/flashpilot/main.py")
+            if os.path.exists(launcher) and os.access(launcher, os.X_OK) and using_installed_tree:
+                try:
+                    QProcess.startDetached(launcher, [])
+                    try:
+                        QApplication.quit()
+                    except Exception:
+                        pass
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    return
+                except Exception:
+                    pass
+            # Source checkout / dev run: re-exec the same interpreter + argv.
+            try:
+                self.close()
+            except Exception:
+                pass
+            try:
+                QApplication.quit()
+            except Exception:
+                pass
+            os.execl(sys.executable, sys.executable, *sys.argv)
+        except Exception:
+            try:
+                self.close()
+            except Exception:
+                pass
 
     def _download_and_prompt_install(self, latest_url, stable_tag):
         import threading

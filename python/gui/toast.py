@@ -428,6 +428,11 @@ class ToastHost(QWidget):
             widgets.append(self._overflow)
         return widgets
 
+    def _cap_stack(self):
+        while len(self._toasts) > self._MAX_STACK:
+            oldest = self._toasts[0]
+            self.dismiss(oldest)
+
     def _relayout(self):
         parent = self.parentWidget()
         if parent is None:

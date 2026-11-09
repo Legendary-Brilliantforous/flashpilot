@@ -204,6 +204,32 @@ fn open_device(target: &str) -> OdinResult<Device> {
         }
     }
 
+    // If device came up unconfigured (active_config 0, no interfaces), set config 1 and re-enumerate
+    if target_dev.interfaces.is_empty() {
+        let ctx2 = rusb::Context::new().map_err(|e| OdinError(format!("libusb: {e}")))?;
+        if let Some(d) = ctx2
+            .devices()
+            .map_err(|e| OdinError(format!("libusb: {e}")))?
+            .iter()
+            .find(|d| d.bus_number() == bus && d.address() == addr)
+        {
+            if let Ok(h) = d.open() {
+                let _ = h.set_active_configuration(1);
+                std::thread::sleep(std::time::Duration::from_millis(600));
+            }
+        }
+        let devices2 = usb::collect_devices(Some(0x04e8))?;
+        target_dev = devices2
+            .into_iter()
+            .find(|d| d.vid == vid && d.bus == bus && d.address == addr)
+            .ok_or(OdinError(
+                "device still unconfigured after set_config(1) - replug cable, re-enter Download Mode".into(),
+            ))?;
+        if target_dev.interfaces.is_empty() {
+            return Err(OdinError("no CDC data interface (device returned no endpoints after config)".into()));
+        }
+    }
+
     let iface = target_dev
         .interfaces
         .iter()
