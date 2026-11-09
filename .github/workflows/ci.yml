@@ -102,3 +102,25 @@ jobs:
           w = FrpWindow()
           print('FrpWindow OK')
           "
+      # The .deb must ship i18n/ next to python/; otherwise the installed app
+      # silently falls back to English even though catalogs exist in the repo.
+      - name: Smoke test UI translations (installed layout)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          /tmp/flashpilot-pkg/usr/lib/flashpilot/venv/bin/python -c "
+          import sys
+          sys.path.insert(0, '/tmp/flashpilot-pkg/usr/share/flashpilot')
+          from PyQt6.QtWidgets import QApplication
+          app = QApplication([])
+          from python.gui.i18n import available_languages, install, json_path_for
+          codes = [row['code'] for row in available_languages()]
+          assert 'ar' in codes, codes
+          for code in codes:
+              path = json_path_for(code)
+              assert path.is_file(), (code, path)
+          translator = install(app, 'ar')
+          assert translator is not None, 'Arabic catalog did not install'
+          assert translator.translate('ctx', 'Interface language') != 'Interface language'
+          print('i18n OK:', len(codes), 'languages')
+          "
