@@ -121,6 +121,7 @@ jobs:
               assert path.is_file(), (code, path)
           translator = install(app, 'ar')
           assert translator is not None, 'Arabic catalog did not install'
-          assert translator.translate('ctx', 'Interface language') != 'Interface language'
+          from PyQt6.QtCore import QCoreApplication
+          assert QCoreApplication.translate('ctx', 'Interface language') != 'Interface language'
           print('i18n OK:', len(codes), 'languages')
           "

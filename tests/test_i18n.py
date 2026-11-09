@@ -342,8 +342,12 @@ def test_install_keeps_a_reference_and_applies_rtl(monkeypatch):
         assert translator is not None
         assert translator in i18n._INSTALLED, "QTranslator must stay alive"
         assert app.layoutDirection() == Qt.LayoutDirection.RightToLeft
+        # Exercise the real lookup path used by every self.tr() call, not just
+        # the translator object directly.
+        from PyQt6.QtCore import QCoreApplication
+
         assert (
-            translator.translate("Context", "Interface language")
+            QCoreApplication.translate("FlashPilot", "Interface language")
             != "Interface language"
         )
     finally:
