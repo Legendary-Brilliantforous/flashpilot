@@ -57,3 +57,8 @@ opencode.json
 
 # Local vendor-payload scratch cache (downloads, unreviewed binaries)
 /.cache/
+
+# AI/agent scaffolding (local only, never shipped)
+.agents/
+.opencode/
+skills-lock.json
