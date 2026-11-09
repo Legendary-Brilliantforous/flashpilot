@@ -50,6 +50,38 @@ def placeholders(text):
     return set(_PLACEHOLDER.findall(text or ""))
 
 
+def stable_key(prefix, text):
+    """A stable catalog key for a data-driven string (job/mode names).
+
+    ``stable_key("job", "Flash Firmware")`` -> ``"job.flash_firmware"``.
+    Job and mode strings are already routing identifiers, so their slug is as
+    stable as the English text they replace.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", str(text or "").lower()).strip("_")
+    return f"{prefix}.{slug}" if slug else prefix
+
+
+def tr_key(key, fallback=""):
+    """Translate a stable catalog key, falling back to English display text.
+
+    Used for data that never passes through a widget's ``tr()`` — flow
+    captions, job names and transport modes. The key is looked up in the
+    catalog's ``keys`` section; when it is missing or empty, ``fallback``
+    (the original English label) is returned unchanged.
+    """
+    if not key:
+        return fallback
+    try:
+        from PyQt6.QtCore import QCoreApplication
+
+        hit = QCoreApplication.translate("flashpilot", key)
+    except Exception:
+        return fallback or key
+    if hit and hit != key:
+        return hit
+    return fallback or key
+
+
 def language_code(lang):
     """Normalise a language tag to a bare lookup code (``pt-BR`` -> ``pt``)."""
     return str(lang or "").strip().replace("_", "-").split("-")[0].lower()
@@ -157,7 +189,13 @@ def available_languages():
 
 
 class JsonTranslator(QTranslator):
-    """A QTranslator backed by a JSON dictionary."""
+    """A QTranslator backed by a JSON dictionary.
+
+    Catalogs have two sections: ``strings`` (keyed by the English source
+    phrase, used by ``tr()``) and ``keys`` (stable ids such as
+    ``flow.odin_flash_tar``, used by :func:`tr_key`). Both are merged into one
+    lookup table; empty values are treated as untranslated.
+    """
 
     def __init__(self, path, parent=None):
         super().__init__(parent)
@@ -167,13 +205,16 @@ class JsonTranslator(QTranslator):
             with open(self.path, encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
-                strings = data.get("strings", data)
-                if isinstance(strings, dict):
-                    self._strings = {
-                        k: v
-                        for k, v in strings.items()
-                        if isinstance(k, str) and isinstance(v, str) and v
-                    }
+                merged = {}
+                for section in ("strings", "keys"):
+                    rows = data.get(section)
+                    if isinstance(rows, dict):
+                        merged.update(rows)
+                self._strings = {
+                    k: v
+                    for k, v in merged.items()
+                    if isinstance(k, str) and isinstance(v, str) and v
+                }
         except (OSError, ValueError, TypeError):
             self._strings = {}
 

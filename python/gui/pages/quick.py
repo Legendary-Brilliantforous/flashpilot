@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import C, _btn_ghost, _btn_primary, _card_qss
+from ..i18n import tr_key
 from ..widgets import SectionTitle
 from ...core import core
 
@@ -193,7 +194,8 @@ class QuickPageMixin:
                 confirm_label="Wipe Device",
                 on_confirm=lambda: self._run_ops_flow(
                     "Remove FRP", "ADB", "factory_reset",
-                    core.FLOWS["factory_reset"]().name,
+                    tr_key("flow.factory_reset",
+                           core.FLOWS["factory_reset"]().name),
                 ),
             )
         )
@@ -215,7 +217,8 @@ class QuickPageMixin:
         sw_btn.clicked.connect(
             lambda: self._run_ops_flow(
                 "Remove FRP", "ADB", "setup_wizard",
-                core.FLOWS["setup_wizard"]().name,
+                tr_key("flow.setup_wizard",
+                       core.FLOWS["setup_wizard"]().name),
             )
         )
         sw_row.addWidget(sw_btn)

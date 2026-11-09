@@ -77,17 +77,24 @@ def test_catalog_is_valid_json_with_string_map(path):
     json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=no_duplicates)
 
     assert isinstance(data, dict), f"{path.name} must be an object"
-    strings = data.get("strings")
-    assert isinstance(strings, dict), f"{path.name} needs a 'strings' object"
-    for key, value in strings.items():
-        assert isinstance(key, str) and key, f"{path.name}: bad key {key!r}"
-        assert isinstance(value, str), f"{path.name}: {key!r} is not a string"
+    for section in ("strings", "keys"):
+        rows = data.get(section)
+        assert isinstance(rows, dict), f"{path.name} needs a '{section}' object"
+        for key, value in rows.items():
+            assert isinstance(key, str) and key, f"{path.name}: bad key {key!r}"
+            assert isinstance(value, str), f"{path.name}: {key!r} is not a string"
 
 
 def test_english_catalog_is_the_identity_map():
-    strings = _read(CATALOG_DIR / "en.json")["strings"]
-    wrong = {key: value for key, value in strings.items() if value != key}
-    assert not wrong, f"English keys must map to themselves: {wrong}"
+    data = _read(CATALOG_DIR / "en.json")
+    wrong = {
+        key: value for key, value in data["strings"].items() if value != key
+    }
+    assert not wrong, f"English string keys must map to themselves: {wrong}"
+    # Data-driven ids map to the English display label the GUI passes as the
+    # fallback, so a missing translation shows the right text.
+    for key, value in data["keys"].items():
+        assert value, f"en.json key {key!r} has no English label"
 
 
 # --------------------------------------------------------------------------
@@ -111,13 +118,41 @@ def test_english_catalog_has_no_stale_keys():
 
 
 @pytest.mark.parametrize("path", _catalog_files(), ids=_catalog_ids())
-def test_catalog_key_set_matches_english(path):
-    english = set(_read(CATALOG_DIR / "en.json")["strings"])
-    strings = set(_read(path)["strings"])
-    assert strings == english, (
-        f"{path.name} keys drift from en.json; "
-        f"missing={sorted(english - strings)} extra={sorted(strings - english)}"
+def test_catalog_key_sets_match_english(path):
+    english = _read(CATALOG_DIR / "en.json")
+    catalog = _read(path)
+    for section in ("strings", "keys"):
+        expected = set(english[section])
+        actual = set(catalog[section])
+        assert actual == expected, (
+            f"{path.name} {section} drift from en.json; "
+            f"missing={sorted(expected - actual)} "
+            f"extra={sorted(actual - expected)}"
+        )
+
+
+def test_flow_job_mode_keys_match_the_display_sources():
+    entries = extract.scan_key_entries()
+    english = _read(CATALOG_DIR / "en.json")["keys"]
+    assert set(entries) == set(english), (
+        "run scripts/i18n_extract.py; "
+        f"missing={sorted(set(entries) - set(english))[:8]} "
+        f"stale={sorted(set(english) - set(entries))[:8]}"
     )
+    drifted = {
+        key: (value, english.get(key))
+        for key, value in entries.items()
+        if english.get(key) != value
+    }
+    assert not drifted, f"English labels drifted: {drifted}"
+
+
+def test_key_entries_include_flows_jobs_and_modes():
+    entries = extract.scan_key_entries()
+    assert any(key.startswith("flow.") for key in entries)
+    assert any(key.startswith("job.") for key in entries)
+    assert any(key.startswith("mode.") for key in entries)
+    assert len([key for key in entries if key.startswith("flow.")]) >= 100
 
 
 def test_extractor_check_passes():
@@ -149,6 +184,29 @@ def test_extractor_merges_new_keys_without_losing_translations(tmp_path):
     assert changed and {row["code"] for row in report} == {"en", "fr"}
 
 
+def test_extractor_merges_key_entries_without_losing_translations(tmp_path):
+    (tmp_path / "en.json").write_text(
+        json.dumps({"strings": {}, "keys": {"flow.a": "A label"}}), encoding="utf-8"
+    )
+    (tmp_path / "fr.json").write_text(
+        json.dumps({"strings": {}, "keys": {"flow.a": "Libellé A"}}),
+        encoding="utf-8",
+    )
+
+    extract.merge(
+        set(),
+        {"flow.a": "A label", "job.b": "B Job"},
+        catalog_dir=tmp_path,
+    )
+
+    english = _read(tmp_path / "en.json")["keys"]
+    french = _read(tmp_path / "fr.json")["keys"]
+    assert english["flow.a"] == "A label"
+    assert english["job.b"] == "B Job"
+    assert french["flow.a"] == "Libellé A"
+    assert french["job.b"] == ""
+
+
 def test_extractor_prune_removes_only_unused_keys(tmp_path):
     (tmp_path / "en.json").write_text(
         json.dumps({"strings": {"Keep": "Keep", "Drop": "Drop"}}), encoding="utf-8"
@@ -168,11 +226,12 @@ def test_extractor_flags_dynamic_tr_arguments(tmp_path):
     source.write_text(
         "tr('Static')\n"
         "tr(f'Dynamic {value}')\n"
-        "self.tr('Method')\n",
+        "self.tr('Method')\n"
+        "QCoreApplication.translate('ctx', 'From translate')\n",
         encoding="utf-8",
     )
     keys, warnings = extract.scan_sources(tmp_path)
-    assert keys == {"Static", "Method"}
+    assert keys == {"Static", "Method", "From translate"}
     assert any("dynamic tr()" in warning for warning in warnings)
 
 
@@ -187,16 +246,49 @@ def test_placeholders_are_recognised():
     assert i18n.placeholders("No placeholders here") == set()
 
 
+def test_stable_keys_are_readable_slugs():
+    assert i18n.stable_key("job", "Flash Firmware") == "job.flash_firmware"
+    assert i18n.stable_key("job", "QCN / Modem") == "job.qcn_modem"
+    assert i18n.stable_key("mode", "Download mode") == "mode.download_mode"
+    assert i18n.stable_key("job", "") == "job"
+
+
+def test_tr_key_falls_back_to_english(monkeypatch):
+    # No translator installed: the English label must be returned verbatim.
+    assert (
+        i18n.tr_key("flow.does_not_exist", "Pre-flight validation")
+        == "Pre-flight validation"
+    )
+    assert i18n.tr_key("", "Fallback") == "Fallback"
+
+
+def test_json_translator_reads_the_key_section(tmp_path):
+    path = tmp_path / "fr.json"
+    path.write_text(
+        json.dumps(
+            {
+                "strings": {"Flash firmware": "Flasher le firmware"},
+                "keys": {"flow.odin_flash_tar": "Flasher l'archive"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    translator = i18n.JsonTranslator(path)
+    assert translator.translate("ctx", "flow.odin_flash_tar") == "Flasher l'archive"
+    assert translator.translate("ctx", "Flash firmware") == "Flasher le firmware"
+
+
 @pytest.mark.parametrize("path", _catalog_files(), ids=_catalog_ids())
 def test_translations_preserve_placeholders(path):
-    strings = _read(path)["strings"]
-    broken = []
-    for key, value in strings.items():
-        if not value.strip():
-            continue  # untranslated entries are allowed
-        if i18n.placeholders(key) != i18n.placeholders(value):
-            broken.append((key, value))
-    assert not broken, f"{path.name} changed placeholders: {broken[:5]}"
+    for section in ("strings", "keys"):
+        rows = _read(path)[section]
+        broken = []
+        for key, value in rows.items():
+            if not value.strip():
+                continue  # untranslated entries are allowed
+            if i18n.placeholders(key) != i18n.placeholders(value):
+                broken.append((key, value))
+        assert not broken, f"{path.name} {section} changed placeholders: {broken[:5]}"
 
 
 # --------------------------------------------------------------------------

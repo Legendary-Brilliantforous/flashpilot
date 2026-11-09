@@ -35,13 +35,29 @@ from .method_card import MethodCard
 
 @dataclass(frozen=True)
 class FlowRow:
-    """One rendered method button: ``(job, mode, key, label, risk)``."""
+    """One rendered method button: ``(job, mode, key, label, risk)``.
+
+    ``job``/``mode`` are the raw routing values (never translated);
+    ``job_label``/``mode_label`` are their display text for the current UI
+    language. ``label`` is already the translated flow caption. Empty display
+    fields fall back to the raw value, so existing constructors keep working.
+    """
 
     job: str
     mode: str
     key: str
     label: str
     risk: str
+    job_label: str = ""
+    mode_label: str = ""
+
+    @property
+    def job_text(self):
+        return self.job_label or self.job
+
+    @property
+    def mode_text(self):
+        return self.mode_label or self.mode
 
 
 class FlowBrowser(QFrame):
@@ -67,10 +83,14 @@ class FlowBrowser(QFrame):
     # -- rendering ---------------------------------------------------------
     def _legend_label(self):
         legend = QLabel(
-            f'<span style="color:{C["ok"]};">●</span> read-only&nbsp;&nbsp;'
-            f'<span style="color:{C["warn"]};">●</span> medium&nbsp;&nbsp;'
-            f'<span style="color:{C["err"]};">●</span> high&nbsp;&nbsp;'
-            f'<span style="color:{C["experimental"]};">●</span> experimental'
+            f'<span style="color:{C["ok"]};">●</span> '
+            f'{self.tr("read-only")}&nbsp;&nbsp;'
+            f'<span style="color:{C["warn"]};">●</span> '
+            f'{self.tr("medium")}&nbsp;&nbsp;'
+            f'<span style="color:{C["err"]};">●</span> '
+            f'{self.tr("high")}&nbsp;&nbsp;'
+            f'<span style="color:{C["experimental"]};">●</span> '
+            f'{self.tr("experimental")}'
         )
         legend.setObjectName("risk_legend")
         legend.setTextFormat(Qt.TextFormat.RichText)
@@ -125,16 +145,16 @@ class FlowBrowser(QFrame):
         for i, row in enumerate(rows):
             if row.job != group_job:
                 count = sum(1 for r in rows[i:] if r.job == row.job)
-                self._lay.addWidget(self._job_header(row.job, count))
+                self._lay.addWidget(self._job_header(row.job_text, count))
                 group_job = row.job
                 group_mode = None  # force a mode sub-heading at each job start
             if row.mode != group_mode:
-                self._lay.addWidget(self._mode_heading(row.mode))
+                self._lay.addWidget(self._mode_heading(row.mode_text))
                 flow = FlowLayout(spacing=self._spacing)
                 self._lay.addLayout(flow)
                 group_mode = row.mode
             card = MethodCard(row.label, self)
-            card.setToolTip(f"{row.job} / {row.mode} / {row.key}")
+            card.setToolTip(f"{row.job_text} / {row.mode_text} / {row.key}")
             if row.risk == "experimental":
                 # EXPERIMENTAL: the warning title leads the tooltip. The amber
                 # dashed border comes from set_risk (risk == experimental),
@@ -142,7 +162,8 @@ class FlowBrowser(QFrame):
                 feature = _EXPERIMENTAL_FLOW_MAP.get(row.key)
                 title, _warn = experimental.get_warning(feature)
                 card.setToolTip(
-                    f"[EXPERIMENTAL] {title}\n{row.job} / {row.mode} / {row.key}"
+                    f"[EXPERIMENTAL] {title}\n"
+                    f"{row.job_text} / {row.mode_text} / {row.key}"
                 )
             card.set_risk(row.risk)
             card.clicked.connect(

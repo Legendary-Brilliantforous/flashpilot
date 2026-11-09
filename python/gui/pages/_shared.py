@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 
 from ..common import _DESTRUCTIVE_CONFIRM, _EXPERIMENTAL_FLOW_MAP
 from ..flow_meta import risk_for, route_for
+from ..i18n import stable_key, tr_key
 from ..theme import C, _btn_ghost
 from ..widgets import FlowBrowser, FlowRow, SamsungSubTabs
 from ...core import core, experimental
@@ -89,8 +90,13 @@ class FlowRenderMixin:
                                 else getattr(_factory, "name", key))
                     except Exception as e:
                         name = f"{key} ({e})"
-                    rows.append(FlowRow(job, mode, key, name,
-                                        risk_for(key, job)))
+                    rows.append(FlowRow(
+                        job, mode, key,
+                        tr_key(f"flow.{key}", name),
+                        risk_for(key, job),
+                        job_label=tr_key(stable_key("job", job), job),
+                        mode_label=tr_key(stable_key("mode", mode), mode),
+                    ))
         return rows
 
     def _route_flow_activation(self, job, mode, key, label, run_cb=None):

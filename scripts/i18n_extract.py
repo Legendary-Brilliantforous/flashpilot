@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """Keep the UI translation catalogs in sync with the source code.
 
-The GUI marks user-visible text with ``self.tr("...")`` / ``tr("...")``. This
-script scans the Python sources for those literals and merges them into
-``i18n/json/en.json`` (English is the canonical key catalog). Every other
-catalog must contain the same keys; missing entries are added empty so
-translators can see exactly what is left to do.
+The GUI marks user-visible text in two ways:
+
+* ``self.tr("...")`` / ``tr("...")`` — the key is the English source phrase.
+* ``QCoreApplication.translate("context", "...")`` — used where no widget
+  ``self`` exists (module-level dialog tables).
+* stable ids such as ``flow.odin_flash_tar`` — data-driven labels (flow
+  captions, job and transport-mode names) rendered with ``i18n.tr_key()``.
+
+This script scans the sources and merges the keys into every catalog:
+
+* ``en.json`` is the identity catalog (key -> English text) and defines the
+  required key set.
+* every other catalog gets missing entries added **empty**, so translators
+  see exactly what is left to do.
 
 Usage
 -----
@@ -18,9 +27,10 @@ Usage
 
 Translation policy
 ------------------
-* The key **is** the English source phrase, so reviewers can see what changed.
+* The key **is** the English source phrase for GUI strings, so reviewers can
+  see what changed. Data-driven labels use stable ids instead.
 * Whole phrases only — never single words, and never the values used for
-  routing (job/mode identifiers stay untouched).
+  routing (job/mode identifiers stay untouched; only display text is keyed).
 * Machine translation is a *build-time* convenience (``--seed``); its output is
   listed in ``meta.machine_translated`` and must be reviewed. The app itself is
   a plain offline dictionary lookup.
@@ -39,7 +49,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_DIR = ROOT / "i18n" / "json"
 SOURCE_DIR = ROOT / "python"
+CORE_SOURCE = ROOT / "python" / "core" / "core.py"
 ENGLISH = "en"
+
+TRANSLATE_FUNCS = {"tr", "translate"}
 
 
 def _load_runtime():
@@ -52,26 +65,41 @@ def _load_runtime():
     return module
 
 
-def tr_literals(source: Path):
-    """Yield ``(key, lineno)`` for every literal ``tr()`` call in ``source``.
+def _is_tr_call(node):
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == "tr") or (
+        isinstance(func, ast.Attribute) and func.attr == "tr"
+    )
 
-    Non-literal arguments (f-strings, variables) are returned separately by
-    :func:`scan_sources` because they can never be translated by the catalog.
-    """
+
+def _is_translate_call(node):
+    # QCoreApplication.translate("ctx", "text", ...) — second arg is the key.
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "translate"
+        and len(node.args) >= 2
+    )
+
+
+def _string_arg(node):
+    arg = node.args[1] if _is_translate_call(node) else (node.args[0] if node.args else None)
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    return None
+
+
+def translatable_literals(source: Path):
+    """Yield ``(key, lineno)`` for every literal ``tr()``/``translate()`` call."""
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        is_tr = (isinstance(func, ast.Name) and func.id == "tr") or (
-            isinstance(func, ast.Attribute) and func.attr == "tr"
-        )
-        if not is_tr or not node.args:
+        if not (_is_tr_call(node) or _is_translate_call(node)):
             continue
-        arg = node.args[0]
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            if arg.value:
-                yield arg.value, node.lineno
+        text = _string_arg(node)
+        if text:
+            yield text, node.lineno
 
 
 def scan_sources(root: Path = SOURCE_DIR):
@@ -80,34 +108,83 @@ def scan_sources(root: Path = SOURCE_DIR):
     warnings: list[str] = []
     for source in sorted(root.rglob("*.py")):
         try:
-            literals = list(tr_literals(source))
+            tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         except (OSError, SyntaxError) as exc:  # pragma: no cover - defensive
             warnings.append(f"{_display(source)}: cannot parse ({exc})")
             continue
-        keys.update(key for key, _ in literals)
 
-        # Flag tr() calls whose argument is not a static string.
-        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            func = node.func
-            is_tr = (isinstance(func, ast.Name) and func.id == "tr") or (
-                isinstance(func, ast.Attribute) and func.attr == "tr"
-            )
-            if not is_tr or not node.args:
-                continue
-            arg = node.args[0]
-            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-                warnings.append(
-                    f"{_display(source)}:{node.lineno}: "
-                    "dynamic tr() argument cannot be extracted"
-                )
+            if _is_tr_call(node):
+                if not node.args:
+                    continue
+                text = _string_arg(node)
+                if text:
+                    keys.add(text)
+                else:
+                    warnings.append(
+                        f"{_display(source)}:{node.lineno}: "
+                        "dynamic tr() argument cannot be extracted"
+                    )
+            elif _is_translate_call(node):
+                text = _string_arg(node)
+                if text:
+                    keys.add(text)
     return keys, warnings
 
 
+def scan_key_entries(core_source: Path = CORE_SOURCE):
+    """Stable-id entries for data-driven labels.
+
+    Reads the Python registry (``_RustFlow`` captions, ``JOBS``, ``MODES``)
+    rather than the Rust table because that is exactly what the GUI renders.
+    """
+    runtime = _load_runtime()
+    tree = ast.parse(core_source.read_text(encoding="utf-8"), filename=str(core_source))
+    flows, jobs, modes = {}, [], []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "_RustFlow" and len(node.args) >= 2:
+                key = node.args[0]
+                label = node.args[1]
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and isinstance(label, ast.Constant)
+                    and isinstance(label.value, str)
+                ):
+                    flows[key.value] = label.value
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if target.id == "MODES" and isinstance(node.value, ast.List):
+                    modes = [
+                        e.value
+                        for e in node.value.elts
+                        if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    ]
+                elif target.id == "JOBS" and isinstance(node.value, ast.Dict):
+                    jobs = [
+                        k.value
+                        for k in node.value.keys
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                    ]
+
+    entries = {}
+    for key, label in flows.items():
+        entries[f"flow.{key}"] = label
+    for job in jobs:
+        entries[runtime.stable_key("job", job)] = job
+    for mode in modes:
+        entries[runtime.stable_key("mode", mode)] = mode
+    return entries
+
+
 def load_catalog(path: Path):
-    """Return ``(data, strings)`` with defensive defaults."""
+    """Return ``(data, strings, keys)`` with defensive defaults."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -117,12 +194,22 @@ def load_catalog(path: Path):
     strings = data.get("strings")
     if not isinstance(strings, dict):
         strings = {}
-    return data, {str(k): v for k, v in strings.items()}
+    keys = data.get("keys")
+    if not isinstance(keys, dict):
+        keys = {}
+    return (
+        data,
+        {str(k): v for k, v in strings.items()},
+        {str(k): v for k, v in keys.items()},
+    )
 
 
-def save_catalog(path: Path, data: dict, strings: dict):
+def save_catalog(path: Path, data: dict, strings: dict, keys: dict):
     """Write a stable, human-reviewable catalog (sorted keys, UTF-8)."""
-    payload = {"strings": {key: strings.get(key, "") for key in sorted(strings)}}
+    payload = {
+        "strings": {key: strings.get(key, "") for key in sorted(strings)},
+        "keys": {key: keys.get(key, "") for key in sorted(keys)},
+    }
     meta = data.get("meta")
     if isinstance(meta, dict) and meta:
         payload["meta"] = meta
@@ -144,9 +231,15 @@ def _display(path: Path):
         return str(path)
 
 
-def merge(keys, catalog_dir: Path = CATALOG_DIR, prune: bool = False):
-    """Merge ``keys`` into every catalog. Returns ``(changed, report)``."""
+def merge(
+    keys,
+    key_entries=None,
+    catalog_dir: Path = CATALOG_DIR,
+    prune: bool = False,
+):
+    """Merge source keys into every catalog. Returns ``(changed, report)``."""
     wanted = set(keys)
+    wanted_keys = dict(key_entries or {})
     changed = []
     report = []
 
@@ -156,11 +249,12 @@ def merge(keys, catalog_dir: Path = CATALOG_DIR, prune: bool = False):
 
     for path in paths:
         code = path.stem
-        data, strings = load_catalog(path)
-        before = dict(strings)
+        data, strings, catalog_keys = load_catalog(path)
+        before = (dict(strings), dict(catalog_keys))
 
         if prune:
             strings = {k: v for k, v in strings.items() if k in wanted}
+            catalog_keys = {k: v for k, v in catalog_keys.items() if k in wanted_keys}
 
         for key in wanted:
             if code == ENGLISH:
@@ -172,69 +266,116 @@ def merge(keys, catalog_dir: Path = CATALOG_DIR, prune: bool = False):
                 if strings[key] is None:
                     strings[key] = ""
 
-        if strings != before:
-            save_catalog(path, data, strings)
+        for key, english in wanted_keys.items():
+            if code == ENGLISH:
+                if not catalog_keys.get(key):
+                    catalog_keys[key] = english
+            else:
+                catalog_keys.setdefault(key, "")
+                if catalog_keys[key] is None:
+                    catalog_keys[key] = ""
+
+        if (strings, catalog_keys) != before:
+            save_catalog(path, data, strings, catalog_keys)
             changed.append(_display(path))
-        report.append(coverage(code, strings))
+        report.append(coverage(code, strings, catalog_keys))
 
     return changed, report
 
 
-def coverage(code, strings):
-    total = len(strings)
-    done = sum(1 for value in strings.values() if str(value).strip())
-    missing = sorted(key for key, value in strings.items() if not str(value).strip())
-    return {"code": code, "total": total, "translated": done, "missing": missing}
+def coverage(code, strings, keys):
+    def done(rows):
+        return sum(1 for value in rows.values() if str(value).strip())
+
+    return {
+        "code": code,
+        "total": len(strings),
+        "translated": done(strings),
+        "key_total": len(keys),
+        "key_translated": done(keys),
+        "missing": sorted(k for k, v in strings.items() if not str(v).strip()),
+        "missing_keys": sorted(k for k, v in keys.items() if not str(v).strip()),
+    }
 
 
 def print_report(report):
     if not report:
         return
     width = max(len(row["code"]) for row in report)
-    print(f"{'lang'.ljust(width)}  keys  translated  missing")
+    print(
+        f"{'lang'.ljust(width)}  ui keys  ui done  flow keys  flow done"
+    )
     for row in report:
         print(
-            f"{row['code'].ljust(width)}  {row['total']:4}  "
-            f"{row['translated']:10}  {len(row['missing']):7}"
+            f"{row['code'].ljust(width)}  {row['total']:7}  {row['translated']:7}  "
+            f"{row['key_total']:9}  {row['key_translated']:9}"
         )
     for row in report:
-        if row["missing"]:
-            preview = ", ".join(row["missing"][:8])
-            if len(row["missing"]) > 8:
-                preview += ", ..."
-            print(f"  {row['code']}: {preview}")
+        for label, missing in (("ui", row["missing"]), ("flow", row["missing_keys"])):
+            if missing:
+                preview = ", ".join(missing[:6])
+                if len(missing) > 6:
+                    preview += ", ..."
+                print(f"  {row['code']} [{label}]: {preview}")
 
 
-def check(keys, catalog_dir: Path = CATALOG_DIR):
+def check(keys, key_entries=None, catalog_dir: Path = CATALOG_DIR):
     """Return a list of problems; empty means the catalogs are up to date."""
     wanted = set(keys)
+    wanted_keys = dict(key_entries or {})
     problems = []
-    en_data, en_strings = load_catalog(catalog_dir / f"{ENGLISH}.json")
+    en_data, en_strings, en_keys = load_catalog(catalog_dir / f"{ENGLISH}.json")
     del en_data
 
     missing = sorted(wanted - set(en_strings))
     stale = sorted(set(en_strings) - wanted)
     if missing:
-        problems.append(f"en.json is missing {len(missing)} key(s): {missing[:8]}")
+        problems.append(f"en.json is missing {len(missing)} string key(s): {missing[:8]}")
     if stale:
         problems.append(
-            f"en.json has {len(stale)} stale key(s) (use --prune): {stale[:8]}"
+            f"en.json has {len(stale)} stale string key(s) (use --prune): {stale[:8]}"
         )
     empty_en = sorted(k for k, v in en_strings.items() if not str(v).strip())
     if empty_en:
-        problems.append(f"en.json has empty value(s): {empty_en[:8]}")
+        problems.append(f"en.json has empty string value(s): {empty_en[:8]}")
+
+    missing_keys = sorted(set(wanted_keys) - set(en_keys))
+    stale_keys = sorted(set(en_keys) - set(wanted_keys))
+    if missing_keys:
+        problems.append(
+            f"en.json is missing {len(missing_keys)} flow/job/mode key(s): "
+            f"{missing_keys[:8]}"
+        )
+    if stale_keys:
+        problems.append(
+            f"en.json has {len(stale_keys)} stale flow/job/mode key(s) "
+            f"(use --prune): {stale_keys[:8]}"
+        )
+    wrong_identity = sorted(
+        key for key, value in wanted_keys.items() if en_keys.get(key) != value
+    )
+    if wrong_identity:
+        problems.append(
+            f"en.json key value(s) drifted from source: {wrong_identity[:8]}"
+        )
 
     for path in catalog_paths(catalog_dir):
         code = path.stem
         if code == ENGLISH:
             continue
-        _, strings = load_catalog(path)
+        _, strings, catalog_keys = load_catalog(path)
         absent = sorted(wanted - set(strings))
         extra = sorted(set(strings) - wanted)
         if absent:
-            problems.append(f"{code}.json is missing {len(absent)} key(s)")
+            problems.append(f"{code}.json is missing {len(absent)} string key(s)")
         if extra:
-            problems.append(f"{code}.json has {len(extra)} stale key(s)")
+            problems.append(f"{code}.json has {len(extra)} stale string key(s)")
+        absent_keys = sorted(set(wanted_keys) - set(catalog_keys))
+        extra_keys = sorted(set(catalog_keys) - set(wanted_keys))
+        if absent_keys:
+            problems.append(f"{code}.json is missing {len(absent_keys)} flow/job/mode key(s)")
+        if extra_keys:
+            problems.append(f"{code}.json has {len(extra_keys)} stale flow/job/mode key(s)")
     return problems
 
 
@@ -259,30 +400,38 @@ def seed(catalog_dir: Path = CATALOG_DIR, languages=None):
         code = path.stem
         if code == ENGLISH or (languages and code not in languages):
             continue
-        data, strings = load_catalog(path)
-        missing = sorted(key for key, value in strings.items() if not str(value).strip())
+        data, strings, keys = load_catalog(path)
+        missing = sorted(
+            list(k for k, v in strings.items() if not str(v).strip())
+            + list(k for k, v in keys.items() if not str(v).strip())
+        )
         if not missing:
             continue
         translator = GoogleTranslator(source="en", target=code)
         marked = set(data.get("meta", {}).get("machine_translated", []))
         for key in missing:
             try:
-                strings[key] = translator.translate(key) or ""
+                translated = translator.translate(key) or ""
             except Exception as exc:  # network/rate limit
                 print(f"  {code}: failed on {key!r}: {exc}")
                 continue
+            if key in strings:
+                strings[key] = translated
+            else:
+                keys[key] = translated
             marked.add(key)
         data["meta"] = dict(data.get("meta", {}))
         data["meta"]["machine_translated"] = sorted(marked)
-        save_catalog(path, data, strings)
+        save_catalog(path, data, strings, keys)
         seeded.append(f"{code}: {len(missing)}")
 
         # Verify placeholder parity and warn (never silently ship a broken one).
         for key in missing:
-            if runtime.placeholders(key) != runtime.placeholders(strings.get(key, "")):
+            value = strings.get(key, keys.get(key, ""))
+            if runtime.placeholders(key) != runtime.placeholders(value):
                 print(
                     f"  {code}: placeholder mismatch for {key!r} -> "
-                    f"{strings.get(key)!r} (needs review)"
+                    f"{value!r} (needs review)"
                 )
     return seeded
 
@@ -313,12 +462,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     keys, warnings = scan_sources()
+    key_entries = scan_key_entries()
     for warning in warnings:
         print(f"warning: {warning}", file=sys.stderr)
-    print(f"found {len(keys)} translatable literal(s)")
+    print(
+        f"found {len(keys)} translatable literal(s) and "
+        f"{len(key_entries)} flow/job/mode key(s)"
+    )
 
     if args.check:
-        problems = check(keys)
+        problems = check(keys, key_entries)
         if problems:
             for problem in problems:
                 print(f"error: {problem}", file=sys.stderr)
@@ -330,7 +483,7 @@ def main(argv=None):
         seeded = seed(languages=args.lang or None)
         print("seeded: " + (", ".join(seeded) if seeded else "nothing to do"))
 
-    changed, report = merge(keys, prune=args.prune)
+    changed, report = merge(keys, key_entries, prune=args.prune)
     print_report(report)
     if changed:
         print("updated: " + ", ".join(changed))

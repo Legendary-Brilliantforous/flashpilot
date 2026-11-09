@@ -89,6 +89,7 @@ from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, expe
 from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
+from .i18n import tr_key
 from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, SPACE, RADIUS, _BASE_QSS, _get_base_qss,
@@ -1713,16 +1714,16 @@ class FlashPilotWindow(
         title_box.setSpacing(0)
         _disp_ver = _display_version(APP_VERSION)
         _is_beta_tb = _is_beta_version(APP_VERSION)
-        title_text = "flashpilot FLASHING TOOL"
+        title_text = self.tr("flashpilot FLASHING TOOL")
         if _is_beta_tb:
-            title_text += f"  —  BETA  v{_disp_ver}"
+            title_text += f"  —  {self.tr('BETA')}  v{_disp_ver}"
         title = QLabel(title_text)
         title.setStyleSheet(
             f"color:{C['text']}; font-size:16px; font-weight:800; letter-spacing:1.5px;"
             + (" color: #fbbf24;" if _is_beta_tb else "")
         )
-        sub = QLabel("FRP bypass · screen lock · download mode & ADB tooling"
-                     + ("  •  BETA build" if _is_beta_tb else ""))
+        sub = QLabel(self.tr("FRP bypass · screen lock · download mode & ADB tooling")
+                     + (f"  •  {self.tr('BETA build')}" if _is_beta_tb else ""))
         sub.setStyleSheet(
             f"color:{C['mute']}; font-size:10px;"
             f" font-family:'JetBrains Mono','Consolas',monospace;"
@@ -1734,7 +1735,7 @@ class FlashPilotWindow(
         tb.addStretch(1)
 
         # Global Stop — single button outside any chip card, stops ANY process
-        self.global_stop_btn = QPushButton("⏹  STOP")
+        self.global_stop_btn = QPushButton(f"⏹  {self.tr('STOP')}")
         self.global_stop_btn.setEnabled(False)
         self.global_stop_btn.setStyleSheet(
             "QPushButton { color: #ffffff; background: #334155; border: 1px solid #475569; border-radius: 8px; padding: 6px 16px; font-weight: 900; font-size: 12px; letter-spacing: 0.8px; }"
@@ -1743,13 +1744,14 @@ class FlashPilotWindow(
             "QPushButton:disabled { color: #64748b; background: #1e293b; border-color: #334155; }"
         )
         self.global_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.global_stop_btn.setToolTip("Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD")
+        self.global_stop_btn.setToolTip(self.tr(
+            "Stop any running operation (Ctrl+Esc) — works for Samsung/MTK/Qualcomm/SPD"))
         self.global_stop_btn.clicked.connect(self.on_stop)
 
         # Header Settings — frees the rail slot (compact top-right gear)
         self.settings_btn = QPushButton("⚙")
         self.settings_btn.setFixedSize(32, 32)
-        self.settings_btn.setToolTip("Settings (Ctrl+,)")
+        self.settings_btn.setToolTip(self.tr("Settings (Ctrl+,)"))
         self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.settings_btn.setStyleSheet(
             "QPushButton { color:#cbd5e1; background:rgba(255,255,255,8);"
@@ -1803,7 +1805,7 @@ class FlashPilotWindow(
             if b["key"] == "samsung":
                 continue
             oem_items.append((f"dev_{b['key']}", b.get('icon', '▣'), b['label']))
-        oem_items.append(("general", "⚡", "General"))
+        oem_items.append(("general", "⚡", self.tr("General")))
         tools = [
             ("fus", "⬇", "FUS"),
             ("mtk", "▣", "MTK"),
@@ -1834,10 +1836,10 @@ class FlashPilotWindow(
         _dev_txt_col = QVBoxLayout()
         _dev_txt_col.setContentsMargins(0, 0, 0, 0)
         _dev_txt_col.setSpacing(0)
-        self._dev_title = QLabel("No phone detected")
+        self._dev_title = QLabel(self.tr("No phone detected"))
         self._dev_title.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:800;")
         _dev_txt_col.addWidget(self._dev_title)
-        self._dev_text = QLabel("Connect a device over USB")
+        self._dev_text = QLabel(self.tr("Connect a device over USB"))
         self._dev_text.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
         _dev_txt_col.addWidget(self._dev_text)
         _strip_lay.addLayout(_dev_txt_col, 1)
@@ -1845,11 +1847,16 @@ class FlashPilotWindow(
         # Fastboot hub lands in the next slice — greyed with a reason,
         # never a dead popup.
         self._transport_combo = QComboBox()
-        self._transport_combo.addItems(
-            ["Transports", "ADB Hub", "Fastboot Hub", "Easy Login", "CMD Console"])
+        self._transport_combo.addItems([
+            self.tr("Transports"),
+            self.tr("ADB Hub"),
+            self.tr("Fastboot Hub"),
+            self.tr("Easy Login"),
+            self.tr("CMD Console"),
+        ])
         self._transport_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._transport_combo.setFixedWidth(118)
-        self._transport_combo.setToolTip("Open a transport hub")
+        self._transport_combo.setToolTip(self.tr("Open a transport hub"))
         self._transport_combo.setStyleSheet(
             f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
             f" border-radius:6px; padding:3px 8px; color:{C['text']}; font-size:10px; font-weight:700; }}"
@@ -1859,7 +1866,8 @@ class FlashPilotWindow(
             f" selection-background-color:{C['accent']}; }}"
         )
         try:
-            self._transport_combo.model().item(2).setToolTip("Fastboot presets in the CMD tab")
+            self._transport_combo.model().item(2).setToolTip(
+                self.tr("Fastboot presets in the CMD tab"))
         except Exception:
             pass
         self._transport_combo.activated.connect(self._on_transport_pick)
@@ -1868,7 +1876,7 @@ class FlashPilotWindow(
         _strip_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         _strip_refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         _strip_refresh.setFixedSize(26, 24)
-        _strip_refresh.setToolTip("Re-detect the connected phone")
+        _strip_refresh.setToolTip(self.tr("Re-detect the connected phone"))
         _strip_refresh.setStyleSheet(
             "QPushButton { color:#8fa4bd; background:rgba(255,255,255,9);"
             " border:1px solid rgba(255,255,255,0.08); border-radius:6px; font-size:12px; }"
@@ -2252,7 +2260,7 @@ class FlashPilotWindow(
         self.console_toggle_btn.setFixedSize(24, 22)
         self.console_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.console_toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.console_toggle_btn.setToolTip("Collapse the console dock")
+        self.console_toggle_btn.setToolTip(self.tr("Collapse the console dock"))
         self.console_toggle_btn.setStyleSheet(
             f"QPushButton {{ color:{C['dim']}; background:transparent;"
             f" border:1px solid {C['border']}; border-radius:{RADIUS['sm']}px;"
@@ -2262,10 +2270,10 @@ class FlashPilotWindow(
         )
         self.console_toggle_btn.clicked.connect(self._toggle_console_collapse)
         header.addWidget(self.console_toggle_btn)
-        self._console_title = SectionTitle("CONSOLE")
+        self._console_title = SectionTitle(self.tr("CONSOLE"))
         header.addWidget(self._console_title)
 
-        self.console_count = QLabel("0 lines")
+        self.console_count = QLabel(self.tr("{n} lines").format(n=0))
         self.console_count.setStyleSheet(
             f"color:{C['mute']}; font-size:10px; font-weight:600; letter-spacing:1px;"
             f" font-family:'JetBrains Mono','Consolas',monospace;"
@@ -2285,28 +2293,28 @@ class FlashPilotWindow(
         console_row = QHBoxLayout()
         console_row.setSpacing(SPACE['sm'])
 
-        self.wrap_btn = self._tool_button("Wrap", self._toggle_wrap)
-        self.wrap_btn.setToolTip("Toggle line wrap")
+        self.wrap_btn = self._tool_button(self.tr("Wrap"), self._toggle_wrap)
+        self.wrap_btn.setToolTip(self.tr("Toggle line wrap"))
         self.wrap_btn.setFixedWidth(52)
         self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
-        self.clear_btn = self._tool_button("Clear", self._clear_console)
+        self.clear_btn = self._tool_button(self.tr("Clear"), self._clear_console)
         self.clear_btn.setFixedWidth(52)
         self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
-        self.clear_btn.setToolTip("Clear console (Ctrl+L)")
+        self.clear_btn.setToolTip(self.tr("Clear console (Ctrl+L)"))
         console_row.addWidget(self.clear_btn)
-        self.copy_btn = self._tool_button("Copy", self._copy_console)
+        self.copy_btn = self._tool_button(self.tr("Copy"), self._copy_console)
         self.copy_btn.setFixedWidth(52)
         self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
-        self.copy_btn.setToolTip("Copy console to clipboard (Ctrl+Shift+C)")
+        self.copy_btn.setToolTip(self.tr("Copy console to clipboard (Ctrl+Shift+C)"))
         console_row.addWidget(self.copy_btn)
-        self.save_btn = self._tool_button("Save", self._save_console)
+        self.save_btn = self._tool_button(self.tr("Save"), self._save_console)
         self.save_btn.setFixedWidth(52)
         self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
-        self.save_btn.setToolTip("Save console to a text file (Ctrl+S)")
+        self.save_btn.setToolTip(self.tr("Save console to a text file (Ctrl+S)"))
         console_row.addWidget(self.save_btn)
         self.time_btn = self._console_chip(
-            "Time", "Show/hide the [HH:MM:SS] timestamp prefix",
+            self.tr("Time"), self.tr("Show/hide the [HH:MM:SS] timestamp prefix"),
             self._show_timestamps, width=46)
         # Drive from the button's own state (toggled) so a programmatic
         # setChecked() can never desync the chip from the render mode.
@@ -2327,7 +2335,7 @@ class FlashPilotWindow(
         cons_lay = QVBoxLayout(_cons_page)
         cons_lay.setContentsMargins(0, 0, 0, 0)
         cons_lay.setSpacing(8)
-        self.console_tabs.addTab(_cons_page, "Console")
+        self.console_tabs.addTab(_cons_page, self.tr("Console"))
         try:
             self.console_tabs.tabBar().setTabButton(
                 0, _TabBar.ButtonPosition.RightSide, None)
@@ -2351,7 +2359,7 @@ class FlashPilotWindow(
         find_row = QHBoxLayout()
         find_row.setSpacing(6)
         self.find_edit = QLineEdit()
-        self.find_edit.setPlaceholderText("Search console...  (Ctrl+F)")
+        self.find_edit.setPlaceholderText(self.tr("Search console...  (Ctrl+F)"))
         self.find_edit.setClearButtonEnabled(True)
         self.find_edit.setMinimumWidth(80)  # yield space instead of clipping chips
         self.find_edit.textChanged.connect(self._apply_console_search)
@@ -2372,18 +2380,18 @@ class FlashPilotWindow(
         self._find_edit_base_qss = self.find_edit.styleSheet()
         find_row.addWidget(self.find_edit, 1)
         self.regex_btn = self._console_chip(
-            ".*", "Treat the search text as a regular expression",
+            ".*", self.tr("Treat the search text as a regular expression"),
             self._console_regex, width=30)
         self.regex_btn.toggled.connect(self._set_regex_mode)
         find_row.addWidget(self.regex_btn)
-        self.find_next_btn = self._tool_button("Next", lambda: self._find_nav(1))
-        self.find_next_btn.setToolTip("Find next match")
-        self.find_prev_btn = self._tool_button("Prev", lambda: self._find_nav(-1))
-        self.find_prev_btn.setToolTip("Find previous match")
+        self.find_next_btn = self._tool_button(self.tr("Next"), lambda: self._find_nav(1))
+        self.find_next_btn.setToolTip(self.tr("Find next match"))
+        self.find_prev_btn = self._tool_button(self.tr("Prev"), lambda: self._find_nav(-1))
+        self.find_prev_btn.setToolTip(self.tr("Find previous match"))
         find_row.addWidget(self.find_next_btn)
         find_row.addWidget(self.find_prev_btn)
         self.search_clear_btn = self._tool_button("✕", lambda: self.find_edit.clear())
-        self.search_clear_btn.setToolTip("Clear console search filter")
+        self.search_clear_btn.setToolTip(self.tr("Clear console search filter"))
         self.search_clear_btn.setStyleSheet(
             self.search_clear_btn.styleSheet()
             .replace('font-size: 12px', 'font-size: 10px')
@@ -2403,10 +2411,10 @@ class FlashPilotWindow(
 
         self._filter_btns = {}
         for level, label, color, width, tip in (
-            ("err", "Errors", C["err"], 58, "Show error lines"),
-            ("warn", "Warnings", C["warn"], 70, "Show warning lines"),
-            ("ok", "OK", C["ok"], 44, "Show success lines"),
-            ("info", "Info", C["dim"], 46, "Show info lines"),
+            ("err", self.tr("Errors"), C["err"], 58, self.tr("Show error lines")),
+            ("warn", self.tr("Warnings"), C["warn"], 70, self.tr("Show warning lines")),
+            ("ok", self.tr("OK"), C["ok"], 44, self.tr("Show success lines")),
+            ("info", self.tr("Info"), C["dim"], 46, self.tr("Show info lines")),
         ):
             btn = QPushButton(label)
             btn.setCheckable(True)
@@ -2443,7 +2451,7 @@ class FlashPilotWindow(
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(4000)
         self.log.setMinimumHeight(120)
-        self.log.setPlainText("Ready. Connect a device to begin.")
+        self.log.setPlainText(self.tr("Ready. Connect a device to begin."))
         self.log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         try:
             LogHighlighter(self.log.document())
@@ -2640,8 +2648,8 @@ class FlashPilotWindow(
             self.console_count.setVisible(not collapsed)
             self.console_toggle_btn.setText("▸" if collapsed else "▾")
             self.console_toggle_btn.setToolTip(
-                "Expand the console dock" if collapsed
-                else "Collapse the console dock")
+                self.tr("Expand the console dock") if collapsed
+                else self.tr("Collapse the console dock"))
             # Centre the chevron in the thin bar: with the title/count hidden a
             # leading stretch balances the trailing one, and tighter side
             # margins leave room for the 24px button inside the 44px bar.
@@ -3121,8 +3129,8 @@ class FlashPilotWindow(
             if not rows:
                 self._dev_dot.setText("○")
                 self._dev_dot.setStyleSheet(f"color:{C['dim']}; font-size:15px; font-weight:800;")
-                self._dev_title.setText("No phone detected")
-                self._dev_text.setText("Connect a device over USB")
+                self._dev_title.setText(self.tr("No phone detected"))
+                self._dev_text.setText(self.tr("Connect a device over USB"))
             elif len(rows) == 1:
                 r = rows[0]
                 transports = "/".join(r.get("transports") or ["?"])
@@ -3130,14 +3138,17 @@ class FlashPilotWindow(
                 self._dev_dot.setText("●")
                 self._dev_dot.setStyleSheet("color:#34d399; font-size:15px; font-weight:800;")
                 self._dev_title.setText(f"{r.get('label', mode)[:60]}")
-                self._dev_text.setText(f"{mode} · [{transports}] — only matching actions are lit")
+                self._dev_text.setText(
+                    self.tr("{mode} · [{transports}] — only matching actions are lit")
+                    .format(mode=mode, transports=transports))
                 try:
                     ports = device_pages.usb_serial_ports(
                         int(r.get("bus", 0) or 0), int(r.get("address", 0) or 0))
                 except Exception:
                     ports = []
                 if ports:
-                    self._dev_strip.setToolTip(f"Serial ports: {', '.join(ports)}")
+                    self._dev_strip.setToolTip(
+                        self.tr("Serial ports: {ports}").format(ports=", ".join(ports)))
                 else:
                     self._dev_strip.setToolTip("")
             else:
@@ -3145,8 +3156,11 @@ class FlashPilotWindow(
                 transports = "/".join(r.get("transports") or ["?"])
                 self._dev_dot.setText("●")
                 self._dev_dot.setStyleSheet("color:#fbbf24; font-size:15px; font-weight:800;")
-                self._dev_title.setText(f"{len(rows)} phones connected")
-                self._dev_text.setText(f"showing {r.get('label', '')[:40]} · [{transports}]")
+                self._dev_title.setText(
+                    self.tr("{n} phones connected").format(n=len(rows)))
+                self._dev_text.setText(
+                    self.tr("showing {label} · [{transports}]")
+                    .format(label=r.get('label', '')[:40], transports=transports))
             device_pages.apply_applicability(self._stack.currentWidget())
         except Exception:
             pass
@@ -3188,9 +3202,10 @@ class FlashPilotWindow(
                 ok = (engines is None
                       or bool(engines & tool_engines)
                       or bool(live_eng & tool_engines))
-                why = ("" if ok else
-                       f"{brand_key.title() if brand_key else 'This brand'} models "
-                       f"don't use this tool (connect a matching phone to enable)")
+                brand = brand_key.title() if brand_key else self.tr("This brand")
+                why = ("" if ok else self.tr(
+                    "{brand} models don't use this tool (connect a matching phone to enable)"
+                ).format(brand=brand))
                 self.oem_bar.set_tool_enabled(key, ok, tip=why or None)
         except Exception:
             pass
@@ -9161,7 +9176,8 @@ class FlashPilotWindow(
         self._apply_find()
 
     def _update_count(self):
-        self.console_count.setText(f"{len(self._log_buffer)} lines")
+        self.console_count.setText(
+            self.tr("{n} lines").format(n=len(self._log_buffer)))
 
     def _clear_console(self):
         self._flush_console()
@@ -9341,27 +9357,27 @@ class FlashPilotWindow(
     def _build_console_menu(self):
         """Transcript right-click menu (state kept in sync with the chips)."""
         menu = QMenu(self)
-        act_copy_sel = menu.addAction("Copy selection")
+        act_copy_sel = menu.addAction(self.tr("Copy selection"))
         act_copy_sel.setEnabled(bool(self.log.textCursor().hasSelection()))
         act_copy_sel.triggered.connect(self._copy_selection)
-        act_copy_all = menu.addAction("Copy all")
+        act_copy_all = menu.addAction(self.tr("Copy all"))
         act_copy_all.triggered.connect(self._copy_console)
-        act_save = menu.addAction("Save…")
+        act_save = menu.addAction(self.tr("Save…"))
         act_save.triggered.connect(self._save_console)
-        act_clear = menu.addAction("Clear")
+        act_clear = menu.addAction(self.tr("Clear"))
         act_clear.triggered.connect(self._clear_console)
-        act_find = menu.addAction("Find…")
+        act_find = menu.addAction(self.tr("Find…"))
         act_find.triggered.connect(self._focus_console_find)
         menu.addSeparator()
-        act_wrap = menu.addAction("Wrap lines")
+        act_wrap = menu.addAction(self.tr("Wrap lines"))
         act_wrap.setCheckable(True)
         act_wrap.setChecked(self._console_wrap_enabled())
         act_wrap.toggled.connect(self._set_wrap)
-        act_time = menu.addAction("Timestamps")
+        act_time = menu.addAction(self.tr("Timestamps"))
         act_time.setCheckable(True)
         act_time.setChecked(bool(getattr(self, "_show_timestamps", True)))
         act_time.toggled.connect(self._set_timestamps)
-        act_regex = menu.addAction("Regex search")
+        act_regex = menu.addAction(self.tr("Regex search"))
         act_regex.setCheckable(True)
         act_regex.setChecked(bool(getattr(self, "_console_regex", False)))
         act_regex.toggled.connect(self._set_regex_mode)
@@ -12129,11 +12145,13 @@ class FlashPilotWindow(
 
     # ----------------------------- run flow -------------------------------
     def _carrier_lock_status(self):
-        name = core.FLOWS["carrier_lock_status"]().name
+        name = tr_key("flow.carrier_lock_status",
+                      core.FLOWS["carrier_lock_status"]().name)
         self._run_ops_flow("Unlock Carrier", "ADB", "carrier_lock_status", name)
 
     def _carrier_lock_mtk(self):
-        name = core.FLOWS["carrier_lock_mtk"]().name
+        name = tr_key("flow.carrier_lock_mtk",
+                      core.FLOWS["carrier_lock_mtk"]().name)
         self._run_ops_flow("Unlock Carrier", "MTK BROM", "carrier_lock_mtk", name)
 
     def _on_flash_slots(self):
