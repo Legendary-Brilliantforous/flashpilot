@@ -13,11 +13,19 @@ offline.
   ```json
   {
     "strings": {"English source": "translation"},
+    "keys": {"flow.odin_flash_tar": "translated flow caption"},
     "meta": {"machine_translated": ["English source"]}
   }
   ```
-- `en.json` is the identity map and defines the required key set.
+- `strings` is keyed by the English source phrase (widget `tr()` calls).
+- `keys` holds stable ids (`flow.*`, `job.*`, `mode.*`) for data-driven labels
+  translated at render time with `i18n.tr_key()`.
+- `en.json` is the identity catalog and defines the required key set.
 - Empty/missing keys fall back to the English source text.
+
+Safety-review hold: long confirmation-dialog bodies and EXPERIMENTAL legal
+warnings stay English until a native-speaker review; see
+`docs/TRANSLATION.md`.
 
 Language codes: `en` (default), `fr`, `es`, `de`, `zh`, `ru`, `pt`,
 `ja`, `ar`, `hi`, `tr`.

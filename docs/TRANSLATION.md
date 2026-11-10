@@ -37,16 +37,25 @@ translation is only a build-time helper for seeding new entries.
   "strings": {
     "Flash firmware": "Flasher le firmware"
   },
+  "keys": {
+    "flow.odin_flash_tar": "Flasher l'archive firmware",
+    "job.remove_frp": "Supprimer FRP",
+    "mode.edl": "EDL"
+  },
   "meta": {
     "machine_translated": ["Flash firmware"]
   }
 }
 ```
 
-* The **key is the English source phrase** — whole phrases, never single
-  words. That keeps catalogs reviewable and Qt-idiomatic.
-* `en.json` is the identity map (`"Flash firmware": "Flash firmware"`) and
-  defines the required key set.
+* `strings` is keyed by the **English source phrase** — whole phrases, never
+  single words. That keeps catalogs reviewable and Qt-idiomatic.
+* `keys` holds **stable ids** for data-driven labels (flow captions, job and
+  transport-mode names). The GUI translates them at render time with
+  `i18n.tr_key()`; English text changes never orphan these entries.
+* `en.json` is the identity catalog (`"Flash firmware": "Flash firmware"`,
+  `"flow.odin_flash_tar": "Flash firmware tar (native)"`) and defines the
+  required key set.
 * Missing or empty values fall back to English, so partial translations are
   always safe to ship.
 * Keep placeholders exactly as written: `{model}`, `{0}`, `%n`, `%1`.
@@ -55,6 +64,19 @@ translation is only a build-time helper for seeding new entries.
 * `meta.machine_translated` lists entries that came from machine translation
   and still need a human review. Deleting the `meta` block is fine once a
   language has been reviewed.
+
+#### What is translated today
+
+- Shared chrome: title bar, OEM chip bar, device strip, console controls and
+  context menu, transport picker.
+- Flow captions, job headers and transport-mode headings (stable ids).
+- The settings page.
+
+Safety-review hold: the long **confirmation-dialog bodies**
+(`_DESTRUCTIVE_CONFIRM`) and the **EXPERIMENTAL legal warnings**
+(`python/core/experimental.py`) remain English on purpose. Machine-translating
+words like "IRREVERSIBLE" or "may void warranty" without a native-speaker
+review is too risky; they will be handled by a dedicated reviewed pass.
 
 ### Workflow
 
