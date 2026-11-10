@@ -144,7 +144,8 @@ def test_dragging_the_panel_resizes_the_page_and_persists(win):
 
     # Drag the divider to the right: panel wider, page viewport narrower.
     win._body_user_moved = True
-    target = min(win._BODY_PANEL_MAX_W, win._BODY_PANEL_DEFAULT_W + 120)
+    target = max(win._body_panel_floor() + 20, min(
+        win._BODY_PANEL_MAX_W, win._BODY_PANEL_DEFAULT_W + 120))
     splitter.setSizes([target, splitter.width() - target])
     _pump()
     after = splitter.sizes()
@@ -210,11 +211,13 @@ def test_transient_narrow_layout_does_not_pin_the_panel(win):
 
     # Once the user drags, that width is what survives a resize.
     win._body_user_moved = True
-    win._body_splitter.setSizes([300, win._body_splitter.width() - 300])
+    chosen = max(300, win._body_panel_floor() + 20)
+    win._body_splitter.setSizes([chosen, win._body_splitter.width() - chosen])
     _pump()
     win.resize(1250, 800)
     _pump()
-    assert win._body_splitter.sizes()[0] == 300, "a user-chosen width was overwritten"
+    assert win._body_splitter.sizes()[0] == chosen, (
+        "a user-chosen width was overwritten")
     win._body_user_moved = False
 
 

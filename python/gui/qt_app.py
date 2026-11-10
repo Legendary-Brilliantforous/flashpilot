@@ -2543,14 +2543,16 @@ class FlashPilotWindow(
         splitter = getattr(self, "_body_splitter", None)
         if splitter is None or splitter.width() <= 0:
             return
-        if getattr(self, "_body_user_moved", False):
-            return
         # Keep the widget floor and the computed floor in sync: QSplitter clamps
         # drags to the child's explicit minimumWidth, so leaving it at the design
-        # baseline would let a drag clip the panel on wider font metrics.
+        # baseline would let a drag clip the panel on wider font metrics. This
+        # must run after a user drag too: real font metrics can raise the floor
+        # only once styles are applied.
         floor = self._body_panel_floor()
         if self._conn.minimumWidth() != floor:
             self._conn.setMinimumWidth(floor)
+        if getattr(self, "_body_user_moved", False):
+            return
         panel = self._desired_device_panel_width(splitter.width())
         page = max(1, splitter.width() - panel)
         if page >= self._PAGE_VIEW_MIN_W:
@@ -2574,6 +2576,17 @@ class FlashPilotWindow(
                     "layout/device_panel_width", int(sizes[0]))
         except Exception:
             pass
+        # A drag re-lays the panel out at the new width, and only then can its
+        # real minimum ("font metrics once styles are applied") be known. A drag
+        # never resizes the window, so no resizeEvent would pick that up: re-sync
+        # the clamp one event-loop turn later, coalesced across move events.
+        if not getattr(self, "_body_floor_sync_pending", False):
+            self._body_floor_sync_pending = True
+            QTimer.singleShot(0, self._sync_body_panel_floor_deferred)
+
+    def _sync_body_panel_floor_deferred(self):
+        self._body_floor_sync_pending = False
+        self._apply_default_body_split()
 
     def _desired_dock_console_width(self, total):
         """Console width for `total` px: persisted width if sane, else default."""
@@ -10380,6 +10393,13 @@ class FlashPilotWindow(
         # Capability display-gating follows the list rebuild (fail-open).
         try:
             self._refresh_gates()
+        except Exception:
+            pass
+        # The row text sizes the panel's content floor, so a rebuild can raise
+        # the minimum width after the splitter's clamp was last synced. Re-apply
+        # (it re-syncs the floor even when the user has already dragged).
+        try:
+            self._apply_default_body_split()
         except Exception:
             pass
 
