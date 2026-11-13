@@ -103,9 +103,9 @@ class TestQrProvision:
         from python.gui.qt_app import FlashPilotWindow
 
         src = inspect.getsource(FlashPilotWindow._open_qr_generator)
-        assert 'setPlaceholderText("TestDPC (default)")' in src
-        assert 'addItem("Google Device Policy", "adp")' in src
-        assert 'addItem("FlashPilot DPC", "ours")' in src
+        assert 'setPlaceholderText(self.tr("TestDPC (default)"))' in src
+        assert 'addItem(self.tr("Google Device Policy"), "adp")' in src
+        assert 'addItem(self.tr("FlashPilot DPC"), "ours")' in src
         # TestDPC is the default shown QR, never a dropdown entry.
         assert 'addItem("TestDPC' not in src
         # Selecting an option re-renders the shown QR.

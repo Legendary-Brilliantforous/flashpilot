@@ -262,6 +262,44 @@ def test_tr_key_falls_back_to_english(monkeypatch):
     assert i18n.tr_key("", "Fallback") == "Fallback"
 
 
+def test_plain_tr_helper_falls_back_and_translates(tmp_path):
+    # Used by module-level helpers that have no widget ``self``.
+    assert i18n.tr("Scan USB bus") == "Scan USB bus"
+    assert i18n.tr("") == ""
+
+    path = tmp_path / "fr.json"
+    path.write_text(
+        json.dumps({"strings": {"Scan USB bus": "Analyser le bus USB"}}),
+        encoding="utf-8",
+    )
+    from PyQt6.QtWidgets import QApplication
+
+    translator = i18n.JsonTranslator(path)
+    app = QApplication.instance() or QApplication([])
+    app.installTranslator(translator)
+    try:
+        assert i18n.tr("Scan USB bus") == "Analyser le bus USB"
+    finally:
+        app.removeTranslator(translator)
+
+
+def test_console_level_prefixes_stay_untranslated():
+    """`_classify()` matches English `[error]`/`[step]` prefixes.
+
+    A prefix inside a translated phrase would stop matching once a catalog is
+    active, so console lines must be built as `"[step] " + tr("...")`.
+    """
+    import re
+
+    pattern = re.compile(r"^\[[A-Za-z_]+\]\s")
+    offenders = []
+    for source in (ROOT / "python" / "gui").rglob("*.py"):
+        for key, line in extract.translatable_literals(source):
+            if pattern.match(key):
+                offenders.append(f"{source.relative_to(ROOT)}:{line}: {key[:40]!r}")
+    assert not offenders, offenders
+
+
 def test_json_translator_reads_the_key_section(tmp_path):
     path = tmp_path / "fr.json"
     path.write_text(

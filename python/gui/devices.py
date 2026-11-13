@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .i18n import tr
 from .widgets.action_row import ActionRow
 
 
@@ -218,7 +219,10 @@ def build_brand_page(win, key):
         cb.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         cb.setMinimumHeight(30)
         if eng in engines and section:
-            cb.setToolTip(f"{brand['label']} uses {clabel} — open the {clabel} tools")
+            cb.setToolTip(
+                tr("{brand} uses {engine} — open the {engine} tools")
+                .format(brand=brand["label"], engine=clabel)
+            )
             cb.setStyleSheet(
                 "QPushButton { color:#04121a; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
                 " stop:0 #d4b78f, stop:1 #b89a6a); border:1px solid rgba(255,255,255,0.18);"
@@ -228,8 +232,9 @@ def build_brand_page(win, key):
             )
             cb.clicked.connect(lambda _=False, s=section: win._on_section(s))
         else:
-            reason = ("no tool section yet" if eng in engines
-                      else f"{brand['label']} doesn't use {clabel}")
+            reason = (tr("no tool section yet") if eng in engines
+                      else tr("{brand} doesn't use {engine}")
+                      .format(brand=brand["label"], engine=clabel))
             cb.setEnabled(False)
             cb.setToolTip(f"{glyph}  {clabel} — {reason}")
             cb.setStyleSheet(
@@ -258,7 +263,7 @@ def build_brand_page(win, key):
     lv = QVBoxLayout(list_col)
     lv.setContentsMargins(0, 0, 0, 0)
     lv.setSpacing(6)
-    lhead = QLabel("SUPPORTED DEVICES")
+    lhead = QLabel(tr("SUPPORTED DEVICES"))
     lhead.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:800; letter-spacing:1px;")
     lv.addWidget(lhead)
     lscroll = QScrollArea()
@@ -352,7 +357,7 @@ def _build_model_page(win, brand, m, back):
 
     top = _HL()
     if back is not None:
-        back_btn = QPushButton("← Back")
+        back_btn = QPushButton(tr("← Back"))
         back_btn.setStyleSheet(_btn_ghost())
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         back_btn.setFixedWidth(90)
@@ -376,7 +381,10 @@ def _build_model_page(win, brand, m, back):
 
     # Chip badge on its own line: beside the title it stole width and
     # clipped both (the motorola G6 chip string is long).
-    chip_lbl = _Lbl(f"{m.get('chip','')}   engine: {m.get('engine','—').upper()}")
+    chip_lbl = _Lbl(
+        tr("{chip}   engine: {engine}").format(
+            chip=m.get("chip", ""), engine=m.get("engine", "—").upper())
+    )
     chip_lbl.setWordWrap(True)
     chip_lbl.setStyleSheet(
         f"color:{badge_fg}; background:{badge_bg}; border-radius:8px;"
@@ -396,7 +404,8 @@ def _build_model_page(win, brand, m, back):
     researched = m.get("status") == "researched"
     # Motorola and Apple flows are handled per brand/runtime
     if not researched and brand.get("key") not in ("motorola", "apple"):
-        empty = _Lbl("No wired actions yet for this model — research in progress.")
+        empty = _Lbl(tr(
+            "No wired actions yet for this model — research in progress."))
         empty.setStyleSheet(f"color:{C['mute']}; font-size:12px;")
         v.addWidget(empty)
         v.addStretch(1)
@@ -567,12 +576,12 @@ def _build_model_page(win, brand, m, back):
     fl = _VL(flash_card)
     fl.setContentsMargins(_SPC["md"], _SPC["md"], _SPC["md"], _SPC["md"])
     fl.setSpacing(_SPC["sm"])
-    fh = _Lbl("FLASH FIRMWARE")
+    fh = _Lbl(tr("FLASH FIRMWARE"))
     fh.setStyleSheet(
         f"color:{C['experimental_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;"
     )
     fl.addWidget(fh)
-    fb = QPushButton("  ⬆  Open Flash workbench (SPD/MTK tab)")
+    fb = QPushButton(tr("  ⬆  Open Flash workbench (SPD/MTK tab)"))
     fb.setCursor(Qt.CursorShape.PointingHandCursor)
     fb.setStyleSheet(
         "QPushButton { color:#fff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
@@ -580,9 +589,9 @@ def _build_model_page(win, brand, m, back):
         " padding:10px 14px; font-weight:800; font-size:12px; }"
         " QPushButton:hover { background: #f59e0b; }"
     )
-    fb.setToolTip("Flash is destructive and firmware-specific. It opens the "
+    fb.setToolTip(tr("Flash is destructive and firmware-specific. It opens the "
                   "SPD (or MTK) tab where you supply FDL1/FDL2 + a firmware "
-                  "directory. Flash never runs inline from this page.")
+                  "directory. Flash never runs inline from this page."))
     fb.clicked.connect(lambda: win._on_section(m.get("engine", "spd") if m.get("engine") in ("spd", "mtk") else "spd"))
     fl.addWidget(fb)
     v.addWidget(flash_card)
@@ -831,7 +840,9 @@ def apply_applicability(root):
                 btn.setStyleSheet(base_style + _DISABLED_SUFFIX)
             want = "/".join(sorted(need))
             got = "/".join(sorted(have)) if have else "none"
-            btn.setToolTip(f"{base_tip}\nNeeds: {want} (connected: {got})")
+            btn.setToolTip(tr(
+                "{tip}\nNeeds: {needed} (connected: {got})"
+            ).format(tip=base_tip, needed=want, got=got))
         else:
             btn.setEnabled(True)
             if btn.styleSheet() != base_style:
@@ -851,7 +862,9 @@ def apply_applicability(root):
             tile.setProperty("flow_dimmed", True)
             want = "/".join(sorted(need))
             got = "/".join(sorted(have)) if have else "none"
-            tile.setToolTip(f"{base_tip}\nNeeds: {want} (connected: {got})")
+            tile.setToolTip(tr(
+                "{tip}\nNeeds: {needed} (connected: {got})"
+            ).format(tip=base_tip, needed=want, got=got))
         else:
             tile.setGraphicsEffect(None)
             tile.setProperty("flow_dimmed", False)
@@ -888,10 +901,10 @@ def build_adb_hub_page(win):
     v = _VL(page)
     v.setContentsMargins(10, 8, 10, 8)
     v.setSpacing(10)
-    head = _Lbl("🔌  ADB Hub")
+    head = _Lbl(tr("🔌  ADB Hub"))
     head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     v.addWidget(head)
-    sub = _Lbl("Brand-specific ADB actions live on their device pages.")
+    sub = _Lbl(tr("Brand-specific ADB actions live on their device pages."))
     sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
     sub.setWordWrap(True)
     v.addWidget(sub)
@@ -952,7 +965,7 @@ def build_adb_hub_page(win):
     # window (TestDPC by default; Google Device Policy + FlashPilot are the
     # two optional QRs in its dropdown). QR provisioning creates the ADB
     # session, so it is exempt from transport dimming (see _QR_ENTRY_ACTS).
-    qr_head = _Lbl("QR PROVISIONING (setup wizard)")
+    qr_head = _Lbl(tr("QR PROVISIONING (setup wizard)"))
     qr_head.setStyleSheet(f"color:{C['mute']}; font-size:11px; font-weight:800; letter-spacing:1px;")
     v.addWidget(qr_head)
     qr_row = _HL()
@@ -984,7 +997,7 @@ def build_adb_hub_page(win):
     name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
     name.setStyleSheet(f"color:{C['text']}; font-size:12px; font-weight:800; background:transparent; border:none;")
     tl.addWidget(name)
-    hint = _Lbl("TestDPC (default)\n+ Google · FlashPilot")
+    hint = _Lbl(tr("TestDPC (default)\n+ Google · FlashPilot"))
     hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
     hint.setWordWrap(True)
     hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -1022,21 +1035,21 @@ def build_fastboot_hub_page(win):
     v = _VL(page)
     v.setContentsMargins(10, 8, 10, 8)
     v.setSpacing(10)
-    head = _Lbl("⚡  Fastboot Hub")
+    head = _Lbl(tr("⚡  Fastboot Hub"))
     head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     v.addWidget(head)
-    sub = _Lbl("Bootloader actions for any fastboot phone. Per-device fastboot flows stay on their device pages.")
+    sub = _Lbl(tr("Bootloader actions for any fastboot phone. Per-device fastboot flows stay on their device pages."))
     sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
     sub.setWordWrap(True)
     v.addWidget(sub)
 
     code_row = _HL()
     code_row.setSpacing(8)
-    code_lbl = _Lbl("Unlock code")
+    code_lbl = _Lbl(tr("Unlock code"))
     code_lbl.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:700;")
     code_row.addWidget(code_lbl)
     code_edit = _LE()
-    code_edit.setPlaceholderText("20-char code (BL Unlock only)")
+    code_edit.setPlaceholderText(tr("20-char code (BL Unlock only)"))
     code_edit.setMinimumHeight(30)
     code_edit.setStyleSheet(
         f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']};"
@@ -1121,12 +1134,12 @@ def build_easylogin_hub_page(win):
     v = QVBoxLayout(page)
     v.setContentsMargins(10, 8, 10, 8)
     v.setSpacing(10)
-    head = QLabel("📷  Easy Login — QR provisioning")
+    head = QLabel(tr("📷  Easy Login — QR provisioning"))
     head.setStyleSheet(f"color:{C['text']}; font-size:15px; font-weight:800;")
     v.addWidget(head)
-    sub = QLabel(
+    sub = QLabel(tr(
         "Scan in the setup wizard (tap the Welcome screen 6 times fast): the DPC\n"
-        "enrolls as device owner, the wizard ends before the FRP gate, then FRP clears over ADB.")
+        "enrolls as device owner, the wizard ends before the FRP gate, then FRP clears over ADB."))
     sub.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
     sub.setWordWrap(True)
     v.addWidget(sub)
@@ -1178,22 +1191,22 @@ def build_easylogin_hub_page(win):
     lst = QVBoxLayout()
     lst.setSpacing(12)
     lst.addWidget(_tile(
-        "frp_fake_login", "🧩", "Easy Login · FlashPilot DPC",
-        "Our own app — completes setup + enables ADB by itself",
-        "Needs the APK built (android/FlashPilotDPC/build.sh); warns honestly if missing."))
+        "frp_fake_login", "🧩", tr("Easy Login · FlashPilot DPC"),
+        tr("Our own app — completes setup + enables ADB by itself"),
+        tr("Needs the APK built (android/FlashPilotDPC/build.sh); warns honestly if missing.")))
     lst.addWidget(_tile(
-        "frp_fake_login_testdpc", "🧪", "Easy Login · TestDPC",
-        "Google's sample DPC — local APK or Play Store",
-        "Downloads from this PC when served, else the Play Store."))
+        "frp_fake_login_testdpc", "🧪", tr("Easy Login · TestDPC"),
+        tr("Google's sample DPC — local APK or Play Store"),
+        tr("Downloads from this PC when served, else the Play Store.")))
     lst.addWidget(_tile(
-        "frp_fake_login_adp", "🏢", "Easy Login · Device Policy",
-        "Android Device Policy — Play Store download",
-        "Google's production DPC (oobconfig); needs Play Store reachability."))
+        "frp_fake_login_adp", "🏢", tr("Easy Login · Device Policy"),
+        tr("Android Device Policy — Play Store download"),
+        tr("Google's production DPC (oobconfig); needs Play Store reachability.")))
     lst.addWidget(_tile(
-        "_qr_generator", "📷", "QR Provision",
-        "Device-owner QR — TestDPC (default) + Google / FlashPilot",
-        "Opens the QR window: TestDPC is shown; the dropdown offers the "
-        "two optional DPCs (Google Device Policy, FlashPilot)."))
+        "_qr_generator", "📷", tr("QR Provision"),
+        tr("Device-owner QR — TestDPC (default) + Google / FlashPilot"),
+        tr("Opens the QR window: TestDPC is shown; the dropdown offers the "
+        "two optional DPCs (Google Device Policy, FlashPilot).")))
     v.addLayout(lst)
     v.addStretch(1)
     return page
@@ -1245,7 +1258,7 @@ def _moto_frp_dispatch(win):
     act, _label, reason = _moto_frp_choice()
     if reason and hasattr(win, "_toasts"):
         try:
-            win._toasts.show_info("FRP strategy", reason)
+            win._toasts.show_info(tr("FRP strategy"), reason)
         except Exception:
             pass
     _dispatch(win, act, "Motorola", {})

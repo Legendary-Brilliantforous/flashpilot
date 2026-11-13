@@ -35,22 +35,22 @@ class QcPageMixin:
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(9)
 
-        lay.addWidget(SectionTitle("QUALCOMM EDL / SAHARA / FIREHOSE"))
+        lay.addWidget(SectionTitle(self.tr("QUALCOMM EDL / SAHARA / FIREHOSE")))
         info = QLabel(
-            "Qualcomm Emergency Download (EDL) tooling. Requires the device in EDL "
-            "mode (VID 05c6) plus a firehose programmer and rawprogram XML."
+            self.tr("Qualcomm Emergency Download (EDL) tooling. Requires the device in EDL "
+            "mode (VID 05c6) plus a firehose programmer and rawprogram XML.")
         )
         info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         info.setWordWrap(True)
         lay.addWidget(info)
 
         det_row = QHBoxLayout()
-        self.qc_detect_btn = QPushButton("Detect Qualcomm")
+        self.qc_detect_btn = QPushButton(self.tr("Detect Qualcomm"))
         self.qc_detect_btn.setStyleSheet(_btn_primary())
         self.qc_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.qc_detect_btn.clicked.connect(self._qc_detect)
         det_row.addWidget(self.qc_detect_btn)
-        self.qc_status = QLabel("No Qualcomm EDL device detected")
+        self.qc_status = QLabel(self.tr("No Qualcomm EDL device detected"))
         self.qc_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
         det_row.addWidget(self.qc_status, 1)
         lay.addLayout(det_row)
@@ -64,7 +64,8 @@ class QcPageMixin:
             lab = QLabel(lbl)
             lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:120px;")
             edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {lbl.lower()}...")
+            edit.setPlaceholderText(
+                self.tr("Select {label}...").format(label=lbl.lower()))
             edit.setStyleSheet(
                 f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
                 f" border-radius:8px; padding:6px 10px; color:{C['text']};"
@@ -72,7 +73,7 @@ class QcPageMixin:
                 f" QLineEdit:hover {{ border:1px solid {C['border_hi']}; }}"
                 f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
             )
-            btn = QPushButton("Browse...")
+            btn = QPushButton(self.tr("Browse..."))
             btn.setStyleSheet(_btn_ghost())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedWidth(90)
@@ -122,19 +123,19 @@ class QcPageMixin:
             }.get(label))
             acts_row2.addWidget(b)
         acts_row2.addStretch(1)
-        self.qc_stop_btn = QPushButton("Stop")
+        self.qc_stop_btn = QPushButton(self.tr("Stop"))
         self.qc_stop_btn.setEnabled(False)
         self.qc_stop_btn.setStyleSheet(_btn_danger())
         self.qc_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.qc_stop_btn.clicked.connect(self._qc_stop)
-        self.qc_stop_btn.setToolTip("Cancel the running Qualcomm operation")
+        self.qc_stop_btn.setToolTip(self.tr("Cancel the running Qualcomm operation"))
         acts_row2.addWidget(self.qc_stop_btn)
         self.qc_stop_btn.setVisible(False)
         acts.addLayout(acts_row2)
         lay.addLayout(acts)
 
         self.qc_fw_dir = QLineEdit()
-        self.qc_fw_dir.setPlaceholderText("Firmware directory (partition images)...")
+        self.qc_fw_dir.setPlaceholderText(self.tr("Firmware directory (partition images)..."))
         self.qc_fw_dir.setStyleSheet(
             f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
             f" border-radius:8px; padding:6px 10px; color:{C['text']};"
@@ -143,9 +144,9 @@ class QcPageMixin:
             f" QLineEdit:focus {{ border:1px solid {C['accent']}; }}"
         )
         fw_row = QHBoxLayout()
-        fw_row.addWidget(QLabel("Firmware dir"), 0)
+        fw_row.addWidget(QLabel(self.tr("Firmware dir")), 0)
         fw_row.addWidget(self.qc_fw_dir, 1)
-        fw_btn = QPushButton("Browse...")
+        fw_btn = QPushButton(self.tr("Browse..."))
         fw_btn.setStyleSheet(_btn_ghost())
         fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fw_btn.clicked.connect(self._qc_browse_dir)
@@ -181,18 +182,18 @@ class QcPageMixin:
         fb_row = QHBoxLayout()
         fb_row.setSpacing(6)
         fb_part = QLineEdit()
-        fb_part.setPlaceholderText("Partition (e.g. boot, system, super)")
+        fb_part.setPlaceholderText(self.tr("Partition (e.g. boot, system, super)"))
         fb_part.setMinimumWidth(80)
         fb_part.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         fb_part.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
         fb_row.addWidget(fb_part, 1)
         fb_img = QLineEdit()
-        fb_img.setPlaceholderText("Image file (.img / .tar)")
+        fb_img.setPlaceholderText(self.tr("Image file (.img / .tar)"))
         fb_img.setMinimumWidth(80)
         fb_img.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         fb_img.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 5px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
         fb_row.addWidget(fb_img, 1)
-        fb_browse = QPushButton("Browse...")
+        fb_browse = QPushButton(self.tr("Browse..."))
         fb_browse.setStyleSheet(_btn_ghost())
         fb_browse.setCursor(Qt.CursorShape.PointingHandCursor)
         fb_browse.setFixedWidth(80)

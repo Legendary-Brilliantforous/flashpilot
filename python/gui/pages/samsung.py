@@ -31,23 +31,24 @@ class SamsungPageMixin:
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        lay.addWidget(SectionTitle("OPERATIONS"))
+        lay.addWidget(SectionTitle(self.tr("OPERATIONS")))
 
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
-        self.info_btn = QPushButton("Get Device Info")
+        self.info_btn = QPushButton(self.tr("Get Device Info"))
         self.info_btn.setStyleSheet(_btn_ghost())
         self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.info_btn.clicked.connect(self.refresh_device)
-        self.info_btn.setToolTip("Scan the bus and print full device info to the console")
+        self.info_btn.setToolTip(self.tr(
+            "Scan the bus and print full device info to the console"))
         top_row.addWidget(self.info_btn)
         top_row.addStretch(1)
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton(self.tr("Stop"))
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet(_btn_danger())
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.clicked.connect(self.on_stop)
-        self.stop_btn.setToolTip("Cancel the running operation")
+        self.stop_btn.setToolTip(self.tr("Cancel the running operation"))
         top_row.addWidget(self.stop_btn)
         # Legacy per-chip Stop hidden — global STOP in titlebar is the single entry point
         self.stop_btn.setVisible(False)
@@ -221,7 +222,7 @@ class SamsungPageMixin:
         self.shimmer.setVisible(False)
         lay.addWidget(self.shimmer)
 
-        self.status = QLabel("Ready")
+        self.status = QLabel(self.tr("Ready"))
         self.status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
         lay.addWidget(self.status)
 
@@ -279,11 +280,12 @@ class SamsungPageMixin:
             lbl.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; font-size: 10px; min-width: 58px;")
             hl.addWidget(lbl)
             edit = QLineEdit()
-            edit.setPlaceholderText(f"Select {label} (.tar)")
+            edit.setPlaceholderText(
+                self.tr("Select {label} (.tar)").format(label=label))
             edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 6px; padding: 4px 8px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
             hl.addWidget(edit, 1)
-            btn = QPushButton("Browse")
+            btn = QPushButton(self.tr("Browse"))
             btn.setStyleSheet(_btn_ghost())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedWidth(66)
@@ -306,20 +308,20 @@ class SamsungPageMixin:
 
         run_row = QHBoxLayout()
         run_row.setSpacing(8)
-        self.flash_btn = QPushButton("Flash Firmware")
+        self.flash_btn = QPushButton(self.tr("Flash Firmware"))
         self.flash_btn.setStyleSheet(_btn_primary())
         self.flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.flash_btn.setToolTip(
-            "Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)"
+            self.tr("Flash the selected AP/BL/CP/CSC/USERDATA firmware (odin4)")
         )
         self.flash_btn.clicked.connect(self._on_flash_slots)
         self._gate_button(self.flash_btn, job="Flash Firmware", mode="Download mode")
         run_row.addWidget(self.flash_btn)
-        self.check_tar_btn = QPushButton("Check archive")
+        self.check_tar_btn = QPushButton(self.tr("Check archive"))
         self.check_tar_btn.setStyleSheet(_btn_ghost())
         self.check_tar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.check_tar_btn.setToolTip(
-            "Validate the firmware archive / PIT with odin4 --check-only (no write)"
+            self.tr("Validate the firmware archive / PIT with odin4 --check-only (no write)")
         )
         self.check_tar_btn.clicked.connect(
             lambda: self._run_ops_flow(
@@ -351,25 +353,25 @@ class SamsungPageMixin:
         opt_lay.setSpacing(6)
 
         opt_row = FlowLayout(spacing=8)
-        self.allow_unknown_cb = QCheckBox("Allow unknown partitions (bypass PIT check, --allow-unknown)")
+        self.allow_unknown_cb = QCheckBox(self.tr("Allow unknown partitions (bypass PIT check, --allow-unknown)"))
         self.allow_unknown_cb.setChecked(False)
         self.allow_unknown_cb.setToolTip(
-            "OFF by default (safety). Lets odin4 skip archive entries that have no match\n"
+            self.tr("OFF by default (safety). Lets odin4 skip archive entries that have no match\n"
             "in the device's PIT. Needed for unofficial/custom firmware or region variants\n"
             "whose partition table differs from the device ('check failure pit' / PIT mismatch).\n"
-            "Only enable for firmware you are certain is correct for this device."
+            "Only enable for firmware you are certain is correct for this device.")
         )
         self.allow_unknown_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row.addWidget(self.allow_unknown_cb)
-        self.auto_reboot_cb = QCheckBox("Auto-reboot after flash (--reboot)")
+        self.auto_reboot_cb = QCheckBox(self.tr("Auto-reboot after flash (--reboot)"))
         self.auto_reboot_cb.setChecked(False)
         self.auto_reboot_cb.setToolTip(
-            "OFF by default (safety). Lets odin4 reboot the phone as soon as the flash\n"
+            self.tr("OFF by default (safety). Lets odin4 reboot the phone as soon as the flash\n"
             "finishes. Leave OFF so you can verify the flash completed before rebooting -\n"
-            "a failed write otherwise hides behind a phone that no longer answers."
+            "a failed write otherwise hides behind a phone that no longer answers.")
         )
         self.auto_reboot_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
@@ -380,50 +382,50 @@ class SamsungPageMixin:
 
         # Advanced options row 2 - always-work repair steps
         opt_row2 = FlowLayout(spacing=8)
-        self.erase_nv_cb = QCheckBox("Erase NVRAM/NVDATA (zero-fill nv* partitions)")
+        self.erase_nv_cb = QCheckBox(self.tr("Erase NVRAM/NVDATA (zero-fill nv* partitions)"))
         self.erase_nv_cb.setChecked(False)
         self.erase_nv_cb.setToolTip(
-            "OFF by default (safety - wipes network calibration). After the flash,\n"
+            self.tr("OFF by default (safety - wipes network calibration). After the flash,\n"
             "zero-fills every NVRAM/NVDATA partition from the device's own PIT using\n"
             "the native Odin flash path. Standard fix for IMEI/network issues and a\n"
             "common FRP-adjacent step. Works on Odin-protocol (Exynos/Qualcomm)\n"
-            "download mode; MTK download-agent devices use the MediaTek workbench."
+            "download mode; MTK download-agent devices use the MediaTek workbench.")
         )
         self.erase_nv_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row2.addWidget(self.erase_nv_cb)
-        self.check_only_cb = QCheckBox("Validate archives first (--check-only)")
+        self.check_only_cb = QCheckBox(self.tr("Validate archives first (--check-only)"))
         self.check_only_cb.setChecked(False)
         self.check_only_cb.setToolTip(
-            "Run odin4 --check-only over every selected archive BEFORE flashing.\n"
+            self.tr("Run odin4 --check-only over every selected archive BEFORE flashing.\n"
             "Aborts on corrupt/renamed .tar.md5 or PIT mismatches so a bad archive\n"
-            "is never written to the phone."
+            "is never written to the phone.")
         )
         self.check_only_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row2.addWidget(self.check_only_cb)
-        self.redownload_cb = QCheckBox("Re-download after flash (--redownload)")
+        self.redownload_cb = QCheckBox(self.tr("Re-download after flash (--redownload)"))
         self.redownload_cb.setChecked(False)
         self.redownload_cb.setToolTip(
-            "After flashing, odin4 sends the Redownload command so the phone re-enters\n"
+            self.tr("After flashing, odin4 sends the Redownload command so the phone re-enters\n"
             "download mode instead of rebooting - the reliable way to chain a second\n"
             "step (like Erase NVRAM) without power-cycling. Mutually exclusive with\n"
-            "auto-reboot."
+            "auto-reboot.")
         )
         self.redownload_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row2.addWidget(self.redownload_cb)
-        self.verbose_cb = QCheckBox("Verbose logging (--verbose)")
+        self.verbose_cb = QCheckBox(self.tr("Verbose logging (--verbose)"))
         self.verbose_cb.setChecked(False)
         self.verbose_cb.setToolTip(
-            "Pass --verbose to odin4 so the console shows detailed per-partition\n"
-            "progress - useful for diagnosing stuck flashes."
+            self.tr("Pass --verbose to odin4 so the console shows detailed per-partition\n"
+            "progress - useful for diagnosing stuck flashes.")
         )
         self.verbose_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
@@ -442,39 +444,39 @@ class SamsungPageMixin:
 
         # BL downgrade override row (native multi-partition flash gate)
         opt_row3 = FlowLayout(spacing=8)
-        self.skip_efs_cb = QCheckBox("Skip EFS backup requirement (ODIN4_SKIP_BACKUP=1)")
+        self.skip_efs_cb = QCheckBox(self.tr("Skip EFS backup requirement (ODIN4_SKIP_BACKUP=1)"))
         self.skip_efs_cb.setChecked(False)
         self.skip_efs_cb.setToolTip(
-            "OFF by default (safety). The flash refuses to run without a recent\n"
+            self.tr("OFF by default (safety). The flash refuses to run without a recent\n"
             "EFS backup (<30 days) or an authorized-ADB auto-backup. Tick this\n"
             "ONLY if you already have backups elsewhere - EFS holds IMEI/radio\n"
-            "calibration; losing it without a backup is unrecoverable."
+            "calibration; losing it without a backup is unrecoverable.")
         )
         self.skip_efs_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row3.addWidget(self.skip_efs_cb)
-        self.engine_native_cb = QCheckBox("Use native engine (recommended)")
+        self.engine_native_cb = QCheckBox(self.tr("Use native engine (recommended)"))
         self.engine_native_cb.setChecked(True)
         self.engine_native_cb.setToolTip(
-            "ON  = FlashPilot's own single-session Rust writer.\n"
+            self.tr("ON  = FlashPilot's own single-session Rust writer.\n"
             "     Preserves Loke's one-session-per-plug rule; best for\n"
             "     MTK-Samsung units like A14/A15 Helio variants.\n"
-            "OFF = Samsung's proprietary odin4 binary (Exynos fallback)."
+            "OFF = Samsung's proprietary odin4 binary (Exynos fallback).")
         )
         self.engine_native_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         opt_row3.addWidget(self.engine_native_cb)
-        self.force_bl_cb = QCheckBox("Allow BL revision downgrade (ODIN4_FORCE_BL=1)")
+        self.force_bl_cb = QCheckBox(self.tr("Allow BL revision downgrade (ODIN4_FORCE_BL=1)"))
         self.force_bl_cb.setChecked(False)
         self.force_bl_cb.setToolTip(
-            "OFF by default (safety). Lets the native multi-partition flash write a\n"
+            self.tr("OFF by default (safety). Lets the native multi-partition flash write a\n"
             "bootloader whose revision is LOWER than the device's current one.\n"
             "Flashing a lower BL revision on a newer device can hard-brick it - only\n"
-            "enable when you are certain the older firmware is correct for this device."
+            "enable when you are certain the older firmware is correct for this device.")
         )
         self.force_bl_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
@@ -485,12 +487,12 @@ class SamsungPageMixin:
 
         # vbmeta auto-patch toggle
         opt_row4 = FlowLayout(spacing=8)
-        self.vbmeta_patch_cb = QCheckBox("Auto-patch vbmeta (disable AVB verification)")
+        self.vbmeta_patch_cb = QCheckBox(self.tr("Auto-patch vbmeta (disable AVB verification)"))
         self.vbmeta_patch_cb.setChecked(True)
         self.vbmeta_patch_cb.setToolTip(
-            "When ON, extracts vbmeta from AP firmware, patches it to disable\n"
+            self.tr("When ON, extracts vbmeta from AP firmware, patches it to disable\n"
             "AVB verification (flags 0x03), and flashes the patched vbmeta.\n"
-            "Required for booting custom kernels / unofficial firmware."
+            "Required for booting custom kernels / unofficial firmware.")
         )
         self.vbmeta_patch_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['mute']}; font-size:10px; font-weight:600; }}"
@@ -519,31 +521,31 @@ class SamsungPageMixin:
         )
 
         self.partition_edit = QLineEdit()
-        self.partition_edit.setPlaceholderText("e.g. vbmeta, boot, super, system ...")
+        self.partition_edit.setPlaceholderText(self.tr("e.g. vbmeta, boot, super, system ..."))
         self.partition_edit.setMinimumWidth(80)
         self.partition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.partition_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
 
         self.image_edit = QLineEdit()
-        self.image_edit.setPlaceholderText("Image file (.img / .lz4 / .tar)")
+        self.image_edit.setPlaceholderText(self.tr("Image file (.img / .lz4 / .tar)"))
         self.image_edit.setMinimumWidth(80)
         self.image_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.image_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
 
         self.sales_code_edit = QLineEdit()
-        self.sales_code_edit.setPlaceholderText("e.g. XSG")
+        self.sales_code_edit.setPlaceholderText(self.tr("e.g. XSG"))
         self.sales_code_edit.setMinimumWidth(80)
         self.sales_code_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.sales_code_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
 
         self.flash_specs_edit = QLineEdit()
-        self.flash_specs_edit.setPlaceholderText("partition=image;partition=image")
+        self.flash_specs_edit.setPlaceholderText(self.tr("partition=image;partition=image"))
         self.flash_specs_edit.setMinimumWidth(80)
         self.flash_specs_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.flash_specs_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
 
         self.pit_file_edit = QLineEdit()
-        self.pit_file_edit.setPlaceholderText("Path to .pit")
+        self.pit_file_edit.setPlaceholderText(self.tr("Path to .pit"))
         self.pit_file_edit.setMinimumWidth(80)
         self.pit_file_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.pit_file_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
@@ -564,12 +566,12 @@ class SamsungPageMixin:
 
         # single partition + image -> one row
         p_row = QHBoxLayout()
-        p_label = QLabel("Single")
+        p_label = QLabel(self.tr("Single"))
         p_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 52px; font-size: 11px;")
         p_row.addWidget(p_label)
         p_row.addWidget(self.partition_edit, 1)
         p_row.addWidget(self.image_edit, 1)
-        img_btn = QPushButton("Browse...")
+        img_btn = QPushButton(self.tr("Browse..."))
         img_btn.setStyleSheet(_btn_ghost())
         img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         img_btn.setFixedWidth(80)
@@ -585,7 +587,7 @@ class SamsungPageMixin:
 
         # sales code -> one row
         sc_row = QHBoxLayout()
-        sc_label = QLabel("Sales Code")
+        sc_label = QLabel(self.tr("Sales Code"))
         sc_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
         sc_row.addWidget(sc_label)
         sc_row.addWidget(self.sales_code_edit, 1)
@@ -599,7 +601,7 @@ class SamsungPageMixin:
 
         # multi-partition specs -> one row
         ms_row = QHBoxLayout()
-        ms_label = QLabel("Flash specs")
+        ms_label = QLabel(self.tr("Flash specs"))
         ms_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
         ms_row.addWidget(ms_label)
         ms_row.addWidget(self.flash_specs_edit, 1)
@@ -613,11 +615,11 @@ class SamsungPageMixin:
 
 # pit -> one row
         pit_row = QHBoxLayout()
-        pit_label = QLabel("PIT file")
+        pit_label = QLabel(self.tr("PIT file"))
         pit_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
         pit_row.addWidget(pit_label)
         pit_row.addWidget(self.pit_file_edit, 1)
-        pit_btn = QPushButton("Browse...")
+        pit_btn = QPushButton(self.tr("Browse..."))
         pit_btn.setStyleSheet(_btn_ghost())
         pit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         pit_btn.setFixedWidth(80)
@@ -632,16 +634,16 @@ class SamsungPageMixin:
 
         # vbmeta -> one row
         vb_row = QHBoxLayout()
-        vb_label = QLabel("vbmeta")
+        vb_label = QLabel(self.tr("vbmeta"))
         vb_label.setStyleSheet(f"color: {C['accent_hi']}; font-weight: 800; min-width: 70px; font-size: 11px;")
         vb_row.addWidget(vb_label)
         self.vbmeta_edit = QLineEdit()
-        self.vbmeta_edit.setPlaceholderText("vbmeta image (.img / .img.lz4)")
+        self.vbmeta_edit.setPlaceholderText(self.tr("vbmeta image (.img / .img.lz4)"))
         self.vbmeta_edit.setMinimumWidth(80)
         self.vbmeta_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.vbmeta_edit.setStyleSheet(f"QLineEdit {{ background: {C['inset']}; border: 1px solid {C['border']}; border-radius: 8px; padding: 6px 10px; color: {C['text']}; selection-background-color: {C['accent']}; }} QLineEdit:hover {{ border: 1px solid {C['border_hi']}; }} QLineEdit:focus {{ border: 1px solid {C['accent']}; }}")
         vb_row.addWidget(self.vbmeta_edit, 1)
-        vb_img_btn = QPushButton("Browse...")
+        vb_img_btn = QPushButton(self.tr("Browse..."))
         vb_img_btn.setStyleSheet(_btn_ghost())
         vb_img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         vb_img_btn.setFixedWidth(80)

@@ -25,19 +25,19 @@ class GeneralPageMixin:
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        lay.addWidget(SectionTitle("BATTERY REPAIR (ADB)"))
+        lay.addWidget(SectionTitle(self.tr("BATTERY REPAIR (ADB)")))
         info = QLabel(
-            "Diagnose and repair any connected Android device over ADB - no "
+            self.tr("Diagnose and repair any connected Android device over ADB - no "
             "vendor-specific hardware needed.\n"
             "Works on Samsung, MediaTek (Tecno/Infinix/itel/Redmi...), Qualcomm "
-            "and any other phone with USB debugging enabled."
+            "and any other phone with USB debugging enabled.")
         )
         info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         info.setWordWrap(True)
         lay.addWidget(info)
 
         status_row = QHBoxLayout()
-        self.batt_status = QLabel("No device probed yet")
+        self.batt_status = QLabel(self.tr("No device probed yet"))
         self.batt_status.setStyleSheet(f"color:{C['dim']}; font-size:12px;")
         status_row.addWidget(self.batt_status, 1)
         lay.addLayout(status_row)
@@ -115,10 +115,10 @@ class GeneralPageMixin:
         lay.addLayout(cards, 1)
 
         tip = QLabel(
-            "Tip: for accurate battery health the device must expose the "
+            self.tr("Tip: for accurate battery health the device must expose the "
             "fuel-gauge sysfs (charge_full / charge_full_design). Connect the "
             "phone, authorize USB debugging, then run any tool - they work on "
-            "any connected device."
+            "any connected device.")
         )
         tip.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         tip.setWordWrap(True)
@@ -144,12 +144,12 @@ class GeneralPageMixin:
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(14)
 
-        lay.addWidget(SectionTitle("NETWORK REPAIR (ADB)"))
+        lay.addWidget(SectionTitle(self.tr("NETWORK REPAIR (ADB)")))
         info = QLabel(
-            "Diagnose and repair Wi-Fi / mobile data / modem issues on any "
+            self.tr("Diagnose and repair Wi-Fi / mobile data / modem issues on any "
             "connected Android device over ADB.\n"
             "Useful for: no internet, weak signal, stuck on 3G, DNS failures, "
-            "SIM not detected after a flash, airplane-mode glitches."
+            "SIM not detected after a flash, airplane-mode glitches.")
         )
         info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         info.setWordWrap(True)
@@ -184,7 +184,7 @@ class GeneralPageMixin:
         lay.addLayout(net_grid)
 
         status_row = QHBoxLayout()
-        self.net_status = QLabel("Live diagnostics update while a device is connected")
+        self.net_status = QLabel(self.tr("Live diagnostics update while a device is connected"))
         self.net_status.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         status_row.addWidget(self.net_status, 1)
         lay.addLayout(status_row)
@@ -223,7 +223,7 @@ class GeneralPageMixin:
             cv.addWidget(b)
             return c
 
-        lay.addWidget(SectionTitle("ACTIONS"))
+        lay.addWidget(SectionTitle(self.tr("ACTIONS")))
         cards = QHBoxLayout()
         cards.setSpacing(14)
         cards.addWidget(
@@ -270,9 +270,9 @@ class GeneralPageMixin:
         lock_lay.setSpacing(12)
 
         lock_info = QLabel(
-            "Check the SIM / network lock state on any device (read-only), and "
+            self.tr("Check the SIM / network lock state on any device (read-only), and "
             "read / back up the modem lock record on MediaTek A05/A06 (BROM).\n"
-            "The MTK unlock step never writes without a validated device recipe."
+            "The MTK unlock step never writes without a validated device recipe.")
         )
         lock_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         lock_info.setWordWrap(True)
@@ -310,9 +310,9 @@ class GeneralPageMixin:
         ))
 
         tip = QLabel(
-            "All fixes work over ADB on any connected device (Samsung / MTK / "
+            self.tr("All fixes work over ADB on any connected device (Samsung / MTK / "
             "Qualcomm / any Android). Reversible from the phone's network "
-            "settings."
+            "settings.")
         )
         tip.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         tip.setWordWrap(True)

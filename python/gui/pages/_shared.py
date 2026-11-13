@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 
 from ..common import _DESTRUCTIVE_CONFIRM, _EXPERIMENTAL_FLOW_MAP
 from ..flow_meta import risk_for, route_for
-from ..i18n import stable_key, tr_key
+from ..i18n import stable_key, tr, tr_key
 from ..theme import C, _btn_ghost
 from ..widgets import FlowBrowser, FlowRow, SamsungSubTabs
 from ...core import core, experimental
@@ -35,20 +35,21 @@ class FlowRenderMixin:
         window, whose dropdown offers TestDPC (the default QR) plus the two
         optional DPCs (Google Device Policy, FlashPilot). Shown on every MDM
         surface (chip benches + Samsung) so the operator always finds it."""
-        header = QLabel("QR PROVISIONING")
+        header = QLabel(tr("QR PROVISIONING"))
         header.setStyleSheet(
             f"color:{C['mute']}; font-size:11px; font-weight:800;"
             f" letter-spacing:1px; margin-top:4px;"
         )
         parent_layout.addWidget(header)
-        b = QPushButton("📷  QR Provision")
+        b = QPushButton(tr("📷  QR Provision"))
         b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         b.setAutoDefault(False)
         b.setDefault(False)
         b.setStyleSheet(_btn_ghost())
         b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.setToolTip("Device-owner QR enrollment — TestDPC by default, with "
-                     "Google Device Policy / FlashPilot as the two optional QRs")
+        b.setToolTip(tr(
+            "Device-owner QR enrollment — TestDPC by default, with "
+            "Google Device Policy / FlashPilot as the two optional QRs"))
         b.setProperty("flow_act", "_qr_generator")
         b.clicked.connect(lambda _=False: self._open_qr_generator())
         parent_layout.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
@@ -110,7 +111,7 @@ class FlowRenderMixin:
             feature = _EXPERIMENTAL_FLOW_MAP.get(key)
             title, warn = experimental.get_warning(feature)
             self._confirm_experimental_overlay(
-                feature, title, warn, key, confirm_label="I Accept — Run",
+                feature, title, warn, key, confirm_label=tr("I Accept — Run"),
                 on_confirm=lambda _=False, j=job, m=mode, k=key, n=label:
                     (run_cb(j, m, k, n) if run_cb
                      else self._run_ops_flow(j, m, k, n)),
@@ -127,7 +128,8 @@ class FlowRenderMixin:
                 on_confirm = (lambda _=False, j=job, m=mode, k=key, n=label:
                               run_cb(j, m, k, n))
             self._confirm_overlay(
-                title, text, confirm_label="Continue", on_confirm=on_confirm,
+                title, text, confirm_label=tr("Continue"),
+                on_confirm=on_confirm,
             )
             return
         if run_cb is None:
@@ -202,14 +204,14 @@ class FlowRenderMixin:
 
         tab_specs = []
         if flash_jobs:
-            tab_specs.append(("flash", "FLASH", flash_jobs))
+            tab_specs.append(("flash", tr("FLASH"), flash_jobs))
         tab_specs += [
             ("frp", "FRP", ["Remove FRP"]),
-            ("lock", "SCREEN LOCK", ["Remove Screen Lock"]),
+            ("lock", tr("SCREEN LOCK"), ["Remove Screen Lock"]),
             ("mdm", "MDM", ["Remove MDM"]),
             (
                 "tools",
-                "INFO & TOOLS",
+                tr("INFO & TOOLS"),
                 ["Read Device Info", "Detect Devices", "Reboot",
                  "Repair Settings"],
             ),

@@ -150,7 +150,7 @@ class SettingsPageMixin:
             f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
             f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
         )
-        dir_btn = QPushButton("Browse...")
+        dir_btn = QPushButton(self.tr("Browse..."))
         dir_btn.setStyleSheet(_btn_ghost())
         dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         dir_btn.clicked.connect(self._pick_default_dir)
@@ -231,7 +231,7 @@ class SettingsPageMixin:
         )
 
         # Manual check button
-        self._check_updates_btn = QPushButton("Check for Updates Now")
+        self._check_updates_btn = QPushButton(self.tr("Check for Updates Now"))
         self._check_updates_btn.setStyleSheet(
             f"QPushButton {{ background:{C['accent']}; color:{C['panel']}; padding:8px 16px; border-radius:6px; font-size:12px; font-weight:700; }}"
             f" QPushButton:hover {{ background:{C['card_hover']}; }}"
@@ -247,7 +247,7 @@ class SettingsPageMixin:
         )
 
         # Two-tier light patch (python-only) button
-        self._apply_patch_btn = QPushButton("Apply Python Patch…")
+        self._apply_patch_btn = QPushButton(self.tr("Apply Python Patch…"))
         self._apply_patch_btn.setStyleSheet(
             f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
             f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
@@ -257,9 +257,9 @@ class SettingsPageMixin:
         self._apply_patch_btn.setFixedWidth(200)
         self._apply_patch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply_patch_btn.setToolTip(
-            "Tier-1 update: pulls only the python/ tree from GitHub main when\n"
+            self.tr("Tier-1 update: pulls only the python/ tree from GitHub main when\n"
             "no bridge/packaging changes are involved (~200 KB, no full .deb).\n"
-            "Requires a restart afterwards."
+            "Requires a restart afterwards.")
         )
         self._apply_patch_btn.clicked.connect(self._apply_python_patch_clicked)
         self._settings_row(
@@ -279,7 +279,7 @@ class SettingsPageMixin:
             self.tr("ON shows the beta risk dialog every launch; OFF (default) shows only on first install of each beta version."),
             self._beta_every_boot,
         )
-        prev_btn = QPushButton("Preview beta warning")
+        prev_btn = QPushButton(self.tr("Preview beta warning"))
         prev_btn.setStyleSheet(
             f"QPushButton {{ background:{C['inset']}; color:{C['text']}; padding:8px 16px;"
             f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
@@ -322,7 +322,7 @@ class SettingsPageMixin:
         self._s_theme.setCurrentText(self.settings.value("theme", "Slate Professional"))
         self._s_theme.currentTextChanged.connect(self._apply_theme)
         self._s_theme.setVisible(False)
-        intro = QLabel("Whole-app live — buttons, cards, console, shimmer, cable/ORB recolor instantly. Each next theme is a touch more advanced.")
+        intro = QLabel(self.tr("Whole-app live — buttons, cards, console, shimmer, cable/ORB recolor instantly. Each next theme is a touch more advanced."))
         intro.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         intro.setWordWrap(True)
         bl.addWidget(intro)
@@ -373,7 +373,9 @@ class SettingsPageMixin:
                 f"QFrame {{ background: {bg}; border: {bw} solid {bd}; border-radius: 11px; }}"
                 + shadow
             )
-            card.setToolTip(f"{th}\n{tok['accent']} → {tok['grad_b']} (click to apply)")
+            card.setToolTip(self.tr(
+                "{name}\n{accent} → {grad} (click to apply)"
+            ).format(name=th, accent=tok["accent"], grad=tok["grad_b"]))
             # Subtle drop shadow for most advanced tiers
             if idx >= 6:
                 sd = QGraphicsDropShadowEffect(card)
@@ -408,7 +410,7 @@ class SettingsPageMixin:
             card.mousePressEvent = lambda e, t=th: self._s_theme.setCurrentText(t)
             grid.addWidget(card)
         bl.addWidget(grid_host)
-        hint = QLabel("Tip: cards only — no dropdown. Each next theme adds a stop/glow, fitted in a 3-column grid that never overflows.")
+        hint = QLabel(self.tr("Tip: cards only — no dropdown. Each next theme adds a stop/glow, fitted in a 3-column grid that never overflows."))
         hint.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         hint.setWordWrap(True)
         bl.addWidget(hint)
@@ -516,7 +518,7 @@ class SettingsPageMixin:
             row.addWidget(chip)
             row.addWidget(desc, 1)
             bl3.addLayout(row)
-        sc_hint = QLabel("Shortcuts are fixed in this build — custom key mapping is planned. Use Settings → Tools → Reset to restore defaults.")
+        sc_hint = QLabel(self.tr("Shortcuts are fixed in this build — custom key mapping is planned. Use Settings → Tools → Reset to restore defaults."))
         sc_hint.setStyleSheet(f"color:{C['dim']}; font-size:10px;")
         sc_hint.setWordWrap(True)
         bl3.addWidget(sc_hint)
@@ -570,17 +572,17 @@ class SettingsPageMixin:
         bl = self._settings_box(self.tr("ACTIONS"), lay)
         act = QHBoxLayout()
         act.setSpacing(10)
-        b1 = QPushButton("Rebuild bridge (cargo)")
+        b1 = QPushButton(self.tr("Rebuild bridge (cargo)"))
         b1.setStyleSheet(_btn_ghost())
         b1.setCursor(Qt.CursorShape.PointingHandCursor)
         b1.clicked.connect(self._rebuild_bridge)
         act.addWidget(b1)
-        b2 = QPushButton("Open log folder")
+        b2 = QPushButton(self.tr("Open log folder"))
         b2.setStyleSheet(_btn_ghost())
         b2.setCursor(Qt.CursorShape.PointingHandCursor)
         b2.clicked.connect(self._open_log_dir)
         act.addWidget(b2)
-        b3 = QPushButton("Reset all settings")
+        b3 = QPushButton(self.tr("Reset all settings"))
         b3.setStyleSheet(_btn_danger())
         b3.setCursor(Qt.CursorShape.PointingHandCursor)
         b3.clicked.connect(self._reset_settings)
@@ -625,7 +627,7 @@ class SettingsPageMixin:
         if _beta:
             ver_text += "  ·  BETA"
             # Beta pill badge
-            badge = QLabel("  BETA  ")
+            badge = QLabel(self.tr("  BETA  "))
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setStyleSheet(
                 "color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
@@ -650,8 +652,8 @@ class SettingsPageMixin:
         )
         cl.addWidget(ver)
         tag = QLabel(
-            "Samsung · MediaTek · Qualcomm low-level flashing & repair\n"
-            "FRP bypass · screen-lock removal · download-mode tooling"
+            self.tr("Samsung · MediaTek · Qualcomm low-level flashing & repair\n"
+            "FRP bypass · screen-lock removal · download-mode tooling")
         )
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tag.setStyleSheet(f"color:{C['mute']}; font-size:10px;")

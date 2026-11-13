@@ -207,7 +207,7 @@ class ModeBadge(QFrame):
         self._dot = QLabel()
         self._dot.setFixedSize(8, 8)
         lay.addWidget(self._dot)
-        self._label = QLabel("NOT CONNECTED")
+        self._label = QLabel(self.tr("NOT CONNECTED"))
         self._label.setStyleSheet(
             f"color:{C['mute']}; font-size:11px; font-weight:700; letter-spacing:1px;"
         )

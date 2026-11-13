@@ -1407,7 +1407,7 @@ class FlashPilotWindow(
 ):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FlashPilot")
+        self.setWindowTitle(self.tr("FlashPilot"))
 
         self._cached_model = None
         self._cached_adb_status = None
@@ -1968,7 +1968,7 @@ class FlashPilotWindow(
         srow.setSpacing(6)
         self.orb = StatusOrb()
         srow.addWidget(self.orb, 0, Qt.AlignmentFlag.AlignTop)
-        self.conn_state = QLabel("No device connected")
+        self.conn_state = QLabel(self.tr("No device connected"))
         self.conn_state.setWordWrap(True)
         self.conn_state.setStyleSheet(
             f"color:{C['dim']}; font-size:10px; font-weight:500; background:transparent;"
@@ -1988,7 +1988,7 @@ class FlashPilotWindow(
             f"QListWidget::item {{ padding:4px 6px; border-bottom:1px solid {C['border']}; }}"
             f"QListWidget::item:selected {{ background:{C['accent_dim']}; color:{C['accent_hi']}; }}"
         )
-        self.device_list.setToolTip("Connected devices — click to inspect one")
+        self.device_list.setToolTip(self.tr("Connected devices — click to inspect one"))
         self.device_list.itemClicked.connect(self._on_device_picked)
         ll.addWidget(self.device_list)
 
@@ -2011,10 +2011,10 @@ class FlashPilotWindow(
             mgrid.setRowStretch(r, 1)
         ll.addLayout(mgrid)
         # Quick "Copy Info" helper for current device
-        self.info_copy_btn = QPushButton("Copy Device Info")
+        self.info_copy_btn = QPushButton(self.tr("Copy Device Info"))
         self.info_copy_btn.setStyleSheet(_btn_ghost())
         self.info_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.info_copy_btn.setToolTip("Copy model / build / android / serial to clipboard")
+        self.info_copy_btn.setToolTip(self.tr("Copy model / build / android / serial to clipboard"))
         self.info_copy_btn.clicked.connect(self._copy_device_info)
         ll.addWidget(self.info_copy_btn)
 
@@ -2124,7 +2124,7 @@ class FlashPilotWindow(
         row.setSpacing(8)
         self.orb = StatusOrb()
         row.addWidget(self.orb, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.conn_state = QLabel("No device connected")
+        self.conn_state = QLabel(self.tr("No device connected"))
         self.conn_state.setWordWrap(True)
         self.conn_state.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.conn_state.setStyleSheet(
@@ -2434,7 +2434,7 @@ class FlashPilotWindow(
             self._filter_btns[level] = btn
             flt_row.addWidget(btn)
 
-        self.clear_on_run = QCheckBox("auto-clear")
+        self.clear_on_run = QCheckBox(self.tr("auto-clear"))
         self.clear_on_run.setChecked(
             self.settings.value("clear_on_run", "true", type=bool)
         )
@@ -2813,7 +2813,7 @@ class FlashPilotWindow(
             self._cmd_mode.addItems(["ADB", "Fastboot"])
             self._cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._cmd_mode.setFixedWidth(110)
-            self._cmd_mode.setToolTip("Which transport the custom command uses")
+            self._cmd_mode.setToolTip(self.tr("Which transport the custom command uses"))
             self._cmd_mode.setStyleSheet(
                 f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
                 f" border-radius:6px; padding:4px 8px; color:{C['text']}; font-size:11px; font-weight:700; }}"
@@ -2824,7 +2824,7 @@ class FlashPilotWindow(
             )
             mode_row.addWidget(self._cmd_mode)
             self._cmd_code = QLineEdit()
-            self._cmd_code.setPlaceholderText("Unlock code (BL unlock only)")
+            self._cmd_code.setPlaceholderText(self.tr("Unlock code (BL unlock only)"))
             self._cmd_code.setStyleSheet(
                 f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
                 f" border-radius:6px; padding:5px 10px; color:{C['text']};"
@@ -2842,10 +2842,10 @@ class FlashPilotWindow(
             adb_lbl.setFixedWidth(52)
             adb_row.addWidget(adb_lbl)
             for label, shell_cmd in (
-                ("Reboot", "reboot"),
-                ("Recovery", "reboot recovery"),
-                ("Bootloader", "reboot bootloader"),
-                ("EDL", "reboot edl"),
+                (self.tr("Reboot"), "reboot"),
+                (self.tr("Recovery"), "reboot recovery"),
+                (self.tr("Bootloader"), "reboot bootloader"),
+                (self.tr("EDL"), "reboot edl"),
             ):
                 b = QPushButton(label)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2865,7 +2865,7 @@ class FlashPilotWindow(
 
             fb_row = QHBoxLayout()
             fb_row.setSpacing(6)
-            fb_lbl = QLabel("Fastboot")
+            fb_lbl = QLabel(self.tr("Fastboot"))
             fb_lbl.setStyleSheet("color:#fbbf24; font-size:10px; font-weight:800;")
             fb_lbl.setFixedWidth(52)
             fb_row.addWidget(fb_lbl)
@@ -2881,14 +2881,14 @@ class FlashPilotWindow(
             fb_btns.setContentsMargins(0, 0, 0, 0)
             fb_btns.setSpacing(6)
             for label, fb_cmd, tip in (
-                ("Unlock BL", None, "oem unlock <code> (two-step, uses the code above)"),
-                ("Relock BL", "relock", "flashing lock (re-lock the bootloader)"),
-                ("Reboot", "reboot", "reboot to system"),
-                ("Bootloader", "reboot bootloader", "reboot to bootloader/fastboot"),
-                ("Recovery", "reboot recovery", "reboot to recovery"),
-                ("EDL", "oem edl", "reboot to EDL (falls back to reboot edl)"),
-                ("Getvar", "getvar all", "dump all bootloader variables"),
-                ("Continue", "continue", "continue boot to system"),
+                (self.tr("Unlock BL"), None, self.tr("oem unlock <code> (two-step, uses the code above)")),
+                (self.tr("Relock BL"), "relock", self.tr("flashing lock (re-lock the bootloader)")),
+                (self.tr("Reboot"), "reboot", self.tr("reboot to system")),
+                (self.tr("Bootloader"), "reboot bootloader", self.tr("reboot to bootloader/fastboot")),
+                (self.tr("Recovery"), "reboot recovery", self.tr("reboot to recovery")),
+                (self.tr("EDL"), "oem edl", self.tr("reboot to EDL (falls back to reboot edl)")),
+                (self.tr("Getvar"), "getvar all", self.tr("dump all bootloader variables")),
+                (self.tr("Continue"), "continue", self.tr("continue boot to system")),
             ):
                 b = QPushButton(label)
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2918,7 +2918,7 @@ class FlashPilotWindow(
 
             custom_row = QHBoxLayout()
             custom_row.setSpacing(6)
-            self._cmd_prompt = QLabel("no-device$")
+            self._cmd_prompt = QLabel(self.tr("no-device$"))
             self._cmd_prompt.setStyleSheet(
                 "color:#34d399; font-size:12px; font-weight:700;"
                 " font-family:'JetBrains Mono','Consolas',monospace;"
@@ -2926,7 +2926,7 @@ class FlashPilotWindow(
             )
             custom_row.addWidget(self._cmd_prompt)
             self._cmd_input = QLineEdit()
-            self._cmd_input.setPlaceholderText("type a command — Enter runs")
+            self._cmd_input.setPlaceholderText(self.tr("type a command — Enter runs"))
             self._cmd_input.setStyleSheet(
                 f"QLineEdit {{ background:transparent; border:none;"
                 f" padding:5px 2px; color:{C['text']};"
@@ -2938,7 +2938,7 @@ class FlashPilotWindow(
             custom_row.addWidget(self._cmd_input, 1)
             lay.addLayout(custom_row)
 
-            hint = QLabel("Output goes to the Console tab — switch tabs to read it.")
+            hint = QLabel(self.tr("Output goes to the Console tab — switch tabs to read it."))
             hint.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
             hint.setWordWrap(True)
             lay.addWidget(hint)
@@ -2947,7 +2947,7 @@ class FlashPilotWindow(
             outer.addWidget(scroll, 1)
 
             self._cmd_tab = page
-            self.console_tabs.addTab(page, "CMD")
+            self.console_tabs.addTab(page, self.tr("CMD"))
             try:
                 self.console_tabs.tabBar().setTabTextColor(
                     self.console_tabs.count() - 1, QColor("#fbbf24"))
@@ -3239,12 +3239,12 @@ class FlashPilotWindow(
                                    f"{label} · staged flash ({_os.path.basename(fw)})")
                 return
             self._toasts.show_info(
-                f"{label} · Flash",
-                ("Signed firmware found — press FRP REMOVE → staged flash. "
+                self.tr("{label} · Flash").format(label=label),
+                (self.tr("Signed firmware found — press FRP REMOVE → staged flash. ")
                  if fw else
                  "Fastboot-based flashing: set MOTO_FW_DIR to the signed "
                  "stock firmware (flashfile.xml) dir, then re-run — or use ")
-                + "FASTBOOT ▸ flash/erase with your firmware files.")
+                + self.tr("FASTBOOT ▸ flash/erase with your firmware files."))
             return
         if engine in ("mtk", "spd", "odin"):
             self._on_section(engine if engine != "odin" else "samsung")
@@ -3252,22 +3252,23 @@ class FlashPilotWindow(
                     "spd": "SPD tab (FDL1/FDL2 + firmware dir)",
                     "odin": "Samsung ▸ FLASH slots (AP/BL/CP/CSC)"}[engine]
             self._toasts.show_info(
-                f"{label} · Flash",
-                f"Opened the workbench for this model's chipset — {dest}.")
+                self.tr("{label} · Flash").format(label=label),
+                self.tr("Opened the workbench for this model's chipset — {dest}.")
+                .format(dest=dest))
             return
         if engine in ("apple", "kirin"):
             self._toasts.show_info(
-                f"{label} · Flash",
-                "No PC-side flash path for this chipset in FlashPilot "
-                "(Apple DFU / Kirin are not supported flash engines).")
+                self.tr("{label} · Flash").format(label=label),
+                self.tr("No PC-side flash path for this chipset in FlashPilot "
+                        "(Apple DFU / Kirin are not supported flash engines)."))
             return
         # Unknown engine: ask, never guess.
         from PyQt6.QtWidgets import QInputDialog, QComboBox, QDialog, QDialogButtonBox, QVBoxLayout, QLabel as _QL
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"{label} · Chipset")
+        dlg.setWindowTitle(self.tr("{label} · Chipset").format(label=label))
         v = QVBoxLayout(dlg)
-        v.addWidget(_QL("Which chipset does this device use? "
-                        "(flash routing differs per chip)"))
+        v.addWidget(_QL(self.tr("Which chipset does this device use? "
+                                "(flash routing differs per chip)")))
         combo = QComboBox()
         combo.addItems(["MediaTek (MTK)", "UNISOC (SPD)",
                         "Qualcomm (EDL/fastboot)", "Samsung (Odin)"])
@@ -3352,13 +3353,12 @@ class FlashPilotWindow(
         if da_dir:
             return da_dir
         self.log_line(
-            f"[error] {label}: bundled MediaTek DA containers missing "
-            "(root/tools/mtk/MTK_DA_V5.bin)")
+            "[error] " + self.tr("{label}: bundled MediaTek DA containers missing (root/tools/mtk/MTK_DA_V5.bin)").format(label=label))
         self._toasts.show_error(
-            f"{label} · {action}",
-            "Bundled MediaTek DA is missing (root/tools/mtk). Reinstall "
-            "FlashPilot or restore the DA containers — BROM operations "
-            "cannot run without it.")
+            self.tr("{label} · {action}").format(label=label, action=action),
+            self.tr("Bundled MediaTek DA is missing (root/tools/mtk). Reinstall "
+                    "FlashPilot or restore the DA containers — BROM operations "
+                    "cannot run without it."))
         return ""
 
     def _mtk_board_frp(self, label):
@@ -3367,16 +3367,16 @@ class FlashPilotWindow(
         if not da_dir:
             return
         key = self._mtk_board_key()
-        self.log_line(f"[step] {label}: FRP via BROM (bundled DA, no ADB)")
+        self.log_line("[step] " + self.tr("{label}: FRP via BROM (bundled DA, no ADB)").format(label=label))
         self._confirm_overlay(
-            f"{label} · Remove FRP",
+            self.tr("{label} · Remove FRP").format(label=label),
             "No authorized ADB on the selected phone, so FRP is cleared\n"
             "over BROM (boot ROM) instead.\n\n"
             "The BROM exploit / DAA bypass runs first, then the FRP and\n"
             "lock partitions are erased from the device GPT. Lock\n"
             "partitions are erased and user data may be lost.\n\n"
             "Continue?",
-            confirm_label="Remove FRP",
+            confirm_label=self.tr("Remove FRP"),
             on_confirm=lambda k=key, d=da_dir: self._mtk_run(
                 ["mtk-frp-brom", "auto", d], timeout=1800, device_key=k),
             chip="frp",
@@ -3385,16 +3385,16 @@ class FlashPilotWindow(
     def _mtk_board_screen_lock_choice(self, label):
         """No-ADB screen-lock choice: 'erase' | 'wipe' | None (cancelled)."""
         box = QMessageBox(self)
-        box.setWindowTitle(f"{label} · Remove Screen Lock")
+        box.setWindowTitle(self.tr("{label} · Remove Screen Lock").format(label=label))
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setText("No authorized ADB — the lock must be cleared over BROM.")
+        box.setText(self.tr("No authorized ADB — the lock must be cleared over BROM."))
         box.setInformativeText(
             "Erase locks only: removes the PIN/pattern/password and FRP\n"
             "keys; userdata is kept.\n\n"
             "Factory reset: also wipes userdata (all apps and files).")
-        erase_btn = box.addButton("Erase locks only",
+        erase_btn = box.addButton(self.tr("Erase locks only"),
                                   QMessageBox.ButtonRole.AcceptRole)
-        wipe_btn = box.addButton("Factory reset (wipe data)",
+        wipe_btn = box.addButton(self.tr("Factory reset (wipe data)"),
                                  QMessageBox.ButtonRole.DestructiveRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(erase_btn)
@@ -3413,7 +3413,7 @@ class FlashPilotWindow(
             return
         choice = self._mtk_board_screen_lock_choice(label)
         if not choice:
-            self.log_line(f"[info] {label}: screen-lock removal cancelled")
+            self.log_line("[info] " + self.tr("{label}: screen-lock removal cancelled").format(label=label))
             return
         wipe = choice == "wipe"
         args = ["mtk-screen-lock", "auto", da_dir]
@@ -3426,10 +3426,11 @@ class FlashPilotWindow(
             "ERASE LOCKS: the PIN/pattern/password, FRP and keystore\n"
             "partitions are erased. Userdata is kept.\n\n")
         self._confirm_overlay(
-            f"{label} · Remove Screen Lock",
+            self.tr("{label} · Remove Screen Lock").format(label=label),
             warn + "Runs over BROM with the bundled DA. The phone must stay\n"
                    "connected. Continue?",
-            confirm_label="Factory Reset" if wipe else "Erase Locks",
+            confirm_label=(self.tr("Factory Reset") if wipe
+                           else self.tr("Erase Locks")),
             on_confirm=lambda a=args, k=key: self._mtk_run(
                 a, timeout=1800, device_key=k),
             chip="wipe" if wipe else "lock",
@@ -3441,22 +3442,23 @@ class FlashPilotWindow(
         if not da_dir:
             return
         out_dir = QFileDialog.getExistingDirectory(
-            self, "MTK backup output folder", "/tmp/mtk_backup")
+            self, self.tr("MTK backup output folder"), "/tmp/mtk_backup")
         if not out_dir:
-            self.log_line(f"[info] {label}: backup cancelled")
+            self.log_line("[info] " + self.tr("{label}: backup cancelled").format(label=label))
             return
         key = self._mtk_board_key()
-        self.log_line(f"[step] {label}: GPT backup via BROM (bundled DA)")
+        self.log_line("[step] " + self.tr("{label}: GPT backup via BROM (bundled DA)").format(label=label))
 
         def done(_out):
             # Report the destination only once the bridge run has returned.
-            self.log_line(f"[backup] {label}: GPT backup written to {out_dir}")
+            self.log_line("[backup] " + self.tr("{label}: GPT backup written to {out_dir}")
+                          .format(label=label, out_dir=out_dir))
 
         self._confirm_overlay(
-            f"{label} · Backup GPT",
+            self.tr("{label} · Backup GPT").format(label=label),
             f"Read the partition table (GPT) over BROM and write a backup\n"
             f"to:\n{out_dir}\n\nUses the bundled DA. Continue?",
-            confirm_label="Backup GPT",
+            confirm_label=self.tr("Backup GPT"),
             on_confirm=lambda o=out_dir, d=da_dir, k=key: self._mtk_run(
                 ["mtk-backup-gpt", "auto", d, o], timeout=1800,
                 device_key=k, on_done=done),
@@ -3468,16 +3470,16 @@ class FlashPilotWindow(
         'format_data' or '' when cancelled. Extracted so tests can drive the
         decision without a modal dialog."""
         box = QMessageBox(self)
-        box.setWindowTitle("MTK flash mode")
+        box.setWindowTitle(self.tr("MTK flash mode"))
         box.setText(
-            "How should the flash run?\n\n"
+            self.tr("How should the flash run?\n\n"
             "Format All erases each target partition before writing it; "
-            "Format All + wipe data also erases userdata and cache."
+            "Format All + wipe data also erases userdata and cache.")
         )
-        fmt_all = box.addButton("Format all + download", QMessageBox.ButtonRole.AcceptRole)
+        fmt_all = box.addButton(self.tr("Format all + download"), QMessageBox.ButtonRole.AcceptRole)
         fmt_data = box.addButton(
-            "Format all + wipe data", QMessageBox.ButtonRole.DestructiveRole)
-        flash_only = box.addButton("Flash only", QMessageBox.ButtonRole.AcceptRole)
+            self.tr("Format all + wipe data"), QMessageBox.ButtonRole.DestructiveRole)
+        flash_only = box.addButton(self.tr("Flash only"), QMessageBox.ButtonRole.AcceptRole)
         cancel = box.addButton(QMessageBox.StandardButton.Cancel)
         box.exec()
         clicked = box.clickedButton()
@@ -3494,15 +3496,15 @@ class FlashPilotWindow(
     def _mtk_board_flash(self, label):
         """Flash a firmware folder over BROM (mtk-flash-auto, auto DA)."""
         folder = QFileDialog.getExistingDirectory(
-            self, "MTK firmware folder",
+            self, self.tr("MTK firmware folder"),
             self.settings.value("default_dir", os.path.expanduser("~/Downloads")))
         if not folder:
-            self.log_line(f"[info] {label}: flash cancelled")
+            self.log_line("[info] " + self.tr("{label}: flash cancelled").format(label=label))
             return
         key = self._mtk_board_key()
         mode = self._mtk_board_flash_mode()
         if not mode:
-            self.log_line(f"[info] {label}: flash cancelled at mode prompt")
+            self.log_line("[info] " + self.tr("{label}: flash cancelled at mode prompt").format(label=label))
             return
         if mode == "format_data":
             mode_flags = ["--format-all", "--erase-userdata"]
@@ -3514,13 +3516,13 @@ class FlashPilotWindow(
             mode_flags = []
             mode_label = "Flash only"
         self._confirm_overlay(
-            f"{label} · Flash Firmware",
+            self.tr("{label} · Flash Firmware").format(label=label),
             f"Mode: {mode_label}\nFolder:\n{folder}\n\n"
             "mtk-flash-auto matches images to partitions from the device\n"
             "GPT/scatter and OVERWRITES those partitions. A wrong folder,\n"
             "a mismatched model or an interrupted cable can leave the\n"
             "phone unbootable.\n\nContinue?",
-            confirm_label="Flash Firmware",
+            confirm_label=self.tr("Flash Firmware"),
             on_confirm=lambda f=folder, k=key, mf=list(mode_flags): self._mtk_run(
                 ["mtk-flash-auto", "auto", f, "--da", "auto", *mf],
                 timeout=3600, device_key=k),
@@ -3560,23 +3562,24 @@ class FlashPilotWindow(
                         and r.get("key")]
                 skeys = [r["key"] for r in sams]
                 if not skeys:
-                    raise RuntimeError("no Samsung device on USB")
+                    raise RuntimeError(self.tr("no Samsung device on USB"))
                 if len(skeys) > 1:
                     raise RuntimeError(
-                        f"{len(skeys)} Samsung devices connected — KG unlock "
-                        "needs exactly one target (unplug the others)")
+                        self.tr("{n} Samsung devices connected — KG unlock "
+                                "needs exactly one target (unplug the others)")
+                        .format(n=len(skeys)))
                 key = skeys[0]
                 # Per-device run guard: a concurrent op on the SAME phone
                 # blocks this.
                 if not _flow_start("KG unlock", destructive=True, key=key):
-                    self._toasts.show_warn("Operation already running",
+                    self._toasts.show_warn(self.tr("Operation already running"),
                                            _flow_busy_msg(key=key))
                     return
                 # Fresh target for the picked key (never a stale cached one).
                 tgt = _devices.resolve_usb_target(key)
                 if not tgt:
                     _flow_end(key=key)
-                    raise RuntimeError("Samsung device left USB — replug and retry")
+                    raise RuntimeError(self.tr("Samsung device left USB — replug and retry"))
 
                 def work():
                     flux = jobs.start_job(key, "KG unlock", "AT", "kg_unlock", ())
@@ -3588,13 +3591,14 @@ class FlashPilotWindow(
                                               timeout=30)
                         jobs.finish_job(flux.job_id, "COMPLETED")
                         self.log_line(f"[kg] {out}")
-                        self._toasts.show_ok("KG unlock",
-                                             f"{label}: chain sent — check phone")
+                        self._toasts.show_ok(self.tr("KG unlock"),
+                                             self.tr("{label}: chain sent — check phone")
+                                             .format(label=label))
                     except Exception as e:  # noqa: BLE001
                         state, code = jobs.classify_failure(e, key)
                         jobs.finish_job(flux.job_id, state, str(e), code)
                         self.log_line(f"[kg] failed: {e}")
-                        self._toasts.show_error("KG unlock failed", str(e))
+                        self._toasts.show_error(self.tr("KG unlock failed"), str(e))
                     finally:
                         _flow_end(key=key)
 
@@ -3678,7 +3682,7 @@ class FlashPilotWindow(
                 if self._adb_ready_for_key():
                     self._run_ops_flow("Remove Screen Lock", "ADB",
                                        "screen_lock_locksettings",
-                                       f"{label} · screen lock remove (ADB)")
+                                       self.tr("{label} · screen lock remove (ADB)").format(label=label))
                     return
                 self._spd_board_screen_lock(label)
                 return
@@ -3687,7 +3691,7 @@ class FlashPilotWindow(
                 # SELECTED phone, never a different attached one.
                 if self._adb_ready_for_key():
                     self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
-                                       f"{label} · FRP bypass (ADB)")
+                                       self.tr("{label} · FRP bypass (ADB)").format(label=label))
                     return
                 if self._spd_fdl1():
                     # FDL1/FDL2 already configured on the SPD tab: keep the
@@ -3723,11 +3727,11 @@ class FlashPilotWindow(
             if act == "screen_lock":
                 self._run_ops_flow("Remove Screen Lock", "ADB",
                                    "screen_lock_locksettings",
-                                   f"{label} · screen lock remove (ADB)")
+                                   self.tr("{label} · screen lock remove (ADB)").format(label=label))
                 return
             if act == "adb_enable":
                 self._run_ops_flow("Remove FRP", "MTP", "enable_adb",
-                                   f"{label} · enable ADB")
+                                   self.tr("{label} · enable ADB").format(label=label))
                 return
             if act == "info":
                 self._on_section("qc")
@@ -3739,7 +3743,7 @@ class FlashPilotWindow(
                 adb_up = self._adb_ready_for_key()
                 if adb_up:
                     self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
-                                       f"{label} · FRP bypass (ADB)")
+                                       self.tr("{label} · FRP bypass (ADB)").format(label=label))
                     return
                 self._qc_board_frp(label)
                 return
@@ -3769,7 +3773,7 @@ class FlashPilotWindow(
                     return
                 self._run_ops_flow("Remove Screen Lock", "ADB",
                                    "screen_lock_locksettings",
-                                   f"{label} · screen lock remove (ADB)")
+                                   self.tr("{label} · screen lock remove (ADB)").format(label=label))
                 return
             if act == "adb_enable":
                 # Motorola (22b8) has no Samsung AT path — Samsung flow would
@@ -3777,16 +3781,16 @@ class FlashPilotWindow(
                 vid = str(meta.get("vid", "")).lower()
                 model_l = str(meta.get("model", "")).lower()
                 if "22b8" in vid or "moto" in model_l or "g6" in model_l or "motorola" in brand_label.lower():
-                    self.log_line(f"[device] {label}: Moto G6 has no AT ADB enable (22b8 MTP vendor, no diag port)")
+                    self.log_line("[device] " + self.tr("{label}: Moto G6 has no AT ADB enable (22b8 MTP vendor, no diag port)").format(label=label))
                     self._toasts.show_info(
-                        f"{label} · Enable ADB",
-                        "Moto FRP-locked has no ADB: use the MDM ▸ Generate QR "
-                        "fake-login (enrolls a device owner that enables ADB), "
-                        "the factory-bootmode cycle (FRP REMOVE → factory-mode), "
-                        "or on-phone wizard escapes. No Samsung *#0*#/AT.")
+                        self.tr("{label} · Enable ADB").format(label=label),
+                        self.tr("Moto FRP-locked has no ADB: use the MDM ▸ Generate QR "
+                                "fake-login (enrolls a device owner that enables ADB), "
+                                "the factory-bootmode cycle (FRP REMOVE → factory-mode), "
+                                "or on-phone wizard escapes. No Samsung *#0*#/AT."))
                     return
                 self._run_ops_flow("Remove FRP", "MTP", "enable_adb",
-                                   f"{label} · enable ADB")
+                                   self.tr("{label} · enable ADB").format(label=label))
                 return
             if act == "frp":
                 # Prefer ADB FRP when the SELECTED phone is authorized; the
@@ -3794,17 +3798,17 @@ class FlashPilotWindow(
                 adb_up = self._adb_ready_for_key()
                 if adb_up:
                     self._run_ops_flow("Remove FRP", "ADB", "adb_frp",
-                                       f"{label} · FRP bypass (ADB)")
+                                       self.tr("{label} · FRP bypass (ADB)").format(label=label))
                     return
                 vid = str(meta.get("vid", "")).lower()
                 model_l = str(meta.get("model", "")).lower()
                 if "22b8" in vid or "moto" in model_l or "motorola" in brand_label.lower():
-                    self.log_line(f"[device] {label}: Moto G6 FRP — no ADB, use browser/fastboot")
+                    self.log_line("[device] " + self.tr("{label}: Moto G6 FRP — no ADB, use browser/fastboot").format(label=label))
                     self._toasts.show_info(
                         f"{label} · FRP",
-                        "No ADB: MDM ▸ Generate QR (fake-login enables ADB), "
-                        "FRP REMOVE → factory-mode cycle, or on-phone wizard "
-                        "escapes (Browser → Settings → remove account).")
+                        self.tr("No ADB: MDM ▸ Generate QR (fake-login enables ADB), "
+                                "FRP REMOVE → factory-mode cycle, or on-phone wizard "
+                                "escapes (Browser → Settings → remove account)."))
                     return
                 if engine == "mtk":
                     self._mtk_board_frp(label)
@@ -3813,9 +3817,9 @@ class FlashPilotWindow(
                 self._on_section("mtk")
                 self._toasts.show_info(
                     f"{label} · FRP",
-                    "Load DA + scatter on the MTK tab (or catch BROM) — "
-                    "FRP clears via combo flash. For ADB method, authorize "
-                    "USB debugging first.")
+                    self.tr("Load DA + scatter on the MTK tab (or catch BROM) — "
+                            "FRP clears via combo flash. For ADB method, authorize "
+                            "USB debugging first."))
                 return
             if act == "flash":
                 if engine == "mtk":
@@ -3829,8 +3833,8 @@ class FlashPilotWindow(
                     return
                 self._on_section("mtk")
                 self._toasts.show_info(
-                    f"{label} · Backup",
-                    "Use MTK tab Backup Partitions (DA + scatter required).")
+                    self.tr("{label} · Backup").format(label=label),
+                    self.tr("Use MTK tab Backup Partitions (DA + scatter required)."))
                 return
             if act == "info":
                 self._on_section("mtk")
@@ -3847,17 +3851,17 @@ class FlashPilotWindow(
             if act == "screen_lock":
                 self._run_ops_flow("Remove Screen Lock", "ADB",
                                    "screen_lock_locksettings",
-                                   f"{label} · screen lock remove (ADB)")
+                                   self.tr("{label} · screen lock remove (ADB)").format(label=label))
                 return
             if act == "adb_enable":
                 # Motorola (22b8) has no Samsung AT path and no Linux MDL
                 # driver — on-phone steps only.
-                self.log_line(f"[device] {label}: Moto has no AT ADB enable (no diag port on Linux)")
+                self.log_line("[device] " + self.tr("{label}: Moto has no AT ADB enable (no diag port on Linux)").format(label=label))
                 self._toasts.show_info(
-                    f"{label} · Enable ADB",
-                    "No PC-side ADB enable on Motorola: on the phone use the "
-                    "Browser/TalkBack route to Settings → Developer options → "
-                    "USB debugging, or unlock via fastboot (see FRP REMOVE → FB).")
+                    self.tr("{label} · Enable ADB").format(label=label),
+                    self.tr("No PC-side ADB enable on Motorola: on the phone use the "
+                            "Browser/TalkBack route to Settings → Developer options → "
+                            "USB debugging, or unlock via fastboot (see FRP REMOVE → FB)."))
                 return
             if act == "frp":
                 # Selected-device-only, bounded ADB check (no GUI freeze, no
@@ -3865,22 +3869,22 @@ class FlashPilotWindow(
                 adb_up = self._adb_ready_for_key()
                 if adb_up:
                     self._run_ops_flow("Remove FRP", "ADB", "moto_frp_adb",
-                                       f"{label} · FRP reset (ADB)")
+                                       self.tr("{label} · FRP reset (ADB)").format(label=label))
                 else:
-                    self.log_line(f"[device] {label}: Moto FRP — no ADB, use fastboot flow or on-phone route")
+                    self.log_line("[device] " + self.tr("{label}: Moto FRP — no ADB, use fastboot flow or on-phone route").format(label=label))
                     self._toasts.show_info(
                         f"{label} · FRP",
-                        "No authorized ADB. Either run FRP REMOVE → FB "
-                        "(staged flash when firmware is set, else the "
-                        "CVE-2016-10277 chain), or on-phone Browser → "
-                        "Settings → remove account.")
+                        self.tr("No authorized ADB. Either run FRP REMOVE → FB "
+                                "(staged flash when firmware is set, else the "
+                                "CVE-2016-10277 chain), or on-phone Browser → "
+                                "Settings → remove account."))
                 return
             if act in ("flash", "backup"):
                 self._toasts.show_info(
                     f"{label} · {act}",
-                    "Motorola flash/backup is fastboot-based with model-specific "
-                    "stock firmware (not bundled). Use the FASTBOOT job flows "
-                    "(fastboot_flash / fastboot_erase) with your firmware files.")
+                    self.tr("Motorola flash/backup is fastboot-based with model-specific "
+                            "stock firmware (not bundled). Use the FASTBOOT job flows "
+                            "(fastboot_flash / fastboot_erase) with your firmware files."))
                 return
             self._toasts.show_info(f"{label} · {act}",
                                    "Wiring lands in the next step.")
@@ -3894,10 +3898,10 @@ class FlashPilotWindow(
             except Exception:
                 method = "download_frp"
             self._run_ops_flow("Remove FRP", "Download mode", method,
-                               f"{label} · FRP bypass (download mode)")
+                               self.tr("{label} · FRP bypass (download mode)").format(label=label))
         elif act == "backup":
             self._run_ops_flow("Flash Firmware", "Download mode",
-                               "odin_efs_backup", f"{label} · EFS backup")
+                               "odin_efs_backup", self.tr("{label} · EFS backup").format(label=label))
         elif act == "flash":
             self._route_model_flash(label, engine, meta)
         else:
@@ -3907,7 +3911,7 @@ class FlashPilotWindow(
     # ----------------------------- Native one-session flash ---------------
     def _nf_pick_tar(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Odin archive", "",
+            self, self.tr("Select Odin archive"), "",
             "Odin archives (*.tar *.tar.md5);;All files (*)",
         )
         if path:
@@ -3918,7 +3922,7 @@ class FlashPilotWindow(
             return
         tar_path = self._nf_tar_edit.text().strip()
         if not tar_path or not os.path.isfile(tar_path):
-            self._toasts.show_warn("Native flash", "Pick a .tar archive first")
+            self._toasts.show_warn(self.tr("Native flash"), self.tr("Pick a .tar archive first"))
             return
         # Pin to one explicitly-picked Download-mode device: the core smart
         # flash resolves its target through the ambient scope, so without a
@@ -3928,8 +3932,8 @@ class FlashPilotWindow(
             return
         if not picked:
             self._toasts.show_warn(
-                "Native flash", "Put the phone in Download mode first "
-                "(Vol Down + Power, then Vol Up)."
+                self.tr("Native flash"), self.tr("Put the phone in Download mode first "
+                                                 "(Vol Down + Power, then Vol Up).")
             )
             return
         device_key = picked
@@ -3937,15 +3941,16 @@ class FlashPilotWindow(
         ok, last = _actions_mod.check_actions(
             device_key, ["samsung_odin_flash"], bridge.validate_action)
         if not ok:
-            self.log_line(f"[refused] Flash Firmware is not valid for {device_key}: {last}")
-            self._toasts.show_warn("Unsupported for this device",
-                                   "Flash cannot run on the selected device "
-                                   "in its current state.")
+            self.log_line("[refused] " + self.tr("Flash Firmware is not valid for {device_key}: {last}")
+                          .format(device_key=device_key, last=last))
+            self._toasts.show_warn(self.tr("Unsupported for this device"),
+                                   self.tr("Flash cannot run on the selected device "
+                                           "in its current state."))
             return
         # Per-device run guard: a concurrent ops flow on the SAME phone must
         # block this (the old _nf_busy flag alone could not see it).
         if not _flow_start("Native flash", destructive=True, key=device_key):
-            self._toasts.show_warn("Operation already running",
+            self._toasts.show_warn(self.tr("Operation already running"),
                                    _flow_busy_msg(key=device_key))
             return
         patch = self._nf_patch_cb.isChecked()
@@ -3988,9 +3993,9 @@ class FlashPilotWindow(
                 _flow_end(key=device_key)
                 if ok:
                     self._toasts.show_ok(
-                        "Flash complete", summary)
+                        self.tr("Flash complete"), summary)
                 else:
-                    self._toasts.show_warn("Flash failed", summary)
+                    self._toasts.show_warn(self.tr("Flash failed"), summary)
 
             self._ui.ui.emit(done)
 
@@ -4004,10 +4009,12 @@ class FlashPilotWindow(
             s = pitstore.stats()
             if s["count"]:
                 self._pit_cache_lbl.setText(
-                    f"cache: {s['count']} table(s) for {', '.join(s['models'][:3])}"
+                    self.tr("cache: {count} table(s) for {models}")
+                    .format(count=s['count'],
+                            models=', '.join(s['models'][:3]))
                 )
             else:
-                self._pit_cache_lbl.setText("cache: empty")
+                self._pit_cache_lbl.setText(self.tr("cache: empty"))
         except Exception:
             self._pit_cache_lbl.setText("")
 
@@ -4015,18 +4022,18 @@ class FlashPilotWindow(
         """Show the Transsion/XOS secret code reference table."""
         import json
         dlg = QDialog(self)
-        dlg.setWindowTitle("Transsion/XOS Secret Codes (Infinix · Tecno · itel)")
+        dlg.setWindowTitle(self.tr("Transsion/XOS Secret Codes (Infinix · Tecno · itel)"))
         dlg.setMinimumSize(760, 560)
         dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
         lay = QVBoxLayout(dlg)
 
         chain = QLabel(
-            "EXACT CHAIN (factory-reset / FRP phones):\n"
-            "Welcome → language & country → WiFi → Next →\n"
-            "tap 'Personalized Recommendations' privacy link → Chrome →\n"
-            "type 'frpbypass' → open the DIALER link on that site →\n"
-            "real Dialer opens → dial *#*#49#*#* → ADB on.\n"
-            "(The lock-screen emergency pad does NOT process secret codes.)"
+            self.tr("EXACT CHAIN (factory-reset / FRP phones):\n"
+                    "Welcome → language & country → WiFi → Next →\n"
+                    "tap 'Personalized Recommendations' privacy link → Chrome →\n"
+                    "type 'frpbypass' → open the DIALER link on that site →\n"
+                    "real Dialer opens → dial *#*#49#*#* → ADB on.\n"
+                    "(The lock-screen emergency pad does NOT process secret codes.)")
         )
         chain.setWordWrap(True)
         chain.setStyleSheet(f"color:{C['warn']}; font-size:11px; font-weight:600; padding:6px;")
@@ -4034,7 +4041,7 @@ class FlashPilotWindow(
 
         table = QTableWidget()
         table.setColumnCount(3)
-        table.setHorizontalHeaderLabels(["Code", "Action", "Verified"])
+        table.setHorizontalHeaderLabels([self.tr("Code"), self.tr("Action"), self.tr("Verified")])
         table.horizontalHeader().setStretchLastSection(True)
         table.setColumnWidth(0, 170)
         table.setColumnWidth(1, 380)
@@ -4063,20 +4070,20 @@ class FlashPilotWindow(
             f0 = c0.font(); f0.setBold(e.get("verified", False)); c0.setFont(f0)
             table.setItem(r, 0, c0)
             table.setItem(r, 1, QTableWidgetItem(e.get("action", "")))
-            v = "✅ field-tested" if e.get("verified") else "manifest"
+            v = self.tr("✅ field-tested") if e.get("verified") else self.tr("manifest")
             table.setItem(r, 2, QTableWidgetItem(v))
         lay.addWidget(table)
 
         note = QLabel(
-            "Note: direct SECRET_CODE broadcast from shell is denied by the system - "
-            "the real dialer is required. *#*#49#*#* sets persist.sys.usb.config=adb "
-            "(survives reboot and setup wizard)."
+            self.tr("Note: direct SECRET_CODE broadcast from shell is denied by the system - "
+                    "the real dialer is required. *#*#49#*#* sets persist.sys.usb.config=adb "
+                    "(survives reboot and setup wizard).")
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{C['dim']}; font-size:10px; padding:6px;")
         lay.addWidget(note)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(self.tr("Close"))
         close_btn.setStyleSheet(_btn_ghost())
         close_btn.clicked.connect(dlg.accept)
         bl = QHBoxLayout()
@@ -4200,8 +4207,8 @@ class FlashPilotWindow(
             except Exception as e:
                 err = str(e)
                 try:
-                    self._ui.ui.emit(lambda m=err: self.show_toast("Triage failed", m, "error"))
-                    emit(f"[error] Triage failed: {err}")
+                    self._ui.ui.emit(lambda m=err: self.show_toast(self.tr("Triage failed"), m, "error"))
+                    emit("[error] " + self.tr("Triage failed: {err}").format(err=err))
                 except Exception:
                     pass
                 if flux:
@@ -4229,7 +4236,7 @@ class FlashPilotWindow(
             return
         self._pit_fetching = True
         self._pit_fetch_btn.setEnabled(False)
-        self._pit_view.setPlainText("Fetching PIT from device...\n")
+        self._pit_view.setPlainText(self.tr("Fetching PIT from device...\n"))
         target = f"04e8:{d['pid']:04x}@{d['bus']}:{d['address']}"
 
         def work():
@@ -4267,7 +4274,7 @@ class FlashPilotWindow(
         threading.Thread(target=work, daemon=True).start()
 
     def _fus_detect_device(self):
-        self.fus_status_lbl.setText("Scanning connected Samsung device (ADB or Download mode)...")
+        self.fus_status_lbl.setText(self.tr("Scanning connected Samsung device (ADB or Download mode)..."))
         def work():
             try:
                 try:
@@ -4279,8 +4286,9 @@ class FlashPilotWindow(
                     def ok_adb():
                         self.fus_model_input.setText(model)
                         self.fus_region_input.setText(csc)
-                        self.fus_status_lbl.setText(f"Detected connected device: {model} ({csc})")
-                        self.show_toast(f"Detected {model} [{csc}]", "success")
+                        self.fus_status_lbl.setText(self.tr("Detected connected device: {model} ({csc})")
+                                                    .format(model=model, csc=csc))
+                        self.show_toast(self.tr("Detected {model} [{csc}]").format(model=model, csc=csc), "success")
                         self._fus_check_version()
                     self._ui.ui.emit(ok_adb)
                     return
@@ -4298,10 +4306,10 @@ class FlashPilotWindow(
                 if cached and not cached.startswith(("0x", "--", "(")) and cached.strip().lower() not in (
                     "adb", "samsung", "mediatek", "qualcomm", "unknown",
                 ):
-                    _dlog(f"using already-known model {cached} (no USB probe needed)")
+                    _dlog(self.tr("using already-known model {model} (no USB probe needed)").format(model=cached))
                     model = cached.upper()
                 else:
-                    _dlog("no ADB device - trying download (Odin) mode ...")
+                    _dlog(self.tr("no ADB device - trying download (Odin) mode ..."))
                     model = self._fus_detect_via_download_mode(log=_dlog)
                 def ok_dl():
                     region = self.fus_region_input.text().strip() or "EUX"
@@ -4314,17 +4322,18 @@ class FlashPilotWindow(
                     except Exception:
                         pass
                     self.fus_status_lbl.setText(
-                        f"Detected download-mode phone: {model} "
-                        f"(CSC unreadable in download mode - verify region [{region}], then Check Version)"
+                        self.tr("Detected download-mode phone: {model} "
+                                "(CSC unreadable in download mode - verify region [{region}], then Check Version)")
+                        .format(model=model, region=region)
                     )
-                    self.show_toast(f"Detected {model} (download mode)", "success")
+                    self.show_toast(self.tr("Detected {model} (download mode)").format(model=model), "success")
                     self._fus_check_version()
                 self._ui.ui.emit(ok_dl)
             except Exception as e:
                 err = str(e)
                 def fail():
-                    self.fus_status_lbl.setText(f"Detection failed: {err}")
-                    self.show_toast(f"Device detection failed: {err}", "error")
+                    self.fus_status_lbl.setText(self.tr("Detection failed: {err}").format(err=err))
+                    self.show_toast(self.tr("Device detection failed: {err}").format(err=err), "error")
                 self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
@@ -4373,21 +4382,22 @@ class FlashPilotWindow(
                     log(msg)
             except Exception:
                 pass
-        _log("scanning USB for Samsung download-mode phone ...")
+        _log(self.tr("scanning USB for Samsung download-mode phone ..."))
         d = core._download_mode_device()
         if not d:
             raise RuntimeError(
-                "No ADB device authorized/connected and no Samsung phone in "
-                "download mode found. Connect the phone in normal/ADB mode, "
-                "or in Download mode (Vol Down + Power, then Vol Up)."
+                self.tr("No ADB device authorized/connected and no Samsung phone in "
+                        "download mode found. Connect the phone in normal/ADB mode, "
+                        "or in Download mode (Vol Down + Power, then Vol Up).")
             )
         target = f"{d['vid']:04x}:{d['pid']:04x}@{d['bus']}:{d['address']}"
         _log(f"found {d['vid']:04x}:{d['pid']:04x} at bus={d['bus']} addr={d['address']} -> target {target}")
         try:
             res = bridge.usb_detach_kernel(target, timeout=15)
-            _log(f"detach result: {res.get('detached') if isinstance(res, dict) else res}")
+            _log(self.tr("detach result: {res}").format(
+                res=res.get('detached') if isinstance(res, dict) else res))
         except Exception as e:
-            _log(f"kernel detach skipped: {e}")
+            _log(self.tr("kernel detach skipped: {err}").format(err=e))
         # Retry on transient "Resource busy": our own background monitor
         # fires odin-model probes on its own cycle and may briefly hold the
         # port. A persistent busy across all attempts means an external
@@ -4396,29 +4406,32 @@ class FlashPilotWindow(
         info = None
         for attempt in range(3):
             try:
-                _log(f"reading model via odin-model probe (attempt {attempt + 1}/3) ...")
+                _log(self.tr("reading model via odin-model probe (attempt {n}/3) ...")
+                     .format(n=attempt + 1))
                 info = bridge.odin_model(target)
-                _log(f"probe answered: {info}")
+                _log(self.tr("probe answered: {info}").format(info=info))
                 break
             except Exception as e:
                 last_err = e
-                _log(f"probe attempt {attempt + 1} failed: {e}")
+                _log(self.tr("probe attempt {n} failed: {err}").format(n=attempt + 1, err=e))
                 if attempt < 2:
                     import time as _t
                     _t.sleep(3)
         else:
             raise RuntimeError(
-                f"Download-mode phone found at {target} but the model probe failed 3x: {last_err} "
-                "(reinstall the latest .deb so udev rules apply, reload with "
-                "`sudo udevadm control --reload-rules && sudo udevadm trigger`, replug the phone; "
-                "if 'Resource busy' persists, ModemManager/cdc_acm is holding the port - "
-                "try `sudo systemctl stop ModemManager`)"
+                self.tr("Download-mode phone found at {target} but the model probe failed 3x: {last_err} "
+                        "(reinstall the latest .deb so udev rules apply, reload with "
+                        "`sudo udevadm control --reload-rules && sudo udevadm trigger`, replug the phone; "
+                        "if 'Resource busy' persists, ModemManager/cdc_acm is holding the port - "
+                        "try `sudo systemctl stop ModemManager`)")
+                .format(target=target, last_err=last_err)
             )
         model = (info.get("model") or "").strip() if isinstance(info, dict) else str(info or "").strip()
         if not model or model.startswith("("):
             raise RuntimeError(
-                f"Could not read model from download-mode phone (got {model!r}). "
-                "Type the SM- model manually."
+                self.tr("Could not read model from download-mode phone (got {model!r}). "
+                        "Type the SM- model manually.")
+                .format(model=model)
             )
         # FUS wants the marketing model (SM-A145M). The Odin probe sometimes
         # returns a bare code (A145M); restore the SM- prefix in that case.
@@ -4452,10 +4465,11 @@ class FlashPilotWindow(
         model = self.fus_model_input.text().strip()
         region = self.fus_region_input.text().strip()
         if not model or not region:
-            self.show_toast("Enter device model and region first.", "error")
+            self.show_toast(self.tr("Enter device model and region first."), "error")
             return
         self.fus_check_btn.setEnabled(False)
-        self.fus_status_lbl.setText(f"Fetching firmware for {model} ({region})...")
+        self.fus_status_lbl.setText(self.tr("Fetching firmware for {model} ({region})...")
+                                    .format(model=model, region=region))
 
         def work():
             try:
@@ -4471,14 +4485,14 @@ class FlashPilotWindow(
                         f"Latest firmware for {model} ({region}): {details['version']}{size_txt}"
                     )
                     self.fus_check_btn.setEnabled(True)
-                    self.show_toast(f"Latest firmware: {details['version']}", "success")
+                    self.show_toast(self.tr("Latest firmware: {version}").format(version=details['version']), "success")
                 self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
-                    self.fus_status_lbl.setText(f"Check failed: {err}")
+                    self.fus_status_lbl.setText(self.tr("Check failed: {err}").format(err=err))
                     self.fus_check_btn.setEnabled(True)
-                    self.show_toast(f"Check failed: {err}", "error")
+                    self.show_toast(self.tr("Check failed: {err}").format(err=err), "error")
                 self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
@@ -4487,10 +4501,11 @@ class FlashPilotWindow(
         model = self.fus_model_input.text().strip()
         region = self.fus_region_input.text().strip()
         if not model or not region:
-            self.show_toast("Enter device model and region first.", "error")
+            self.show_toast(self.tr("Enter device model and region first."), "error")
             return
         self.fus_list_btn.setEnabled(False)
-        self.fus_status_lbl.setText(f"Fetching all versions for {model} ({region})...")
+        self.fus_status_lbl.setText(self.tr("Fetching all versions for {model} ({region})")
+                                    .format(model=model, region=region))
 
         def work():
             try:
@@ -4498,15 +4513,16 @@ class FlashPilotWindow(
                 def ok():
                     self._show_version_dialog(versions)
                     self.fus_list_btn.setEnabled(True)
-                    self.fus_status_lbl.setText(f"Found {len(versions)} versions for {model} ({region})")
-                    self.show_toast(f"Found {len(versions)} firmware versions", "success")
+                    self.fus_status_lbl.setText(self.tr("Found {n} versions for {model} ({region})")
+                                                .format(n=len(versions), model=model, region=region))
+                    self.show_toast(self.tr("Found {n} firmware versions").format(n=len(versions)), "success")
                 self._ui.ui.emit(ok)
             except Exception as e:
                 err = str(e)
                 def fail():
-                    self.fus_status_lbl.setText(f"List failed: {err}")
+                    self.fus_status_lbl.setText(self.tr("List failed: {err}").format(err=err))
                     self.fus_list_btn.setEnabled(True)
-                    self.show_toast(f"List failed: {err}", "error")
+                    self.show_toast(self.tr("List failed: {err}").format(err=err), "error")
                 self._ui.ui.emit(fail)
 
         threading.Thread(target=work, daemon=True).start()
@@ -4514,12 +4530,12 @@ class FlashPilotWindow(
     def _show_version_dialog(self, versions: list):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QLabel
         dlg = QDialog(self)
-        dlg.setWindowTitle("Available Firmware Versions")
+        dlg.setWindowTitle(self.tr("Available Firmware Versions"))
         dlg.setMinimumSize(700, 500)
         dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
         lay = QVBoxLayout(dlg)
         
-        info = QLabel(f"Found {len(versions)} firmware versions (newest first)")
+        info = QLabel(self.tr("Found {n} firmware versions (newest first)").format(n=len(versions)))
         info.setStyleSheet(f"color:{C['dim']}; font-size:12px; padding:5px;")
         lay.addWidget(info)
         
@@ -4533,10 +4549,10 @@ class FlashPilotWindow(
         lay.addWidget(list_w)
         
         btn_row = QHBoxLayout()
-        select_btn = QPushButton("Select Version")
+        select_btn = QPushButton(self.tr("Select Version"))
         select_btn.setStyleSheet(_btn_primary())
         select_btn.clicked.connect(lambda: self._select_version_from_dialog(dlg, list_w))
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton(self.tr("Cancel"))
         cancel_btn.setStyleSheet(_btn_ghost())
         cancel_btn.clicked.connect(dlg.reject)
         btn_row.addStretch(1)
@@ -4563,9 +4579,9 @@ class FlashPilotWindow(
                     "size_bytes": data.get("size"),
                     "filename": None,
                 })
-                self.fus_status_lbl.setText(f"Selected firmware: {ver}")
+                self.fus_status_lbl.setText(self.tr("Selected firmware: {ver}").format(ver=ver))
             dlg.accept()
-            self.show_toast(f"Selected version: {ver}", "info")
+            self.show_toast(self.tr("Selected version: {ver}").format(ver=ver), "info")
 
     def _fus_download(self):
         model = self.fus_model_input.text().strip()
@@ -4573,7 +4589,7 @@ class FlashPilotWindow(
         fw_ver = self.fus_version_input.text().strip()
         out_dir = self.fus_out_input.text().strip()
         if not model or not region or not fw_ver:
-            self.show_toast("Model, Region, and Firmware Version are required.", "error")
+            self.show_toast(self.tr("Model, Region, and Firmware Version are required."), "error")
             return
         if not _flow_start("Firmware Downloader", destructive=False):
             self.show_toast(_flow_busy_msg(), "warning")
@@ -4581,15 +4597,19 @@ class FlashPilotWindow(
 
         self.fus_download_btn.setEnabled(False)
         self.fus_progress.setValue(0)
-        self.fus_status_lbl.setText("Starting download and decryption...")
-        self._append_console(f"[fus] Starting download for {model} {fw_ver}...")
+        self.fus_status_lbl.setText(self.tr("Starting download and decryption..."))
+        self._append_console("[fus] " + self.tr("Starting download for {model} {fw_ver}...")
+                             .format(model=model, fw_ver=fw_ver))
 
         def progress_cb(downloaded, total):
             if total > 0:
                 pct = int((downloaded * 100) / total)
                 def upd():
                     self.fus_progress.setValue(pct)
-                    self.fus_status_lbl.setText(f"Downloading... {downloaded/(1024*1024):.1f} MB / {total/(1024*1024):.1f} MB ({pct}%)")
+                    self.fus_status_lbl.setText(self.tr("Downloading... {done:.1f} MB / {total:.1f} MB ({pct}%)")
+                                                .format(done=downloaded / (1024 * 1024),
+                                                        total=total / (1024 * 1024),
+                                                        pct=pct))
                 self._ui.ui.emit(upd)
 
         def log_cb(msg):
@@ -4607,9 +4627,9 @@ class FlashPilotWindow(
                 def done():
                     self.fus_download_btn.setEnabled(True)
                     self.fus_progress.setValue(100)
-                    self.fus_status_lbl.setText(f"Success! Decrypted file: {dec_file}")
-                    self._append_console(f"[fus] Complete! Saved to {dec_file}")
-                    self.show_toast("Firmware downloaded & decrypted successfully!", "success")
+                    self.fus_status_lbl.setText(self.tr("Success! Decrypted file: {file}").format(file=dec_file))
+                    self._append_console("[fus] " + self.tr("Complete! Saved to {file}").format(file=dec_file))
+                    self.show_toast(self.tr("Firmware downloaded & decrypted successfully!"), "success")
                     self._last_decrypted_fw = dec_file
                     _flow_end()
                 self._ui.ui.emit(done)
@@ -4617,9 +4637,9 @@ class FlashPilotWindow(
                 err = str(e)
                 def fail():
                     self.fus_download_btn.setEnabled(True)
-                    self.fus_status_lbl.setText(f"Download/Decrypt failed: {err}")
+                    self.fus_status_lbl.setText(self.tr("Download/Decrypt failed: {err}").format(err=err))
                     self._append_console(f"[fus] ERROR: {err}")
-                    self.show_toast(f"Download failed: {err}", "error")
+                    self.show_toast(self.tr("Download failed: {err}").format(err=err), "error")
                     _flow_end()
                 self._ui.ui.emit(fail)
 
@@ -4628,25 +4648,25 @@ class FlashPilotWindow(
     def _fus_load_into_ap(self):
         fw = getattr(self, "_last_decrypted_fw", None)
         if not fw or not os.path.exists(fw):
-            self.show_toast("No downloaded firmware found to load.", "warning")
+            self.show_toast(self.tr("No downloaded firmware found to load."), "warning")
             return
         # Populate AP slot in Samsung tab if available
         ap_slot = getattr(self, "slot_inputs", {}).get("AP")
         if ap_slot is not None:
             ap_slot.setText(fw)
-            self.show_toast("Loaded decrypted firmware into AP slot!", "success")
+            self.show_toast(self.tr("Loaded decrypted firmware into AP slot!"), "success")
             self._on_section("samsung")
         else:
-            self.show_toast(f"Firmware ready at: {fw}", "info")
+            self.show_toast(self.tr("Firmware ready at: {file}").format(file=fw), "info")
 
     def _mtk_browse(self, edit, name, name_filter):
-        path, _ = QFileDialog.getOpenFileName(self, f"Select {name}", os.path.expanduser("~/Downloads"), name_filter)
+        path, _ = QFileDialog.getOpenFileName(self, self.tr("Select {name}").format(name=name), os.path.expanduser("~/Downloads"), name_filter)
         if path:
             edit.setText(path)
 
     def _mtk_browse_dir(self):
         d = QFileDialog.getExistingDirectory(
-            self, "Select firmware directory", os.path.expanduser("~/Downloads")
+            self, self.tr("Select firmware directory"), os.path.expanduser("~/Downloads")
         )
         if d:
             self.mtk_fw_dir.setText(d)
@@ -4692,41 +4712,42 @@ class FlashPilotWindow(
             if not device_key:
                 self._ui.line.emit(
                     f"[refused] {label}: target {args[target_idx]} is not on USB now.")
-                self._ui.toast.emit("warn", "Device gone",
-                                    "The selected target is no longer connected.")
+                self._ui.toast.emit("warn", self.tr("Device gone"),
+                                    self.tr("The selected target is no longer connected."))
                 return None, None, None
         if device_key is None:
             picked = self._pick_device(label, modes)
             if picked == "__cancelled__":
-                self._ui.line.emit("[info] device choice cancelled.")
+                self._ui.line.emit("[info] " + self.tr("device choice cancelled."))
                 return None, None, None
             device_key = picked
         if not device_key:
-            self._ui.line.emit(f"[refused] {label}: no matching device detected.")
-            self._ui.toast.emit("warn", "No device",
-                                f"No {tag} device detected for this operation.")
+            self._ui.line.emit("[refused] " + self.tr("{label}: no matching device detected.").format(label=label))
+            self._ui.toast.emit("warn", self.tr("No device"),
+                                self.tr("No {tag} device detected for this operation.").format(tag=tag))
             return None, None, None
         action_ids = _actions_mod.actions_for_command(cmd)
         ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
         if not ok and action_ids and _actions_mod.is_transient_refusal(last):
             import time as _t
             self._ui.line.emit(
-                f"[info] {label}: device temporarily unreadable "
-                "(re-enumerating?) — settling 2.5s and retrying ...")
+                "[info] " + self.tr("{label}: device temporarily unreadable (re-enumerating?) — settling 2.5s and retrying ...")
+                .format(label=label))
             _t.sleep(2.5)
             ok, last = _actions_mod.check_actions(device_key, action_ids, bridge.validate_action)
         if not ok:
             self._ui.line.emit(
-                f"[refused] {label} is not valid for this device right now "
-                f"({device_key}): {last}")
-            self._ui.toast.emit("warn", "Unsupported for this device",
-                                f"{label} cannot run on the selected device "
-                                "in its current state. If the GUI shows it "
-                                "connected, wait a moment and retry.")
+                "[refused] " + self.tr("{label} is not valid for this device right now ({device_key}): {last}")
+                .format(label=label, device_key=device_key, last=last))
+            self._ui.toast.emit("warn", self.tr("Unsupported for this device"),
+                                self.tr("{label} cannot run on the selected device "
+                                        "in its current state. If the GUI shows it "
+                                        "connected, wait a moment and retry.")
+                                .format(label=label))
             return None, None, None
         if not _flow_start(label, destructive=destructive, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
-            self._ui.toast.emit("warn", "Operation already running",
+            self._ui.toast.emit("warn", self.tr("Operation already running"),
                                 _flow_busy_msg(key=device_key))
             self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
             return None, None, None
@@ -4743,17 +4764,18 @@ class FlashPilotWindow(
             # ops on the same device only — acceptable on a failure path.
             import time as _t
             self._ui.line.emit(
-                f"[info] {label}: transport unreadable "
-                "(re-enumerating?) — settling 2.5s and retrying ...")
+                "[info] " + self.tr("{label}: transport unreadable (re-enumerating?) — settling 2.5s and retrying ...")
+                .format(label=label))
             _t.sleep(2.5)
             tgt = _devices.resolve_usb_target(device_key)
         if not tgt:
             self._ui.line.emit(
-                f"[refused] {label}: {device_key} left USB before start.")
-            self._ui.toast.emit("warn", "Device gone",
-                                "The device disconnected before the operation started. "
-                                "If the GUI still shows it connected, wait a moment "
-                                "and retry.")
+                "[refused] " + self.tr("{label}: {device_key} left USB before start.")
+                .format(label=label, device_key=device_key))
+            self._ui.toast.emit("warn", self.tr("Device gone"),
+                                self.tr("The device disconnected before the operation started. "
+                                        "If the GUI still shows it connected, wait a moment "
+                                        "and retry."))
             _flow_end(key=device_key)
             return None, None, None
         # Target↔identity binding: the frozen target must still belong to
@@ -4769,23 +4791,21 @@ class FlashPilotWindow(
                 cur = bridge.verify_target(tgt, serial_for_check)
                 if cur and cur != serial_for_check:
                     self._ui.line.emit(
-                        f"[refused] {label}: device identity changed at "
-                        f"{tgt} — it is now serial '{cur}', not "
-                        f"'{serial_for_check}'. Replug the intended device "
-                        "and retry.")
+                        "[refused] " + self.tr("{label}: device identity changed at {tgt} — it is now serial '{cur}', not '{serial}'. Replug the intended device and retry.")
+                        .format(label=label, tgt=tgt, cur=cur, serial=serial_for_check))
                     self._ui.toast.emit(
-                        "warn", "Device replaced",
-                        "The phone at that port is not the one the "
-                        "operation was validated for.")
+                        "warn", self.tr("Device replaced"),
+                        self.tr("The phone at that port is not the one the "
+                                "operation was validated for."))
                     _flow_end(key=device_key)
                     return None, None, None
             except bridge.BridgeError as e:
                 if "identity changed" in str(e).lower():
                     self._ui.line.emit(f"[refused] {label}: {e}")
                     self._ui.toast.emit(
-                        "warn", "Device replaced",
-                        "The phone at that port is not the one the "
-                        "operation was validated for.")
+                        "warn", self.tr("Device replaced"),
+                        self.tr("The phone at that port is not the one the "
+                                "operation was validated for."))
                     _flow_end(key=device_key)
                     return None, None, None
                 # Absent/other: the worker's open reports it; not fatal here.
@@ -4904,25 +4924,25 @@ class FlashPilotWindow(
                 picked = self._pick_from_keys(
                     label, sorted(f"adb:{d.get('serial', '')}" for d in auth))
                 if picked == "__cancelled__":
-                    self._ui.line.emit("[info] device choice cancelled.")
+                    self._ui.line.emit("[info] " + self.tr("device choice cancelled."))
                     return None, None, None
                 device_key = picked
                 self._ui.line.emit(
-                    f"[info] {label}: USB scan missed (re-enumerating) — "
-                    f"picked from the ADB daemon rows ({device_key})")
+                    "[info] " + self.tr("{label}: USB scan missed (re-enumerating) — picked from the ADB daemon rows ({device_key})")
+                    .format(label=label, device_key=device_key))
             else:
                 self._ui.line.emit(
-                    "[warn] No authorized ADB device found right now — enable USB "
-                    "debugging and tap Allow. If the GUI shows the device as "
-                    "connected, it may be re-enumerating: wait a moment and retry.")
-                self._ui.toast.emit("warn", "No ADB device", "Connect + authorize the phone")
+                    "[warn] " + self.tr("No authorized ADB device found right now — enable USB debugging and tap Allow. If the GUI shows the device as connected, it may be re-enumerating: wait a moment and retry."))
+                self._ui.toast.emit("warn", self.tr("No ADB device"),
+                                    self.tr("Connect + authorize the phone"))
                 return None, None, None
         serial = self._adb_serial_for_key(device_key)
         if not serial:
             self._ui.line.emit(
-                f"[refused] {label}: cannot determine the ADB serial for {device_key}.")
-            self._ui.toast.emit("warn", "Cannot target device",
-                                "The selected device has no usable ADB serial.")
+                "[refused] " + self.tr("{label}: cannot determine the ADB serial for {device_key}.")
+                .format(label=label, device_key=device_key))
+            self._ui.toast.emit("warn", self.tr("Cannot target device"),
+                                self.tr("The selected device has no usable ADB serial."))
             return None, None, None
         # One retry on transient resolution failures: USB serials can be
         # unreadable for a moment while a device re-enumerates (marginal
@@ -4936,15 +4956,16 @@ class FlashPilotWindow(
             ok, last = _actions_mod.check_actions(device_key, ["adb_shell"], bridge.validate_action)
         if not ok:
             self._ui.line.emit(
-                f"[refused] {label} is not valid for this device right now "
-                f"({device_key}): {last}")
-            self._ui.toast.emit("warn", "Unsupported for this device",
-                                f"{label} cannot run on the selected device "
-                                "in its current state.")
+                "[refused] " + self.tr("{label} is not valid for this device right now ({device_key}): {last}")
+                .format(label=label, device_key=device_key, last=last))
+            self._ui.toast.emit("warn", self.tr("Unsupported for this device"),
+                                self.tr("{label} cannot run on the selected device "
+                                        "in its current state.")
+                                .format(label=label))
             return None, None, None
         if not _flow_start(label, destructive=False, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
-            self._ui.toast.emit("warn", "Operation already running",
+            self._ui.toast.emit("warn", self.tr("Operation already running"),
                                 _flow_busy_msg(key=device_key))
             self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
             return None, None, None
@@ -4992,19 +5013,20 @@ class FlashPilotWindow(
                     except Exception:
                         pass
                 self._ui.status.emit(f"MTK: {args[0]} done")
-                self._ui.toast.emit("ok", f"MTK {args[0]}", "Completed successfully")
+                self._ui.toast.emit("ok", self.tr("MTK {cmd}").format(cmd=args[0]),
+                                    self.tr("Completed successfully"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
-                emit("[cancelled] MTK operation stopped by user")
+                emit("[cancelled] " + self.tr("MTK operation stopped by user"))
                 self._ui.status.emit("MTK: operation cancelled")
-                self._ui.toast.emit("warn", "MTK operation", "Cancelled")
+                self._ui.toast.emit("warn", self.tr("MTK operation"), self.tr("Cancelled"))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
                 emit(f"[error] MTK {args[0]}: {e}")
                 self._ui.status.emit(f"MTK: {args[0]} failed")
-                self._ui.toast.emit("error", f"MTK {args[0]}", str(e))
+                self._ui.toast.emit("error", self.tr("MTK {cmd}").format(cmd=args[0]), str(e))
                 if flux:
                     state, code = jobs.classify_failure(e, device_key)
                     jobs.finish_job(flux.job_id, state, str(e), code)
@@ -5063,14 +5085,14 @@ class FlashPilotWindow(
         self._ui.line.emit("[warn] MTK: stop requested, killing bridge ...")
 
     def _mtk_detect(self):
-        self.mtk_status.setText("Scanning USB...")
+        self.mtk_status.setText(self.tr("Scanning USB..."))
 
         def work():
             try:
                 devs = bridge.detect_mtk()
                 if not devs:
                     self._ui.ui.emit(lambda: self.mtk_status.setText(
-                        "No MediaTek device detected"))
+                        self.tr("No MediaTek device detected")))
                     self._ui.line.emit("[info] mtk-detect: no MediaTek device found")
                     return
                 for d in devs:
@@ -5143,7 +5165,7 @@ class FlashPilotWindow(
             return
         if not _flow_start("MTK preloader dump", destructive=True):
             self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.toast.emit("warn", self.tr("Operation already running"), _flow_busy_msg())
             self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg()}")
             return
         self._ui.line.emit(
@@ -5232,15 +5254,15 @@ class FlashPilotWindow(
                         self._ui.ui.emit(lambda: self.mtk_files["da"].setText(out))
                         self._ui.status.emit("MTK: DA built from phone preloader")
                         self._ui.toast.emit(
-                            "ok", "MTK DA", "Patched preloader saved + selected as DA"
+                            "ok", self.tr("MTK DA"), self.tr("Patched preloader saved + selected as DA")
                         )
                         return
                     self._ui.line.emit(
-                        "  dump ran but produced no file - retrying next window ..."
+                        self.tr("  dump ran but produced no file - retrying next window ...")
                     )
                     _time.sleep(1)
                 self._ui.line.emit(
-                    "[error] MTK preloader: no successful dump within 240s"
+                    "[error] " + self.tr("MTK preloader: no successful dump within 240s")
                 )
                 self._ui.status.emit("MTK: preloader dump timed out")
             finally:
@@ -5282,11 +5304,11 @@ class FlashPilotWindow(
                 self._ui.line.emit(res)
                 self._ui.ui.emit(lambda: self.mtk_files["scatter"].setText(out))
                 self._ui.status.emit("MTK: scatter generated from device GPT")
-                self._ui.toast.emit("ok", "MTK scatter", "Generated from device GPT")
+                self._ui.toast.emit("ok", self.tr("MTK scatter"), self.tr("Generated from device GPT"))
             except bridge.BridgeError as e:
                 self._ui.line.emit(f"[error] MTK scatter: {e}")
                 self._ui.status.emit("MTK: scatter generation failed")
-                self._ui.toast.emit("error", "MTK scatter", str(e))
+                self._ui.toast.emit("error", self.tr("MTK scatter"), str(e))
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] MTK scatter: {e}")
 
@@ -5297,7 +5319,7 @@ class FlashPilotWindow(
         detect-all, which now includes manufacturer / product / serial /
         interfaces / endpoints) with the BROM/preloader chip report (from
         mtk-detect, which requires the device in a low-level boot stage)."""
-        self.mtk_status.setText("Reading device info...")
+        self.mtk_status.setText(self.tr("Reading device info..."))
 
         def work():
             try:
@@ -5306,7 +5328,7 @@ class FlashPilotWindow(
                 if not mtk_usb:
                     self._ui.line.emit("[info] mtk-detect: no MediaTek device found")
                     self._ui.ui.emit(lambda: self.mtk_status.setText(
-                        "No MediaTek device detected"))
+                        self.tr("No MediaTek device detected")))
                     return
 
                 chip_by_bus_addr = {}
@@ -5320,7 +5342,7 @@ class FlashPilotWindow(
                     chipdev = chip_by_bus_addr.get((d.get("bus"), d.get("address")))
                     chip = (chipdev or {}).get("chip") if chipdev else d.get("chip")
                     lines = [
-                        "=== MediaTek Device Info ===",
+                        self.tr("=== MediaTek Device Info ==="),
                     ]
                     lines.extend(_fmt_usb_full(d))
                     lines.append("")
@@ -5377,30 +5399,30 @@ class FlashPilotWindow(
                         lines.append("")
                         if stage == "mtk-adb":
                             lines.append(
-                                "Chip report: not available - phone is booted to "
-                                "Android (ADB)."
+                                self.tr("Chip report: not available - phone is booted to "
+                                        "Android (ADB).")
                             )
                         else:
                             lines.append(
-                                "Chip report: no BROM/preloader handshake yet - "
-                                "put the phone into BROM/preloader mode."
+                                self.tr("Chip report: no BROM/preloader handshake yet - "
+                                        "put the phone into BROM/preloader mode.")
                             )
                         lines.append(
-                            "  How to reach BROM: power OFF, then hold Volume+ "
-                            "(some models Volume-) while plugging the USB cable. "
-                            "No battery removal needed."
+                            self.tr("  How to reach BROM: power OFF, then hold Volume+ "
+                                    "(some models Volume-) while plugging the USB cable. "
+                                    "No battery removal needed.")
                         )
                     self._ui.line.emit("\n".join(lines))
                 self._ui.ui.emit(lambda n=len(mtk_usb): self.mtk_status.setText(
-                    f"{n} MediaTek device(s) - info above"))
+                    self.tr("{n} MediaTek device(s) - info above").format(n=n)))
             except bridge.BridgeError as e:
                 self._ui.line.emit(f"[error] MTK device info: {e}")
                 self._ui.ui.emit(lambda err=e: self.mtk_status.setText(
-                    f"Read error: {err}"))
+                    self.tr("Read error: {err}").format(err=err)))
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] MTK device info: {e}")
                 self._ui.ui.emit(lambda err=e: self.mtk_status.setText(
-                    f"Read error: {err}"))
+                    self.tr("Read error: {err}").format(err=err)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -5408,8 +5430,8 @@ class FlashPilotWindow(
         scatter = self.mtk_scatter_edit.text().strip()
         da = self.mtk_da_edit.text().strip()
         if not scatter or not da:
-            self._ui.line.emit("[warn] MTK: scatter file and DA binary are both required")
-            self._toasts.show_warn("MTK files missing", "Select a scatter file and DA binary")
+            self._ui.line.emit("[warn] " + self.tr("MTK: scatter file and DA binary are both required"))
+            self._toasts.show_warn(self.tr("MTK files missing"), self.tr("Select a scatter file and DA binary"))
             return None
         return scatter, da
 
@@ -5420,7 +5442,7 @@ class FlashPilotWindow(
         scatter, da = files
         fw = self.mtk_fw_dir.text().strip()
         if not fw:
-            self._toasts.show_warn("Firmware dir missing", "Select the firmware directory")
+            self._toasts.show_warn(self.tr("Firmware dir missing"), self.tr("Select the firmware directory"))
             return
         self._ui.line.emit(f"[step] MTK flashing: scatter={scatter} da={da} fw={fw}")
         # Firmware↔device model match (cautious gate): the firmware
@@ -5438,13 +5460,13 @@ class FlashPilotWindow(
                 match = core._models_match(dev_model, fw_model)
                 if match is False and os.environ.get("MTK_FORCE_MODEL", "0") != "1":
                     self._toasts.show_error(
-                        "Firmware model mismatch",
-                        f"Firmware is for '{fw_model}' but the device is "
-                        f"'{dev_model}'. Set MTK_FORCE_MODEL=1 to override.")
+                        self.tr("Firmware model mismatch"),
+                        self.tr("Firmware is for '{fw_model}' but the device is "
+                                "'{dev_model}'. Set MTK_FORCE_MODEL=1 to override.")
+                        .format(fw_model=fw_model, dev_model=dev_model))
                     self._ui.line.emit(
-                        f"[refused] MTK flash: firmware model '{fw_model}' "
-                        f"!= device model '{dev_model}' — refusing "
-                        "(MTK_FORCE_MODEL=1 overrides).")
+                        "[refused] " + self.tr("MTK flash: firmware model '{fw_model}' != device model '{dev_model}' — refusing (MTK_FORCE_MODEL=1 overrides).")
+                        .format(fw_model=fw_model, dev_model=dev_model))
                     return
         except Exception:
             pass
@@ -5452,22 +5474,22 @@ class FlashPilotWindow(
         
         def run_flash():
             if auth_bypass:
-                self._ui.line.emit("[step] Running auth bypass (da_auth_bypass)...")
+                self._ui.line.emit("[step] " + self.tr("Running auth bypass (da_auth_bypass)..."))
                 try:
                     self._mtk_run(["mtk-bypass", "auto", da, "da_auth_bypass", scatter, "1"], timeout=300)
                 except Exception as e:
-                    self._toasts.show_error("Auth bypass failed", str(e))
+                    self._toasts.show_error(self.tr("Auth bypass failed"), str(e))
                     return
             self._mtk_run(["mtk-flash", "auto", da, scatter, fw], timeout=1800)
         
         self._confirm_overlay(
-            "Flash Firmware (MTK)",
+            self.tr("Flash Firmware (MTK)"),
             "Write ALL firmware images from the selected directory to the "
             "connected MediaTek device, following the scatter file.\n\n"
             "This OVERWRITES the system, boot, vendor and modem partitions.\n"
             "If the firmware is wrong for this model, the device may not boot.\n\n"
             "There is NO undo. Continue?",
-            confirm_label="Flash",
+            confirm_label=self.tr("Flash"),
             on_confirm=run_flash,
         )
 
@@ -5704,13 +5726,13 @@ class FlashPilotWindow(
                     except Exception:
                         pass
                 self._ui.status.emit(f"Qualcomm: {args[0]} done")
-                self._ui.toast.emit("ok", f"Qualcomm {args[0]}", "Completed successfully")
+                self._ui.toast.emit("ok", f"Qualcomm {args[0]}", self.tr("Completed successfully"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
                 emit("[cancelled] Qualcomm operation stopped by user")
                 self._ui.status.emit("Qualcomm: operation cancelled")
-                self._ui.toast.emit("warn", "Qualcomm operation", "Cancelled")
+                self._ui.toast.emit("warn", self.tr("Qualcomm operation"), self.tr("Cancelled"))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
@@ -5785,7 +5807,7 @@ class FlashPilotWindow(
                     except bridge.BridgeError as e:
                         emit(f"[warn] {cmd}: {e}")
                 emit("[ok] ADB enable commands sent")
-                self._ui.toast.emit("ok", "Enable ADB", "Commands sent to device")
+                self._ui.toast.emit("ok", self.tr("Enable ADB"), self.tr("Commands sent to device"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -5803,7 +5825,7 @@ class FlashPilotWindow(
         threading.Thread(target=work, daemon=True).start()
 
     def _qc_detect(self):
-        self.qc_status.setText("Scanning USB...")
+        self.qc_status.setText(self.tr("Scanning USB..."))
 
         def work():
             try:
@@ -5855,10 +5877,10 @@ class FlashPilotWindow(
         box.setWindowTitle(f"{label} · FRP (EDL 9008)")
         box.setIcon(QMessageBox.Icon.Warning)
         box.setText(
-            "Qualcomm FRP over EDL 9008 (Sahara + Firehose).\n\n"
+            self.tr("Qualcomm FRP over EDL 9008 (Sahara + Firehose).\n\n"
             "The phone must be in EDL mode (9008): power it off, hold "
             "Vol Up + Vol Down and plug USB.\n\n"
-            "How much should be erased?")
+            "How much should be erased?"))
         only = box.addButton("Erase FRP only",
                              QMessageBox.ButtonRole.AcceptRole)
         wipe = box.addButton("Erase FRP + wipe data",
@@ -6192,7 +6214,7 @@ class FlashPilotWindow(
             "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
             "QPushButton:hover { background: #334155; color: #ffffff; }"
         )
-        x_btn.setToolTip("Close")
+        x_btn.setToolTip(self.tr("Close"))
         hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addWidget(hdr_wrap)
 
@@ -6226,7 +6248,7 @@ class FlashPilotWindow(
         btns = QHBoxLayout()
         btns.setSpacing(12)
 
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.setFixedWidth(120)
@@ -6311,7 +6333,7 @@ class FlashPilotWindow(
         hdr = QHBoxLayout(hdr_wrap)
         hdr.setContentsMargins(0, 0, 0, 0)
         hdr.setSpacing(10)
-        pill = QLabel(" EXPERIMENTAL ")
+        pill = QLabel(self.tr(" EXPERIMENTAL "))
         pill.setStyleSheet(
             f"color: #04121a; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[0]}, stop:1 {grad[1]});"
             " border-radius: 7px; padding: 4px 12px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
@@ -6329,7 +6351,7 @@ class FlashPilotWindow(
             "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
             "QPushButton:hover { background: #334155; color: #ffffff; }"
         )
-        x_btn.setToolTip("Close")
+        x_btn.setToolTip(self.tr("Close"))
         hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addWidget(hdr_wrap)
 
@@ -6365,8 +6387,8 @@ class FlashPilotWindow(
 
         # Mandatory ownership checkbox — required EVERY run.
         cb = QCheckBox(
-            "I own this device, understand this is EXPERIMENTAL and educational "
-            "purpose only, and I accept all risk."
+            self.tr("I own this device, understand this is EXPERIMENTAL and educational "
+            "purpose only, and I accept all risk.")
         )
         cb.setStyleSheet(
             "QCheckBox { color: #fde68a; font-size: 12px; font-weight: 700; spacing: 10px; }"
@@ -6390,7 +6412,7 @@ class FlashPilotWindow(
 
         btns = QHBoxLayout()
         btns.setSpacing(12)
-        cancel = QPushButton("Cancel")
+        cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.setFixedWidth(120)
@@ -6599,14 +6621,14 @@ class FlashPilotWindow(
         hdr = QHBoxLayout(hdr_wrap)
         hdr.setContentsMargins(0, 0, 0, 0)
         hdr.setSpacing(10)
-        pill = QLabel(" BETA ")
+        pill = QLabel(self.tr(" BETA "))
         pill.setStyleSheet(
             "color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #f59e0b, stop:1 #dc2626);"
             " border-radius: 7px; padding: 3px 10px; font-size: 11px; font-weight: 900; letter-spacing: 1px;"
         )
         pill.setFixedHeight(24)
         hdr.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
-        title = QLabel("Pre-release build — accept the risk to continue")
+        title = QLabel(self.tr("Pre-release build — accept the risk to continue"))
         title.setStyleSheet("color: #f8fafc; font-size: 15px; font-weight: 800;")
         title.setWordWrap(True)
         hdr.addWidget(title, 1)
@@ -6618,7 +6640,7 @@ class FlashPilotWindow(
             "QPushButton { color: #cbd5e1; background: rgba(255,255,255,8); border: 1px solid rgba(255,255,255,12); border-radius: 14px; font-size: 13px; font-weight: 700; }"
             "QPushButton:hover { background: #dc2626; color: #ffffff; border-color: #dc2626; }"
         )
-        x_btn.setToolTip("Exit application")
+        x_btn.setToolTip(self.tr("Exit application"))
         hdr.addWidget(x_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addWidget(hdr_wrap)
         # Make header draggable
@@ -6660,11 +6682,11 @@ class FlashPilotWindow(
         v.addWidget(ver_line)
 
         body = QLabel(
-            "Beta builds are for testing only. They may contain bugs, incomplete\n"
+            self.tr("Beta builds are for testing only. They may contain bugs, incomplete\n"
             "features, or instabilities that can affect flashing and device data.\n\n"
             "• Back up your device and firmware before flashing\n"
             "• Do not use a beta on a primary / daily-driver phone\n"
-            "• Report issues at github.com/Legendary-Brilliantforous/flashpilot"
+            "• Report issues at github.com/Legendary-Brilliantforous/flashpilot")
         )
         body.setStyleSheet("color: #e2e8f0; font-size: 12.5px; font-weight: 500; letter-spacing: 0.2px;")
         body.setWordWrap(True)
@@ -6673,7 +6695,7 @@ class FlashPilotWindow(
         # Checkbox gate — must be high-contrast
         from PyQt6.QtWidgets import QCheckBox
 
-        cb = QCheckBox("I understand this beta may be unstable and I accept the risk.")
+        cb = QCheckBox(self.tr("I understand this beta may be unstable and I accept the risk."))
         cb.setStyleSheet(
             "QCheckBox { color: #f8fafc; font-size: 12.5px; font-weight: 700; spacing: 10px; }"
             "QCheckBox::indicator { width: 19px; height: 19px; border: 1px solid #64748b; border-radius: 5px; background: #0f172a; }"
@@ -6683,12 +6705,12 @@ class FlashPilotWindow(
 
         btns = QHBoxLayout()
         btns.setSpacing(12)
-        cancel = QPushButton("Exit")
+        cancel = QPushButton(self.tr("Exit"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.setFixedWidth(120)
-        cancel.setToolTip("Close the application")
-        accept = QPushButton("OK — I Accept")
+        cancel.setToolTip(self.tr("Close the application"))
+        accept = QPushButton(self.tr("OK — I Accept"))
         accept.setEnabled(False)
         accept.setStyleSheet(
             "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #f59e0b, stop:1 #ea580c);"
@@ -6703,7 +6725,7 @@ class FlashPilotWindow(
         btns.addWidget(accept)
         v.addLayout(btns)
 
-        hint = QLabel("Tip: you can change this in Settings → Updates → Beta warning (first install / every boot).")
+        hint = QLabel(self.tr("Tip: you can change this in Settings → Updates → Beta warning (first install / every boot)."))
         hint.setStyleSheet("color: #94a3b8; font-size: 11px;")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -7104,13 +7126,13 @@ class FlashPilotWindow(
                     except Exception:
                         pass
                 self._ui.status.emit(f"SPD: {args[0]} done")
-                self._ui.toast.emit("ok", f"SPD {args[0]}", "Completed successfully")
+                self._ui.toast.emit("ok", f"SPD {args[0]}", self.tr("Completed successfully"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
                 emit("[cancelled] SPD operation stopped by user")
                 self._ui.status.emit("SPD: operation cancelled")
-                self._ui.toast.emit("warn", "SPD operation", "Cancelled")
+                self._ui.toast.emit("warn", self.tr("SPD operation"), self.tr("Cancelled"))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
@@ -7148,7 +7170,7 @@ class FlashPilotWindow(
         self._ui.line.emit("[warn] SPD: stop requested, killing bridge ...")
 
     def _spd_detect(self):
-        self.spd_status.setText("Scanning USB...")
+        self.spd_status.setText(self.tr("Scanning USB..."))
 
         def work():
             try:
@@ -7157,7 +7179,7 @@ class FlashPilotWindow(
                 parsed = _json.loads(devs or "[]")
                 if not parsed:
                     self._ui.ui.emit(lambda: self.spd_status.setText(
-                        "No SPD device detected"))
+                        self.tr("No SPD device detected")))
                     self._ui.line.emit("[info] spd-detect: no device found")
                     return
                 for d in parsed:
@@ -7207,7 +7229,7 @@ class FlashPilotWindow(
             self._ui.line.emit("[spd] BROM watch already running - press Stop")
             return
         self._spd_watch_active = True
-        self.spd_status.setText("Watching for BROM... hold boot key + plug USB")
+        self.spd_status.setText(self.tr("Watching for BROM... hold boot key + plug USB"))
         self._ui.line.emit("[spd] BROM watch started - power off, hold VOL- , plug USB")
 
         def work():
@@ -7227,7 +7249,7 @@ class FlashPilotWindow(
                         self._last_spd_target = caught
                         def on_catch(t=caught, p=pid):
                             self.spd_status.setText(f"BROM CAUGHT @ {t} (1782:{p:04x}) - ready")
-                            self.show_toast("SPD BROM detected!", f"Target {t}", "success")
+                            self.show_toast(self.tr("SPD BROM detected!"), f"Target {t}", "success")
                             self._append_console(f"[spd] === BROM WINDOW CAUGHT @ {t} (1782:{p:04x}) ===")
                             self._append_console("[spd] Run Get Device Info / FRP Reset / Format NOW (window closes on reboot)")
                         self._ui.ui.emit(on_catch)
@@ -7239,7 +7261,7 @@ class FlashPilotWindow(
             if not caught:
                 def on_timeout():
                     if self._spd_watch_active:
-                        self.spd_status.setText("BROM watch timeout (3 min) - retry with VOL- held")
+                        self.spd_status.setText(self.tr("BROM watch timeout (3 min) - retry with VOL- held"))
                         self._append_console("[spd] BROM watch timed out after 3 minutes")
                     self._spd_watch_active = False
                 self._ui.ui.emit(on_timeout)
@@ -7318,7 +7340,7 @@ class FlashPilotWindow(
         except Exception:
             pass
         self._ui.line.emit("[spd] BROM not yet present — arming auto factory reset (FIRST) + starting watch (no FDL needed)")
-        self.show_toast("BROM Factory Reset armed (FIRST)", "Hold VOL-/boot key + plug USB — format will auto-run on catch (BROM-only if no FDL)", "info")
+        self.show_toast(self.tr("BROM Factory Reset armed (FIRST)"), self.tr("Hold VOL-/boot key + plug USB — format will auto-run on catch (BROM-only if no FDL)"), "info")
         self._spd_brom_watch()
 
     def _spd_resolve_target(self):
@@ -7366,7 +7388,7 @@ class FlashPilotWindow(
             return
         device_key, flux, resolved = prep
         tgt = resolved[1]
-        self.spd_status.setText("Reading device info...")
+        self.spd_status.setText(self.tr("Reading device info..."))
 
         def work():
             if flux:
@@ -7384,7 +7406,7 @@ class FlashPilotWindow(
                 with _devices.device_scope(device_key):
                     out = bridge._run(["spd-info", tgt], timeout=60)
                 emit(out or "(no output)")
-                self._ui.ui.emit(lambda: self.spd_status.setText("Info above"))
+                self._ui.ui.emit(lambda: self.spd_status.setText(self.tr("Info above")))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -7581,7 +7603,7 @@ class FlashPilotWindow(
 
         if not _flow_start("SPD ADB enable", destructive=True):
             self._ui.status.emit("Busy: " + _flow_busy_msg())
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg())
+            self._ui.toast.emit("warn", self.tr("Operation already running"), _flow_busy_msg())
             return
 
         def work():
@@ -7609,7 +7631,7 @@ class FlashPilotWindow(
                         "shows, tap Allow once."
                     )
                     self._ui.status.emit("SPD: ADB enable complete")
-                    self._ui.toast.emit("ok", "SPD ADB", "boot patched + flashed")
+                    self._ui.toast.emit("ok", self.tr("SPD ADB"), self.tr("boot patched + flashed"))
                 else:
                     self._ui.line.emit(
                         "[info] patched image staged but NOT flashed — follow "
@@ -7617,13 +7639,13 @@ class FlashPilotWindow(
                     )
                     self._ui.status.emit("SPD: ADB enable staged (not flashed)")
                     self._ui.toast.emit(
-                        "warn", "SPD ADB", "Patched image staged — not flashed")
+                        "warn", self.tr("SPD ADB"), self.tr("Patched image staged — not flashed"))
             except bridge.BridgeError as e:
                 self._ui.line.emit(f"[error] SPD ADB: {e}")
-                self._ui.toast.emit("error", "SPD ADB", str(e))
+                self._ui.toast.emit("error", self.tr("SPD ADB"), str(e))
             except Exception as e:  # noqa: BLE001
                 self._ui.line.emit(f"[error] SPD ADB: {e}")
-                self._ui.toast.emit("error", "SPD ADB", str(e))
+                self._ui.toast.emit("error", self.tr("SPD ADB"), str(e))
             finally:
                 _flow_end()
                 bridge.clear_cancel()
@@ -7793,17 +7815,17 @@ class FlashPilotWindow(
                     out = bridge._run(args, timeout=1800)
                 emit(out or "(no output)")
                 self._ui.status.emit("SPD: flash complete")
-                self._ui.toast.emit("ok", "SPD flash", "Completed")
+                self._ui.toast.emit("ok", self.tr("SPD flash"), self.tr("Completed"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
                 emit("[cancelled] SPD flash stopped by user")
-                self._ui.toast.emit("warn", "SPD flash", "Cancelled")
+                self._ui.toast.emit("warn", self.tr("SPD flash"), self.tr("Cancelled"))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
                 emit(f"[error] SPD flash: {e}")
-                self._ui.toast.emit("error", "SPD flash", str(e))
+                self._ui.toast.emit("error", self.tr("SPD flash"), str(e))
                 if flux:
                     state, code = jobs.classify_failure(e, device_key)
                     jobs.finish_job(flux.job_id, state, str(e), code)
@@ -7865,17 +7887,17 @@ class FlashPilotWindow(
                     )
                 emit(out or "(no output)")
                 self._ui.status.emit("SPD: backup complete")
-                self._ui.toast.emit("ok", "SPD backup", "Partition table dumped")
+                self._ui.toast.emit("ok", self.tr("SPD backup"), self.tr("Partition table dumped"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled:
                 emit("[cancelled] SPD backup stopped by user")
-                self._ui.toast.emit("warn", "SPD backup", "Cancelled")
+                self._ui.toast.emit("warn", self.tr("SPD backup"), self.tr("Cancelled"))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", "cancelled by user", "CANCELLED")
             except bridge.BridgeError as e:
                 emit(f"[error] SPD backup: {e}")
-                self._ui.toast.emit("error", "SPD backup", str(e))
+                self._ui.toast.emit("error", self.tr("SPD backup"), str(e))
                 if flux:
                     state, code = jobs.classify_failure(e, device_key)
                     jobs.finish_job(flux.job_id, state, str(e), code)
@@ -8069,7 +8091,7 @@ class FlashPilotWindow(
                 f"[build] {'OK' if rc.returncode == 0 else f'FAILED (rc={rc.returncode})'}"
             )
             self._ui.toast.emit(
-                "ok", "Bridge build", "Succeeded" if rc.returncode == 0 else "Failed - see console"
+                "ok", self.tr("Bridge build"), "Succeeded" if rc.returncode == 0 else "Failed - see console"
             )
         threading.Thread(target=work, daemon=True).start()
 
@@ -8086,7 +8108,7 @@ class FlashPilotWindow(
         import threading
 
         fpath = os.path.expanduser("~/flashpilot_update.deb")
-        self.show_toast("Downloading update", f"Downloading FlashPilot {stable_tag}...", "info")
+        self.show_toast(self.tr("Downloading update"), f"Downloading FlashPilot {stable_tag}...", "info")
         if hasattr(self, "_ui") and self._ui:
             try:
                 self._ui.line.emit(f"[check] Downloading {stable_tag} ...")
@@ -8105,14 +8127,14 @@ class FlashPilotWindow(
                             pass
                         self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
                 else:
-                    self._ui.ui.emit(lambda: self.show_toast("Download failed", "File missing after download.", "error"))
+                    self._ui.ui.emit(lambda: self.show_toast(self.tr("Download failed"), self.tr("File missing after download."), "error"))
             except Exception as e:
                 try:
                     if hasattr(self, "_ui") and self._ui:
                         self._ui.line.emit(f"[check] Download failed: {e}")
-                        self._ui.ui.emit(lambda _e=e: self.show_toast("Download failed", str(_e), "error"))
+                        self._ui.ui.emit(lambda _e=e: self.show_toast(self.tr("Download failed"), str(_e), "error"))
                     else:
-                        self.show_toast("Download failed", str(e), "error")
+                        self.show_toast(self.tr("Download failed"), str(e), "error")
                 except Exception:
                     pass
 
@@ -8133,7 +8155,7 @@ class FlashPilotWindow(
         import threading
 
         if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
-            self.show_toast("Installation Failed", "Update file not found.", "error")
+            self.show_toast(self.tr("Installation Failed"), self.tr("Update file not found."), "error")
             return
         from PyQt6.QtWidgets import QInputDialog, QLineEdit
         password, ok = QInputDialog.getText(
@@ -8144,7 +8166,7 @@ class FlashPilotWindow(
         )
         if not (ok and password):
             return
-        self.show_toast("Installing update", "Running sudo dpkg -i ...", "info")
+        self.show_toast(self.tr("Installing update"), self.tr("Running sudo dpkg -i ..."), "info")
         if hasattr(self, "_ui") and self._ui:
             try:
                 self._ui.line.emit("[check] Installing update (sudo dpkg -i) ...")
@@ -8162,7 +8184,7 @@ class FlashPilotWindow(
                     timeout=600,
                 )
             except Exception as e:
-                self._ui.ui.emit(lambda _e=e: self.show_toast("Installation Failed", str(_e), "error"))
+                self._ui.ui.emit(lambda _e=e: self.show_toast(self.tr("Installation Failed"), str(_e), "error"))
                 return
             finally:
                 # Never keep the password referenced longer than needed.
@@ -8173,12 +8195,12 @@ class FlashPilotWindow(
                         self._ui.line.emit("[check] Update installed - restarting into the new version ...")
                     except Exception:
                         pass
-                self._ui.ui.emit(lambda: self.show_toast("Update Installed", "Restarting FlashPilot...", "success"))
+                self._ui.ui.emit(lambda: self.show_toast(self.tr("Update Installed"), self.tr("Restarting FlashPilot..."), "success"))
                 QTimer.singleShot(1500, self._restart_application)
             else:
                 err = (res.stderr or "").strip() or (res.stdout or "").strip() or "Installation failed"
                 # Avoid echoing a wrong-password sudo prompt verbatim forever; keep it short.
-                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast("Installation Failed", _e, "error"))
+                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast(self.tr("Installation Failed"), _e, "error"))
                 if hasattr(self, "_ui") and self._ui:
                     try:
                         self._ui.line.emit(f"[check] Install failed: {err[-500:]}")
@@ -8236,7 +8258,7 @@ class FlashPilotWindow(
         import threading
 
         fpath = os.path.expanduser("~/flashpilot_update.deb")
-        self.show_toast("Downloading update", f"Downloading FlashPilot {stable_tag}...", "info")
+        self.show_toast(self.tr("Downloading update"), f"Downloading FlashPilot {stable_tag}...", "info")
         if hasattr(self, "_ui") and self._ui:
             try:
                 self._ui.line.emit(f"[check] Downloading {stable_tag} ...")
@@ -8255,14 +8277,14 @@ class FlashPilotWindow(
                             pass
                         self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
                 else:
-                    self._ui.ui.emit(lambda: self.show_toast("Download failed", "File missing after download.", "error"))
+                    self._ui.ui.emit(lambda: self.show_toast(self.tr("Download failed"), self.tr("File missing after download."), "error"))
             except Exception as e:
                 try:
                     if hasattr(self, "_ui") and self._ui:
                         self._ui.line.emit(f"[check] Download failed: {e}")
-                        self._ui.ui.emit(lambda _e=e: self.show_toast("Download failed", str(_e), "error"))
+                        self._ui.ui.emit(lambda _e=e: self.show_toast(self.tr("Download failed"), str(_e), "error"))
                     else:
-                        self.show_toast("Download failed", str(e), "error")
+                        self.show_toast(self.tr("Download failed"), str(e), "error")
                 except Exception:
                     pass
 
@@ -8283,7 +8305,7 @@ class FlashPilotWindow(
         import threading
 
         if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
-            self.show_toast("Installation Failed", "Update file not found.", "error")
+            self.show_toast(self.tr("Installation Failed"), self.tr("Update file not found."), "error")
             return
         from PyQt6.QtWidgets import QInputDialog, QLineEdit
         password, ok = QInputDialog.getText(
@@ -8294,7 +8316,7 @@ class FlashPilotWindow(
         )
         if not (ok and password):
             return
-        self.show_toast("Installing update", "Running sudo dpkg -i ...", "info")
+        self.show_toast(self.tr("Installing update"), self.tr("Running sudo dpkg -i ..."), "info")
         if hasattr(self, "_ui") and self._ui:
             try:
                 self._ui.line.emit("[check] Installing update (sudo dpkg -i) ...")
@@ -8312,7 +8334,7 @@ class FlashPilotWindow(
                     timeout=600,
                 )
             except Exception as e:
-                self._ui.ui.emit(lambda _e=e: self.show_toast("Installation Failed", str(_e), "error"))
+                self._ui.ui.emit(lambda _e=e: self.show_toast(self.tr("Installation Failed"), str(_e), "error"))
                 return
             finally:
                 # Never keep the password referenced longer than needed.
@@ -8323,12 +8345,12 @@ class FlashPilotWindow(
                         self._ui.line.emit("[check] Update installed - restarting into the new version ...")
                     except Exception:
                         pass
-                self._ui.ui.emit(lambda: self.show_toast("Update Installed", "Restarting FlashPilot...", "success"))
+                self._ui.ui.emit(lambda: self.show_toast(self.tr("Update Installed"), self.tr("Restarting FlashPilot..."), "success"))
                 QTimer.singleShot(1500, self._restart_application)
             else:
                 err = (res.stderr or "").strip() or (res.stdout or "").strip() or "Installation failed"
                 # Avoid echoing a wrong-password sudo prompt verbatim forever; keep it short.
-                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast("Installation Failed", _e, "error"))
+                self._ui.ui.emit(lambda _e=err[-800:]: self.show_toast(self.tr("Installation Failed"), _e, "error"))
                 if hasattr(self, "_ui") and self._ui:
                     try:
                         self._ui.line.emit(f"[check] Install failed: {err[-500:]}")
@@ -8394,7 +8416,7 @@ class FlashPilotWindow(
         self._last_check_was_auto = True
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(False)
-            self._check_updates_btn.setText("Checking...")
+            self._check_updates_btn.setText(self.tr("Checking..."))
         threading.Thread(target=self._check_update_thread, daemon=True).start()
 
     def _manual_check_update(self):
@@ -8406,7 +8428,7 @@ class FlashPilotWindow(
         self._last_check_was_auto = False
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(False)
-            self._check_updates_btn.setText("Checking...")
+            self._check_updates_btn.setText(self.tr("Checking..."))
         if hasattr(self, "_ui") and self._ui:
             self._ui.line.emit("[check] Manual update check requested...")
         threading.Thread(target=self._check_update_thread, daemon=True).start()
@@ -8737,7 +8759,7 @@ class FlashPilotWindow(
     def _reset_update_btn(self):
         if hasattr(self, "_check_updates_btn") and self._check_updates_btn:
             self._check_updates_btn.setEnabled(True)
-            self._check_updates_btn.setText("Check for Updates Now")
+            self._check_updates_btn.setText(self.tr("Check for Updates Now"))
 
     # ---- two-tier updater (python light patch) -------------------------
     def _apply_python_patch_clicked(self):
@@ -8745,10 +8767,10 @@ class FlashPilotWindow(
         try:
             from python.core import updater
         except Exception as e:
-            self.show_toast("Updater unavailable", str(e), "error")
+            self.show_toast(self.tr("Updater unavailable"), str(e), "error")
             return
         if updater.is_dev_checkout():
-            self.show_toast("Dev checkout", "Light patch applies only to installed builds.", "warn")
+            self.show_toast(self.tr("Dev checkout"), self.tr("Light patch applies only to installed builds."), "warn")
             return
         self._confirm_overlay(
             "Apply Python Patch",
@@ -9275,7 +9297,7 @@ class FlashPilotWindow(
             if on:
                 edit.setStyleSheet(
                     base + f" QLineEdit {{ border:1px solid {C['err']}; }}")
-                edit.setToolTip("Invalid regular expression")
+                edit.setToolTip(self.tr("Invalid regular expression"))
             else:
                 edit.setStyleSheet(base)
                 edit.setToolTip("")
@@ -9520,7 +9542,7 @@ class FlashPilotWindow(
             QLabel as _QL, QComboBox
         from PyQt6.QtCore import QTimer as _QTimer
         dlg = QDialog(self)
-        dlg.setWindowTitle("QR Provision")
+        dlg.setWindowTitle(self.tr("QR Provision"))
         dlg.setModal(False)
         dlg.setMinimumSize(440, 680)
         dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
@@ -9554,9 +9576,9 @@ class FlashPilotWindow(
         opt_lbl.setStyleSheet(f"color:{C['dim']}; font-size:11px; font-weight:700;")
         opt_row.addWidget(opt_lbl)
         dpc = QComboBox()
-        dpc.setPlaceholderText("TestDPC (default)")
-        dpc.addItem("Google Device Policy", "adp")
-        dpc.addItem("FlashPilot DPC", "ours")
+        dpc.setPlaceholderText(self.tr("TestDPC (default)"))
+        dpc.addItem(self.tr("Google Device Policy"), "adp")
+        dpc.addItem(self.tr("FlashPilot DPC"), "ours")
         dpc.setCurrentIndex(-1)
         self._style_combo(dpc)
         opt_row.addWidget(dpc, 1)
@@ -9633,7 +9655,7 @@ class FlashPilotWindow(
                 svg = "mdm_qr/provisioning_qr_mdm.svg"
             import os as _os
             if not _os.path.isfile(svg):
-                info.setText("Generation failed — see console.")
+                info.setText(self.tr("Generation failed — see console."))
                 return
             pix = self._render_svg(svg, 300)
             if pix is not None:
@@ -9664,7 +9686,7 @@ class FlashPilotWindow(
             info.setText(f"Generation failed: {e}")
 
         def do_gen(choice):
-            info.setText("Generating …")
+            info.setText(self.tr("Generating …"))
             dpc.setEnabled(False)
             import threading as _th
 
@@ -9782,7 +9804,7 @@ class FlashPilotWindow(
             return
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("MDM provisioning QR code")
+        dlg.setWindowTitle(self.tr("MDM provisioning QR code"))
         dlg.setModal(False)
         dlg.setMinimumSize(360, 520)
         dlg.setStyleSheet(f"background:{C['panel']}; color:{C['text']};")
@@ -9865,7 +9887,7 @@ class FlashPilotWindow(
         lay.addWidget(hint)
         lay.addWidget(path_lbl)
 
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(self.tr("Close"))
         close_btn.setStyleSheet(_btn_primary())
         close_btn.clicked.connect(dlg.accept)
         lay.addWidget(close_btn)
@@ -9941,7 +9963,7 @@ class FlashPilotWindow(
             # lit and show re-scanning instead; the next good poll restores
             # the exact state.
             if getattr(self, "_last_conn", False) or getattr(self, "_device_connected", False):
-                self.conn_state.setText("Re-scanning USB ... (last scan failed)")
+                self.conn_state.setText(self.tr("Re-scanning USB ... (last scan failed)"))
                 return
             self.badge.set_state(None)
             self.orb.set_connected(False)
@@ -10276,7 +10298,7 @@ class FlashPilotWindow(
             self.scene.set_connected(False)
             self.scene.set_vendor(None)
             self._set_conn_glow(C["border_hi"])
-            self.conn_state.setText("No device connected")
+            self.conn_state.setText(self.tr("No device connected"))
             self.conn_state.setStyleSheet(
                 f"color:{C['dim']}; font-size:12px; background:transparent;"
             )
@@ -11125,7 +11147,7 @@ class FlashPilotWindow(
             text = "\n".join(f"{k}: {v}" for k, v in info.items())
             QApplication.clipboard().setText(text)
             self._ui.line.emit(f"[info] Device info copied to clipboard:\n{text}")
-            self.show_toast("Device info copied", "Model/build/serial copied to clipboard", "success")
+            self.show_toast(self.tr("Device info copied"), self.tr("Model/build/serial copied to clipboard"), "success")
         except Exception as e:
             self._ui.line.emit(f"[error] Copy failed: {e}")
 
@@ -11608,7 +11630,7 @@ class FlashPilotWindow(
                     "to 100% without interruption to finish re-calibration."
                 )
                 self._ui.toast.emit(
-                    "ok", "Battery repair", "Fixes applied - re-calibration tip shown"
+                    "ok", self.tr("Battery repair"), self.tr("Fixes applied - re-calibration tip shown")
                 )
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
@@ -11770,7 +11792,7 @@ class FlashPilotWindow(
                     "weak cell (voltage dropped below cutoff)."
                 )
                 self._ui.status.emit("Battery load test complete")
-                self._ui.toast.emit("ok", "Load test", "Result printed to console")
+                self._ui.toast.emit("ok", self.tr("Load test"), self.tr("Result printed to console"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -11909,7 +11931,7 @@ class FlashPilotWindow(
         for k, card in self.net_cards.items():
             card.set("--")
         self.net_status.setText(
-            "No authorized ADB device - connect + authorize to see live diagnostics"
+            self.tr("No authorized ADB device - connect + authorize to see live diagnostics")
         )
 
     def _network_report(self, device_key=None):
@@ -11972,7 +11994,7 @@ class FlashPilotWindow(
                     pass
                 emit("\n".join(lines))
                 self._ui.ui.emit(lambda: self.net_status.setText(
-                    "Report printed to console"))
+                    self.tr("Report printed to console")))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -12064,7 +12086,7 @@ class FlashPilotWindow(
                 emit("")
                 emit("Network repair done. Re-open Settings -> "
                      "Connections if the phone needs a moment.")
-                self._ui.toast.emit("ok", "Network repair", "Radios reset + caches flushed")
+                self._ui.toast.emit("ok", self.tr("Network repair"), self.tr("Radios reset + caches flushed"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -12146,7 +12168,7 @@ class FlashPilotWindow(
                     emit(f"\nSIM state after reset: {v or '(unknown)'}")
                 except bridge.BridgeError:
                     pass
-                self._ui.toast.emit("ok", "Modem reset", "Modem re-registering")
+                self._ui.toast.emit("ok", self.tr("Modem reset"), self.tr("Modem re-registering"))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except bridge.BridgeCancelled as e:
@@ -12282,7 +12304,7 @@ class FlashPilotWindow(
         bridge.request_cancel()
         self._ui.status.emit("Stopping …")
         try:
-            self._ui.toast.emit("warn", "Stopping", "Closing the current USB operation — device stays connected")
+            self._ui.toast.emit("warn", self.tr("Stopping"), self.tr("Closing the current USB operation — device stays connected"))
         except Exception:
             pass
         # Instantly disable the single global STOP and all legacy stops so the user
@@ -12315,8 +12337,8 @@ class FlashPilotWindow(
         radios[0].setChecked(True)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        ok = QPushButton("Run on this device")
-        cancel = QPushButton("Cancel")
+        ok = QPushButton(self.tr("Run on this device"))
+        cancel = QPushButton(self.tr("Cancel"))
         ok.clicked.connect(dlg.accept)
         cancel.clicked.connect(dlg.reject)
         btns.addWidget(cancel)
@@ -12333,10 +12355,10 @@ class FlashPilotWindow(
         """Which running job(s) should STOP cancel? Returns a device key,
         "__all__", or "__cancelled__" (dismissal stands — no stop)."""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Stop which device?")
+        dlg.setWindowTitle(self.tr("Stop which device?"))
         dlg.setMinimumWidth(420)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Several devices are running operations.<br>Which one should stop?"))
+        lay.addWidget(QLabel(self.tr("Several devices are running operations.<br>Which one should stop?")))
         group = QButtonGroup(dlg)
         radios = []
         for i, k in enumerate(device_keys):
@@ -12347,15 +12369,15 @@ class FlashPilotWindow(
             group.addButton(rb, i)
             lay.addWidget(rb)
             radios.append(rb)
-        rb_all = QRadioButton("Stop ALL devices")
+        rb_all = QRadioButton(self.tr("Stop ALL devices"))
         rb_all.setProperty("device_key", "__all__")
         group.addButton(rb_all, len(device_keys))
         lay.addWidget(rb_all)
         radios[0].setChecked(True)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        ok = QPushButton("Stop")
-        cancel = QPushButton("Continue all")
+        ok = QPushButton(self.tr("Stop"))
+        cancel = QPushButton(self.tr("Continue all"))
         ok.clicked.connect(dlg.accept)
         cancel.clicked.connect(dlg.reject)
         btns.addWidget(cancel)
@@ -12400,8 +12422,8 @@ class FlashPilotWindow(
         radios[0].setChecked(True)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        ok = QPushButton("Run on this device")
-        cancel = QPushButton("Cancel")
+        ok = QPushButton(self.tr("Run on this device"))
+        cancel = QPushButton(self.tr("Cancel"))
         ok.clicked.connect(dlg.accept)
         cancel.clicked.connect(dlg.reject)
         btns.addWidget(cancel)
@@ -12456,7 +12478,7 @@ class FlashPilotWindow(
                 f"right now ({device_key}): {last}"
             )
             self._ui.toast.emit(
-                "warn", "Unsupported for this device",
+                "warn", self.tr("Unsupported for this device"),
                 f"{job} cannot run on the selected device in its current state.")
         except Exception:
             pass
@@ -12611,7 +12633,7 @@ class FlashPilotWindow(
             return
         if not _flow_start(label, destructive=True, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", self.tr("Operation already running"), _flow_busy_msg(key=device_key))
             self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
             return
         core.clear_cancel(key=device_key)
@@ -12771,13 +12793,13 @@ class FlashPilotWindow(
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
                 emit(f"{dev_tag}Flow completed successfully")
-                self._ui.toast.emit("ok", "Operation completed", label)
+                self._ui.toast.emit("ok", self.tr("Operation completed"), label)
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except core.FlowCancelled as e:
                 emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
-                self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                self._ui.toast.emit("warn", self.tr("Operation cancelled"), str(e))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001
@@ -12881,7 +12903,7 @@ class FlashPilotWindow(
                 for ln in tail.splitlines():
                     self._ui.line.emit(f"  {ln}")
         self._ui.status.emit(f"FAILED: {label} - {msg.splitlines()[0]}")
-        self._ui.toast.emit("error", "Operation failed", msg.splitlines()[0])
+        self._ui.toast.emit("error", self.tr("Operation failed"), msg.splitlines()[0])
         # Button shake + cable shake on failure (professional 340ms / 420ms)
         try:
             if self.settings.value("animations", "true", type=bool):
@@ -12950,7 +12972,7 @@ class FlashPilotWindow(
             return
         if not _flow_start(label, destructive=True, key=device_key):
             self._ui.status.emit("Busy: " + _flow_busy_msg(key=device_key))
-            self._ui.toast.emit("warn", "Operation already running", _flow_busy_msg(key=device_key))
+            self._ui.toast.emit("warn", self.tr("Operation already running"), _flow_busy_msg(key=device_key))
             self._ui.line.emit(f"[warn] blocked: {_flow_busy_msg(key=device_key)}")
             return
         core.clear_cancel(key=device_key)
@@ -13033,13 +13055,13 @@ class FlashPilotWindow(
                     self._ui.qr.emit(ctx["mdm_qr_png"])
                 self._ui.status.emit(f"Flow '{label}' finished")
                 emit(f"{dev_tag}Flow completed successfully")
-                self._ui.toast.emit("ok", "Operation completed", label)
+                self._ui.toast.emit("ok", self.tr("Operation completed"), label)
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
             except core.FlowCancelled as e:
                 emit(f"{dev_tag}[cancelled] flow stopped by user ({e})")
                 self._ui.status.emit(f"Flow '{label}' cancelled")
-                self._ui.toast.emit("warn", "Operation cancelled", str(e))
+                self._ui.toast.emit("warn", self.tr("Operation cancelled"), str(e))
                 if flux:
                     jobs.finish_job(flux.job_id, "CANCELLED", str(e), "CANCELLED")
             except Exception as e:  # noqa: BLE001

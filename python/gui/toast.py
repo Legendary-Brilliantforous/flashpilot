@@ -418,7 +418,7 @@ class ToastHost(QWidget):
                 self._overflow.hide()
             return
         lab = self._ensure_overflow()
-        lab.setText(f"+{n} more")
+        lab.setText(self.tr("+{n} more").format(n=n))
         lab.adjustSize()
         lab.show()
 

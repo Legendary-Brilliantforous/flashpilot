@@ -34,11 +34,11 @@ class FusPageMixin:
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(12)
 
-        lay.addWidget(SectionTitle("SAMSUNG OFFICIAL FIRMWARE DOWNLOADER (SAMFIRM / FUS)"))
+        lay.addWidget(SectionTitle(self.tr("SAMSUNG OFFICIAL FIRMWARE DOWNLOADER (SAMFIRM / FUS)")))
         info = QLabel(
-            "Direct FUS client to query Samsung servers, check latest firmware versions, "
+            self.tr("Direct FUS client to query Samsung servers, check latest firmware versions, "
             "download encrypted firmware packages in parallel, and auto-decrypt them into "
-            "ready-to-flash .tar.md5 archives."
+            "ready-to-flash .tar.md5 archives.")
         )
         info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         info.setWordWrap(True)
@@ -53,21 +53,21 @@ class FusPageMixin:
 
         # Model row
         r1 = QHBoxLayout()
-        lbl1 = QLabel("Device Model:")
+        lbl1 = QLabel(self.tr("Device Model:"))
         lbl1.setStyleSheet(f"color:{C['text']}; font-weight:600;")
         r1.addWidget(lbl1)
         self.fus_model_input = QLineEdit("SM-S918B")
         self.fus_model_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
         r1.addWidget(self.fus_model_input, 1)
 
-        self.fus_detect_btn = QPushButton("🔍 Detect Connected Device")
+        self.fus_detect_btn = QPushButton(self.tr("🔍 Detect Connected Device"))
         self.fus_detect_btn.setStyleSheet(_btn_ghost())
         self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_detect_btn.clicked.connect(self._fus_detect_device)
         self._gate_button(self.fus_detect_btn, command="adb_shell")
         r1.addWidget(self.fus_detect_btn)
         
-        lbl_reg = QLabel("Region:")
+        lbl_reg = QLabel(self.tr("Region:"))
         lbl_reg.setStyleSheet(f"color:{C['text']}; font-weight:600;")
         r1.addWidget(lbl_reg)
         self.fus_region_input = QLineEdit("EUX")
@@ -78,21 +78,21 @@ class FusPageMixin:
 
         # Version row
         r2 = QHBoxLayout()
-        lbl2 = QLabel("Firmware Version:")
+        lbl2 = QLabel(self.tr("Firmware Version:"))
         lbl2.setStyleSheet(f"color:{C['text']}; font-weight:600;")
         r2.addWidget(lbl2)
         self.fus_version_input = QLineEdit()
-        self.fus_version_input.setPlaceholderText("e.g. S918BXXU3BWCV/S918BOXM3BWCV/S918BXXU3BWCV (or click Check Version)")
+        self.fus_version_input.setPlaceholderText(self.tr("e.g. S918BXXU3BWCV/S918BOXM3BWCV/S918BXXU3BWCV (or click Check Version)"))
         self.fus_version_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
         r2.addWidget(self.fus_version_input, 1)
 
-        self.fus_check_btn = QPushButton("Check Version")
+        self.fus_check_btn = QPushButton(self.tr("Check Version"))
         self.fus_check_btn.setStyleSheet(_btn_primary())
         self.fus_check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_check_btn.clicked.connect(self._fus_check_version)
         r2.addWidget(self.fus_check_btn)
 
-        self.fus_list_btn = QPushButton("List All Versions")
+        self.fus_list_btn = QPushButton(self.tr("List All Versions"))
         self.fus_list_btn.setStyleSheet(_btn_ghost())
         self.fus_list_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_list_btn.clicked.connect(self._fus_list_versions)
@@ -101,7 +101,7 @@ class FusPageMixin:
 
         # Output dir row
         r3 = QHBoxLayout()
-        lbl3 = QLabel("Output Directory:")
+        lbl3 = QLabel(self.tr("Output Directory:"))
         lbl3.setStyleSheet(f"color:{C['text']}; font-weight:600;")
         r3.addWidget(lbl3)
         self.fus_out_input = QLineEdit(os.path.expanduser("~/brilliant/cache"))
@@ -121,7 +121,7 @@ class FusPageMixin:
         details_lay = QVBoxLayout(details_card)
         details_lay.setContentsMargins(12, 10, 12, 10)
         details_lay.setSpacing(6)
-        details_title = QLabel("📋 FIRMWARE FOR THIS DEVICE")
+        details_title = QLabel(self.tr("📋 FIRMWARE FOR THIS DEVICE"))
         details_title.setStyleSheet(f"color:{C['accent_hi']}; font-size:11px; font-weight:800; letter-spacing:1px;")
         details_lay.addWidget(details_title)
         details_grid = QGridLayout()
@@ -149,14 +149,14 @@ class FusPageMixin:
 
         # Actions row
         act_row = QHBoxLayout()
-        self.fus_download_btn = QPushButton("⬇ Download & Decrypt Firmware")
+        self.fus_download_btn = QPushButton(self.tr("⬇ Download & Decrypt Firmware"))
         self.fus_download_btn.setStyleSheet(_btn_primary())
         self.fus_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_download_btn.setFixedHeight(38)
         self.fus_download_btn.clicked.connect(self._fus_download)
         act_row.addWidget(self.fus_download_btn)
 
-        self.fus_load_ap_btn = QPushButton("📂 Load into AP Slot")
+        self.fus_load_ap_btn = QPushButton(self.tr("📂 Load into AP Slot"))
         self.fus_load_ap_btn.setStyleSheet(_btn_ghost())
         self.fus_load_ap_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_load_ap_btn.setFixedHeight(38)
@@ -172,7 +172,7 @@ class FusPageMixin:
         lay.addWidget(self.fus_progress)
 
         # Status label
-        self.fus_status_lbl = QLabel("Ready.")
+        self.fus_status_lbl = QLabel(self.tr("Ready."))
         self.fus_status_lbl.setStyleSheet(f"color:{C['dim']}; font-size:12px; font-weight:600;")
         lay.addWidget(self.fus_status_lbl)
 
@@ -184,14 +184,14 @@ class FusPageMixin:
         res_lay = QVBoxLayout(res_card)
         res_lay.setSpacing(6)
         
-        res_title = QLabel("🌐 Other Brand Firmware & Loader Repositories (Reference)")
+        res_title = QLabel(self.tr("🌐 Other Brand Firmware & Loader Repositories (Reference)"))
         res_title.setStyleSheet(f"color:{C['text']}; font-weight:700; font-size:12px;")
         res_lay.addWidget(res_title)
 
         res_info = QLabel(
-            "• <b>MediaTek (MTK) Scatter / DA:</b> Check Hovatek & Needrom for scatter files and signed Download Agents.<br>"
+            self.tr("• <b>MediaTek (MTK) Scatter / DA:</b> Check Hovatek & Needrom for scatter files and signed Download Agents.<br>"
             "• <b>Qualcomm EDL Firehose:</b> Use <i>bkerler/Firehose</i> on GitHub for open EDL programmer loaders.<br>"
-            "• <b>UNISOC / Spreadtrum (SPD):</b> Stock PAC firmwares contain FDL1/FDL2 binaries required for BSL flashing."
+            "• <b>UNISOC / Spreadtrum (SPD):</b> Stock PAC firmwares contain FDL1/FDL2 binaries required for BSL flashing.")
         )
         res_info.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
         res_info.setWordWrap(True)

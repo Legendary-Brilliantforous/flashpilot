@@ -50,6 +50,25 @@ def placeholders(text):
     return set(_PLACEHOLDER.findall(text or ""))
 
 
+def tr(text):
+    """Translate a plain source phrase where no widget ``tr()`` is available.
+
+    Module-level helpers (for example the device-board applicability pass) have
+    no QObject to call ``self.tr()`` on. Translation is looked up at call time,
+    so an installed translator takes effect without rebuilding any constants,
+    and a missing translator returns the English source unchanged.
+    """
+    if not text:
+        return text
+    try:
+        from PyQt6.QtCore import QCoreApplication
+
+        hit = QCoreApplication.translate("flashpilot", text)
+    except Exception:
+        return text
+    return hit or text
+
+
 def stable_key(prefix, text):
     """A stable catalog key for a data-driven string (job/mode names).
 

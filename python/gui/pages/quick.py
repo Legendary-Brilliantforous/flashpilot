@@ -37,43 +37,45 @@ class QuickPageMixin:
         hv.setContentsMargins(16, 14, 16, 14)
         hv.setSpacing(12)
 
-        hv.addWidget(SectionTitle("QUICK ACTIONS"))
+        hv.addWidget(SectionTitle(self.tr("QUICK ACTIONS")))
         info = QLabel(
-            "One-tap ADB & Fastboot actions - reboot destinations and factory "
-            "reset without hunting through the mode dropdowns."
+            self.tr("One-tap ADB & Fastboot actions - reboot destinations and factory "
+                    "reset without hunting through the mode dropdowns.")
         )
         info.setWordWrap(True)
         info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
         hv.addWidget(info)
 
         # --- XOS/Transsion unlock (secret codes) --------------------------
-        hv.addWidget(SectionTitle("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)"))
+        hv.addWidget(SectionTitle(self.tr("XOS / INFINIX-TECNO-ITEL UNLOCK (SECRET CODES)")))
         xos_info = QLabel(
-            "Enable ADB on a factory-reset (FRP) Transsion phone:\n"
-            "① Welcome → select language & country → connect WiFi → Next\n"
-            "② On the Agreement page tap the 'Personalized Recommendations'\n"
-            "    privacy-policy link → Chrome opens\n"
-            "③ In Chrome type 'frpbypass' → on that site find the DIALER link\n"
-            "    and open it → the real phone Dialer appears despite OOBE lock\n"
-            "④ Dial *#*#49#*#* → ADB enables persistently. Plug USB, authorize."
+            self.tr(
+                "Enable ADB on a factory-reset (FRP) Transsion phone:\n"
+                "① Welcome → select language & country → connect WiFi → Next\n"
+                "② On the Agreement page tap the 'Personalized Recommendations'\n"
+                "    privacy-policy link → Chrome opens\n"
+                "③ In Chrome type 'frpbypass' → on that site find the DIALER link\n"
+                "    and open it → the real phone Dialer appears despite OOBE lock\n"
+                "④ Dial *#*#49#*#* → ADB enables persistently. Plug USB, authorize."
+            )
         )
         xos_info.setWordWrap(True)
         xos_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
         hv.addWidget(xos_info)
 
         xos_row = QHBoxLayout()
-        codes_btn = QPushButton("📋 Secret Codes Reference")
+        codes_btn = QPushButton(self.tr("📋 Secret Codes Reference"))
         codes_btn.setStyleSheet(_btn_ghost())
         codes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        codes_btn.setToolTip("Full code table for Transsion/XOS devices")
+        codes_btn.setToolTip(self.tr("Full code table for Transsion/XOS devices"))
         codes_btn.clicked.connect(self._show_secret_codes)
         xos_row.addWidget(codes_btn)
-        triage_btn = QPushButton("🔎 ADB Triage")
+        triage_btn = QPushButton(self.tr("🔎 ADB Triage"))
         triage_btn.setStyleSheet(_btn_primary())
         triage_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         triage_btn.setToolTip(
-            "Probe the connected device over ADB: lock enforcement state, root, "
-            "partition access, FRP markers - tells you which flow to use next."
+            self.tr("Probe the connected device over ADB: lock enforcement state, root, "
+                    "partition access, FRP markers - tells you which flow to use next.")
         )
         triage_btn.clicked.connect(self._adb_triage)
         self._gate_button(triage_btn, command="adb_shell")
@@ -82,24 +84,24 @@ class QuickPageMixin:
         hv.addLayout(xos_row)
 
         # --- PIT safety contract (auto-fetch + forensic validation) -------
-        hv.addWidget(SectionTitle("PIT SAFETY CONTRACT"))
+        hv.addWidget(SectionTitle(self.tr("PIT SAFETY CONTRACT")))
         pit_info = QLabel(
-            "Fetches the partition table straight from the phone (the device "
-            "is always the source of truth), validates it with the odin4 "
-            "checklist plus FlashPilot chain analysis, and caches it by "
-            "content hash. Runs automatically before every flash."
+            self.tr("Fetches the partition table straight from the phone (the device "
+                    "is always the source of truth), validates it with the odin4 "
+                    "checklist plus FlashPilot chain analysis, and caches it by "
+                    "content hash. Runs automatically before every flash.")
         )
         pit_info.setWordWrap(True)
         pit_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
         hv.addWidget(pit_info)
 
         pit_btn_row = QHBoxLayout()
-        self._pit_fetch_btn = QPushButton("Fetch & Verify PIT")
+        self._pit_fetch_btn = QPushButton(self.tr("Fetch & Verify PIT"))
         self._pit_fetch_btn.setStyleSheet(_btn_primary())
         self._pit_fetch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._pit_fetch_btn.setToolTip(
-            "Auto-fetch PIT from the phone in download mode, validate it and "
-            "show the storage map"
+            self.tr("Auto-fetch PIT from the phone in download mode, validate it and "
+            "show the storage map")
         )
         self._pit_fetch_btn.clicked.connect(self._pit_fetch_clicked)
         self._gate_button(self._pit_fetch_btn, command="pit-fetch")
@@ -113,7 +115,7 @@ class QuickPageMixin:
         self._pit_view.setReadOnly(True)
         self._pit_view.setMaximumHeight(190)
         self._pit_view.setPlaceholderText(
-            "PIT health, findings and storage map will appear here..."
+            self.tr("PIT health, findings and storage map will appear here...")
         )
         self._pit_view.setStyleSheet(
             f"QPlainTextEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
@@ -124,12 +126,12 @@ class QuickPageMixin:
         self._refresh_pit_cache_label()
 
         # --- Native one-session archive flash -----------------------------
-        hv.addWidget(SectionTitle("NATIVE FLASH (ONE SESSION)"))
+        hv.addWidget(SectionTitle(self.tr("NATIVE FLASH (ONE SESSION)")))
         nf_info = QLabel(
-            "Flash an Odin .tar archive with FlashPilot's own writer - "
+            self.tr("Flash an Odin .tar archive with FlashPilot's own writer - "
             "extract, decompress, PIT-map and write every partition in a "
             "single session. No replugging, no odin4 (which cannot talk to "
-            "A14-class devices anyway)."
+            "A14-class devices anyway).")
         )
         nf_info.setWordWrap(True)
         nf_info.setStyleSheet(f"color:{C['mute']}; font-size:11px;")
@@ -137,13 +139,13 @@ class QuickPageMixin:
 
         nf_row = QHBoxLayout()
         self._nf_tar_edit = QLineEdit()
-        self._nf_tar_edit.setPlaceholderText("Bootloader/AP archive (.tar)...")
+        self._nf_tar_edit.setPlaceholderText(self.tr("Bootloader/AP archive (.tar)..."))
         self._nf_tar_edit.setStyleSheet(
             f"QLineEdit {{ background:{C['inset']}; border:1px solid {C['border']};"
             f" border-radius:8px; padding:6px 10px; color:{C['text']}; }}"
         )
         nf_row.addWidget(self._nf_tar_edit, 1)
-        nf_browse = QPushButton("Browse...")
+        nf_browse = QPushButton(self.tr("Browse..."))
         nf_browse.setStyleSheet(_btn_ghost())
         nf_browse.setCursor(Qt.CursorShape.PointingHandCursor)
         nf_browse.setFixedWidth(90)
@@ -151,12 +153,12 @@ class QuickPageMixin:
         nf_row.addWidget(nf_browse)
         hv.addLayout(nf_row)
 
-        self._nf_patch_cb = QCheckBox("Patch vbmeta - disable AVB verification")
+        self._nf_patch_cb = QCheckBox(self.tr("Patch vbmeta - disable AVB verification"))
         self._nf_patch_cb.setChecked(True)
         self._nf_patch_cb.setToolTip(
-            "Rewrites the archive's vbmeta flags to 0x03 so mixed-version\n"
+            self.tr("Rewrites the archive's vbmeta flags to 0x03 so mixed-version\n"
             "bootloaders pass Android Verified Boot. Required when flashing\n"
-            "a BL from a different build than the installed system."
+            "a BL from a different build than the installed system.")
         )
         self._nf_patch_cb.setStyleSheet(
             f"QCheckBox {{ color:{C['text']}; font-size:11px; }}"
@@ -165,7 +167,7 @@ class QuickPageMixin:
         hv.addWidget(self._nf_patch_cb)
 
         nf_btn_row = QHBoxLayout()
-        self._nf_flash_btn = QPushButton("⚡ Flash Archive Now")
+        self._nf_flash_btn = QPushButton(self.tr("⚡ Flash Archive Now"))
         self._nf_flash_btn.setStyleSheet(_btn_primary())
         self._nf_flash_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._nf_flash_btn.clicked.connect(self._native_flash_clicked)
@@ -175,13 +177,13 @@ class QuickPageMixin:
         hv.addLayout(nf_btn_row)
 
         # --- Factory reset (ADB + recovery fallback) ---
-        hv.addWidget(SectionTitle("FACTORY RESET"))
+        hv.addWidget(SectionTitle(self.tr("FACTORY RESET")))
         fr_row = QHBoxLayout()
         fr_row.setSpacing(8)
-        fr_btn = QPushButton("Factory reset")
+        fr_btn = QPushButton(self.tr("Factory reset"))
         fr_btn.setStyleSheet(_btn_primary())
         fr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fr_btn.setToolTip("ADB wipe /data when authorized, else guided recovery reset")
+        fr_btn.setToolTip(self.tr("ADB wipe /data when authorized, else guided recovery reset"))
         fr_btn.clicked.connect(
             lambda: self._confirm_overlay(
                 "Factory Reset",
@@ -204,15 +206,15 @@ class QuickPageMixin:
         hv.addLayout(fr_row)
 
         # --- ADB: one-tap reboot destinations ---
-        hv.addWidget(SectionTitle("ADB / USB DEBUGGING"))
+        hv.addWidget(SectionTitle(self.tr("ADB / USB DEBUGGING")))
         self._add_job_flows(hv, ["Reboot"], modes=["ADB"])
         sw_row = QHBoxLayout()
         sw_row.setSpacing(8)
-        sw_btn = QPushButton("Setup wizard bypass")
+        sw_btn = QPushButton(self.tr("Setup wizard bypass"))
         sw_btn.setStyleSheet(_btn_ghost())
         sw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         sw_btn.setToolTip(
-            "Classic ADB bypass for older Android (7-8) stuck on the setup wizard"
+            self.tr("Classic ADB bypass for older Android (7-8) stuck on the setup wizard")
         )
         sw_btn.clicked.connect(
             lambda: self._run_ops_flow(
