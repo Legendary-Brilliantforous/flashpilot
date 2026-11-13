@@ -67,16 +67,47 @@ translation is only a build-time helper for seeding new entries.
 
 #### What is translated today
 
-- Shared chrome: title bar, OEM chip bar, device strip, console controls and
-  context menu, transport picker.
-- Flow captions, job headers and transport-mode headings (stable ids).
-- The settings page.
+The catalogs hold **612 phrases** (`strings`) plus **138 stable keys**
+(`keys` = flow captions, job names, transport modes), and every language
+ships them translated. Covered surfaces:
+
+- Shared chrome: title bar, OEM chip bar, device strip, transport picker,
+  console dock (header, controls, search/filter, context menu).
+- Flow captions, job headers and transport-mode headings (stable ids, so
+  English wording changes never orphan a translation).
+- Every operations page: Samsung (Odin), MediaTek, Qualcomm, SPD/UNISOC,
+  Samsung FUS firmware downloader, quick actions, battery/network tools,
+  and settings (including the language picker itself).
+- The device drill-down board (brand → model → actions) and the shared QR
+  provisioning helpers.
+- Toasts (title and detail) and the application's own console status lines.
+
+Three rules keep this honest:
+
+1. **Console level prefixes stay English.** `_classify()` matches `[error]`,
+   `[step]`, `[refused]`, `[device]`, `[fus]`, so those lines are built as
+   `"[step] " + tr("...")` — the prefix is never handed to a translator.
+   `tests/test_i18n.py` fails if a catalog key starts with a level token.
+2. **Raw tool output is never translated.** Bridge/adb/fastboot output,
+   device text, serials, paths, protocol tokens and anything under
+   `supported_devices.json` stay exactly as the device reported them.
+3. **Module-level helpers use `i18n.tr()`.** Code with no widget to call
+   `self.tr()` on (device-board applicability, QR helpers) goes through
+   `i18n.tr()`, which performs the same offline lookup at call time.
 
 Safety-review hold: the long **confirmation-dialog bodies**
 (`_DESTRUCTIVE_CONFIRM`) and the **EXPERIMENTAL legal warnings**
 (`python/core/experimental.py`) remain English on purpose. Machine-translating
 words like "IRREVERSIBLE" or "may void warranty" without a native-speaker
 review is too risky; they will be handled by a dedicated reviewed pass.
+
+#### Pseudo-locale smoke test
+
+`tests/test_i18n_pseudo.py` installs a synthetic catalog that wraps every
+value in `⟦…⟧`, builds the real window, and asserts the markers reach the
+chrome, the flow browser rows (label, job header, mode heading) and
+`i18n.tr()`. It catches strings that never reach the translator, and proves
+the layouts survive visibly longer labels.
 
 ### Workflow
 
@@ -99,7 +130,7 @@ review is too risky; they will be handled by a dedicated reviewed pass.
 
    ```bash
    .venv/bin/python scripts/i18n_extract.py --check
-   .venv/bin/pytest tests/test_i18n.py -q
+   .venv/bin/pytest tests/test_i18n.py tests/test_i18n_pseudo.py -q
    ```
 
 5. Test the switch in **Settings → Language & region** (applies on restart).

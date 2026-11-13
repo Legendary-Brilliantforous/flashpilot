@@ -23,6 +23,23 @@ offline.
 - `en.json` is the identity catalog and defines the required key set.
 - Empty/missing keys fall back to the English source text.
 
+Current size: **612 `strings` + 138 `keys`** per language, all translated.
+They cover the shared chrome, every operations page (Samsung/Odin, MediaTek,
+Qualcomm, SPD/UNISOC, FUS, quick actions, battery/network, settings), the
+device board, QR provisioning helpers, toasts and the app's own console
+status lines.
+
+Console lines are built as `"[step] " + tr("...")`: `[error]`, `[refused]`,
+`[device]` and friends are matched by `_classify()` and must stay outside the
+translated phrase. Raw bridge/device output is never translated, and neither
+are brands, model numbers or protocol terms.
+
+`i18n.tr()` is the translation helper for module-level code that has no widget
+to call `self.tr()` on. It does the same offline lookup at call time.
+
+`tests/test_i18n_pseudo.py` builds the real window under a `⟦pseudo⟧` catalog
+to prove those surfaces actually route through the translator.
+
 Safety-review hold: long confirmation-dialog bodies and EXPERIMENTAL legal
 warnings stay English until a native-speaker review; see
 `docs/TRANSLATION.md`.
@@ -46,7 +63,7 @@ Language codes: `en` (default), `fr`, `es`, `de`, `zh`, `ru`, `pt`,
 4. Verify:
    ```bash
    .venv/bin/python scripts/i18n_extract.py --check
-   .venv/bin/pytest tests/test_i18n.py -q
+   .venv/bin/pytest tests/test_i18n.py tests/test_i18n_pseudo.py -q
    ```
 5. Switch language in Settings (requires restart). Arabic switches the layout
    direction to right-to-left automatically.
