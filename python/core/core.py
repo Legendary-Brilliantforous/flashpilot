@@ -23,7 +23,7 @@ from . import experimental as _experimental
 from . import device_info as _device_info
 from . import devices as _devices
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 APP_VERSION = __version__
 
 MODES = ["ADB", "MTP", "Download mode", "Samsung BROM", "MTK", "MTK BROM", "FASTBOOT", "EDL", "SPD"]
