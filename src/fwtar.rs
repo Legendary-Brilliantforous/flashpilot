@@ -51,9 +51,8 @@ pub fn verify_md5_trailer(path: &str) -> Result<String> {
             "{path} too small for a .tar.md5 trailer"
         )));
     }
-    let mut f = BufReader::new(
-        File::open(path).map_err(|e| BridgeError::Io(format!("{path}: {e}")))?,
-    );
+    let mut f =
+        BufReader::new(File::open(path).map_err(|e| BridgeError::Io(format!("{path}: {e}")))?);
     let body_md5 = md5_of_stream(&mut f, body_len);
 
     let mut tail = vec![0u8; 66];
@@ -105,7 +104,8 @@ pub fn strip_md5_trailer(path: &str) -> Result<(String, String)> {
         .join(format!("{name}.tar"))
         .to_string_lossy()
         .to_string();
-    let mut w = BufWriter::new(File::create(&out_path).map_err(|e| BridgeError::Io(e.to_string()))?);
+    let mut w =
+        BufWriter::new(File::create(&out_path).map_err(|e| BridgeError::Io(e.to_string()))?);
     // Stream-copy only the `len`-byte payload.
     let mut remaining = len;
     let mut buf = [0u8; 65536];
@@ -115,11 +115,14 @@ pub fn strip_md5_trailer(path: &str) -> Result<(String, String)> {
             break;
         }
         let want = remaining.min(buf.len() as u64) as usize;
-        let n = r.read(&mut buf[..want]).map_err(|e| BridgeError::Io(e.to_string()))?;
+        let n = r
+            .read(&mut buf[..want])
+            .map_err(|e| BridgeError::Io(e.to_string()))?;
         if n == 0 {
             break;
         }
-        w.write_all(&buf[..n]).map_err(|e| BridgeError::Io(e.to_string()))?;
+        w.write_all(&buf[..n])
+            .map_err(|e| BridgeError::Io(e.to_string()))?;
         h.update(&buf[..n]);
         remaining -= n as u64;
     }
@@ -220,10 +223,7 @@ pub fn prepare_member(path: &Path) -> Result<PathBuf> {
             && u32::from_le_bytes(magic) == crate::sparse::SPARSE_MAGIC
         {
             let raw = current.with_extension("raw");
-            crate::sparse::expand_file(
-                &current.to_string_lossy(),
-                &raw.to_string_lossy(),
-            )?;
+            crate::sparse::expand_file(&current.to_string_lossy(), &raw.to_string_lossy())?;
             current = raw;
         }
     }
@@ -287,7 +287,7 @@ mod tests {
         h.set_path("test.img").unwrap();
         h.set_size(body.len() as u64);
         h.set_mode(0o644);
-        h.set_cksum();  // MUST be called last (computes checksum over the header)
+        h.set_cksum(); // MUST be called last (computes checksum over the header)
         b.append(&h, body.as_slice()).unwrap();
         let tar_bytes = b.into_inner().unwrap();
         let md5 = to_hex(&Md5::digest(&tar_bytes));
@@ -335,7 +335,10 @@ mod tests {
         // multi-member plain tar: staging must preserve tar order.
         let tmp = tempfile::tempdir().unwrap();
         let mut b = tar::Builder::new(Vec::new());
-        for (i, name) in ["boot.img", "recovery.img", "vbmeta.img"].iter().enumerate() {
+        for (i, name) in ["boot.img", "recovery.img", "vbmeta.img"]
+            .iter()
+            .enumerate()
+        {
             let body = vec![b'A' + i as u8; 1024];
             let mut h = tar::Header::new_ustar();
             h.set_path(name).unwrap();

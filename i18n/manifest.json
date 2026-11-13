@@ -1,0 +1,29 @@
+{
+  "default": "en",
+  "ui": [
+    {"code": "en", "name": "English"},
+    {"code": "fr", "name": "Français"},
+    {"code": "es", "name": "Español"},
+    {"code": "de", "name": "Deutsch"},
+    {"code": "zh", "name": "简体中文"},
+    {"code": "ru", "name": "Русский"},
+    {"code": "pt", "name": "Português"},
+    {"code": "ja", "name": "日本語"},
+    {"code": "ar", "name": "العربية"},
+    {"code": "hi", "name": "हिन्दी"},
+    {"code": "tr", "name": "Türkçe"}
+  ],
+  "docs": [
+    {"code": "en", "name": "English"},
+    {"code": "fr", "name": "French"},
+    {"code": "es", "name": "Spanish"},
+    {"code": "de", "name": "German"},
+    {"code": "zh", "name": "Chinese (Simplified)"},
+    {"code": "ru", "name": "Russian"},
+    {"code": "pt", "name": "Portuguese"},
+    {"code": "ja", "name": "Japanese"},
+    {"code": "ar", "name": "Arabic"},
+    {"code": "hi", "name": "Hindi"},
+    {"code": "tr", "name": "Turkish"}
+  ]
+}

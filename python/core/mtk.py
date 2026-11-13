@@ -68,13 +68,19 @@ def pid_stage(pid):
 
 
 def find_mtk():
-    """Return the list of MediaTek USB device dicts (VID 0x0e8d).
+    """Return the list of MediaTek merged rows (Rust mode mediatek*).
 
-    Scans the UNFILTERED bus list — bridge.detect_usb() is Samsung-filtered
-    (04e8) and would never yield MTK devices, which is why BROM/preloader
-    polling used to see '0 devices' even with a phone in BROM mode."""
+    Filter: the main MTK VID (0x0e8d — every PID, the old behaviour) plus
+    any row the bridge classifies as mediatek* (OEM preloader/BROM/DA
+    stages). Mode alone would miss plain-boot 0x0e8d rows labelled by PID
+    the classifier does not prefix; VID alone would miss OEM VIDs.
+    """
     try:
-        return [d for d in bridge.detect_all() if d.get("vid") == MTK_VID]
+        from . import bridge as _bridge2
+        return [r for r in (_bridge2.list_merged() or [])
+                if isinstance(r, dict)
+                and (r.get("vid") == MTK_VID
+                     or str(r.get("mode", "")).startswith("mediatek"))]
     except bridge.BridgeError:
         return []
 

@@ -1,0 +1,14 @@
+============================================================
+MDM / DEVICE-OWNER ANALYSIS REPORT
+============================================================
+Device         : TECNO KM7 (TECNO / TECNO)
+Android        : 15 (API 35)
+Security patch : 2025-07-05
+Build          : TECNO/KM7-OP/TECNO-KM7:15/AP3A.240905.015.A2/113012:user/release-keys
+Encryption     : encrypted
+Boot           : bootloader=locked  verifiedboot=green  oem_unlock=0
+
+Management state:
+  Active admin                : Lists the device / profile owners per user
+  MDM/DPC package              : Lists the device 
+

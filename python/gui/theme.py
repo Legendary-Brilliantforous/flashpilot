@@ -34,6 +34,10 @@ C = {
     "warn_dim": "#2e2410",
     "err": "#ff7a86",
     "err_dim": "#2e1418",
+    "err_hi": "#ff8a96",
+    # Experimental — amber, per design.md (amber dashed border + ack gate).
+    "experimental": "#f59e0b",
+    "experimental_hi": "#fbbf24",
     "chip_blue": "#201a14",
     "chip_text": "#f0d9b5",
     "accent_dim": "#2a2114",
@@ -92,21 +96,42 @@ ACCENT_THEMES = {
     },
 }
 
-# Unified base QSS — single definition, no duplication
-_BASE_QSS = f"""
+# ---- Design tokens (per design.md) ----
+# Spacing scale 4/8/12/16/24 — use these instead of ad-hoc pixel paddings.
+SPACE = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 24}
+# Radius scale 8/10/12/14/16.
+RADIUS = {"sm": 8, "md": 10, "lg": 12, "xl": 14, "xxl": 16}
+# Typography — UI sans stack, console mono stack, and the type scale.
+FONT_FAMILY = '"Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif'
+FONT_MONO = '"JetBrains Mono", "Consolas", "Menlo", monospace'
+FONT_SIZE = {"caption": 8, "small": 11, "base": 13, "title": 16}
+# Elevation — (x, y, blur) drop-shadow offsets for painted surfaces.
+ELEV = {"card": (0, 8, 24), "popup": (0, 18, 64)}
+
+
+# Unified base QSS — single definition, no duplication.
+def _base_qss():
+    """Build the app-wide base QSS from the CURRENT `C` values.
+
+    Rebuilt on every call so an accent switch (`C.update(ACCENT_THEMES[...])`
+    in `qt_app._apply_theme`) actually recolors the whole app, not just the
+    accent strip. Use `_get_base_qss()`; the module-level `_BASE_QSS` name is
+    a frozen-at-import snapshot kept only for backwards compatibility.
+    """
+    return f"""
 * {{
-    font-family: "Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
-    font-size: 13px;
+    font-family: {FONT_FAMILY};
+    font-size: {FONT_SIZE['base']}px;
 }}
 QToolTip {{
     background-color: {C['panel']}; color: {C['text_hi']};
-    border: 1px solid {C['border_hi']}; border-radius: 8px; padding: 8px 10px;
+    border: 1px solid {C['border_hi']}; border-radius: {RADIUS['sm']}px; padding: 8px 10px;
     font-size: 12px;
 }}
 QLineEdit {{
     background: {C['inset']};
     border: 1px solid {C['border']};
-    border-radius: 10px;
+    border-radius: {RADIUS['md']}px;
     padding: 8px 12px;
     color: {C['text_hi']};
     selection-background-color: {C['accent']};
@@ -118,7 +143,7 @@ QComboBox {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 {C['card_hover']}, stop:1 {C['card']});
     border: 1px solid {C['glass_border']};
-    border-radius: 10px;
+    border-radius: {RADIUS['md']}px;
     padding: 8px 34px 8px 12px;
     color: {C['text_hi']};
     min-height: 22px;
@@ -144,24 +169,28 @@ QComboBox::down-arrow:on {{ border-top: 6px solid {C['accent']}; }}
 QComboBox QAbstractItemView {{
     background-color: {C['panel']};
     border: 1px solid {C['border_hi']};
-    border-radius: 12px;
+    border-radius: {RADIUS['lg']}px;
     color: {C['text']};
     selection-background-color: {C['accent_dim']};
     selection-color: {C['accent_hi']};
     outline: 0;
     padding: 6px;
 }}
-QScrollBar:vertical {{
-    background: transparent; width: 8px; border-radius: 4px; margin: 2px;
+QScrollBar:vertical {{ background: transparent; width: 7px; margin: 2px; }}
+QScrollBar::handle:vertical {{
+    background: rgba(141,168,200,0.18); border-radius: 3px; min-height: 28px;
 }}
-QScrollBar::handle:vertical {{ background: {C['border_hi']}; border-radius: 4px; min-height: 30px; }}
 QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
-QScrollBar:horizontal {{ height: 0; }}
+QScrollBar:horizontal {{ background: transparent; height: 7px; margin: 2px; }}
+QScrollBar::handle:horizontal {{
+    background: rgba(141,168,200,0.18); border-radius: 3px; min-width: 28px;
+}}
+QScrollBar::handle:horizontal:hover {{ background: {C['accent']}; }}
 QFrame#sbox {{
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 rgba(19,35,64,180), stop:1 rgba(10,20,38,200));
-    border: 1px solid {C['glass_border']}; border-radius: 14px;
+    border: 1px solid {C['glass_border']}; border-radius: {RADIUS['xl']}px;
 }}
 QPushButton {{
     border-radius: 9px; padding: 7px 14px; font-size: 12px; font-weight: 600;
@@ -171,23 +200,19 @@ QCheckBox::indicator {{ width: 16px; height: 16px;
     border: 1px solid rgba(141,168,200,0.28); border-radius: 5px; background: {C['inset']}; }}
 QCheckBox::indicator:hover {{ border-color: {C['accent']}; }}
 QCheckBox::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
-QScrollBar:vertical {{ background: transparent; width: 7px; margin: 2px; }}
-QScrollBar::handle:vertical {{
-    background: rgba(141,168,200,0.18); border-radius: 3px; min-height: 28px;
-}}
-QScrollBar::handle:vertical:hover {{ background: {C['accent']}; }}
-QScrollBar:horizontal {{ background: transparent; height: 7px; margin: 2px; }}
-QScrollBar::handle:horizontal {{
-    background: rgba(141,168,200,0.18); border-radius: 3px; min-width: 28px;
-}}
-QScrollBar::handle:horizontal:hover {{ background: {C['accent']}; }}
 """
 
 
+# Backwards-compat shim: `_BASE_QSS` is FROZEN at import time and does NOT pick
+# up later `C.update(ACCENT_THEMES[...])` accent switches. Callers should use
+# `_get_base_qss()` instead; this str is retained only because some call sites
+# do `_BASE_QSS + _console_qss()`.
+_BASE_QSS = _base_qss()
+
 
 def _get_base_qss():
-    """Regenerate base QSS with current C values — single source, no duplication."""
-    return _BASE_QSS
+    """Regenerate base QSS with the CURRENT C values — single source, no duplication."""
+    return _base_qss()
 
 
 def _btn_primary():
@@ -234,6 +259,20 @@ def _card_qss():
     )
 
 
+def _splitter_qss():
+    """Painted divider for the resizable splitters (device panel | page and
+    page | console), from theme tokens only — no hardcoded colours.
+
+    The grab zone is the splitter's handle width; this only paints a subtle
+    pill inside it that lights up on hover."""
+    return (
+        f"QSplitter {{ background: transparent; }}"
+        f"QSplitter::handle {{ background: {C['border']};"
+        f" margin: 40px 2px; border-radius: {RADIUS['sm']}px; }}"
+        f"QSplitter::handle:hover {{ background: {C['accent']}; }}"
+    )
+
+
 def _btn_ghost():
     return f"""
     QPushButton {{
@@ -276,7 +315,7 @@ def _btn_danger():
         color: #ffffff; border-color: #ff8a96;
     }}
     QPushButton:pressed {{ background: #c41f2f; border-color: #c41f2f; }}
-    QPushButton:focus {{ border-color: #ff8a96; }}
+    QPushButton:focus {{ border-color: {C['err_hi']}; }}
     QPushButton:disabled {{ color: {C['mute']};
                             border-color: rgba(141,168,200,0.08); background: transparent; }}
     """
@@ -289,9 +328,11 @@ def _console_qss():
         border: 1px solid {C['glass_border']};
         border-radius: 12px;
         color: {C['text_hi']};
-        font-family: "JetBrains Mono", "Consolas", "Menlo", monospace;
-        font-size: 12px;
-        padding: 14px;
+        font-family: {FONT_MONO};
+        font-size: 12.5px;
+        padding: 16px 18px;
+        line-height: 1.55;
+        spacing: 4px;
         selection-background-color: {C['accent_dim']};
         selection-color: {C['accent_hi']};
     }}

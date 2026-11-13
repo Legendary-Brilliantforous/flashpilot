@@ -1,5 +1,7 @@
 # Security Policy
 
+**Documentation languages:** **English** · [Français](docs/fr/SECURITY.md) · [Español](docs/es/SECURITY.md) · [Deutsch](docs/de/SECURITY.md) · [简体中文](docs/zh/SECURITY.md) · [Русский](docs/ru/SECURITY.md) · [Português](docs/pt/SECURITY.md) · [日本語](docs/ja/SECURITY.md) · [العربية](docs/ar/SECURITY.md) · [हिन्दी](docs/hi/SECURITY.md) · [Türkçe](docs/tr/SECURITY.md) · [Translation guide](docs/TRANSLATION.md)
+
 ## Supported versions
 
 The project is pre-1.0. Security fixes land on the `main` branch and, when one

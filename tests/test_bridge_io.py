@@ -11,6 +11,7 @@ import sys
 import pytest
 
 from python.core import bridge
+from python.core import core
 
 
 def _fake_bridge(tmp_path):
@@ -61,6 +62,91 @@ def test_success_returns_stdout(monkeypatch, tmp_path):
     path.chmod(0o755)
     monkeypatch.setattr(bridge, "BRIDGE", path)
     assert bridge._run(["0"]) == '{"ok": true}'
+
+
+def _flow_bridge(tmp_path, code, lines):
+    """Fake bridge for flow-run: prints `lines`, then exits with `code`."""
+    body = "".join(f"print({line!r})\n" for line in lines)
+    script = "#!/usr/bin/env python3\nimport sys\n" + body + f"sys.exit({code})\n"
+    path = tmp_path / f"flow_bridge_{code}.py"
+    path.write_text(script)
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_flow_nonzero_exit_raises_flow_failed(monkeypatch, tmp_path):
+    """A non-zero bridge exit is a failure: run() must raise, not return
+    quietly (the GUI used to announce success for these)."""
+    path = _flow_bridge(
+        tmp_path, 7, ["[step] trying", "failed to open /dev/bus/003"])
+    monkeypatch.setattr(bridge, "BRIDGE", path)
+    core.clear_cancel()
+    seen = []
+    try:
+        with pytest.raises(core.FlowFailed) as exc:
+            core._RustFlow("detect", "detect").run({}, seen.append)
+    finally:
+        core.clear_cancel()
+    assert exc.value.exit_code == 7
+    assert "exit code 7" in str(exc.value)
+    assert "failed to open /dev/bus/003" in str(exc.value)
+    assert any("failed to open" in line for line in seen)
+
+
+def test_flow_clean_exit_returns(monkeypatch, tmp_path):
+    path = _flow_bridge(tmp_path, 0, ["[step] ok", "OKAY [ 0.1s]"])
+    monkeypatch.setattr(bridge, "BRIDGE", path)
+    core.clear_cancel()
+    try:
+        assert core._RustFlow("detect", "detect").run({}, lambda m: None) is None
+    finally:
+        core.clear_cancel()
+
+
+def test_flow_cancellation_still_reports_cancelled(monkeypatch, tmp_path):
+    """STOP is not a failure: cancellation keeps raising FlowCancelled even
+    when the killed bridge exits non-zero."""
+    path = _flow_bridge(tmp_path, 1, ["[error] would fail"])
+    monkeypatch.setattr(bridge, "BRIDGE", path)
+    core.clear_cancel()
+    core.request_cancel()
+    try:
+        with pytest.raises(core.FlowCancelled):
+            core._RustFlow("detect", "detect").run({}, lambda m: None)
+    finally:
+        core.clear_cancel()
+
+
+def test_flow_success_gating_rejects_failed_transcript():
+    """GUI success gating: only a transcript without failure markers may
+    show the green 'completed' toast."""
+    from python.gui.qt_app import _flow_failure_markers
+
+    assert _flow_failure_markers(["[step] x", "OKAY [ 0.1s]", "done"]) == []
+    # Mid-line mentions are not markers; prefix lines are.
+    assert _flow_failure_markers(["hint: it failed before, retry"]) == []
+    bad = _flow_failure_markers([
+        "  [error] nope",
+        "FAILED (remote: nope)",
+        "refused: wrong device",
+    ])
+    assert len(bad) == 3
+
+
+def test_spd_adb_import_is_safe_and_refuses():
+    """The GUI's SPD ADB button imports this module; it must never raise
+    ImportError and must never pretend a boot patch was written."""
+    import importlib
+
+    mod = importlib.import_module("python.core.spd_adb")
+    assert mod.SUPPORTED is False
+    assert "Nothing was written" in mod.UNAVAILABLE_REASON
+    with pytest.raises(NotImplementedError) as exc:
+        mod.enable_adb_via_boot_patch(
+            object(), "1:2", "/tmp/fdl1", 0x40004000,
+            fdl2=None, part="boot", log=lambda m: None)
+    assert "Nothing was written" in str(exc.value)
+    assert "USB debugging" in str(exc.value)
 
 
 def test_missing_bridge_raises_clear_error(monkeypatch):

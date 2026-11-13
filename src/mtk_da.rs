@@ -5,10 +5,15 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
+use crate::mtk::{
+    boot_stage_for, brom_handshake, detect_mtk as mtk_detect_mtk, find_bulk, BromSession, MTK_VID,
+};
 use crate::usb;
-use crate::mtk::{BromSession, MTK_VID, boot_stage_for, brom_handshake, find_bulk, detect_mtk as mtk_detect_mtk};
-use crate::util::{ensure_dir, format_hex, format_hex_spaced, format_size, parse_hex, parse_size, read_file, write_file, ProgressReporter};
+use crate::util::{
+    ensure_dir, format_hex, format_hex_spaced, format_size, parse_hex, parse_size, read_file,
+    write_file, ProgressReporter,
+};
 
 /// MTK scatter file entry (from SP Flash Tool scatter format)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +87,13 @@ impl ScatterFile {
             } else if line.starts_with("project:") {
                 project = line.split(':').nth(1).unwrap_or("").trim().to_string();
             } else if line.starts_with("block_size:") {
-                block_size = line.split(':').nth(1).unwrap_or("512").trim().parse().unwrap_or(512);
+                block_size = line
+                    .split(':')
+                    .nth(1)
+                    .unwrap_or("512")
+                    .trim()
+                    .parse()
+                    .unwrap_or(512);
             } else if line.starts_with("partition_name:") && line.len() > 15 {
                 // New entry starts (SP Flash Tool scatter format: no leading dash)
                 let mut entry = ScatterEntry {
@@ -114,15 +125,27 @@ impl ScatterFile {
                 } else if line.starts_with("file_name:") || line.starts_with("filename:") {
                     last_entry.filename = line.split(':').nth(1).unwrap_or("").trim().to_string();
                 } else if line.starts_with("is_download:") {
-                    last_entry.is_download = line.split(':').nth(1).unwrap_or("true").trim() == "true";
+                    last_entry.is_download =
+                        line.split(':').nth(1).unwrap_or("true").trim() == "true";
                 } else if line.starts_with("type:") {
-                    last_entry.partition_type = line.split(':').nth(1).unwrap_or("normal").trim().to_string();
+                    last_entry.partition_type = line
+                        .split(':')
+                        .nth(1)
+                        .unwrap_or("normal")
+                        .trim()
+                        .to_string();
                 } else if line.starts_with("partition_type:") {
-                    last_entry.partition_type = line.split(':').nth(1).unwrap_or("normal").trim().to_string();
+                    last_entry.partition_type = line
+                        .split(':')
+                        .nth(1)
+                        .unwrap_or("normal")
+                        .trim()
+                        .to_string();
                 } else if line.starts_with("region:") {
                     // Region is a string like EMMC_BOOT_1 or EMMC_USER
                     last_entry.region = match line.split(':').nth(1).unwrap_or("").trim() {
-                        "EMMC_BOOT_1" | "EMMC_BOOT_2" => 1,
+                        "EMMC_BOOT_1" => 1,
+                        "EMMC_BOOT_2" => 2,
                         _ => 0,
                     };
                 } else if line.starts_with("storage:") {
@@ -131,13 +154,26 @@ impl ScatterFile {
                         _ => 0,
                     };
                 } else if line.starts_with("storage_type:") {
-                    last_entry.storage_type = line.split(':').nth(1).unwrap_or("0").trim().parse().unwrap_or(0);
+                    last_entry.storage_type = line
+                        .split(':')
+                        .nth(1)
+                        .unwrap_or("0")
+                        .trim()
+                        .parse()
+                        .unwrap_or(0);
                 } else if line.starts_with("is_reserved:") || line.starts_with("reserved:") {
-                    last_entry.reserved = line.split(':').nth(1).unwrap_or("false").trim() == "true";
+                    last_entry.reserved =
+                        line.split(':').nth(1).unwrap_or("false").trim() == "true";
                 } else if line.starts_with("operation_type:") {
-                    last_entry.operation_type = line.split(':').nth(1).unwrap_or("UPDATE").trim().to_string();
+                    last_entry.operation_type = line
+                        .split(':')
+                        .nth(1)
+                        .unwrap_or("UPDATE")
+                        .trim()
+                        .to_string();
                 } else if line.starts_with("backup_type:") {
-                    last_entry.backup_type = line.split(':').nth(1).unwrap_or("NONE").trim().to_string();
+                    last_entry.backup_type =
+                        line.split(':').nth(1).unwrap_or("NONE").trim().to_string();
                 } else {
                     last_entry.attributes.insert(
                         line.split(':').next().unwrap_or("").trim().to_string(),
@@ -148,31 +184,31 @@ impl ScatterFile {
         }
 
         // Validate BEFORE filtering: a broken entry must be an error, not silently
-// dropped (silently dropping = the flash proceeds without that partition).
-for e in &entries {
-    if e.length == 0 {
-        return Err(format!(
-            "scatter entry '{}' has zero partition_size - refusing to flash",
-            e.partition_name
-        ));
-    }
-    if e.filename.is_empty() {
-        return Err(format!(
-            "scatter entry '{}' has no filename - refusing to flash",
-            e.partition_name
-        ));
-    }
-    let f = &e.filename;
-    let base = std::path::Path::new(f);
-    if f.contains('/') || f.contains('\\') || f.contains("..") || base.is_absolute() {
-        return Err(format!(
-            "unsafe filename in scatter for '{}': {:?} (must be a plain file name)",
-            e.partition_name, f
-        ));
-    }
-}
+        // dropped (silently dropping = the flash proceeds without that partition).
+        for e in &entries {
+            if e.length == 0 {
+                return Err(format!(
+                    "scatter entry '{}' has zero partition_size - refusing to flash",
+                    e.partition_name
+                ));
+            }
+            if e.filename.is_empty() {
+                return Err(format!(
+                    "scatter entry '{}' has no filename - refusing to flash",
+                    e.partition_name
+                ));
+            }
+            let f = &e.filename;
+            let base = std::path::Path::new(f);
+            if f.contains('/') || f.contains('\\') || f.contains("..") || base.is_absolute() {
+                return Err(format!(
+                    "unsafe filename in scatter for '{}': {:?} (must be a plain file name)",
+                    e.partition_name, f
+                ));
+            }
+        }
 
-// Filter to downloadable entries only
+        // Filter to downloadable entries only
         entries.retain(|e| e.is_download && e.is_valid());
 
         Ok(ScatterFile {
@@ -189,16 +225,532 @@ for e in &entries {
     }
 
     pub fn print_summary(&self) {
-        println!("Scatter: {} v{} ({})", self.project, self.version, self.platform);
+        println!(
+            "Scatter: {} v{} ({})",
+            self.project, self.version, self.platform
+        );
         println!("Block size: {} bytes", self.block_size);
         println!("Partitions ({}):", self.entries.len());
         for e in &self.entries {
-            println!("  {} - {}MB @ 0x{:X} [{}]", 
-                e.partition_name, e.size_mb(), e.start_addr, e.filename);
+            println!(
+                "  {} - {}MB @ 0x{:X} [{}]",
+                e.partition_name,
+                e.size_mb(),
+                e.start_addr,
+                e.filename
+            );
         }
     }
 }
 
+// ============================================================================
+// PURE HELPERS (unit-tested without a device)
+// ============================================================================
+
+/// Raw LBA0 read window: covers the protective MBR, the GPT header and the
+/// 128x128-byte entry array for BOTH 512- and 4096-byte logical sectors.
+pub(crate) const GPT_RAW_WINDOW: u64 = 0x200000;
+
+/// Sector sizes probed for the GPT header. Never assume 512: some eMMC/UFS
+/// LUNs (and USB bridges) use 4096-byte sectors, where the header lives at
+/// byte 4096 and every LBA must be scaled by 4096.
+pub(crate) const GPT_SECTOR_SIZES: [usize; 2] = [512, 4096];
+
+/// Start LBA of the MBR protective (0xEE) partition, if the first sector has
+/// a valid MBR signature. Used ONLY to locate the GPT header.
+fn mbr_protective_start_lba(data: &[u8]) -> Option<u64> {
+    if data.len() < 512 || data[510] != 0x55 || data[511] != 0xAA {
+        return None;
+    }
+    for i in 0..4 {
+        let rec = 446 + i * 16;
+        if data.get(rec + 4).copied() == Some(0xEE) {
+            let bytes = data.get(rec + 8..rec + 12)?;
+            return Some(u32::from_le_bytes(bytes.try_into().ok()?) as u64);
+        }
+    }
+    None
+}
+
+/// Locate the GPT header in a raw image read from LBA0. Returns
+/// `(header_offset, sector_size)`. Detection is by the `EFI PART` signature
+/// at a 512- or 4096-byte boundary; the MBR is only consulted to find the
+/// header when it is not at LBA1.
+pub(crate) fn detect_gpt_header(data: &[u8]) -> Option<(usize, usize)> {
+    for sector in GPT_SECTOR_SIZES {
+        if data.get(sector..sector + 8) == Some(b"EFI PART".as_slice()) {
+            return Some((sector, sector));
+        }
+    }
+    let start_lba = mbr_protective_start_lba(data)?;
+    for sector in GPT_SECTOR_SIZES {
+        let off = (start_lba as usize).checked_mul(sector)?;
+        if data.get(off..off + 8) == Some(b"EFI PART".as_slice()) {
+            return Some((off, sector));
+        }
+    }
+    None
+}
+
+fn parse_gpt_entry(entry: &[u8], sector: usize) -> Option<(String, u64, u64)> {
+    if entry.len() < 128 || entry[0..16].iter().all(|&b| b == 0) {
+        return None;
+    }
+    let start_lba = u64::from_le_bytes(entry[32..40].try_into().ok()?);
+    let end_lba = u64::from_le_bytes(entry[40..48].try_into().ok()?);
+    if end_lba < start_lba {
+        return None;
+    }
+    let size = (end_lba - start_lba + 1).checked_mul(sector as u64)?;
+    let start = start_lba.checked_mul(sector as u64)?;
+    let name: String = entry[56..128]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|&c| c != 0)
+        .map(|c| char::from_u32(c as u32).unwrap_or('\u{fffd}'))
+        .collect();
+    if name.is_empty() || size == 0 {
+        return None;
+    }
+    Some((name, start, size))
+}
+
+/// Parse a GPT from a raw disk image read starting at LBA0 (protective MBR
+/// included). Sector size is detected, not assumed. Returns
+/// `(name, start_byte, size_bytes)`.
+pub(crate) fn parse_gpt_disk_image(
+    data: &[u8],
+) -> std::result::Result<Vec<(String, u64, u64)>, String> {
+    let (off, sector) = detect_gpt_header(data).ok_or_else(|| {
+        "no GPT header (EFI PART) at a 512- or 4096-byte sector boundary, and no protective MBR pointing at one".to_string()
+    })?;
+    let hdr = data
+        .get(off..off + 92)
+        .ok_or_else(|| "GPT header truncated".to_string())?;
+    let header_size = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
+    if header_size < 92 || header_size > sector {
+        return Err(format!("insane GPT header size {header_size}"));
+    }
+    let entry_lba = u64::from_le_bytes(hdr[72..80].try_into().unwrap());
+    let num_entries = u32::from_le_bytes(hdr[80..84].try_into().unwrap()) as usize;
+    let entry_size = u32::from_le_bytes(hdr[84..88].try_into().unwrap()) as usize;
+    if num_entries == 0 || num_entries > 4096 {
+        return Err(format!("insane GPT entry count {num_entries}"));
+    }
+    if !(128..=4096).contains(&entry_size) || entry_size & 7 != 0 {
+        return Err(format!("insane GPT entry size {entry_size}"));
+    }
+    let entries_off = entry_lba
+        .checked_mul(sector as u64)
+        .and_then(|v| usize::try_from(v).ok())
+        .ok_or_else(|| "GPT entry array offset overflows".to_string())?;
+    let entries_end = num_entries
+        .checked_mul(entry_size)
+        .and_then(|len| entries_off.checked_add(len))
+        .ok_or_else(|| "GPT entry array size overflows".to_string())?;
+    if entries_end > data.len() {
+        return Err(format!(
+            "GPT entry array {entries_off}..{entries_end} lies outside the {}-byte read window",
+            data.len()
+        ));
+    }
+    let mut parts = Vec::new();
+    for i in 0..num_entries {
+        let start = entries_off + i * entry_size;
+        if let Some((name, addr, size)) = parse_gpt_entry(&data[start..start + entry_size], sector)
+        {
+            parts.push((name, addr, size));
+        }
+    }
+    Ok(parts)
+}
+
+/// Erase list for `mtk-screen-lock` (screen-lock credentials and their
+/// backing stores). `frp` is deliberately absent: that is `mtk-frp-*`'s job.
+pub(crate) fn screen_lock_partitions(wipe_userdata: bool) -> Vec<&'static str> {
+    let mut parts = vec![
+        "metadata",
+        "persistent",
+        "keystore",
+        "oemkeystore",
+        "protect1",
+        "protect2",
+        "misc",
+    ];
+    if wipe_userdata {
+        // Factory-reset grade: also drops user data and cached state.
+        parts.extend(["userdata", "cache", "nvdata"]);
+    }
+    parts
+}
+
+/// Filter a device partition table for backup. Refuses an empty table and
+/// skips zero-size entries (they cannot be dumped meaningfully).
+pub(crate) fn plan_backup(parts: &[(String, u64, u64)]) -> Result<Vec<(String, u64, u64)>> {
+    let plan: Vec<(String, u64, u64)> = parts
+        .iter()
+        .filter(|(_, _, size)| *size > 0)
+        .cloned()
+        .collect();
+    if plan.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "device partition table is empty (no dumpable partitions) — refusing to create an empty backup"
+                .to_string(),
+        ));
+    }
+    Ok(plan)
+}
+
+/// True when a scatter `region:` maps to the eMMC boot area
+/// (`EMMC_BOOT_1` = 1 / `EMMC_BOOT_2` = 2; `EMMC_USER` = 0). Boot-area
+/// images are only written when the caller opts in with
+/// `--include-boot-regions`.
+pub(crate) fn scatter_region_is_boot(region: u32) -> bool {
+    matches!(region, 1 | 2)
+}
+
+/// Partition name the DA uses for an eMMC boot area. `None` for the user area.
+pub(crate) fn boot_region_partition_name(region: u32) -> Option<&'static str> {
+    match region {
+        1 => Some("boot1"),
+        2 => Some("boot2"),
+        _ => None,
+    }
+}
+
+/// Why an entry must not be flashed (None = flashable). Keeps the skip
+/// decision pure so it can never silently write a boot-area image over a
+/// user-area address.
+pub(crate) fn flash_skip_reason(entry: &ScatterEntry) -> Option<String> {
+    if scatter_region_is_boot(entry.region) {
+        Some(
+            "region EMMC_BOOT_1/EMMC_BOOT_2 (boot area) — pass --include-boot-regions to write it"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Options for the MTK firmware flasher.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FlashOptions {
+    /// Write EMMC_BOOT_1/2 scatter entries to the DA's boot-area partitions.
+    pub include_boot_regions: bool,
+    /// "Format All + Download": erase each target before writing it.
+    pub format_all: bool,
+    /// With `format_all`, also erase userdata/cache.
+    pub erase_userdata: bool,
+}
+
+/// Partition names a `--format-all` run erases before downloading: every
+/// scatter target that resolves in the device GPT (A/B aware, user area
+/// only), plus userdata/cache when asked. Pure so it is testable without a
+/// device.
+pub(crate) fn format_all_targets(
+    entries: &[ScatterEntry],
+    gpt: &[String],
+    erase_userdata: bool,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in entries {
+        if scatter_region_is_boot(e.region) {
+            continue; // boot areas are firmware containers, not data
+        }
+        if let Some(name) = resolve_partition_name(&e.partition_name, gpt) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    if erase_userdata {
+        for extra in ["userdata", "cache"] {
+            if gpt.iter().any(|g| g == extra) && !out.iter().any(|n| n == extra) {
+                out.push(extra.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Resolve a scatter partition name against the device GPT: exact name
+/// first, then the A/B slots `<name>_a` / `<name>_b`.
+pub(crate) fn resolve_partition_name(name: &str, available: &[String]) -> Option<String> {
+    if available.iter().any(|n| n == name) {
+        return Some(name.to_string());
+    }
+    for suffix in ["_a", "_b"] {
+        let candidate = format!("{name}{suffix}");
+        if available.iter().any(|n| n == &candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// File names to try for a scatter image: the exact name, then its `.lz4`
+/// (and a bare `.lz4` for `*.img` entries, as shipped by some vendors).
+pub(crate) fn image_filename_candidates(filename: &str) -> Vec<String> {
+    let mut out = vec![filename.to_string()];
+    let lower = filename.to_ascii_lowercase();
+    if !lower.ends_with(".lz4") {
+        out.push(format!("{filename}.lz4"));
+    }
+    if lower.ends_with(".img") {
+        out.push(format!("{}.lz4", &filename[..filename.len() - 4]));
+    }
+    out
+}
+
+/// Locate a scatter entry's image inside the firmware folder, accepting the
+/// `.lz4`-compressed variant.
+pub(crate) fn find_scatter_image(dir: &Path, filename: &str) -> Option<std::path::PathBuf> {
+    image_filename_candidates(filename)
+        .into_iter()
+        .map(|c| dir.join(c))
+        .find(|p| p.is_file())
+}
+
+/// LZ4 frame magic (little-endian 0x184D2204).
+pub(crate) const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
+
+fn looks_like_scatter(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("partition_index") && lower.contains("partition_name")
+}
+
+/// All `.txt` files in `dir` that parse as an MTK scatter (both
+/// `partition_index` and `partition_name`, case-insensitive).
+pub(crate) fn scatter_candidates(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut found = Vec::new();
+    let entries = fs::read_dir(dir)
+        .map_err(|e| BridgeError::InvalidArgument(format!("read folder {}: {e}", dir.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| BridgeError::Io(format!("dir entry: {e}")))?;
+        let path = entry.path();
+        let is_txt = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("txt"))
+            .unwrap_or(false);
+        if !is_txt || !path.is_file() {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(&path) {
+            if looks_like_scatter(&text) {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Find the single scatter file in a firmware folder, or fail with the full
+/// candidate list (never guess between several).
+pub(crate) fn discover_scatter(dir: &Path) -> Result<std::path::PathBuf> {
+    let mut candidates = scatter_candidates(dir)?;
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(BridgeError::InvalidArgument(format!(
+            "no scatter file found in {} (expected one *.txt containing 'partition_index' and 'partition_name')",
+            dir.display()
+        ))),
+        _ => Err(BridgeError::InvalidArgument(format!(
+            "multiple scatter files found in {}: {} — pass --scatter <path>",
+            dir.display(),
+            candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Decompress an LZ4 frame entirely in memory.
+pub(crate) fn lz4_frame_decompress(data: &[u8]) -> Result<Vec<u8>> {
+    use lz4_flex::frame::FrameDecoder;
+    let mut decoder = FrameDecoder::new(std::io::Cursor::new(data));
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|e| BridgeError::InvalidArgument(format!("lz4 decompress: {e}")))?;
+    Ok(out)
+}
+
+/// Turn a firmware image into the exact bytes to flash: LZ4 frame decompress
+/// first (vendors ship `*.img.lz4`), then Android sparse expansion.
+pub(crate) fn normalize_image(data: Vec<u8>) -> Result<Vec<u8>> {
+    let data = if data.starts_with(&LZ4_FRAME_MAGIC) {
+        lz4_frame_decompress(&data)?
+    } else {
+        data
+    };
+    if crate::sparse::is_sparse(&data) {
+        crate::sparse::expand(&data)
+    } else {
+        Ok(data)
+    }
+}
+
+/// Where the DA comes from for the auto-DA commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DaSource {
+    /// The bundled mtkclient containers (V5/V6).
+    Bundled,
+    /// A directory holding MTK_DA_V5.bin / MTK_DA_V6.bin.
+    ContainerDir(std::path::PathBuf),
+    /// A plain DA binary.
+    Bin(std::path::PathBuf),
+}
+
+/// Classify a `da_spec`: `auto` (bundled), a directory of containers, or a
+/// `.bin` DA file.
+pub(crate) fn classify_da_spec(spec: &str) -> Result<DaSource> {
+    let spec = spec.trim();
+    if spec.is_empty() || spec.eq_ignore_ascii_case("auto") {
+        return Ok(DaSource::Bundled);
+    }
+    let path = std::path::PathBuf::from(spec);
+    if path.is_dir() {
+        return Ok(DaSource::ContainerDir(path));
+    }
+    if path.is_file() {
+        return Ok(DaSource::Bin(path));
+    }
+    if spec.to_ascii_lowercase().ends_with(".bin") {
+        return Err(BridgeError::InvalidArgument(format!(
+            "DA file not found: {spec}"
+        )));
+    }
+    Err(BridgeError::InvalidArgument(format!(
+        "da_spec '{spec}' is not 'auto', an existing .bin DA file, or a directory of bundled DA containers"
+    )))
+}
+
+/// Locate the bundled mtkclient DA containers: repository tree, .deb install,
+/// or `FLASHPILOT_MTK_DA_DIR`.
+pub(crate) fn bundled_da_dir() -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(dir) = std::env::var("FLASHPILOT_MTK_DA_DIR") {
+        if !dir.is_empty() {
+            candidates.push(std::path::PathBuf::from(dir));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("root/tools/mtk"));
+            candidates.push(dir.join("../root/tools/mtk"));
+            candidates.push(dir.join("../share/flashpilot/root/tools/mtk"));
+        }
+    }
+    candidates.push(std::path::PathBuf::from("root/tools/mtk"));
+    candidates.push(std::path::PathBuf::from(
+        "/usr/share/flashpilot/root/tools/mtk",
+    ));
+    candidates.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("root/tools/mtk"));
+    candidates
+        .into_iter()
+        .find(|dir| dir.join("MTK_DA_V5.bin").is_file() || dir.join("MTK_DA_V6.bin").is_file())
+}
+
+/// The stage-1 DA image plus where/how to send it.
+struct DaPayload {
+    bytes: Vec<u8>,
+    addr: u32,
+    sig_len: usize,
+    description: String,
+}
+
+/// Resolve the DA to upload for `hw_code` from a spec: a plain `.bin`, or the
+/// per-chip entry of the V5/V6 containers (V5 first — this engine speaks the
+/// legacy protocol).
+fn resolve_da_payload(source: &DaSource, hw_code: u32) -> Result<DaPayload> {
+    if let DaSource::Bin(path) = source {
+        let bytes = fs::read(path)
+            .map_err(|e| BridgeError::Io(format!("read DA {}: {e}", path.display())))?;
+        if bytes.is_empty() {
+            return Err(BridgeError::InvalidArgument(format!(
+                "DA file {} is empty",
+                path.display()
+            )));
+        }
+        let (addr, _) = crate::mtk_exploit::parse_preloader(&bytes);
+        return Ok(DaPayload {
+            description: format!(
+                "DA binary {} — {} bytes @ 0x{addr:x}",
+                path.display(),
+                bytes.len()
+            ),
+            bytes,
+            addr,
+            sig_len: 0,
+        });
+    }
+
+    let dir = match source {
+        DaSource::Bundled => bundled_da_dir().ok_or_else(|| {
+            BridgeError::InvalidArgument(
+                "bundled MTK DA containers not found (expected root/tools/mtk/MTK_DA_V5.bin, /usr/share/flashpilot/root/tools/mtk, or FLASHPILOT_MTK_DA_DIR)"
+                    .to_string(),
+            )
+        })?,
+        DaSource::ContainerDir(dir) => dir.clone(),
+        DaSource::Bin(_) => unreachable!("handled above"),
+    };
+
+    let load = |name: &str| -> Result<Option<Vec<u8>>> {
+        let path = dir.join(name);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(&path).map_err(|e| {
+            BridgeError::Io(format!("read {name}: {e}"))
+        })?))
+    };
+    let v5 = load("MTK_DA_V5.bin")?;
+    let v6 = load("MTK_DA_V6.bin")?;
+    if v5.is_none() && v6.is_none() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "no bundled DA containers in {} (need MTK_DA_V5.bin / MTK_DA_V6.bin)",
+            dir.display()
+        )));
+    }
+    let parse = |data: &Option<Vec<u8>>| -> Option<crate::mtk_daloader::DaContainer> {
+        data.as_ref()
+            .and_then(|d| crate::mtk_daloader::parse_container(d).ok())
+    };
+    let v5c = parse(&v5);
+    let v6c = parse(&v6);
+    let v5_pick = v5c.as_ref().and_then(|c| c.pick(hw_code));
+    let v6_pick = v6c.as_ref().and_then(|c| c.pick(hw_code));
+    let (entry, container, container_data) = match (&v5_pick, &v6_pick, &v5, &v6) {
+        (Some(e), _, Some(d), _) => (e, v5c.as_ref().unwrap(), d),
+        (None, Some(e), _, Some(d)) => (e, v6c.as_ref().unwrap(), d),
+        _ => {
+            let marketing = crate::mtk_daloader::marketing_dacode(hw_code)
+                .map(|m| format!(" (dacode {m:#06x})"))
+                .unwrap_or_default();
+            return Err(BridgeError::InvalidArgument(format!(
+                "no DA entry for hw {hw_code:#06x}{marketing} in the bundled containers"
+            )));
+        }
+    };
+    let (da1, addr, sig_len) = container.stage1(entry, container_data)?;
+    Ok(DaPayload {
+        description: format!(
+            "Bundled DA ({} container): entry hw 0x{:04x} — stage1 {} bytes @ 0x{:x}",
+            if entry.v6 { "V6/XML" } else { "V5/legacy" },
+            entry.hw_code,
+            da1.len(),
+            addr
+        ),
+        bytes: da1.to_vec(),
+        addr,
+        sig_len,
+    })
+}
 /// DA (Download Agent) session for partition operations
 /// Default DA-protocol write chunk (previous hardcoded behavior everywhere).
 pub const DEFAULT_PACKET_SIZE: usize = 64 * 1024;
@@ -227,12 +779,18 @@ pub struct DaSession {
 
 impl DaSession {
     pub fn new(session: BromSession) -> Self {
+        Self::new_with_hw_code(session, 0)
+    }
+
+    /// Construct with the real chip hw_code so `da_info` reports it. Callers
+    /// that already read the chip identity should prefer this over `new`.
+    pub fn new_with_hw_code(session: BromSession, hw_code: u32) -> Self {
         DaSession {
             session,
             da_addr: 0,
             da_len: 0,
             da_arg: 0,
-            hw_code: 0,
+            hw_code,
             packet_size: DEFAULT_PACKET_SIZE,
         }
     }
@@ -259,7 +817,12 @@ impl DaSession {
     }
 
     /// Send DA command with echo protocol
-    fn send_cmd(&self, cmd: u8, payload: &[u8], resp_len: usize) -> std::result::Result<Vec<u8>, String> {
+    fn send_cmd(
+        &self,
+        cmd: u8,
+        payload: &[u8],
+        resp_len: usize,
+    ) -> std::result::Result<Vec<u8>, String> {
         self.session.write(&[cmd])?;
         let echo = self.session.read_exact(1, Duration::from_secs(1))?;
         if echo[0] != cmd {
@@ -279,11 +842,13 @@ impl DaSession {
     /// Reads the DA file, splits body/signature, sends via SEND_DA (0xD7),
     /// then jumps to it via JUMP_DA (0xD5). The load address is taken from
     /// the DA's own preloader header (`parse_preloader`), defaulting to the
-    /// MTK DA base 0x201000 for raw payloads.
-    pub fn upload_da(&mut self, da_path: &str) -> std::result::Result<(), String> {
+    /// MTK DA base 0x201000 for raw payloads. `hw_code` is the chip identity
+    /// resolved by the caller (`0` when it is genuinely unknown, e.g. the
+    /// generic DA-only CLIs that have not queried the chip).
+    pub fn upload_da(&mut self, da_path: &str, hw_code: u32) -> std::result::Result<(), String> {
         let da_data = std::fs::read(da_path).map_err(|e| format!("read DA: {e}"))?;
         let (da_addr, _) = crate::mtk_exploit::parse_preloader(&da_data);
-        self.upload_da_bytes(&da_data, da_addr)
+        self.upload_da_bytes(&da_data, da_addr, hw_code)
     }
 
     /// Upload an in-memory DA image: SEND_DA + JUMP_DA.
@@ -293,16 +858,16 @@ impl DaSession {
         &mut self,
         da_data: &[u8],
         da_addr: u32,
+        hw_code: u32,
     ) -> std::result::Result<(), String> {
         let sig_len = 0usize;
         self.da_addr = da_addr;
         self.da_len = da_data.len() as u32;
         self.da_arg = 0;
-        if let Ok(tc) = self.session.get_target_config() {
-            self.set_hw_code(tc.raw);
-        }
+        self.set_hw_code(hw_code);
         let _ = self.da_info();
-        self.session.send_da(da_addr, da_data.len(), sig_len, da_data)?;
+        self.session
+            .send_da(da_addr, da_data.len(), sig_len, da_data)?;
         self.session.jump_da(da_addr)?;
         // Wire storage_info as load-bearing health check (best-effort, non-fatal)
         if let Ok(info) = self.storage_info() {
@@ -322,7 +887,13 @@ impl DaSession {
     }
 
     /// Read partition
-    pub fn read_partition(&self, name: &str, start: u64, length: u64, out_path: &str) -> std::result::Result<(), String> {
+    pub fn read_partition(
+        &self,
+        name: &str,
+        start: u64,
+        length: u64,
+        out_path: &str,
+    ) -> std::result::Result<(), String> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&name.len().to_be_bytes());
         payload.extend_from_slice(name.as_bytes());
@@ -330,36 +901,59 @@ impl DaSession {
         payload.extend_from_slice(&length.to_be_bytes());
         payload.extend_from_slice(&(out_path.len() as u32).to_be_bytes());
         payload.extend_from_slice(out_path.as_bytes());
-        
+
         // READ_PARTITION (0xF1)
         let _ = self.send_cmd(0xF1, &payload, 0)?;
-        
-        // DA sends data in chunks - read until done
+
+        // DA sends data in chunks - read until done. The read length is
+        // clamped to what is left, so a partition smaller than the buffer
+        // (e.g. a 4 KiB vbmeta) does not demand a full 1 MiB transfer.
         let mut file = fs::File::create(out_path).map_err(|e| format!("create file: {e}"))?;
-        let mut total = 0;
-        let buf = vec![0u8; 1024 * 1024];
-        loop {
-            let n = self.session.read_exact(buf.len(), Duration::from_secs(30))?;
-            if n.is_empty() { break; }
+        let mut total = 0u64;
+        let buf_size = 1024 * 1024u64;
+        while total < length {
+            let chunk = std::cmp::min(buf_size, length - total) as usize;
+            let n = self.session.read_exact(chunk, Duration::from_secs(30))?;
+            if n.is_empty() {
+                break;
+            }
             file.write_all(&n).map_err(|e| format!("write file: {e}"))?;
-            total += n.len();
-            if total >= length as usize { break; }
+            total += n.len() as u64;
         }
         Ok(())
     }
 
     /// Write partition
-    pub fn write_partition(&self, name: &str, start: u64, file_path: &str) -> std::result::Result<(), String> {
+    pub fn write_partition(
+        &self,
+        name: &str,
+        start: u64,
+        file_path: &str,
+    ) -> std::result::Result<(), String> {
         let file_data = fs::read(file_path).map_err(|e| format!("read file: {e}"))?;
+        self.write_partition_bytes(name, start, &file_data)
+    }
+
+    /// Write partition data already held in memory (after sparse expansion /
+    /// lz4 decompression, so compressed bytes are never sent to flash).
+    pub fn write_partition_bytes(
+        &self,
+        name: &str,
+        start: u64,
+        file_data: &[u8],
+    ) -> std::result::Result<(), String> {
         let length = file_data.len() as u64;
-        
+        if file_data.is_empty() {
+            return Err(format!("refusing to write '{name}': empty image"));
+        }
+
         let mut payload = Vec::new();
         payload.extend_from_slice(&name.len().to_be_bytes());
         payload.extend_from_slice(name.as_bytes());
         payload.extend_from_slice(&start.to_be_bytes());
         payload.extend_from_slice(&length.to_be_bytes());
         payload.extend_from_slice(&1u32.to_be_bytes()); // is_download = true
-        
+
         // WRITE_PARTITION (0xF2)
         self.send_cmd(0xF2, &payload, 2)?;
 
@@ -371,14 +965,19 @@ impl DaSession {
                 return Err(format!("write ack mismatch: {:02X?}", ack));
             }
         }
-        
+
         // Final ack
         let _ = self.session.read_exact(2, Duration::from_secs(5))?;
         Ok(())
     }
 
     /// Read a named partition into a Vec (raw read, no scatter needed).
-    fn read_partition_bytes(&self, name: &str, start: u64, length: u64) -> std::result::Result<Vec<u8>, String> {
+    fn read_partition_bytes(
+        &self,
+        name: &str,
+        start: u64,
+        length: u64,
+    ) -> std::result::Result<Vec<u8>, String> {
         let mut out = Vec::new();
         self.read_partition_raw(name, start, length, &mut out)?;
         Ok(out)
@@ -387,36 +986,84 @@ impl DaSession {
     /// Read the device GPT by reading the `gpt`/`pgpt` partition and parse it.
     /// Returns (name, start_addr, size_bytes) for every entry. This lets
     /// callers flash/backup by partition NAME without a scatter file.
+    ///
+    /// Robustness: when no GPT-named partition parses, the raw table at LBA0
+    /// is read and parsed with the detected sector size (512 or 4096) instead
+    /// of assuming 512-byte sectors.
     pub fn list_gpt(&self) -> std::result::Result<Vec<(String, u64, u64)>, String> {
         let mut last_err = String::new();
         for name in ["gpt", "pgpt", "gpt1", "pgpt1", "gpt_main"] {
-            match self.read_partition_bytes(name, 0, 0x200000) {
+            match self.read_partition_bytes(name, 0, GPT_RAW_WINDOW) {
                 Ok(data) => {
                     if data.len() < 0x400 {
-                        last_err = format!("partition '{name}' read too short ({} bytes)", data.len());
+                        last_err =
+                            format!("partition '{name}' read too short ({} bytes)", data.len());
                         continue;
                     }
-                    let gpt = crate::qualcomm::gpt::QcomGpt::parse(&data)
-                        .map_err(|e| format!("parse GPT from '{name}': {e}"))?;
-                    let mut parts = Vec::new();
-                    for e in &gpt.entries {
-                        parts.push((e.name.clone(), e.starting_lba * 512, e.size_bytes()));
-                    }
-                    if parts.is_empty() {
+                    // 512-byte path first (keeps existing behavior), then the
+                    // sector-size-detecting raw parser on the same bytes.
+                    if let Ok(gpt) = crate::qualcomm::gpt::QcomGpt::parse(&data) {
+                        let mut parts = Vec::new();
+                        for e in &gpt.entries {
+                            parts.push((e.name.clone(), e.starting_lba * 512, e.size_bytes()));
+                        }
+                        if !parts.is_empty() {
+                            return Ok(parts);
+                        }
                         last_err = format!("partition '{name}' had no usable GPT entries");
-                        continue;
+                    } else {
+                        match parse_gpt_disk_image(&data) {
+                            Ok(parts) if !parts.is_empty() => return Ok(parts),
+                            Ok(_) => {
+                                last_err = format!("partition '{name}' had no usable GPT entries")
+                            }
+                            Err(e) => last_err = format!("parse GPT from '{name}': {e}"),
+                        }
                     }
-                    return Ok(parts);
                 }
                 Err(e) => last_err = format!("read '{name}': {e}"),
             }
         }
-        Err(format!("no GPT partition readable: {last_err}"))
+        // Nothing named parsed: read raw LBA0 and parse with the detected
+        // sector size. The raw table is identical whichever partition alias
+        // starts at LBA0, so a single successful read is enough.
+        match self.read_raw_lba0() {
+            Ok(data) => match parse_gpt_disk_image(&data) {
+                Ok(parts) if !parts.is_empty() => Ok(parts),
+                Ok(_) => Err(format!(
+                    "no GPT partition readable: {last_err}; raw LBA0 held no GPT entries"
+                )),
+                Err(e) => Err(format!(
+                    "no GPT partition readable: {last_err}; raw LBA0 parse: {e}"
+                )),
+            },
+            Err(e) => Err(format!(
+                "no GPT partition readable: {last_err}; raw LBA0: {e}"
+            )),
+        }
     }
 
+    /// Read raw bytes from LBA0 (absolute flash offset 0) for the GPT
+    /// fallback. `read_partition` needs a name, so try the aliases that sit
+    /// at LBA0 (`gpt*`, else `preloader`).
+    fn read_raw_lba0(&self) -> std::result::Result<Vec<u8>, String> {
+        let mut last_err = String::new();
+        for name in ["gpt", "pgpt", "gpt_main", "preloader"] {
+            match self.read_partition_bytes(name, 0, GPT_RAW_WINDOW) {
+                Ok(data) if data.len() >= 0x400 => return Ok(data),
+                Ok(data) => last_err = format!("'{name}' read too short ({} bytes)", data.len()),
+                Err(e) => last_err = format!("read '{name}': {e}"),
+            }
+        }
+        Err(last_err)
+    }
     /// Write a named partition from a file using only the partition NAME
     /// (resolved from the device GPT). No scatter file required.
-    pub fn write_partition_by_name(&self, name: &str, file_path: &str) -> std::result::Result<(), String> {
+    pub fn write_partition_by_name(
+        &self,
+        name: &str,
+        file_path: &str,
+    ) -> std::result::Result<(), String> {
         let parts = self.list_gpt()?;
         let (_, start, _) = parts
             .iter()
@@ -477,31 +1124,31 @@ impl DaSession {
     /// Universal ADB Enable - tries multiple strategies
     pub fn enable_adb(&self, scatter: &ScatterFile) -> std::result::Result<(), String> {
         println!("[ADB Enable] Attempting universal ADB enable...");
-        
+
         // Strategy 1: Try DA property commands (newest DAs)
         if self.try_da_set_prop().is_ok() {
             println!("[ADB Enable] ✓ DA SET_PROP succeeded");
             return Ok(());
         }
-        
+
         // Strategy 2: Try boot.img patch (most universal)
         if let Ok(()) = self.try_boot_patch(scatter) {
             println!("[ADB Enable] ✓ Boot.img patch succeeded");
             return Ok(());
         }
-        
+
         // Strategy 3: Try userdata/persist edit
         if let Ok(()) = self.try_userdata_edit(scatter) {
             println!("[ADB Enable] ✓ Userdata/persist edit succeeded");
             return Ok(());
         }
-        
+
         // Strategy 4: Wipe FRP/metadata (for FRP-locked devices)
         if let Ok(()) = self.try_frp_wipe(scatter) {
             println!("[ADB Enable] ✓ FRP/metadata wipe succeeded");
             return Ok(());
         }
-        
+
         Err("All ADB enable strategies failed".to_string())
     }
 
@@ -515,14 +1162,14 @@ impl DaSession {
             ("ro.debuggable", "1"),
             ("ro.secure", "0"),
         ];
-        
+
         for (key, val) in props {
             let mut payload = Vec::new();
             payload.extend_from_slice(&(key.len() as u32).to_be_bytes());
             payload.extend_from_slice(key.as_bytes());
             payload.extend_from_slice(&(val.len() as u32).to_be_bytes());
             payload.extend_from_slice(val.as_bytes());
-            
+
             let resp = self.send_cmd(0xC8, &payload, 2);
             if resp.is_err() {
                 return Err("SET_PROP not supported".to_string());
@@ -531,24 +1178,39 @@ impl DaSession {
         Ok(())
     }
 
+    /// Explicit not-implemented error for the final boot-image rebuild step.
+    /// Kept separate so the failure mode is unit-testable without a device.
+    fn boot_patch_unsupported_error() -> std::result::Result<(), String> {
+        Err("not implemented: boot image rebuild+flash".to_string())
+    }
+
     /// Try patching boot.img ramdisk
     fn try_boot_patch(&self, scatter: &ScatterFile) -> std::result::Result<(), String> {
-        let boot = scatter.get_partition("boot")
+        let boot = scatter
+            .get_partition("boot")
             .or_else(|| scatter.get_partition("boot_a"))
             .or_else(|| scatter.get_partition("boot_b"))
             .ok_or("No boot partition in scatter")?;
-        
-        println!("[ADB Enable] Found boot partition: {} @ 0x{:X}", boot.partition_name, boot.start_addr);
-        
+
+        println!(
+            "[ADB Enable] Found boot partition: {} @ 0x{:X}",
+            boot.partition_name, boot.start_addr
+        );
+
         // Read current boot.img
         let mut boot_data = Vec::new();
-        self.read_partition_raw(&boot.partition_name, boot.start_addr, boot.length, &mut boot_data)?;
-        
+        self.read_partition_raw(
+            &boot.partition_name,
+            boot.start_addr,
+            boot.length,
+            &mut boot_data,
+        )?;
+
         // Check if it's a boot image (Android boot image header)
         if !boot_data.starts_with(b"ANDROID!") {
             return Err("Not a valid Android boot image".to_string());
         }
-        
+
         // Parse boot image header to find ramdisk offset/size
         let (ramdisk_offset, ramdisk_size) = self.parse_boot_header(&boot_data)?;
 
@@ -561,41 +1223,53 @@ impl DaSession {
             ));
         }
         let ramdisk = &boot_data[ramdisk_offset..ramdisk_offset + ramdisk_size];
-        
+
         // Decompress ramdisk (gzip)
         let mut decoder = flate2::read::GzDecoder::new(ramdisk);
         let mut ramdisk_unpacked = Vec::new();
-        decoder.read_to_end(&mut ramdisk_unpacked).map_err(|e| format!("gzip decode: {e}"))?;
-        
+        decoder
+            .read_to_end(&mut ramdisk_unpacked)
+            .map_err(|e| format!("gzip decode: {e}"))?;
+
         // Parse cpio archive, find default.prop
         let mut cpio_data: Vec<u8> = ramdisk_unpacked;
         let mut modified = false;
         let _new_cpio: Vec<u8> = Vec::new();
-        
+
         // Simple cpio parsing to find and modify default.prop
         while !cpio_data.is_empty() {
-            if cpio_data.len() < 110 { break; }
+            if cpio_data.len() < 110 {
+                break;
+            }
             let magic = &cpio_data[0..6];
-            if magic != b"070701" && magic != b"070702" { break; }
-            
-            let namesize = u32::from_be_bytes([
-                cpio_data[12], cpio_data[13], cpio_data[14], cpio_data[15]
-            ]) as usize;
-            let filesize = u32::from_be_bytes([
-                cpio_data[24], cpio_data[25], cpio_data[26], cpio_data[27]
-            ]) as usize;
-            
+            if magic != b"070701" && magic != b"070702" {
+                break;
+            }
+
+            let namesize =
+                u32::from_be_bytes([cpio_data[12], cpio_data[13], cpio_data[14], cpio_data[15]])
+                    as usize;
+            let filesize =
+                u32::from_be_bytes([cpio_data[24], cpio_data[25], cpio_data[26], cpio_data[27]])
+                    as usize;
+
             let name_start = 110;
             let name_end = name_start + namesize;
-            if name_end > cpio_data.len() { break; }
-            let name = String::from_utf8_lossy(&cpio_data[name_start..name_end]).trim_end_matches('\0').to_string();
-            
+            if name_end > cpio_data.len() {
+                break;
+            }
+            let name = String::from_utf8_lossy(&cpio_data[name_start..name_end])
+                .trim_end_matches('\0')
+                .to_string();
+
             let file_start = (name_end + 3) & !3; // 4-byte align
             let file_end = file_start + filesize;
-            if file_end > cpio_data.len() { break; }
-            
+            if file_end > cpio_data.len() {
+                break;
+            }
+
             let file_data = &cpio_data[file_start..file_end];
-            
+
             if name == "default.prop" {
                 // Modify default.prop
                 let mut content = String::from_utf8_lossy(file_data).to_string();
@@ -612,13 +1286,21 @@ impl DaSession {
                     } else {
                         // Replace existing
                         let lines: Vec<&str> = content.lines().collect();
-                        content = lines.iter()
-                            .map(|l| if l.starts_with(prop.split('=').next().unwrap()) { prop } else { l })
-                            .collect::<Vec<_>>().join("\n");
+                        content = lines
+                            .iter()
+                            .map(|l| {
+                                if l.starts_with(prop.split('=').next().unwrap()) {
+                                    prop
+                                } else {
+                                    l
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
                     }
                 }
                 modified = true;
-                
+
                 // Rebuild cpio entry with new content
                 let new_file_data = content.as_bytes();
                 let _new_filesize = new_file_data.len();
@@ -626,18 +1308,19 @@ impl DaSession {
                 // For simplicity, we'll skip full cpio rebuild here
                 println!("[ADB Enable] Would modify default.prop (full cpio rebuild needed)");
             }
-            
+
             let next_offset = (file_end + 3) & !3;
             cpio_data = cpio_data[next_offset..].to_vec();
         }
-        
+
         if !modified {
             return Err("default.prop not found in ramdisk".to_string());
         }
-        
-        // TODO: Recompress ramdisk, rebuild boot.img, flash
-        println!("[ADB Enable] Boot patch framework ready - needs cpio/gzip rebuild");
-        Ok(())
+
+        // Analysis succeeded, but rebuilding a compressed cpio and writing the
+        // boot image back is not implemented. Reporting Ok here used to claim
+        // ADB was enabled when nothing was flashed.
+        Self::boot_patch_unsupported_error()
     }
 
     /// Try editing userdata/persist partition
@@ -648,11 +1331,20 @@ impl DaSession {
                 println!("[ADB Enable] Trying {} partition...", name);
                 // Read partition
                 let mut data = vec![0u8; part.length as usize];
-                self.read_partition_raw(&part.partition_name, part.start_addr, part.length, &mut data)?;
-                
+                self.read_partition_raw(
+                    &part.partition_name,
+                    part.start_addr,
+                    part.length,
+                    &mut data,
+                )?;
+
                 // Try to find and modify persist.sys.usb.config
                 // This requires filesystem parsing (ext4/f2fs) - complex
-                println!("[ADB Enable] Found {} partition ({}MB) - filesystem edit needed", name, part.size_mb());
+                println!(
+                    "[ADB Enable] Found {} partition ({}MB) - filesystem edit needed",
+                    name,
+                    part.size_mb()
+                );
             }
         }
         Err("Filesystem-level edit not implemented".to_string())
@@ -677,21 +1369,31 @@ impl DaSession {
     }
 
     /// Read raw partition data (for boot.img patching)
-    fn read_partition_raw(&self, name: &str, start: u64, length: u64, out: &mut Vec<u8>) -> std::result::Result<(), String> {
+    fn read_partition_raw(
+        &self,
+        name: &str,
+        start: u64,
+        length: u64,
+        out: &mut Vec<u8>,
+    ) -> std::result::Result<(), String> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&name.len().to_be_bytes());
         payload.extend_from_slice(name.as_bytes());
         payload.extend_from_slice(&start.to_be_bytes());
         payload.extend_from_slice(&length.to_be_bytes());
-        
+
         let _resp = self.send_cmd(0xF1, &payload, 0)?;
-        
+
         out.resize(length as usize, 0);
         let mut total = 0;
         while total < length as usize {
             let chunk_size = std::cmp::min(64 * 1024, length as usize - total);
-            let chunk = self.session.read_exact(chunk_size, Duration::from_secs(10))?;
-            if chunk.is_empty() { break; }
+            let chunk = self
+                .session
+                .read_exact(chunk_size, Duration::from_secs(10))?;
+            if chunk.is_empty() {
+                break;
+            }
             out[total..total + chunk.len()].copy_from_slice(&chunk);
             total += chunk.len();
         }
@@ -707,14 +1409,16 @@ impl DaSession {
         let kernel_size = u32::from_le_bytes([data[8], data[9], data[10], data[11]]) as usize;
         let _ramdisk_offset = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as usize;
         let ramdisk_size = u32::from_le_bytes([data[20], data[21], data[22], data[23]]) as usize;
-        
+
         let page_size = u32::from_le_bytes([data[36], data[37], data[38], data[39]]) as usize;
-        if page_size == 0 { return Err("Invalid page size".to_string()); }
-        
+        if page_size == 0 {
+            return Err("Invalid page size".to_string());
+        }
+
         // Align offsets
         let kernel_pages = (kernel_size + page_size - 1) / page_size;
         let actual_ramdisk_offset = (1 + kernel_pages) * page_size;
-        
+
         Ok((actual_ramdisk_offset, ramdisk_size))
     }
 
@@ -723,12 +1427,23 @@ impl DaSession {
     /// frp, nvdata, persistent, metadata, protect1/2, keystore, oemkeystore.
     /// Uses scatter entries when available; falls back to the device GPT
     /// (`use_gpt = true`) for scatter-less operation.
-    pub fn frp_bypass(&self, scatter: Option<&ScatterFile>, use_gpt: bool) -> std::result::Result<(), String> {
+    pub fn frp_bypass(
+        &self,
+        scatter: Option<&ScatterFile>,
+        use_gpt: bool,
+    ) -> std::result::Result<(), String> {
         let lock_parts = [
-            "frp", "frp_a", "frp_b",
-            "nvdata", "persistent", "metadata",
-            "protect1", "protect2", "protect_s",
-            "keystore", "oemkeystore",
+            "frp",
+            "frp_a",
+            "frp_b",
+            "nvdata",
+            "persistent",
+            "metadata",
+            "protect1",
+            "protect2",
+            "protect_s",
+            "keystore",
+            "oemkeystore",
         ];
         let mut wiped = Vec::new();
         let mut failed = Vec::new();
@@ -750,9 +1465,7 @@ impl DaSession {
         };
 
         for name in lock_parts {
-            let present = scatter
-                .and_then(|s| s.get_partition(name))
-                .is_some()
+            let present = scatter.and_then(|s| s.get_partition(name)).is_some()
                 || gpt_names.iter().any(|n| n == name);
             if !present {
                 continue;
@@ -788,8 +1501,26 @@ impl DaSession {
         Ok(())
     }
 
-    /// Flash firmware from scatter
-    pub fn flash_firmware(&self, scatter: &ScatterFile, firmware_dir: &str) -> std::result::Result<(), String> {
+    /// Flash firmware from a scatter: skips eMMC boot-area entries (this
+    /// engine writes the user area only), expands sparse / decompresses LZ4
+    /// images before writing, and resolves A/B slot names against the device
+    /// GPT (`boot` -> `boot_a` / `boot_b`).
+    pub fn flash_firmware(
+        &self,
+        scatter: &ScatterFile,
+        firmware_dir: &str,
+    ) -> std::result::Result<(), String> {
+        self.flash_firmware_opts(scatter, firmware_dir, &FlashOptions::default())
+    }
+
+    /// Flash a scatter's images with explicit options (boot regions,
+    /// "format all + download").
+    pub fn flash_firmware_opts(
+        &self,
+        scatter: &ScatterFile,
+        firmware_dir: &str,
+        opts: &FlashOptions,
+    ) -> std::result::Result<(), String> {
         let mut flashed = 0usize;
         // Wire config HashMap/PathBuf helpers (stability)
         let _cfg_path = crate::config::config_cache_path(&std::path::PathBuf::from(firmware_dir));
@@ -802,61 +1533,194 @@ impl DaSession {
             format_hex(&parse_hex(&sla.n[..16]).unwrap_or_default()),
             sla.e
         );
+        // GPT names drive the A/B fallback. Without a readable GPT the exact
+        // scatter name is used (as before).
+        let gpt_names: Option<Vec<String>> = match self.list_gpt() {
+            Ok(parts) => Some(parts.into_iter().map(|(name, _, _)| name).collect()),
+            Err(e) => {
+                eprintln!("[mtk] warning: device GPT unreadable ({e}); A/B slot fallback disabled");
+                None
+            }
+        };
         // Progress over total downloadable size
         let total: u64 = scatter.entries.iter().map(|e| e.length).sum();
         let mut progress = ProgressReporter::new(total, 300);
         let mut done: u64 = 0;
+        let mut failed: Vec<String> = Vec::new();
+
+        // "Format All + Download": erase every resolvable target (and,
+        // optionally, the data partitions) before any image is written.
+        if opts.format_all {
+            let gpt: Vec<String> = gpt_names.clone().unwrap_or_default();
+            let targets = format_all_targets(&scatter.entries, &gpt, opts.erase_userdata);
+            if targets.is_empty() {
+                eprintln!("[mtk] --format-all: no device partition matched the scatter targets");
+            }
+            for name in &targets {
+                println!("Formatting {name}...");
+                if let Err(e) = self.zero_fill_partition(name) {
+                    println!("FAILED format {name}: {e}");
+                    failed.push(format!("format {name}: {e}"));
+                }
+            }
+        }
+
         for entry in &scatter.entries {
             let filename = &entry.filename;
             // Path traversal guard: the scatter `filename` is untrusted input
             // (it comes from a firmware zip the user selected). Never let it
             // escape the firmware directory to read/flash arbitrary host files.
             let base = std::path::Path::new(filename);
-            if filename.contains('/') || filename.contains('\\') || filename.contains("..") || base.is_absolute() {
+            if filename.contains('/')
+                || filename.contains('\\')
+                || filename.contains("..")
+                || base.is_absolute()
+            {
                 return Err(format!(
                     "unsafe filename in scatter: {:?} (must be a plain file name)",
                     filename
                 ));
             }
-            let file_path = format!("{}/{}", firmware_dir, filename);
-            if fs::metadata(&file_path).is_ok() {
-                // Demonstrate util hex/size helpers and read_file wiring
-                if let Ok(data) = read_file(Path::new(&file_path)) {
-                    eprintln!(
-                        "[mtk] {} {} first 16: {}",
-                        entry.partition_name,
-                        format_size(data.len() as u64),
-                        format_hex_spaced(&data[..data.len().min(16)], 8)
+            // Boot-area images are only written on explicit opt-in
+            // (--include-boot-regions); otherwise they are skipped and never
+            // written to a user-area address.
+            if let Some(reason) = flash_skip_reason(entry) {
+                if !opts.include_boot_regions {
+                    println!(
+                        "Skipping {} ({}; file {})",
+                        entry.partition_name, reason, filename
                     );
+                    continue;
                 }
-                // Validate hex parse round-trip for debug stability
-                let hex = format_hex(entry.start_addr.to_be_bytes().as_ref());
-                if let Ok(b) = parse_hex(&hex.replace(' ', "")) {
-                    debug_assert_eq!(b.len(), 8);
-                }
-                // Size parsing demo
-                let _ = parse_size(&format!("{}B", entry.length));
-                println!("Flashing {} ({}MB)...", entry.partition_name, entry.size_mb());
-                self.write_partition(&entry.partition_name, entry.start_addr, &file_path)?;
-                flashed += 1;
-                done += entry.length;
-                progress.update(done);
-            } else {
-                println!("Skipping {} (file not found: {})", entry.partition_name, file_path);
             }
+            let file_path = match find_scatter_image(std::path::Path::new(firmware_dir), filename) {
+                Some(p) => p,
+                None => {
+                    println!(
+                        "Skipping {} (file not found: {}/{})",
+                        entry.partition_name, firmware_dir, filename
+                    );
+                    continue;
+                }
+            };
+            // Resolve the name actually on the device (A/B fallback). The
+            // scatter's start address stays authoritative for the write.
+            let target_name = if scatter_region_is_boot(entry.region) {
+                // Opted-in boot-area write: the DA must expose the boot1/boot2
+                // partition. Never fall back to the user area.
+                let Some(boot_name) = boot_region_partition_name(entry.region) else {
+                    let msg = format!(
+                        "{}: unknown boot region value {}",
+                        entry.partition_name, entry.region
+                    );
+                    println!("FAILED {msg}");
+                    failed.push(msg);
+                    continue;
+                };
+                let exposed = gpt_names
+                    .as_ref()
+                    .map(|names| names.iter().any(|n| n == boot_name))
+                    .unwrap_or(false);
+                if !exposed {
+                    let msg = format!(
+                        "{}: boot region not writable - the DA/GPT exposes no '{boot_name}' \
+                         partition (refusing to write a boot image to the user area)",
+                        entry.partition_name
+                    );
+                    println!("FAILED {msg}");
+                    failed.push(msg);
+                    continue;
+                }
+                boot_name.to_string()
+            } else {
+                match &gpt_names {
+                    Some(names) => match resolve_partition_name(&entry.partition_name, names) {
+                        Some(name) => name,
+                        None => {
+                            let msg = format!(
+                                "{}: not in the device GPT (tried {}, {}_a, {}_b)",
+                                entry.partition_name,
+                                entry.partition_name,
+                                entry.partition_name,
+                                entry.partition_name
+                            );
+                            println!("FAILED {msg}");
+                            failed.push(msg);
+                            continue;
+                        }
+                    },
+                    None => entry.partition_name.clone(),
+                }
+            };
+            let raw =
+                fs::read(&file_path).map_err(|e| format!("read {}: {e}", file_path.display()))?;
+            let data = normalize_image(raw).map_err(|e| format!("{}: {e}", file_path.display()))?;
+            if data.is_empty() {
+                let msg = format!(
+                    "{}: image is empty after normalization",
+                    file_path.display()
+                );
+                println!("FAILED {msg}");
+                failed.push(msg);
+                continue;
+            }
+            // Validate hex parse round-trip for debug stability
+            let hex = format_hex(entry.start_addr.to_be_bytes().as_ref());
+            if let Ok(b) = parse_hex(&hex.replace(' ', "")) {
+                debug_assert_eq!(b.len(), 8);
+            }
+            // Size parsing demo
+            let _ = parse_size(&format!("{}B", entry.length));
+            eprintln!(
+                "[mtk] {} {} first 16: {}",
+                target_name,
+                format_size(data.len() as u64),
+                format_hex_spaced(&data[..data.len().min(16)], 8)
+            );
+            println!(
+                "Flashing {} ({} bytes from {})...",
+                target_name,
+                data.len(),
+                file_path.file_name().unwrap_or_default().to_string_lossy()
+            );
+            if let Err(e) = self.write_partition_bytes(&target_name, entry.start_addr, &data) {
+                let msg = format!("{target_name}: {e}");
+                println!("FAILED {msg}");
+                failed.push(msg);
+                continue;
+            }
+            flashed += 1;
+            done += entry.length;
+            progress.update(done);
         }
         progress.finish();
         if flashed == 0 {
+            let detail = if failed.is_empty() {
+                String::new()
+            } else {
+                format!(" — failures: {}", failed.join("; "))
+            };
             return Err(format!(
-                "no partition images found in '{}' - nothing was flashed (refusing to report success)",
+                "no partition images found in '{}' - nothing was flashed (refusing to report success){detail}",
                 firmware_dir
+            ));
+        }
+        if !failed.is_empty() {
+            return Err(format!(
+                "flashed {flashed} partition(s), but {} failed: {}",
+                failed.len(),
+                failed.join("; ")
             ));
         }
         Ok(())
     }
 
     /// Backup partitions
-    pub fn backup_partitions(&self, scatter: &ScatterFile, out_dir: &str) -> std::result::Result<(), String> {
+    pub fn backup_partitions(
+        &self,
+        scatter: &ScatterFile,
+        out_dir: &str,
+    ) -> std::result::Result<(), String> {
         ensure_dir(Path::new(out_dir)).map_err(|e| e.to_string())?;
         let total: u64 = scatter.entries.iter().map(|e| e.length).sum();
         let mut progress = ProgressReporter::new(total, 300);
@@ -872,8 +1736,18 @@ impl DaSession {
                 ));
             }
             let out_path = format!("{}/{}.img", out_dir, name);
-            println!("Backing up {} ({} bytes, {})...", entry.partition_name, entry.length, format_size(entry.length));
-            self.read_partition(&entry.partition_name, entry.start_addr, entry.length, &out_path)?;
+            println!(
+                "Backing up {} ({} bytes, {})...",
+                entry.partition_name,
+                entry.length,
+                format_size(entry.length)
+            );
+            self.read_partition(
+                &entry.partition_name,
+                entry.start_addr,
+                entry.length,
+                &out_path,
+            )?;
             // Demonstrate write_file/ensure_dir wiring: touch a manifest entry
             let manifest = Path::new(out_dir).join(format!("{name}.sha1"));
             if let Ok(data) = read_file(Path::new(&out_path)) {
@@ -923,19 +1797,19 @@ pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
         .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))
 }
 
-
 pub fn mtk_da_upload(target: &str, da_path: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
-    
+
     let mut da_session = DaSession::new(session);
-    da_session.upload_da(da_path)?;
-    
+    da_session.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
+
     Ok(serde_json::json!({"status": "DA uploaded", "da_addr": format!("0x{:X}", da_session.da_addr)}).to_string())
 }
 
@@ -945,7 +1819,12 @@ pub fn mtk_scatter_parse(scatter_path: &str) -> Result<String> {
     Ok(serde_json::to_string_pretty(&scatter).map_err(|e| e.to_string())?)
 }
 
-pub fn mtk_flash_firmware(target: &str, da_path: &str, scatter_path: &str, firmware_dir: &str) -> Result<String> {
+pub fn mtk_flash_firmware(
+    target: &str,
+    da_path: &str,
+    scatter_path: &str,
+    firmware_dir: &str,
+) -> Result<String> {
     let ops = MtKOperations {
         flash_firmware: true,
         ..Default::default()
@@ -953,7 +1832,12 @@ pub fn mtk_flash_firmware(target: &str, da_path: &str, scatter_path: &str, firmw
     mtk_flash_flow(target, da_path, scatter_path, firmware_dir, ops)
 }
 
-pub fn mtk_backup(target: &str, da_path: &str, scatter_path: &str, out_dir: &str) -> Result<String> {
+pub fn mtk_backup(
+    target: &str,
+    da_path: &str,
+    scatter_path: &str,
+    out_dir: &str,
+) -> Result<String> {
     let ops = MtKOperations {
         backup: true,
         backup_dir: out_dir.to_string(),
@@ -976,7 +1860,7 @@ pub fn mtk_gpt_cli(target: &str, da_path: &str) -> Result<String> {
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
     let parts = da
         .list_gpt()
         .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
@@ -1027,7 +1911,7 @@ pub fn mtk_flash_part_cli_v(
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let mut out = Vec::new();
     let mut written: Vec<(String, String)> = Vec::new();
@@ -1118,7 +2002,7 @@ pub fn mtk_read_part_cli(
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let parts = da
         .list_gpt()
@@ -1128,17 +2012,16 @@ pub fn mtk_read_part_cli(
         .find(|(n, _, _)| n == partition)
         .map(|(_, s, z)| (*s, *z))
         .ok_or_else(|| {
-            BridgeError::InvalidArgument(format!(
-                "partition '{partition}' not found in device GPT"
-            ))
+            BridgeError::InvalidArgument(format!("partition '{partition}' not found in device GPT"))
         })?;
-    da.read_partition(partition, start, size, out_file).map_err(|e| {
-        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-            cmd: 0,
-            sub: 0,
-            reason: format!("read '{partition}': {e}"),
-        })
-    })?;
+    da.read_partition(partition, start, size, out_file)
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("read '{partition}': {e}"),
+            })
+        })?;
     let _ = da.reboot(4); // back to BROM so the caller can write back if needed
     Ok(format!(
         "Read '{partition}' ({} MB) -> {out_file} (device back in BROM)",
@@ -1152,7 +2035,11 @@ pub fn mtk_read_part_cli(
 /// count from the partition start and compares SHA-256 against the source
 /// file. Reports MATCH per partition; returns Err listing every MISMATCH so
 /// callers (flows, CI) fail loudly instead of shipping a bad flash.
-pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, String)]) -> Result<String> {
+pub fn mtk_verify_part_cli(
+    target: &str,
+    da_path: &str,
+    entries: &[(String, String)],
+) -> Result<String> {
     use crate::util::{sha256_file, verify_bytes_match};
     if entries.is_empty() {
         return Err(BridgeError::InvalidArgument(
@@ -1170,7 +2057,7 @@ pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, Stri
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let mut out = Vec::new();
     let mut bad = Vec::new();
@@ -1193,7 +2080,10 @@ pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, Stri
                         Ok(h) => h[..16].to_string(),
                         Err(_) => "?".to_string(),
                     };
-                    out.push(format!("  MATCH '{name}' ({} bytes, sha256:{hex}...)", expected.len()));
+                    out.push(format!(
+                        "  MATCH '{name}' ({} bytes, sha256:{hex}...)",
+                        expected.len()
+                    ));
                 }
                 Err(e) => bad.push(format!("{name}: MISMATCH ({e})")),
             },
@@ -1210,11 +2100,13 @@ pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, Stri
         for line in &bad {
             eprintln!("{line}");
         }
-        Err(BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-            cmd: 0,
-            sub: 0,
-            reason: format!("verify failed: {}", bad.join("; ")),
-        }))
+        Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("verify failed: {}", bad.join("; ")),
+            },
+        ))
     }
 }
 
@@ -1222,10 +2114,7 @@ pub fn mtk_verify_part_cli(target: &str, da_path: &str, entries: &[(String, Stri
 /// (name, start_addr, size_bytes). Large data partitions (>= 2 GiB) are marked
 /// non-downloadable so backup/flash flows never dump or rewrite them by
 /// accident. Returns a human summary string.
-fn write_scatter_file(
-    parts: &[(String, u64, u64)],
-    out_path: &str,
-) -> Result<String> {
+fn write_scatter_file(parts: &[(String, u64, u64)], out_path: &str) -> Result<String> {
     const BIG_DATA: u64 = 2 * 1024 * 1024 * 1024;
 
     let mut out = String::new();
@@ -1243,10 +2132,11 @@ fn write_scatter_file(
         out.push_str(&format!("file_name: {name}.img\n"));
         out.push_str(&format!("type: RAW\n"));
         out.push_str(&format!("is_download: {download}\n"));
-        out.push_str("storage_type: 1\noperation_type: UPDATE\nbackup_type: NONE\nregion: EMMC_USER\n\n");
+        out.push_str(
+            "storage_type: 1\noperation_type: UPDATE\nbackup_type: NONE\nregion: EMMC_USER\n\n",
+        );
     }
-    fs::write(out_path, out)
-        .map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
+    fs::write(out_path, out).map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
 
     let total: u64 = parts.iter().map(|(_, _, s)| s).sum();
     let dl = parts.iter().filter(|(_, _, s)| *s < BIG_DATA).count();
@@ -1262,11 +2152,7 @@ fn write_scatter_file(
 /// from the authoritative on-device table. Large data partitions (super,
 /// userdata, ...) are marked non-downloadable so backup/flash flows never
 /// touch them by accident.
-pub fn mtk_scatter_gpt_cli(
-    target: &str,
-    da_path: &str,
-    out_path: &str,
-) -> Result<String> {
+pub fn mtk_scatter_gpt_cli(target: &str, da_path: &str, out_path: &str) -> Result<String> {
     let dev = find_mtk_dev(target)?;
     let (stage, _) = boot_stage_for(dev.pid);
     if stage != "brom" && stage != "preloader" {
@@ -1278,7 +2164,7 @@ pub fn mtk_scatter_gpt_cli(
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
     let parts = da
         .list_gpt()
         .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
@@ -1301,20 +2187,41 @@ pub fn mtk_frp_bypass(target: &str, da_path: &str, scatter_path: &str) -> Result
 pub fn mtk_flash_samsung(target: &str, da_path: &str, fw_dir: &str) -> Result<String> {
     let fw = std::path::Path::new(fw_dir);
     if !fw.is_dir() {
-        return Err(BridgeError::InvalidArgument(format!("firmware dir not found: {fw_dir}")));
+        return Err(BridgeError::InvalidArgument(format!(
+            "firmware dir not found: {fw_dir}"
+        )));
     }
     // collect partition images (already decompressed .img/.bin; Python extracts .lz4 first)
     let mut entries: Vec<(String, String)> = Vec::new();
     for e in std::fs::read_dir(fw).map_err(|e| format!("read fw_dir: {e}"))? {
         let e = e.map_err(|e| format!("dir entry: {e}"))?;
         let p = e.path();
-        if !p.is_file() { continue; }
-        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-        if ext != "img" && ext != "bin" { continue; }
-        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-        if stem.is_empty() { continue; }
+        if !p.is_file() {
+            continue;
+        }
+        let ext = p
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "img" && ext != "bin" {
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if stem.is_empty() {
+            continue;
+        }
         // skip hidden / meta partitions that will brick if overwritten raw
-        if matches!(stem.as_str(), "gpt" | "pgpt" | "preloader" | "preloader_raw") { continue; }
+        if matches!(
+            stem.as_str(),
+            "gpt" | "pgpt" | "preloader" | "preloader_raw"
+        ) {
+            continue;
+        }
         entries.push((stem, p.to_string_lossy().to_string()));
     }
     if entries.is_empty() {
@@ -1327,20 +2234,35 @@ pub fn mtk_flash_samsung(target: &str, da_path: &str, fw_dir: &str) -> Result<St
     let dev = find_mtk_dev(target)?;
     let (stage, _) = boot_stage_for(dev.pid);
     if stage != "brom" && stage != "preloader" {
-        return Err(BridgeError::InvalidArgument(format!("Device in {} mode, need BROM/Preloader", stage)));
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
     }
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let mut out = Vec::new();
-    out.push(format!("MTK Samsung flash (GPT, no scatter) - {} partition(s) from {}", entries.len(), fw_dir));
+    out.push(format!(
+        "MTK Samsung flash (GPT, no scatter) - {} partition(s) from {}",
+        entries.len(),
+        fw_dir
+    ));
     for (name, file) in &entries {
-        out.push(format!("Writing '{name}' from {}...", std::path::Path::new(file).file_name().unwrap().to_string_lossy()));
+        out.push(format!(
+            "Writing '{name}' from {}...",
+            std::path::Path::new(file)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+        ));
         da.write_partition_by_name(name, file).map_err(|e| {
-            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed{
-                cmd:0, sub:0, reason: format!("write '{name}': {e}"),
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("write '{name}': {e}"),
             })
         })?;
         out.push(format!("  '{name}' OK"));
@@ -1364,7 +2286,7 @@ pub fn mtk_frp_bypass_gpt(target: &str, da_path: &str) -> Result<String> {
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let mut da = DaSession::new(session);
-    da.upload_da(da_path)?;
+    da.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let mut out = Vec::new();
     out.push("FRP bypass (GPT mode) - resolving lock partitions...".to_string());
@@ -1376,17 +2298,22 @@ pub fn mtk_frp_bypass_gpt(target: &str, da_path: &str) -> Result<String> {
     Ok(out.join("\n"))
 }
 
-/// `mtk-frp-brom <target> <da_dir>` — FRP bypass for ANY MediaTek device via
-/// BROM with NO user-supplied DA: parses the bundled mtkclient DA containers
-/// (V5/V6, GPLv3, attributed in mtk_daloader.rs), picks the entry for the
-/// chip's dacode, uploads it (kamakiri2 first when the BROM is
-/// SBC/SLA/DAA-protected so the unsigned DA isn't blocked), then erases the
-/// lock partitions from the device GPT and reboots.
+/// An open DA session plus the human-readable setup log (DA selection,
+/// exploit, loader sync).
+struct OpenedDa {
+    da: DaSession,
+    log: Vec<String>,
+}
+
+/// Open a BROM/Preloader target and bring up a DA session for `da_spec`:
+/// `auto` (bundled containers), a directory of containers, or a `.bin` DA.
 ///
-/// The mtkclient `upload_da1` flow: region[1] -> SEND_DA at m_start_addr ->
-/// JUMP_DA -> 0xC0 loader sync on the SAME connection (no re-enumeration),
-/// after which the DA speaks the LEGACY echo protocol this DaSession drives.
-pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
+/// Protected BROMs (SBC/SLA/DAA) get the per-SoC exploit first so an unsigned
+/// bundled DA isn't blocked by the auth check; the DA is then uploaded via the
+/// mtkclient `upload_da1` flow (SEND_DA -> JUMP_DA -> 0xC0 loader sync on the
+/// SAME connection).
+fn open_da_session(target: &str, da_spec: &str) -> Result<OpenedDa> {
+    let source = classify_da_spec(da_spec)?;
     let dev = find_mtk_dev(target)?;
     let (stage, _) = boot_stage_for(dev.pid);
     if stage != "brom" && stage != "preloader" {
@@ -1395,64 +2322,17 @@ pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
             stage
         )));
     }
-    let load = |name: &str| -> Result<Option<Vec<u8>>> {
-        let p = std::path::Path::new(da_dir).join(name);
-        if !p.is_file() {
-            return Ok(None);
-        }
-        Ok(Some(
-            std::fs::read(&p).map_err(|e| BridgeError::Io(format!("read {name}: {e}")))?,
-        ))
-    };
-    // V5 (LEGACY protocol) first; V6 (XML) is only a fallback for chips
-    // with no V5 entry — this engine cannot drive XML-mode DAs.
-    let v5 = load("MTK_DA_V5.bin")?;
-    let v6 = load("MTK_DA_V6.bin")?;
-    if v5.is_none() && v6.is_none() {
-        return Err(BridgeError::InvalidArgument(format!(
-            "no bundled DA containers in {da_dir} (need MTK_DA_V5.bin / MTK_DA_V6.bin)"
-        )));
-    }
-    let parse = |data: &Option<Vec<u8>>| -> Option<crate::mtk_daloader::DaContainer> {
-        data.as_ref()
-            .and_then(|d| crate::mtk_daloader::parse_container(d).ok())
-    };
-    let v5c = parse(&v5);
-    let v6c = parse(&v6);
-
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
-    let session = brom_handshake(&dev, iface, in_ep, out_ep)
-        .map_err(|e| e.to_string())?;
+    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     let chip = crate::mtk_exploit::read_chip(&session);
     let hw = chip.hw_code;
 
-    let v5_pick = v5c.as_ref().and_then(|c| c.pick(hw));
-    let v6_pick = v6c.as_ref().and_then(|c| c.pick(hw));
-    let (entry, container, container_data) = match (&v5_pick, &v6_pick, &v5, &v6) {
-        (Some(e), _, Some(d), _) => (e, v5c.as_ref().unwrap(), d),
-        (None, Some(e), _, Some(d)) => (e, v6c.as_ref().unwrap(), d),
-        _ => {
-            let mkt = crate::mtk_daloader::marketing_dacode(hw)
-                .map(|m| format!(" (dacode {m:#06x})"))
-                .unwrap_or_default();
-            return Err(BridgeError::InvalidArgument(format!(
-                "no DA entry for hw {hw:#06x}{mkt} in the bundled containers"
-            )));
-        }
-    };
-    let (da1, da1_addr, sig_len) = container.stage1(entry, container_data)?;
-    let mut out = Vec::new();
-    out.push(format!(
-        "Bundled DA ({} container): entry hw 0x{:04x} — stage1 {} bytes @ 0x{:x}",
-        if entry.v6 { "V6/XML" } else { "V5/legacy" },
-        entry.hw_code,
-        da1.len(),
-        da1_addr
-    ));
+    let payload = resolve_da_payload(&source, hw)?;
+    let mut out = vec![payload.description.clone()];
 
-    // Protected BROM (SBC/SLA/DAA): kamakiri2 first so the unsigned bundled
-    // DA isn't blocked by the auth check (the exploit's send-pointer
-    // redirect jumps straight to the payload, bypassing verification).
+    // Protected BROM (SBC/SLA/DAA): kamakiri2 first so the unsigned DA isn't
+    // blocked by the auth check (the exploit's send-pointer redirect jumps
+    // straight to the payload, bypassing verification).
     let protected = chip
         .target_config
         .as_ref()
@@ -1461,24 +2341,60 @@ pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
     if protected {
         let cfg = crate::mtk_exploit::chip_config(hw).ok_or_else(|| {
             BridgeError::InvalidArgument(format!(
-                "BROM protected (SBC/SLA/DAA) and hw {hw:#06x} is not in the exploit table — cannot run kamakiri2"
+                "BROM protected (SBC/SLA/DAA) and hw {hw:#06x} is not in the exploit table — cannot run a BROM exploit"
             ))
         })?;
-        let mut k2 = crate::mtk_exploit::Kamakiri2::new(&session, cfg);
-        k2.prime();
-        k2.exploit(da1, da1_addr)
-            .map_err(crate::error::BridgeError::InvalidArgument)?;
-        out.push("BROM protected (SBC/SLA/DAA) — kamakiri2 exploit applied".to_string());
+        match cfg.exploit {
+            crate::mtk_exploit::MtkExploitKind::Kamakiri2 => {
+                let mut k2 = crate::mtk_exploit::Kamakiri2::new(&session, cfg);
+                k2.prime();
+                k2.exploit(&payload.bytes, payload.addr)
+                    .map_err(crate::error::BridgeError::InvalidArgument)?;
+                out.push("BROM protected (SBC/SLA/DAA) — kamakiri2 exploit applied".to_string());
+            }
+            crate::mtk_exploit::MtkExploitKind::BypassUtility => {
+                // Upload the small per-SoC BROM payload, not the DA. The DA
+                // follows through SEND_DA/JUMP_DA below.
+                let name = cfg.payload.ok_or_else(|| {
+                    BridgeError::InvalidArgument(format!(
+                        "hw {hw:#06x} uses bypass_utility but names no payload"
+                    ))
+                })?;
+                let path = crate::mtk_exploit::resolve_payload(name).ok_or_else(|| {
+                    BridgeError::InvalidArgument(format!(
+                        "bypass_utility payload '{name}' not found; set MTK_PAYLOAD_DIR"
+                    ))
+                })?;
+                let bypass_payload = std::fs::read(&path).map_err(|e| {
+                    BridgeError::InvalidArgument(format!("read {}: {e}", path.display()))
+                })?;
+                let addr = cfg.brom_payload_addr;
+                crate::mtk_exploit::BypassUtility::new(&session, cfg)
+                    .exploit(&bypass_payload, addr)
+                    .map_err(crate::error::BridgeError::InvalidArgument)?;
+                out.push(format!(
+                    "BROM protected (SBC/SLA/DAA) — bypass_utility payload {name} ({} bytes) uploaded to 0x{addr:x}",
+                    bypass_payload.len()
+                ));
+            }
+        }
     }
 
     session
-        .send_da(da1_addr, da1.len(), sig_len, da1)
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-            cmd: 0,
-            sub: 0,
-            reason: format!("SEND_DA (bundled DA stage1): {e}"),
-        }))?;
-    session.jump_da(da1_addr).map_err(|e| {
+        .send_da(
+            payload.addr,
+            payload.bytes.len(),
+            payload.sig_len,
+            &payload.bytes,
+        )
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("SEND_DA (DA stage1): {e}"),
+            })
+        })?;
+    session.jump_da(payload.addr).map_err(|e| {
         BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
             cmd: 0,
             sub: 0,
@@ -1486,13 +2402,11 @@ pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
         })
     })?;
     // Loader sync: 0xC0 arrives on the SAME connection (no re-enum).
-    let sync = session
-        .read_exact(1, Duration::from_secs(5))
-        .map_err(|e| {
-            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
-                "loader sync: {e}"
-            )))
-        })?;
+    let sync = session.read_exact(1, Duration::from_secs(5)).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+            "loader sync: {e}"
+        )))
+    })?;
     if sync.first() == Some(&0xC0) {
         out.push("Loader sync (0xC0) OK — DA is live".to_string());
     } else {
@@ -1502,13 +2416,274 @@ pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
         ));
     }
 
-    let da = DaSession::new(session);
+    Ok(OpenedDa {
+        da: DaSession::new_with_hw_code(session, hw),
+        log: out,
+    })
+}
+
+/// `mtk-frp-brom <target> <da_dir>` — FRP bypass for ANY MediaTek device via
+/// BROM with NO user-supplied DA: parses the bundled mtkclient DA containers
+/// (V5/V6, GPLv3, attributed in mtk_daloader.rs), picks the entry for the
+/// chip's dacode, uploads it (kamakiri2 first when the BROM is
+/// SBC/SLA/DAA-protected so the unsigned DA isn't blocked), then erases the
+/// lock partitions from the device GPT and reboots.
+pub fn mtk_frp_brom_auto(target: &str, da_dir: &str) -> Result<String> {
+    let opened = open_da_session(target, da_dir)?;
+    let da = opened.da;
+    let mut out = opened.log;
     out.push("Resolving lock partitions from the device GPT...".to_string());
     da.frp_bypass(None, true)
         .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     out.push(
         "Lock partitions cleared (frp/nvdata/metadata/persistent/protect/keystore).".to_string(),
     );
+    let _ = da.reboot(0);
+    out.push("Device rebooted to normal mode.".to_string());
+    Ok(out.join("\n"))
+}
+
+/// `mtk-backup-gpt <target> <da_spec> <out_dir>` — dump every partition in
+/// the device GPT (zero-size entries skipped) plus a `manifest.json` of
+/// name/offset/size/sha256. `da_spec` is `auto` (bundled containers), a `.bin`
+/// DA, or a directory of bundled containers.
+pub fn mtk_backup_gpt(target: &str, da_spec: &str, out_dir: &str) -> Result<String> {
+    let opened = open_da_session(target, da_spec)?;
+    let da = opened.da;
+    let mut out = opened.log;
+    let parts = da.list_gpt().map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+            "read device GPT: {e}"
+        )))
+    })?;
+    let plan = plan_backup(&parts)?;
+    let out_path = Path::new(out_dir);
+    ensure_dir(out_path)?;
+
+    let mut manifest: Vec<serde_json::Value> = Vec::new();
+    let mut dumped_bytes: u64 = 0;
+    let mut failed: Vec<String> = Vec::new();
+    out.push(format!(
+        "Backing up {} partition(s) to {}...",
+        plan.len(),
+        out_path.display()
+    ));
+    for (name, start, size) in &plan {
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(BridgeError::InvalidArgument(format!(
+                "unsafe partition name in device GPT: {name:?}"
+            )));
+        }
+        let file_name = format!("{name}.img");
+        let file = out_path.join(&file_name);
+        println!("Backing up {name} (offset 0x{start:x}, {size} bytes) -> {file_name}...");
+        if let Err(e) = da.read_partition(name, *start, *size, &file.to_string_lossy()) {
+            let msg = format!("{name}: {e}");
+            println!("FAILED {msg}");
+            failed.push(msg);
+            continue;
+        }
+        let dumped = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        if dumped == 0 {
+            let msg = format!("{name}: partition read produced 0 bytes");
+            println!("FAILED {msg}");
+            failed.push(msg);
+            continue;
+        }
+        dumped_bytes += dumped;
+        let sha256 = match crate::util::sha256_file(&file) {
+            Ok(h) => h,
+            Err(e) => {
+                let msg = format!("{name}: sha256: {e}");
+                println!("FAILED {msg}");
+                failed.push(msg);
+                continue;
+            }
+        };
+        manifest.push(serde_json::json!({
+            "name": name,
+            "offset": start,
+            "size": size,
+            "sha256": sha256,
+            "file": file_name,
+        }));
+    }
+
+    if dumped_bytes == 0 || manifest.is_empty() {
+        return Err(BridgeError::Firmware(
+            crate::error::FirmwareError::ImageCorrupt(format!(
+                "backup dumped 0 bytes (failures: {})",
+                if failed.is_empty() {
+                    "none".to_string()
+                } else {
+                    failed.join("; ")
+                }
+            )),
+        ));
+    }
+
+    let manifest_path = out_path.join("manifest.json");
+    let doc = serde_json::json!({
+        "target": target,
+        "partition_count": manifest.len(),
+        "total_bytes": dumped_bytes,
+        "partitions": manifest,
+    });
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&doc)
+            .map_err(|e| BridgeError::Internal(format!("manifest: {e}")))?,
+    )
+    .map_err(|e| BridgeError::Io(format!("write {}: {e}", manifest_path.display())))?;
+
+    out.push(format!(
+        "Backup complete: {} partition(s), {} bytes, manifest {}",
+        manifest.len(),
+        dumped_bytes,
+        manifest_path.display()
+    ));
+    if !failed.is_empty() {
+        out.push(format!("FAILED partitions: {}", failed.join("; ")));
+    }
+    let _ = da.reboot(0);
+    out.push("Device rebooted to normal mode.".to_string());
+    if !failed.is_empty() {
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!(
+                    "backup incomplete: {} partition(s) failed ({})",
+                    failed.len(),
+                    failed.join("; ")
+                ),
+            },
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
+/// `mtk-flash-auto <target> <folder> [--scatter <path>] [--da <spec>]` —
+/// discover the scatter in a firmware folder (unless given), bring up the DA
+/// (bundled by default) and flash every image present. Boot-area entries are
+/// skipped, sparse/LZ4 images are normalized, and A/B slot names fall back to
+/// `<name>_a` / `<name>_b` when the plain name is absent from the GPT.
+pub fn mtk_flash_auto(
+    target: &str,
+    folder: &str,
+    scatter: Option<&str>,
+    da_spec: Option<&str>,
+    opts: &FlashOptions,
+) -> Result<String> {
+    let dir = Path::new(folder);
+    if !dir.is_dir() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "firmware folder not found: {folder}"
+        )));
+    }
+    let scatter_path = match scatter {
+        Some(path) => {
+            let p = Path::new(path);
+            if !p.is_file() {
+                return Err(BridgeError::InvalidArgument(format!(
+                    "scatter file not found: {path}"
+                )));
+            }
+            p.to_path_buf()
+        }
+        None => discover_scatter(dir)?,
+    };
+    let scatter_file = ScatterFile::parse(&scatter_path.to_string_lossy())
+        .map_err(BridgeError::InvalidArgument)?;
+    scatter_file.print_summary();
+
+    let opened = open_da_session(target, da_spec.unwrap_or("auto"))?;
+    let da = opened.da;
+    let mut out = opened.log;
+    out.push(format!(
+        "Flashing from {} (scatter {})...",
+        folder,
+        scatter_path.display()
+    ));
+    da.flash_firmware_opts(&scatter_file, folder, opts)
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("flash: {e}"),
+            })
+        })?;
+    out.push("All available partition images flashed.".to_string());
+    let _ = da.reboot(0);
+    out.push("Device rebooted to normal mode.".to_string());
+    Ok(out.join("\n"))
+}
+
+/// `mtk-screen-lock <target> <da_spec> [--wipe-userdata]` — erase the
+/// screen-lock credential stores by GPT name. `--wipe-userdata` adds
+/// userdata/cache/nvdata (factory-reset grade). `frp` is never touched.
+pub fn mtk_screen_lock(target: &str, da_spec: &str, wipe_userdata: bool) -> Result<String> {
+    let opened = open_da_session(target, da_spec)?;
+    let da = opened.da;
+    let mut out = opened.log;
+    let parts = da.list_gpt().map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+            "read device GPT: {e}"
+        )))
+    })?;
+    let names: Vec<&str> = parts.iter().map(|(n, _, _)| n.as_str()).collect();
+    let wanted = screen_lock_partitions(wipe_userdata);
+    let present: Vec<&str> = wanted
+        .iter()
+        .copied()
+        .filter(|name| names.contains(name))
+        .collect();
+    if present.is_empty() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "no lock partitions found in the device GPT (looked for: {})",
+            wanted.join(", ")
+        )));
+    }
+    out.push(format!(
+        "Erasing {} lock partition(s){}",
+        present.len(),
+        if wipe_userdata {
+            " including userdata/cache/nvdata (FACTORY RESET: all user data will be lost)"
+        } else {
+            ""
+        }
+    ));
+    let mut erased = Vec::new();
+    let mut failed = Vec::new();
+    for name in &present {
+        println!("Erasing {name}...");
+        if da.format_partition(name).is_ok() || da.zero_fill_partition(name).is_ok() {
+            erased.push(*name);
+        } else {
+            failed.push(*name);
+        }
+    }
+    if erased.is_empty() {
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!(
+                    "no lock partition could be erased (failed: {})",
+                    failed.join(", ")
+                ),
+            },
+        ));
+    }
+    out.push(format!(
+        "Erased: {}{}",
+        erased.join(", "),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!("; FAILED: {}", failed.join(", "))
+        }
+    ));
     let _ = da.reboot(0);
     out.push("Device rebooted to normal mode.".to_string());
     Ok(out.join("\n"))
@@ -1524,17 +2699,18 @@ pub fn mtk_adb_enable(target: &str, da_path: &str, scatter_path: &str) -> Result
 
 pub fn mtk_reboot(target: &str, da_path: &str, mode: u8) -> Result<String> {
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
-    
+
     let mut da_session = DaSession::new(session);
-    da_session.upload_da(da_path)?;
+    da_session.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
     da_session.reboot(mode)?;
-    
+
     Ok(serde_json::json!({"status": "reboot sent", "mode": mode}).to_string())
 }
 
@@ -1586,36 +2762,39 @@ impl Default for MtkBypassConfig {
 /// Detect and enter Factory/Dealer mode
 pub fn mtk_enter_factory_mode(target: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     // Factory mode often uses specific PID (0x0001, 0x0003, or 0x0004)
     let (_stage, _) = boot_stage_for(dev.pid);
-    
+
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
 
     // Try factory mode commands
     let mut results = Vec::new();
-    
+
     // CMD 0xE0: GET_FACTORY_MODE
     if let Ok(resp) = session.send_cmd(0xE0, 4) {
         let mode = u32::from_be_bytes([resp[0], resp[1], resp[2], resp[3]]);
         results.push(format!("Factory mode status: 0x{:08X}", mode));
     }
-    
+
     // CMD 0xE1: ENTER_FACTORY_MODE
     if let Ok(_) = session.send_cmd(0xE1, 2) {
         results.push("Entered factory mode".to_string());
     }
-    
+
     // CMD 0xE2: GET_DEALER_INFO
     if let Ok(resp) = session.send_cmd(0xE2, 64) {
-        let info = String::from_utf8_lossy(&resp).trim_end_matches('\0').to_string();
+        let info = String::from_utf8_lossy(&resp)
+            .trim_end_matches('\0')
+            .to_string();
         results.push(format!("Dealer info: {}", info));
     }
-    
+
     // CMD 0xE3: SET_DEALER_MODE
     if let Ok(_) = session.send_cmd(0xE3, 2) {
         results.push("Dealer mode enabled".to_string());
@@ -1628,19 +2807,21 @@ pub fn mtk_enter_factory_mode(target: &str) -> Result<String> {
 pub fn mtk_detect_emergency_mode() -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let mut emergency_devices = Vec::new();
-    
+
     for d in devices.iter().filter(|d| d.vid == MTK_VID) {
         let (stage, _) = boot_stage_for(d.pid);
         // Emergency mode PIDs: 0x0003 (BROM), 0x2000 (preloader) — plus
         // 0x0001/0x0002 variants on some boards.
         // Some devices show 0x0001, 0x0002 in emergency mode
         let is_emergency = matches!(d.pid, 0x2000 | 0x0001 | 0x0002 | 0x0003);
-        
-        if is_emergency || d.product.as_ref().map_or(false, |p| 
-            p.to_lowercase().contains("emergency") || 
-            p.to_lowercase().contains("download") ||
-            p.to_lowercase().contains("brom")
-        ) {
+
+        if is_emergency
+            || d.product.as_ref().map_or(false, |p| {
+                p.to_lowercase().contains("emergency")
+                    || p.to_lowercase().contains("download")
+                    || p.to_lowercase().contains("brom")
+            })
+        {
             emergency_devices.push(serde_json::json!({
                 "bus": d.bus,
                 "address": d.address,
@@ -1651,112 +2832,208 @@ pub fn mtk_detect_emergency_mode() -> Result<String> {
             }));
         }
     }
-    
+
     Ok(serde_json::json!({"emergency_devices": emergency_devices}).to_string())
 }
 
 /// MTK BROM Exploit / Auth Bypass
-/// Supports known exploits for various MTK chips
+///
+/// The engine is selected by the per-SoC table: kamakiri2 (CVE-2020-11152) for
+/// modern SoCs, bypass_utility for pre-2020 chips. A caller-supplied custom
+/// payload path is also supported. The per-SoC CVE *names* below refer to
+/// payloads this engine still does not ship and fail explicitly rather than
+/// reporting success.
 pub fn mtk_brom_exploit(
     target: &str,
     exploit_type: &str,
     payload_path: Option<&str>,
 ) -> Result<String> {
+    // Legacy aliases that used to return a fabricated success. They name a
+    // specific exploit per SoC but are not wired to one; the detected chip
+    // selects its engine automatically. Refuse them before touching the device.
+    if matches!(
+        exploit_type,
+        "mt6765_cve_2020" | "mt6761_cve_2019" | "mt6833_cve_2021"
+    ) {
+        return Err(BridgeError::InvalidArgument(format!(
+            "exploit '{exploit_type}' is a legacy per-chip alias and is not wired to a payload; use 'mtk_bypass'/'auth_bypass' (engine chosen from the detected SoC) or 'custom' with a payload path"
+        )));
+    }
+
+    if exploit_type == "custom" {
+        let path = payload_path.ok_or_else(|| {
+            BridgeError::InvalidArgument("Custom exploit requires payload_path".to_string())
+        })?;
+        let result = crate::mtk_exploit::brom_run_payload(target, path)?;
+        return Ok(serde_json::json!({
+            "exploit": exploit_type,
+            "supported": true,
+            "result": result,
+        })
+        .to_string());
+    }
+
+    if exploit_type != "mtk_bypass" && exploit_type != "auth_bypass" {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Unknown exploit type: {exploit_type}"
+        )));
+    }
+
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
-    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
+    let (iface, in_ep, out_ep) = find_bulk(dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(dev, iface, in_ep, out_ep)?;
 
-    let mut results = Vec::new();
-    
-    match exploit_type {
-        "mtk_bypass" | "auth_bypass" => {
-            // Standard MTK bypass - upload unsigned DA
-            results.push("Attempting standard auth bypass...".to_string());
-            
-            // Disable SLA (Security Lock Authentication) via target config
-            // CMD 0xD8: GET_TARGET_CONFIG - check if SLA bit is set
-            if let Ok(resp) = session.send_cmd(0xD8, 6) {
-                let raw = u32::from_be_bytes([resp[0], resp[1], resp[2], resp[3]]);
-                let sla = raw & 0x0000_0002 != 0;
-                results.push(format!("SLA enabled: {}", sla));
-                
-                if sla {
-                    // Try to disable SLA via CMD 0xD9 (SET_TARGET_CONFIG) if supported
-                    // This is chip-specific
-                    results.push("SLA detected - attempting bypass...".to_string());
-                }
+    // Real flow: read identity, resolve the per-SoC config, stop the watchdog,
+    // then check whether kamakiri2 actually grants RAM access.
+    let chip = crate::mtk_exploit::read_chip(&session);
+    let hw_code = chip.hw_code;
+    let cfg = crate::mtk_exploit::chip_config(hw_code).ok_or_else(|| {
+        BridgeError::InvalidArgument(format!(
+            "hw_code {hw_code:#x} is not in the BROM exploit table; no kamakiri2 target"
+        ))
+    })?;
+
+    let (sbc, sla, daa) = chip
+        .target_config
+        .as_ref()
+        .map(|tc| (tc.sbc, tc.sla, tc.daa))
+        .unwrap_or((false, false, false));
+    let protected = sbc || sla || daa;
+
+    // Pre-2020 SoCs: bypass_utility engine instead of kamakiri2.
+    if cfg.exploit == crate::mtk_exploit::MtkExploitKind::BypassUtility {
+        let payload_file = match payload_path {
+            Some(p) => std::path::PathBuf::from(p),
+            None => {
+                let name = cfg.payload.ok_or_else(|| {
+                    BridgeError::InvalidArgument(format!(
+                        "hw_code {hw_code:#x} ({}) uses bypass_utility but the exploit table \
+                         names no payload",
+                        cfg.name
+                    ))
+                })?;
+                crate::mtk_exploit::resolve_payload(name).ok_or_else(|| {
+                    BridgeError::InvalidArgument(format!(
+                        "hw_code {hw_code:#x} ({}) requires the bypass_utility payload \
+                         '{name}', which was not found; pass a payload path or set \
+                         MTK_PAYLOAD_DIR",
+                        cfg.name
+                    ))
+                })?
             }
-        }
-        "mt6765_cve_2020" => {
-            // MT6765 specific exploit (CVE-2020-xxxx)
-            results.push("MT6765 CVE-2020 exploit: needs custom payload".to_string());
-            if let Some(path) = payload_path {
-                results.push(format!("Payload: {}", path));
-            }
-        }
-        "mt6761_cve_2019" => {
-            // MT6761 specific exploit
-            results.push("MT6761 CVE-2019 exploit: needs custom payload".to_string());
-        }
-        "mt6833_cve_2021" => {
-            // MT6833 (Dimensity 700/800) exploit
-            results.push("MT6833 CVE-2021 exploit: needs custom payload".to_string());
-        }
-        "custom" => {
-            if let Some(path) = payload_path {
-                results.push(format!("Custom payload: {}", path));
-                // Upload custom payload to target address
-            } else {
-                return Err(BridgeError::InvalidArgument("Custom exploit requires payload_path".to_string()));
-            }
-        }
-        _ => return Err(BridgeError::InvalidArgument(format!("Unknown exploit type: {}", exploit_type))),
+        };
+        let payload = std::fs::read(&payload_file).map_err(|e| {
+            BridgeError::InvalidArgument(format!(
+                "read bypass_utility payload {}: {e}",
+                payload_file.display()
+            ))
+        })?;
+        let payload_addr = cfg.brom_payload_addr;
+        crate::mtk_exploit::BypassUtility::new(&session, cfg)
+            .exploit(&payload, payload_addr)
+            .map_err(|e| BridgeError::InvalidArgument(format!("bypass_utility: {e}")))?;
+
+        let results = vec![
+            format!("chip {} (hw_code {hw_code:#x})", cfg.name),
+            format!("target config: sbc={sbc} sla={sla} daa={daa} protected={protected}"),
+            format!(
+                "bypass_utility payload: {} ({} bytes)",
+                payload_file.display(),
+                payload.len()
+            ),
+            format!("payload uploaded to 0x{payload_addr:x} and jumped to"),
+        ];
+        return Ok(serde_json::json!({
+            "exploit": "bypass_utility",
+            "supported": true,
+            "hw_code": format!("0x{hw_code:x}"),
+            "chip": cfg.name,
+            "sbc": sbc,
+            "sla": sla,
+            "daa": daa,
+            "protected": protected,
+            "payload": payload_file.display().to_string(),
+            "payload_addr": format!("0x{payload_addr:x}"),
+            "results": results,
+        })
+        .to_string());
     }
 
-    Ok(serde_json::json!({"exploit": exploit_type, "results": results}).to_string())
+    let mut k2 = crate::mtk_exploit::Kamakiri2::new(&session, cfg);
+    k2.disable_watchdog();
+    k2.prime();
+    let ram_ok = k2.ram_read(0x200000, 1).is_ok();
+
+    let results = vec![
+        format!("chip {} (hw_code {hw_code:#x})", cfg.name),
+        format!("target config: sbc={sbc} sla={sla} daa={daa} protected={protected}"),
+        format!("watchdog 0x{:08x} disabled (best-effort)", cfg.watchdog),
+        format!(
+            "kamakiri2 RAM access: {}",
+            if ram_ok { "ok" } else { "failed" }
+        ),
+    ];
+
+    Ok(serde_json::json!({
+        "exploit": exploit_type,
+        "supported": true,
+        "hw_code": format!("0x{hw_code:x}"),
+        "chip": cfg.name,
+        "sbc": sbc,
+        "sla": sla,
+        "daa": daa,
+        "protected": protected,
+        "ram_access": ram_ok,
+        "results": results,
+    })
+    .to_string())
 }
 
 /// Dealer/Factory mode with full access
 pub fn mtk_dealer_mode(target: &str, da_path: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
-    
+
     let mut da_session = DaSession::new(session);
-    da_session.upload_da(da_path)?;
+    da_session.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let mut results = Vec::new();
-    
+
     // Dealer mode commands
     // CMD 0xE4: DEALER_AUTH - authenticate as dealer
     if let Ok(_) = da_session.send_cmd(0xE4, &[0x01, 0x00, 0x00, 0x00], 2) {
         results.push("Dealer authentication successful".to_string());
     }
-    
+
     // CMD 0xE5: UNLOCK_BOOTLOADER - dealer unlock
     if let Ok(_) = da_session.send_cmd(0xE5, &[], 2) {
         results.push("Bootloader unlock command sent".to_string());
     }
-    
+
     // CMD 0xE6: ERASE_FRP - dealer FRP erase
     if let Ok(_) = da_session.send_cmd(0xE6, &[], 2) {
         results.push("FRP erase command sent".to_string());
     }
-    
+
     // CMD 0xE7: READ_SECURE_CONFIG - read secure config
     if let Ok(resp) = da_session.send_cmd(0xE7, &[], 64) {
-        let config = String::from_utf8_lossy(&resp).trim_end_matches('\0').to_string();
+        let config = String::from_utf8_lossy(&resp)
+            .trim_end_matches('\0')
+            .to_string();
         results.push(format!("Secure config: {}", config));
     }
-    
+
     // CMD 0xE8: WRITE_SECURE_CONFIG - write secure config (enable ADB, etc.)
     let adb_config = b"ro.secure=0\nro.debuggable=1\nro.adb.secure=0\npersist.sys.usb.config=adb\n";
     if let Ok(_) = da_session.send_cmd(0xE8, adb_config, 2) {
@@ -1766,32 +3043,15 @@ pub fn mtk_dealer_mode(target: &str, da_path: &str) -> Result<String> {
     Ok(serde_json::json!({"dealer_mode": results}).to_string())
 }
 
-/// Emergency download mode with full partition access
-pub fn mtk_emergency_mode(target: &str, da_path: &str) -> Result<String> {
-    let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
-        .ok_or("MTK device not found")?;
-
-    // Emergency mode often requires specific entry sequence
-    let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
-    let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
-
-    let mut da_session = DaSession::new(session);
-    da_session.upload_da(da_path)?;
-
-    let mut results = Vec::new();
-    
-    // Emergency mode grants full access
-    // CMD 0xF4: EMERGENCY_READ - read any partition without auth
-    // CMD 0xF5: EMERGENCY_WRITE - write any partition without auth
-    // CMD 0xF6: EMERGENCY_ERASE - erase any partition
-    // CMD 0xF7: EMERGENCY_UNLOCK - unlock bootloader
-    
-    results.push("Emergency mode active - full partition access granted".to_string());
-    results.push("Available: read/write/erase any partition, unlock bootloader".to_string());
-
-    Ok(serde_json::json!({"emergency_mode": results}).to_string())
+/// Emergency download mode with full partition access.
+///
+/// No emergency command sequence is implemented yet; the previous version
+/// fabricated a "full partition access granted" success without sending a
+/// single command to the device.
+pub fn mtk_emergency_mode(_target: &str, _da_path: &str) -> Result<String> {
+    Err(BridgeError::NotSupported(
+        "mtk emergency mode not implemented".to_string(),
+    ))
 }
 
 /// Unified bypass entry point - wires mtk_brom_exploit + config timeouts as load-bearing
@@ -1805,20 +3065,20 @@ pub fn mtk_bypass_unified(
     let ctx = crate::config::app_config_for_operation(None);
     let timeout = crate::config::mtk_da_timeout(&ctx.mtk);
     results.push(format!("mtk timeout {:?}", timeout));
-    
+
     // Force preloader mode if requested
     if config.force_preloader {
         results.push("Forcing preloader mode...".to_string());
     }
-    
+
     // Skip auth if requested
     if config.skip_auth {
         results.push("Auth skip requested".to_string());
     }
-    
+
     // Store mode for JSON output before matching
     let mode_str = format!("{:?}", config.mode);
-    
+
     match &config.mode {
         MtkBypassMode::Standard => {
             results.push("Standard DA auth mode".to_string());
@@ -1826,17 +3086,22 @@ pub fn mtk_bypass_unified(
         MtkBypassMode::BromExploit => {
             let exploit = config.payload_path.as_deref().unwrap_or("mtk_bypass");
             results.push(format!("BROM exploit: {}", exploit));
-            // Wire mtk_brom_exploit as load-bearing when target is present (best-effort)
+            // Surface the real outcome (success payload or the actual error).
             if target != "auto" && !target.is_empty() {
-                if let Ok(r) = mtk_brom_exploit(target, exploit, config.payload_path.as_deref()) {
-                    results.push(format!("exploit probe: {r}"));
-                } else {
-                    results.push("exploit probe: device not present (offline)".to_string());
+                match mtk_brom_exploit(target, exploit, config.payload_path.as_deref()) {
+                    Ok(r) => results.push(format!("exploit result: {r}")),
+                    Err(e) => results.push(format!("exploit failed: {e}")),
                 }
+            } else {
+                results.push("exploit not attempted: no explicit target".to_string());
             }
         }
         MtkBypassMode::DaAuthBypass => {
-            results.push("DA auth bypass mode".to_string());
+            // Previously only appended a text line ("DA auth bypass mode")
+            // and returned success without patching or sending anything.
+            return Err(BridgeError::NotSupported(
+                "DA auth bypass not implemented".to_string(),
+            ));
         }
         MtkBypassMode::FactoryMode => {
             results.push("Factory/Dealer mode".to_string());
@@ -1851,11 +3116,11 @@ pub fn mtk_bypass_unified(
             results.push(format!("Custom payload: {}", path));
         }
     }
-    
+
     if let Some(scatter) = scatter_path {
         results.push(format!("Scatter: {}", scatter));
     }
-    
+
     Ok(serde_json::json!({"bypass": mode_str, "results": results}).to_string())
 }
 
@@ -1874,9 +3139,13 @@ pub fn mtk_bypass_cli(
         "factory" => MtkBypassMode::FactoryMode,
         "emergency" => MtkBypassMode::EmergencyMode,
         "sla_bypass" => MtkBypassMode::SlaBypass,
-        _ => MtkBypassMode::Standard,
+        _ => {
+            return Err(BridgeError::InvalidArgument(format!(
+                "unknown MTK bypass mode: '{mode}' (expected standard|brom_exploit|da_auth_bypass|factory|emergency|sla_bypass)"
+            )))
+        }
     };
-    
+
     let config = MtkBypassConfig {
         mode: bypass_mode,
         payload_path: None,
@@ -1884,7 +3153,7 @@ pub fn mtk_bypass_cli(
         skip_auth,
         force_preloader: true,
     };
-    
+
     mtk_bypass_unified(target, da_path, scatter_path, config)
 }
 
@@ -1897,20 +3166,24 @@ pub fn mtk_flash_flow(
     ops: MtKOperations,
 ) -> Result<String> {
     let devices = usb::collect_devices(None)?;
-    let dev = devices.iter()
+    let dev = devices
+        .iter()
         .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (stage, _) = boot_stage_for(dev.pid);
     if stage != "brom" && stage != "preloader" {
-        return Err(BridgeError::InvalidArgument(format!("Device in {} mode, need BROM/Preloader", stage)));
+        return Err(BridgeError::InvalidArgument(format!(
+            "Device in {} mode, need BROM/Preloader",
+            stage
+        )));
     }
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
     let session = brom_handshake(&dev, iface, in_ep, out_ep).map_err(|e| e.to_string())?;
     // Load-bearing probe that touches read16/write16/write32/get_target_config/reset_device wiring
     let _ = crate::mtk::brom_mem_probe(&session);
-    
+
     let mut da_session = DaSession::new(session);
     // Apply the configured MTK packet size to the DA session (previously
     // computed and dropped — the session always wrote 64K chunks).
@@ -1918,13 +3191,13 @@ pub fn mtk_flash_flow(
     let pkt = crate::config::mtk_packet_size(&ctx.mtk);
     da_session.set_packet_size(pkt);
     eprintln!("[mtk] packet size {pkt} (config: {:?})", ctx.mtk);
-    da_session.upload_da(da_path)?;
+    da_session.upload_da(da_path, 0)?; // hw_code unknown: this CLI has not queried the chip
 
     let scatter = ScatterFile::parse(scatter_path)?;
     scatter.print_summary();
 
     let mut results = Vec::new();
-    
+
     if ops.flash_firmware {
         da_session.flash_firmware(&scatter, firmware_dir)?;
         results.push("firmware flashed".to_string());
@@ -1974,6 +3247,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unimplemented_soc_exploits_fail_before_hardware() {
+        // These used to return a fabricated success string. They must now be
+        // rejected as InvalidArgument without needing a device.
+        for t in ["mt6765_cve_2020", "mt6761_cve_2019", "mt6833_cve_2021"] {
+            let err = mtk_brom_exploit("1:1", t, None).unwrap_err();
+            match err {
+                BridgeError::InvalidArgument(msg) => {
+                    assert!(msg.contains(t), "error must name {t}: {msg}")
+                }
+                other => panic!("expected InvalidArgument for {t}, got {other:?}"),
+            }
+        }
+        // "custom" without a payload path must also fail before USB I/O.
+        let err = mtk_brom_exploit("1:1", "custom", None).unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)));
+        // Unknown types remain rejected.
+        let err = mtk_brom_exploit("1:1", "nonsense", None).unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)));
+    }
+
+    #[test]
     fn test_scatter_parse_basic() {
         let content = r#"
 version: 1.0
@@ -2005,7 +3299,11 @@ storage: HW_STORAGE_EMMC
             ("boot".to_string(), 0x200000, 0x4000000),
             ("vbmeta".to_string(), 0x4200000, 0x1000),
             ("super".to_string(), 0x10000000, 5 * 1024 * 1024 * 1024u64),
-            ("userdata".to_string(), 0x200000000, 100 * 1024 * 1024 * 1024u64),
+            (
+                "userdata".to_string(),
+                0x200000000,
+                100 * 1024 * 1024 * 1024u64,
+            ),
         ];
         let path = "/tmp/test_scatter_gpt.txt";
         let msg = write_scatter_file(&parts, path).unwrap();
@@ -2032,12 +3330,26 @@ storage: HW_STORAGE_EMMC
         // The lock partition set must cover the standard MTK FRP locations
         // (both modern eMMC GPT names and legacy protect/nvdata names).
         let lock_parts = [
-            "frp", "frp_a", "frp_b",
-            "nvdata", "persistent", "metadata",
-            "protect1", "protect2", "protect_s",
-            "keystore", "oemkeystore",
+            "frp",
+            "frp_a",
+            "frp_b",
+            "nvdata",
+            "persistent",
+            "metadata",
+            "protect1",
+            "protect2",
+            "protect_s",
+            "keystore",
+            "oemkeystore",
         ];
-        for want in ["frp", "nvdata", "metadata", "persistent", "protect1", "keystore"] {
+        for want in [
+            "frp",
+            "nvdata",
+            "metadata",
+            "persistent",
+            "protect1",
+            "keystore",
+        ] {
             assert!(
                 lock_parts.contains(&want),
                 "lock partition set missing {want}"
@@ -2045,7 +3357,11 @@ storage: HW_STORAGE_EMMC
         }
         // A realistic MTK eMMC partition list should trigger several wipes.
         let gpt_names = ["boot", "frp", "nvdata", "metadata", "userdata", "system"];
-        let matched: Vec<&str> = lock_parts.iter().filter(|n| gpt_names.contains(n)).copied().collect();
+        let matched: Vec<&str> = lock_parts
+            .iter()
+            .filter(|n| gpt_names.contains(n))
+            .copied()
+            .collect();
         assert_eq!(matched, vec!["frp", "nvdata", "metadata"]);
     }
 
@@ -2084,7 +3400,7 @@ storage: HW_STORAGE_EMMC
         h[72..80].copy_from_slice(&2u64.to_le_bytes()); // partition_entry_lba
         h[80..84].copy_from_slice(&2u32.to_le_bytes()); // num_partition_entries
         h[84..88].copy_from_slice(&128u32.to_le_bytes()); // entry size
-        // Entry 0: boot, LBA 0x1000..0x1100
+                                                          // Entry 0: boot, LBA 0x1000..0x1100
         let e = &mut gpt[1024..1152];
         e[32..40].copy_from_slice(&0x1000u64.to_le_bytes());
         e[40..48].copy_from_slice(&0x10ffu64.to_le_bytes());
@@ -2178,5 +3494,382 @@ is_download: true
         assert_eq!(clamp_packet_size(1024 * 1024), 1024 * 1024);
         assert_eq!(clamp_packet_size(1024 * 1024 + 1), DEFAULT_PACKET_SIZE);
         assert_eq!(clamp_packet_size(usize::MAX), DEFAULT_PACKET_SIZE);
+    }
+
+    #[test]
+    fn emergency_mode_is_not_fabricated_success() {
+        let err = mtk_emergency_mode("1:1", "/missing/da.bin").unwrap_err();
+        assert!(err.to_string().contains("not implemented"), "{err}");
+    }
+
+    #[test]
+    fn da_auth_bypass_is_not_implemented() {
+        let cfg = MtkBypassConfig {
+            mode: MtkBypassMode::DaAuthBypass,
+            ..Default::default()
+        };
+        let err = mtk_bypass_unified("1:1", "/missing/da.bin", None, cfg).unwrap_err();
+        assert!(err.to_string().contains("not implemented"), "{err}");
+    }
+
+    #[test]
+    fn unknown_bypass_mode_is_not_silently_standard() {
+        let err = mtk_bypass_cli("1:1", "/missing/da.bin", "nonsense", None, false).unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)), "{err}");
+        assert!(err.to_string().contains("nonsense"), "{err}");
+    }
+
+    #[test]
+    fn boot_patch_rebuild_step_is_not_implemented() {
+        let err = DaSession::boot_patch_unsupported_error().unwrap_err();
+        assert!(
+            err.contains("not implemented: boot image rebuild+flash"),
+            "{err}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Pure helpers added with the real-operation commands (no USB).
+    // ------------------------------------------------------------------
+
+    fn scatter_entry(name: &str, region: u32) -> ScatterEntry {
+        ScatterEntry {
+            partition_name: name.to_string(),
+            start_addr: 0,
+            length: 0x1000,
+            filename: format!("{name}.img"),
+            is_download: true,
+            partition_type: "NORMAL_ROM".to_string(),
+            region,
+            storage_type: 1,
+            reserved: false,
+            operation_type: "UPDATE".to_string(),
+            backup_type: "NONE".to_string(),
+            attributes: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn discovers_single_scatter_and_rejects_ambiguity() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("MT6765_Android_scatter.txt"),
+            "partition_index: SYS0\npartition_name: boot\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("notes.txt"), "no scatter keys here").unwrap();
+        let found = discover_scatter(dir.path()).unwrap();
+        assert_eq!(
+            found.file_name().and_then(|n| n.to_str()),
+            Some("MT6765_Android_scatter.txt")
+        );
+
+        // Case-insensitive keys, but a second match must be an error that
+        // lists both candidates instead of guessing.
+        fs::write(
+            dir.path().join("other.txt"),
+            "PARTITION_INDEX: SYS1\nPartition_Name: system\n",
+        )
+        .unwrap();
+        let err = discover_scatter(dir.path()).unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("multiple scatter files"), "{msg}");
+        assert!(msg.contains("other.txt"), "{msg}");
+
+        let empty = tempfile::tempdir().unwrap();
+        let err = discover_scatter(empty.path()).unwrap_err();
+        assert!(err.to_string().contains("no scatter file"), "{err}");
+    }
+
+    #[test]
+    fn boot_region_entries_are_skipped() {
+        assert!(!scatter_region_is_boot(0));
+        assert!(scatter_region_is_boot(1));
+        assert!(scatter_region_is_boot(2), "EMMC_BOOT_2 is a boot area too");
+
+        let user = scatter_entry("boot", 0);
+        assert!(flash_skip_reason(&user).is_none());
+
+        for name in ["boot", "recovery"] {
+            let entry = scatter_entry(name, 1);
+            let reason = flash_skip_reason(&entry).expect("boot-area entry must be skipped");
+            assert!(reason.contains("EMMC_BOOT"), "{reason}");
+            assert!(
+                reason.contains("--include-boot-regions"),
+                "the skip reason must point at the opt-in flag: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn boot_region_names_map_to_da_boot_partitions() {
+        assert_eq!(boot_region_partition_name(0), None);
+        assert_eq!(boot_region_partition_name(1), Some("boot1"));
+        assert_eq!(boot_region_partition_name(2), Some("boot2"));
+        assert_eq!(boot_region_partition_name(9), None);
+    }
+
+    #[test]
+    fn format_all_targets_are_resolved_present_and_data_aware() {
+        let entries = vec![
+            scatter_entry("boot", 0),
+            scatter_entry("system", 0),
+            scatter_entry("preloader", 1), // boot area: never a format target
+            scatter_entry("vendor", 0),    // not in the GPT below
+        ];
+        let gpt = vec![
+            "boot_a".to_string(),
+            "system".to_string(),
+            "userdata".to_string(),
+            "cache".to_string(),
+            "misc".to_string(),
+        ];
+        let targets = format_all_targets(&entries, &gpt, false);
+        assert_eq!(targets, vec!["boot_a", "system"]);
+        assert!(
+            !targets.iter().any(|t| t == "preloader" || t == "boot1"),
+            "boot-area entries are never formatted"
+        );
+
+        let with_data = format_all_targets(&entries, &gpt, true);
+        assert_eq!(with_data, vec!["boot_a", "system", "userdata", "cache"]);
+    }
+
+    #[test]
+    fn ab_slot_fallback_resolution() {
+        let names = vec![
+            "boot".to_string(),
+            "boot_b".to_string(),
+            "system_a".to_string(),
+            "vendor_b".to_string(),
+        ];
+        assert_eq!(
+            resolve_partition_name("boot", &names).as_deref(),
+            Some("boot"),
+            "exact match wins"
+        );
+        assert_eq!(
+            resolve_partition_name("system", &names).as_deref(),
+            Some("system_a")
+        );
+        assert_eq!(
+            resolve_partition_name("vendor", &names).as_deref(),
+            Some("vendor_b")
+        );
+        assert_eq!(resolve_partition_name("missing", &names), None);
+        // _b only
+        let only_b = vec!["dtbo_b".to_string()];
+        assert_eq!(
+            resolve_partition_name("dtbo", &only_b).as_deref(),
+            Some("dtbo_b")
+        );
+        // Never invent a slot that is not present.
+        assert_eq!(resolve_partition_name("super", &only_b), None);
+        // Image candidates also accept the .lz4 variant.
+        let cands = image_filename_candidates("boot.img");
+        assert!(cands.contains(&"boot.img".to_string()));
+        assert!(cands.contains(&"boot.img.lz4".to_string()));
+    }
+
+    /// Minimal valid sparse image: one RAW block of 'H' + one DONT_CARE block.
+    fn sparse_image_fixture() -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&crate::sparse::SPARSE_MAGIC.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes()); // major
+        d.extend_from_slice(&0u16.to_le_bytes()); // minor
+        d.extend_from_slice(&28u16.to_le_bytes()); // file header size
+        d.extend_from_slice(&12u16.to_le_bytes()); // chunk header size
+        d.extend_from_slice(&512u32.to_le_bytes()); // block size
+        d.extend_from_slice(&2u32.to_le_bytes()); // total output blocks
+        d.extend_from_slice(&2u32.to_le_bytes()); // chunk count
+        d.extend_from_slice(&0u32.to_le_bytes()); // checksum
+                                                  // RAW: 1 block
+        d.extend_from_slice(&0xCAC1u16.to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&1u32.to_le_bytes());
+        d.extend_from_slice(&(12u32 + 512).to_le_bytes());
+        d.extend_from_slice(&vec![b'H'; 512]);
+        // DONT_CARE: 1 block
+        d.extend_from_slice(&0xCAC3u16.to_le_bytes());
+        d.extend_from_slice(&0u16.to_le_bytes());
+        d.extend_from_slice(&1u32.to_le_bytes());
+        d.extend_from_slice(&12u32.to_le_bytes());
+        d
+    }
+
+    #[test]
+    fn normalization_expands_sparse_and_lz4() {
+        use std::io::Write as _;
+
+        let sparse = sparse_image_fixture();
+        let expected_len = 2 * 512;
+
+        // Sparse only.
+        let raw = normalize_image(sparse.clone()).unwrap();
+        assert_eq!(raw.len(), expected_len);
+        assert!(raw[..512].iter().all(|&b| b == b'H'));
+        assert!(raw[512..].iter().all(|&b| b == 0));
+
+        // LZ4-wrapped sparse (vendors ship boot.img.lz4 containing sparse).
+        let mut enc = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        enc.write_all(&sparse).unwrap();
+        let compressed = enc.finish().unwrap();
+        assert!(compressed.starts_with(&LZ4_FRAME_MAGIC));
+        let raw_from_lz4 = normalize_image(compressed).unwrap();
+        assert_eq!(raw_from_lz4, raw, "compressed bytes must never be flashed");
+
+        // Plain raw image passes through untouched.
+        let plain = vec![0x5Au8; 700];
+        assert_eq!(normalize_image(plain.clone()).unwrap(), plain);
+    }
+
+    /// Build a raw disk image (from LBA0) with a protective MBR, a GPT header
+    /// at `sector`, and two entries at LBA2.
+    fn gpt_disk_fixture(sector: usize) -> Vec<u8> {
+        let mut d = vec![0u8; sector * 8];
+        d[510] = 0x55;
+        d[511] = 0xAA;
+        let rec = 446;
+        d[rec + 4] = 0xEE;
+        d[rec + 8..rec + 12].copy_from_slice(&1u32.to_le_bytes()); // start LBA
+        d[rec + 12..rec + 16].copy_from_slice(&1u32.to_le_bytes()); // size in LBA
+
+        let h = sector;
+        d[h..h + 8].copy_from_slice(b"EFI PART");
+        d[h + 8..h + 12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+        d[h + 12..h + 16].copy_from_slice(&92u32.to_le_bytes());
+        d[h + 24..h + 32].copy_from_slice(&1u64.to_le_bytes()); // current LBA
+        d[h + 32..h + 40].copy_from_slice(&7u64.to_le_bytes()); // backup LBA
+        d[h + 72..h + 80].copy_from_slice(&2u64.to_le_bytes()); // entries LBA
+        d[h + 80..h + 84].copy_from_slice(&2u32.to_le_bytes());
+        d[h + 84..h + 88].copy_from_slice(&128u32.to_le_bytes());
+
+        let mut entry = |idx: usize, name: &str, first: u64, last: u64| {
+            let e = 2 * sector + idx * 128;
+            d[e..e + 16].copy_from_slice(&[0x11; 16]); // partition type GUID
+            d[e + 16..e + 32].copy_from_slice(&[0x22; 16]); // unique GUID
+            d[e + 32..e + 40].copy_from_slice(&first.to_le_bytes());
+            d[e + 40..e + 48].copy_from_slice(&last.to_le_bytes());
+            for (i, c) in name.encode_utf16().enumerate() {
+                d[e + 56 + i * 2..e + 58 + i * 2].copy_from_slice(&c.to_le_bytes());
+            }
+        };
+        entry(0, "boot", 3, 4); // 2 sectors
+        entry(1, "userdata", 5, 6); // 2 sectors
+        d
+    }
+
+    #[test]
+    fn gpt_header_parses_at_512_and_4096_sector_sizes() {
+        for sector in GPT_SECTOR_SIZES {
+            let disk = gpt_disk_fixture(sector);
+            assert_eq!(
+                detect_gpt_header(&disk),
+                Some((sector, sector)),
+                "header must be detected at {sector}-byte sectors"
+            );
+            let parts = parse_gpt_disk_image(&disk).unwrap();
+            assert_eq!(parts.len(), 2);
+            assert_eq!(parts[0].0, "boot");
+            assert_eq!(parts[0].1, 3 * sector as u64, "LBA scaled by sector size");
+            assert_eq!(parts[0].2, 2 * sector as u64);
+            assert_eq!(parts[1].0, "userdata");
+            assert_eq!(parts[1].1, 5 * sector as u64);
+            assert_eq!(parts[1].2, 2 * sector as u64);
+        }
+        // No GPT at all: clean error, never fabricated partitions.
+        assert!(detect_gpt_header(&[0u8; 8192]).is_none());
+        assert!(parse_gpt_disk_image(&[0u8; 8192]).is_err());
+    }
+
+    #[test]
+    fn gpt_fallback_locates_header_via_protective_mbr() {
+        // Header NOT at LBA1; the protective MBR entry points at LBA4, where
+        // the header lives. Must still be found (MBR locates, never fabricates).
+        let sector = 512usize;
+        let disk = gpt_disk_fixture(sector);
+        let mut moved = vec![0u8; sector * 8];
+        moved[510] = 0x55;
+        moved[511] = 0xAA;
+        moved[446 + 4] = 0xEE;
+        moved[446 + 8..446 + 12].copy_from_slice(&4u32.to_le_bytes());
+        // header at LBA4
+        let h = 4 * sector;
+        moved[h..h + 92].copy_from_slice(&disk[sector..sector + 92]);
+        // entries at LBA6 (rewrite entry_lba in the copied header)
+        moved[h + 72..h + 80].copy_from_slice(&6u64.to_le_bytes());
+        let e = 6 * sector;
+        moved[e..e + 128].copy_from_slice(&disk[2 * sector..2 * sector + 128]);
+        assert_eq!(detect_gpt_header(&moved), Some((h, sector)));
+        let parts = parse_gpt_disk_image(&moved).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].0, "boot");
+    }
+
+    #[test]
+    fn screen_lock_partition_lists() {
+        let base = screen_lock_partitions(false);
+        for want in [
+            "metadata",
+            "persistent",
+            "keystore",
+            "oemkeystore",
+            "protect1",
+            "protect2",
+            "misc",
+        ] {
+            assert!(base.contains(&want), "missing {want}: {base:?}");
+        }
+        for absent in ["userdata", "cache", "nvdata", "frp"] {
+            assert!(
+                !base.contains(&absent),
+                "{absent} must not be in the default screen-lock wipe"
+            );
+        }
+
+        let wipe = screen_lock_partitions(true);
+        for want in ["userdata", "cache", "nvdata"] {
+            assert!(wipe.contains(&want), "missing {want} with --wipe-userdata");
+        }
+        // FRP belongs to mtk-frp-*, never to the screen-lock command.
+        assert!(!wipe.contains(&"frp"));
+    }
+
+    #[test]
+    fn backup_refuses_empty_partition_table() {
+        let err = plan_backup(&[]).unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)), "{err:?}");
+        assert!(err.to_string().contains("empty"), "{err}");
+
+        // Only zero-size entries is also an empty backup.
+        let zero = vec![("boot".to_string(), 0u64, 0u64)];
+        assert!(plan_backup(&zero).is_err());
+
+        let mixed = vec![
+            ("boot".to_string(), 0x1000u64, 0x2000u64),
+            ("empty".to_string(), 0x3000u64, 0u64),
+        ];
+        let plan = plan_backup(&mixed).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].0, "boot");
+    }
+
+    #[test]
+    fn da_spec_classification() {
+        assert_eq!(classify_da_spec("auto").unwrap(), DaSource::Bundled);
+        assert_eq!(classify_da_spec(" AUTO ").unwrap(), DaSource::Bundled);
+        let err = classify_da_spec("/definitely/missing/da.bin").unwrap_err();
+        assert!(matches!(err, BridgeError::InvalidArgument(_)), "{err:?}");
+        assert!(err.to_string().contains("DA file not found"), "{err}");
+        // An existing directory classifies as a container dir; the resolver
+        // rejects it later if no V5/V6 container is present.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            classify_da_spec(&dir.path().to_string_lossy()).unwrap(),
+            DaSource::ContainerDir(dir.path().to_path_buf())
+        );
+        let err = classify_da_spec("not-a-spec").unwrap_err();
+        assert!(err.to_string().contains("da_spec"), "{err}");
     }
 }

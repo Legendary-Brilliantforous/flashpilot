@@ -44,7 +44,9 @@ const IMG_SUFFIXES: &[&str] = &[
 
 fn read_u32_le(data: &[u8], off: usize) -> Result<u32> {
     if off + 4 > data.len() {
-        return Err(BridgeError::InvalidArgument("PIT truncated field".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "PIT truncated field".to_string(),
+        ));
     }
     Ok(u32::from_le_bytes([
         data[off],
@@ -119,7 +121,9 @@ pub struct PitHeader {
 
 fn parse_one(data: &[u8], index: usize) -> Result<PitEntry> {
     if data.len() < ENTRY_SIZE {
-        return Err(BridgeError::InvalidArgument("PIT entry truncated".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "PIT entry truncated".to_string(),
+        ));
     }
     let u = |off: usize| read_u32_le(data, off);
     Ok(PitEntry {
@@ -178,7 +182,9 @@ pub fn parse_pit(raw: &[u8]) -> Result<Vec<PitEntry>> {
     }
     let magic = read_u32_le(raw, HDR_MAGIC_OFF)?;
     if magic != PIT_MAGIC {
-        return Err(BridgeError::InvalidArgument(format!("bad PIT magic: {magic:#x}")));
+        return Err(BridgeError::InvalidArgument(format!(
+            "bad PIT magic: {magic:#x}"
+        )));
     }
     let count = read_u32_le(raw, HDR_COUNT_OFF)? as usize;
     let mut out = Vec::new();
@@ -322,9 +328,7 @@ fn py_repr(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\'' if !use_double => out.push_str("\\'"),
             '"' if use_double => out.push_str("\\\""),
-            c if (c < '\u{20}' || c == '\u{7f}') => {
-                out.push_str(&format!("\\x{:02x}", c as u32))
-            }
+            c if (c < '\u{20}' || c == '\u{7f}') => out.push_str(&format!("\\x{:02x}", c as u32)),
             '\u{fffd}' => out.push('\u{fffd}'),
             c if (c as u32) > 0x7e => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
@@ -419,7 +423,11 @@ pub fn validate_pit(raw: &[u8]) -> Health {
     stats.declared_count = declared;
     stats.model = header.model;
     if declared == 0 {
-        add("warn", "NO_ENTRIES", "PIT declares zero entries".to_string());
+        add(
+            "warn",
+            "NO_ENTRIES",
+            "PIT declares zero entries".to_string(),
+        );
     } else if declared > MAX_SANE_ENTRIES {
         add(
             "fail",
@@ -544,8 +552,7 @@ pub fn validate_pit(raw: &[u8]) -> Health {
             ),
         );
     }
-    let sig_set: HashSet<(String, String, u64)> =
-        sig.iter().cloned().collect();
+    let sig_set: HashSet<(String, String, u64)> = sig.iter().cloned().collect();
     let mut meta_pairs = 0;
     for (a, b, blocks) in find_overlaps(&flash_owned) {
         if sig_set.contains(&(a.clone(), b.clone(), blocks)) {
@@ -558,9 +565,7 @@ pub fn validate_pit(raw: &[u8]) -> Health {
         add(
             "info",
             "META_CONTAINMENT",
-            format!(
-                "'{b}' is contained in '{a}' ({blocks} blocks) - normal for platform tables"
-            ),
+            format!("'{b}' is contained in '{a}' ({blocks} blocks) - normal for platform tables"),
         );
     }
     stats.total_bytes = flash_owned
@@ -708,8 +713,14 @@ mod tests {
     fn bad_magic_and_truncation_rejected_like_python() {
         let mut raw = pit_bytes(&[("boot", 10, 100, 50)]);
         raw[0] ^= 0xff;
-        assert!(parse_pit(&raw).unwrap_err().to_string().contains("bad PIT magic"));
-        assert!(parse_pit(&[][..]).unwrap_err().to_string().contains("too short"));
+        assert!(parse_pit(&raw)
+            .unwrap_err()
+            .to_string()
+            .contains("bad PIT magic"));
+        assert!(parse_pit(&[][..])
+            .unwrap_err()
+            .to_string()
+            .contains("too short"));
     }
 
     #[test]
@@ -812,7 +823,14 @@ mod tests {
             pit.extend_from_slice(&e);
         }
         let h = health(&pit);
-        assert!(h.findings.iter().any(|f| f.code == "DUPLICATE_NAME"), "{:?}", h.findings.iter().map(|f| f.code.clone()).collect::<Vec<_>>());
+        assert!(
+            h.findings.iter().any(|f| f.code == "DUPLICATE_NAME"),
+            "{:?}",
+            h.findings
+                .iter()
+                .map(|f| f.code.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Consistency: zero-size flashable entries are a WARN (flashing them
@@ -832,5 +850,4 @@ mod tests {
         let h = health(&pit);
         assert!(h.findings.iter().any(|f| f.code == "ZERO_SIZE_FLASHABLE"));
     }
-
 }

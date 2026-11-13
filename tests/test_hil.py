@@ -24,24 +24,9 @@ HIL_DEVICES = {
     # "spd": "bus:addr",
 }
 
-
-def pytest_addoption(parser):
-    try:
-        parser.addoption("--hil", action="store_true", default=False,
-                         help="run hardware-in-the-loop tests (devices required)")
-    except ValueError:
-        pass
-
-
-def pytest_collection_modifyitems(config, items):
-    if config.getoption("--hil", default=False) if hasattr(config, "getoption") else False:
-        return
-    skip = pytest.mark.skip(reason="HIL: needs --hil and attached devices")
-    for item in items:
-        if "hil" in item.keywords:
-            item.add_marker(skip)
-
-
+# The `--hil` option and the skip-unless-requested hook live in
+# tests/conftest.py: pytest only collects hooks from conftest files, so the
+# copies that used to be here never ran and these tests executed on CI.
 pytestmark = pytest.mark.hil
 
 

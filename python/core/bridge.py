@@ -214,7 +214,7 @@ def _graceful_terminate(proc, timeout=3.0):
         pass
 
 
-def _run(args, timeout=15):
+def _run(args, timeout=15, env=None):
     bridge_path = Path(BRIDGE)
     if not bridge_path.exists():
         raise BinaryNotFoundError(
@@ -228,6 +228,7 @@ def _run(args, timeout=15):
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env=env,
     )
     deadline = time.monotonic() + timeout
 
@@ -1208,6 +1209,34 @@ def bundled_mtk_da_dir():
               Path("/usr/share/flashpilot/root/tools/mtk")):
         try:
             if (p / "MTK_DA_V5.bin").exists() or (p / "MTK_DA_V6.bin").exists():
+                return str(p)
+        except OSError:
+            continue
+    return ""
+
+
+def qcom_payload_candidates(here, home):
+    """Payload directories searched by `bundled_qcom_dir`, most specific
+    first: the dev tree, the .deb install, then a per-user install. Pure so
+    the search order is testable without depending on what is installed."""
+    return (
+        Path(here) / "payloads" / "qcom",
+        Path("/usr/lib/flashpilot/payloads/qcom"),
+        Path(home) / ".local" / "share" / "flashpilot" / "payloads" / "qcom",
+    )
+
+
+def bundled_qcom_dir():
+    """The bundled Qualcomm firehose programmers: repo `payloads/qcom` (dev
+    tree), `/usr/lib/flashpilot/payloads/qcom` (.deb install) or
+    `~/.local/share/flashpilot/payloads/qcom` (per-user install). The
+    programmer is picked by SoC index (`index.json`), so this only has to
+    report the directory. Returns '' when none exists."""
+    here = Path(__file__).resolve().parent.parent.parent
+    candidates = qcom_payload_candidates(here, Path.home())
+    for p in candidates:
+        try:
+            if (p / "index.json").is_file() or any(p.glob("*.mbn")):
                 return str(p)
         except OSError:
             continue

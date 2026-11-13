@@ -10,7 +10,7 @@
 #![allow(dead_code)]
 
 use crate::config::{DeviceInfo, InterfaceInfo};
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -44,9 +44,27 @@ const ANDROID_GENERIC_VIDS: &[u16] = &[
 
 /// Keywords in product/manufacturer that indicate a phone
 const PHONE_NAME_KEYWORDS: &[&str] = &[
-    "android", "phone", "tecno", "infinix", "itel", "xiaomi", "redmi",
-    "oppo", "vivo", "oneplus", "realme", "pixel", "nexus", "motorola",
-    "lenovo", "huawei", "honor", "asus", "transsion", "spark", "smartphone",
+    "android",
+    "phone",
+    "tecno",
+    "infinix",
+    "itel",
+    "xiaomi",
+    "redmi",
+    "oppo",
+    "vivo",
+    "oneplus",
+    "realme",
+    "pixel",
+    "nexus",
+    "motorola",
+    "lenovo",
+    "huawei",
+    "honor",
+    "asus",
+    "transsion",
+    "spark",
+    "smartphone",
 ];
 
 /// ADB device info (from `adb devices -l` output)
@@ -229,6 +247,9 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
             transports.push("Samsung BROM".to_string());
         } else if crate::usb::SAMSUNG_ODIN_PIDS.contains(&pid) && !has_adb_iface {
             transports.push("Download mode".to_string());
+        } else if crate::usb::SAMSUNG_ADB_PIDS.contains(&pid) && !has_adb_iface {
+            // ADB composites that don't expose the 255/66/1 descriptor.
+            transports.push("ADB".to_string());
         } else if pid == 0x6860 || transports.is_empty() {
             transports.push("MTP".to_string());
         }
@@ -258,7 +279,16 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
         // Qualcomm diag/modem PIDs outside the EDL family (0x9091 DIAG ...).
         transports.push("DIAG".to_string());
     } else if vid == 0x18D1 {
-        transports.push("FASTBOOT".to_string());
+        // FASTBOOT only when the gadget proves it: known fastboot PIDs
+        // (the 255/66/3 interface is already pushed above). An ADB-mode
+        // Pixel must not also offer FASTBOOT; MTP-only falls through to
+        // the MTP/USB bottom logic below.
+        if (pid == 0x4EE0 || pid == 0xD00D) && !has_adb_iface {
+            let fb = "FASTBOOT".to_string();
+            if !transports.contains(&fb) {
+                transports.push(fb);
+            }
+        }
     } else if vid == 0x1782 {
         transports.push("SPD".to_string());
     }
@@ -291,17 +321,15 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
 
 /// Compute a short human-readable label: product + serial + VID:PID
 pub fn compute_label(usb: &DeviceInfo, _adb_state_by_serial: &HashSet<String>) -> String {
-    let mfr = usb
-        .manufacturer
-        .as_ref()
-        .map(|s| s.trim())
-        .unwrap_or("");
-    let prod = usb
-        .product
-        .as_ref()
-        .map(|s| s.trim())
-        .unwrap_or("");
-    let name = if !prod.is_empty() { prod } else if !mfr.is_empty() { mfr } else { "USB device" };
+    let mfr = usb.manufacturer.as_ref().map(|s| s.trim()).unwrap_or("");
+    let prod = usb.product.as_ref().map(|s| s.trim()).unwrap_or("");
+    let name = if !prod.is_empty() {
+        prod
+    } else if !mfr.is_empty() {
+        mfr
+    } else {
+        "USB device"
+    };
 
     let mut bits = vec![name.to_string()];
 
@@ -324,10 +352,7 @@ pub fn device_label(usb: &DeviceInfo, adb_state_by_serial: &HashSet<String>) -> 
 
 /// Check if a PID is in the Samsung Odin download-mode list
 fn is_samsung_odin_pid(pid: u16) -> bool {
-    matches!(
-        pid,
-        0x6601 | 0x685d | 0x68c3 | 0x68ef | 0x4eee | 0x4eef
-    )
+    matches!(pid, 0x6601 | 0x685d | 0x68c3 | 0x68ef | 0x4eee | 0x4eef)
 }
 
 /// Filter USB devices to only phones (rejects hubs, keyboards, etc.)
@@ -360,7 +385,11 @@ pub fn merge_devices(
 
         let usb_serial = usb.serial.as_ref().and_then(|s| {
             let norm = normalize_serial(Some(s));
-            if norm.is_empty() { None } else { Some(norm) }
+            if norm.is_empty() {
+                None
+            } else {
+                Some(norm)
+            }
         });
 
         let adb_match = usb_serial
@@ -415,7 +444,9 @@ pub struct FilterCriteria {
 
 /// Classify device mode from VID/PID and interfaces (Python-compatible mode strings)
 pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
-    let has_adb_iface = interfaces.iter().any(|i| i.class == 255 && i.subclass == 66);
+    let has_adb_iface = interfaces
+        .iter()
+        .any(|i| i.class == 255 && i.subclass == 66);
 
     match vid {
         0x04E8 => {
@@ -451,7 +482,18 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
         0x05C6 if crate::qualcomm::sahara::QCOM_ALL_PIDS.contains(&pid) => {
             "qualcomm-diag".to_string()
         }
-        0x18D1 => "fastboot".to_string(),
+        0x18D1 if pid == 0x4EE0 || pid == 0xD00D => "fastboot".to_string(),
+        0x18D1 => {
+            // ADB-mode Pixels must not read as fastboot (mirrors the
+            // compute_transports FASTBOOT PID gate above).
+            if has_adb_iface {
+                return "android-adb".to_string();
+            }
+            if interfaces.iter().any(|i| i.class == 6) {
+                return "android-mtp".to_string();
+            }
+            "google".to_string()
+        }
         0x1782 => "spd".to_string(),
         0x05AC => "apple".to_string(),
         0x22B8 => {
@@ -490,7 +532,12 @@ pub fn detect_merged(criteria: Option<&FilterCriteria>) -> Result<String> {
 mod tests {
     use super::*;
 
-    fn dev(vid: u16, pid: u16, product: Option<&str>, interfaces: Vec<InterfaceInfo>) -> DeviceInfo {
+    fn dev(
+        vid: u16,
+        pid: u16,
+        product: Option<&str>,
+        interfaces: Vec<InterfaceInfo>,
+    ) -> DeviceInfo {
         DeviceInfo {
             vid,
             pid,
@@ -589,9 +636,60 @@ mod tests {
     }
 
     #[test]
+    fn compute_transports_pixel_adb_has_no_fastboot() {
+        // A Pixel in normal ADB mode must not offer FASTBOOT (the old
+        // blanket 18D1 arm lit fastboot actions on ADB-mode phones).
+        let adb: HashSet<String> = HashSet::new();
+        let pixel_adb = dev(
+            0x18D1,
+            0x4EE7,
+            None,
+            vec![InterfaceInfo {
+                number: 0,
+                class: 255,
+                subclass: 66,
+                protocol: 1,
+                endpoints: vec![],
+            }],
+        );
+        let t = compute_transports(&pixel_adb, &adb);
+        assert!(t.contains(&"ADB".to_string()));
+        assert!(!t.contains(&"FASTBOOT".to_string()));
+        // Real fastboot gadget (PID + 255/66/3) still offers FASTBOOT.
+        let pixel_fb = dev(
+            0x18D1,
+            0x4EE0,
+            None,
+            vec![InterfaceInfo {
+                number: 0,
+                class: 255,
+                subclass: 66,
+                protocol: 3,
+                endpoints: vec![],
+            }],
+        );
+        assert_eq!(
+            compute_transports(&pixel_fb, &adb),
+            vec!["FASTBOOT".to_string()]
+        );
+    }
+
+    #[test]
+    fn compute_transports_samsung_adb_composite_without_iface() {
+        // Samsung debug composites (685E/68A3/6868) expose ADB even when
+        // the 255/66/1 descriptor is absent.
+        let adb: HashSet<String> = HashSet::new();
+        for pid in [0x685Eu16, 0x68A3, 0x6868] {
+            let t = compute_transports(&dev(0x04E8, pid, None, vec![]), &adb);
+            assert!(t.contains(&"ADB".to_string()), "pid {pid:04x}: {t:?}");
+        }
+    }
+
+    #[test]
     fn is_phone_captures_bare_flashing_stages() {
-        // TFT parity: a bare preloader/BROM/diag stage (no interfaces, no
-        // strings) on phone-chip silicon is captured, never dropped.
+        // Parity with commercial suites: a bare preloader/BROM/diag stage
+        // (no interfaces, no strings) on phone-chip silicon is captured,
+        // never dropped.
         assert!(is_phone(&dev(0x0E8D, 0x2000, None, vec![]))); // MTK preloader
         assert!(is_phone(&dev(0x0E8D, 0x0003, None, vec![]))); // MTK BROM
         assert!(is_phone(&dev(0x1004, 0x2000, None, vec![]))); // LG MTK preloader (OEM VID)
@@ -599,7 +697,7 @@ mod tests {
         assert!(is_phone(&dev(0x05C6, 0x9008, None, vec![]))); // EDL
         assert!(is_phone(&dev(0x05C6, 0x9006, None, vec![]))); // Diag 9006
         assert!(is_phone(&dev(0x1782, 0x4D00, None, vec![]))); // SPD
-        // Non-phone hardware stays out: keyboard, touchpanel, hub.
+                                                               // Non-phone hardware stays out: keyboard, touchpanel, hub.
         assert!(!is_phone(&dev(0x0461, 0x0010, None, vec![])));
         assert!(!is_phone(&dev(0x0EEF, 0x7356, None, vec![])));
         assert!(!is_phone(&dev(0x1D6B, 0x0002, None, vec![])));
@@ -614,7 +712,13 @@ mod tests {
             classify_mode(
                 0x22B8,
                 0x2E80,
-                &[InterfaceInfo { number: 0, class: 255, subclass: 66, protocol: 1, endpoints: vec![] }]
+                &[InterfaceInfo {
+                    number: 0,
+                    class: 255,
+                    subclass: 66,
+                    protocol: 1,
+                    endpoints: vec![]
+                }]
             ),
             "motorola-adb"
         );
@@ -623,7 +727,13 @@ mod tests {
             classify_mode(
                 0x22B8,
                 0x2E82,
-                &[InterfaceInfo { number: 0, class: 6, subclass: 1, protocol: 1, endpoints: vec![] }]
+                &[InterfaceInfo {
+                    number: 0,
+                    class: 6,
+                    subclass: 1,
+                    protocol: 1,
+                    endpoints: vec![]
+                }]
             ),
             "motorola-mtp"
         );
@@ -634,7 +744,11 @@ mod tests {
         let mut usb = dev(0x04E8, 0x685D, Some("Samsung Galaxy"), vec![]);
         usb.serial = Some("R9X".to_string());
 
-        let adb = vec![AdbDevice { serial: "R9X".to_string(), state: "device".to_string(), extra: String::new() }];
+        let adb = vec![AdbDevice {
+            serial: "R9X".to_string(),
+            state: "device".to_string(),
+            extra: String::new(),
+        }];
 
         let merged = merge_devices(&[usb], &adb);
         assert_eq!(merged.len(), 1);
@@ -652,17 +766,32 @@ mod tests {
             0x0E8D,
             0x2008,
             Some("Android ADB Interface"),
-            vec![InterfaceInfo { number: 0, class: 6, subclass: 1, protocol: 1, endpoints: vec![] }],
+            vec![InterfaceInfo {
+                number: 0,
+                class: 6,
+                subclass: 1,
+                protocol: 1,
+                endpoints: vec![],
+            }],
         );
-        assert_eq!(compute_transports(&tecno, &serials), vec!["MTP".to_string()]);
+        assert_eq!(
+            compute_transports(&tecno, &serials),
+            vec!["MTP".to_string()]
+        );
 
         // Hardware with no MTP interface keeps the honest "USB" label.
         let modem = dev(0x413C, 0x818D, None, vec![]);
-        assert_eq!(compute_transports(&modem, &serials), vec!["USB".to_string()]);
+        assert_eq!(
+            compute_transports(&modem, &serials),
+            vec!["USB".to_string()]
+        );
 
         // Flashing-mode PIDs keep their MTK transports.
         let brom = dev(0x0E8D, 0x0003, None, vec![]);
-        assert_eq!(compute_transports(&brom, &serials), vec!["MTK BROM".to_string()]);
+        assert_eq!(
+            compute_transports(&brom, &serials),
+            vec!["MTK BROM".to_string()]
+        );
     }
 }
 #[cfg(test)]

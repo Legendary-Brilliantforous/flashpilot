@@ -6,8 +6,9 @@
 //! (=2116), "MCT_DOWNLOAD_HEADER"@8, product utf16le@0x20 (64B),
 //! count u32@0x60, flash-size u32@0x848.
 //! entries: one 2560B slot per file: name[512] utf16le@0, size u32@0x30C,
-//! is_nv u32@0x310, checksum u16@0x318 (=0x5433). Then concatenated
-//! payloads, then a 3076-byte zero footer.
+//! is_nv u32@0x310, checksum u16@0x318 (additive byte sum; legacy packers
+//! write the 0x5433 sentinel, which is still accepted on read). Then
+//! concatenated payloads, then a 3076-byte zero footer.
 //!
 //! Notes on fidelity:
 //! * Entry names decode utf16le with lone surrogates DROPPED (Python
@@ -32,13 +33,17 @@ pub const PAC_FLASH_SIZE_OFF: usize = 0x848;
 pub const PAC_ENTRY_SIZE_OFF: usize = 0x30C;
 pub const PAC_ENTRY_IS_NV_OFF: usize = 0x310;
 pub const PAC_ENTRY_CHECKSUM_OFF: usize = 0x318;
-pub const PAC_ENTRY_CHECKSUM: u16 = 0x5433;
+/// Legacy sentinel written by older SPD/YGDP packers at `0x318`. It is not a
+/// data checksum; readers must keep accepting it for compatibility.
+pub const PAC_ENTRY_LEGACY_CHECKSUM: u16 = 0x5433;
 pub const PAC_PRODUCT_OFF: usize = 0x20;
 pub const PAC_PRODUCT_LEN: usize = 64;
 
 fn read_u32_le(data: &[u8], off: usize) -> Result<u32> {
     if off + 4 > data.len() {
-        return Err(BridgeError::InvalidArgument("PAC truncated field".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "PAC truncated field".to_string(),
+        ));
     }
     Ok(u32::from_le_bytes([
         data[off],
@@ -50,7 +55,9 @@ fn read_u32_le(data: &[u8], off: usize) -> Result<u32> {
 
 fn read_u16_le(data: &[u8], off: usize) -> Result<u16> {
     if off + 2 > data.len() {
-        return Err(BridgeError::InvalidArgument("PAC truncated field".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "PAC truncated field".to_string(),
+        ));
     }
     Ok(u16::from_le_bytes([data[off], data[off + 1]]))
 }
@@ -62,9 +69,7 @@ pub(crate) fn decode_name(buf: &[u8]) -> String {
         .chunks_exact(2)
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
-    let text: String = char::decode_utf16(units)
-        .filter_map(|r| r.ok())
-        .collect();
+    let text: String = char::decode_utf16(units).filter_map(|r| r.ok()).collect();
     text.split('\0').next().unwrap_or("").trim().to_string()
 }
 
@@ -199,15 +204,221 @@ pub(crate) fn build_header(count: u32, total_bytes: u64, product: &str) -> Resul
     Ok(hdr)
 }
 
+/// Per-entry payload checksum: additive 16-bit sum of every byte in the
+/// image (mod 2^16). This is the value `pack` writes and `extract` verifies.
+pub fn entry_checksum(data: &[u8]) -> u16 {
+    data.iter().fold(0u16, |acc, &b| acc.wrapping_add(b as u16))
+}
+
+pub(crate) fn checksum_file(path: &std::path::Path) -> Result<u16> {
+    let mut f = std::fs::File::open(path).map_err(|e| BridgeError::Io(e.to_string()))?;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut sum = 0u16;
+    loop {
+        let n = f
+            .read(&mut buf)
+            .map_err(|e| BridgeError::Io(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        sum = buf[..n]
+            .iter()
+            .fold(sum, |acc, &b| acc.wrapping_add(b as u16));
+    }
+    Ok(sum)
+}
+
+/// Payload kinds that decide what `spd-flash-pac` does with a PAC entry.
+///
+/// `Flash` is the only kind that is written to the device. Everything else is
+/// metadata (loaders / partition XML / NV calibration) and must be skipped —
+/// never flashed as if it were a partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacEntryKind {
+    /// Zero-size slot: an operation marker or a truncated payload.
+    Empty,
+    Fdl1,
+    Fdl2,
+    /// Partition-layout / configuration metadata (`*.xml`).
+    Xml,
+    /// NV / IMEI / RF-calibration payload (must never be flashed implicitly).
+    Nv,
+    /// A real partition image.
+    Partition,
+}
+
+/// Lower-case basename of a PAC entry (entries may carry a Windows path).
+fn entry_basename_lower(name: &str) -> String {
+    name.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// FDL1 loader spellings seen in PACs: `fdl1-sign.bin`, `fdl1.bin`,
+/// `fdl1-dl.bin`, and the legacy vendor FILE_T id `FDLA`. FDL2 mirrors it
+/// (`fdl2*`, `FDLB`).
+fn is_fdl1_name(name: &str) -> bool {
+    let n = entry_basename_lower(name);
+    n.starts_with("fdl1") || n.starts_with("fdla")
+}
+
+fn is_fdl2_name(name: &str) -> bool {
+    let n = entry_basename_lower(name);
+    n.starts_with("fdl2") || n.starts_with("fdlb")
+}
+
+/// Classify one PAC entry for the one-file pipeline. Order matters: a
+/// zero-size entry is a marker even if its name says `fdl1`, and NV beats a
+/// `.bin` partition image (an NV payload must never be written implicitly).
+pub fn classify_pac_entry(entry: &PacEntry) -> PacEntryKind {
+    if entry.size == 0 {
+        return PacEntryKind::Empty;
+    }
+    if is_fdl1_name(&entry.name) {
+        return PacEntryKind::Fdl1;
+    }
+    if is_fdl2_name(&entry.name) {
+        return PacEntryKind::Fdl2;
+    }
+    let base = entry_basename_lower(&entry.name);
+    if base.ends_with(".xml") || base == "xml" {
+        return PacEntryKind::Xml;
+    }
+    if entry.is_nv || is_nv_name(&entry.name) {
+        return PacEntryKind::Nv;
+    }
+    PacEntryKind::Partition
+}
+
+/// Device partition name for a PAC payload: PAC entries are image file names
+/// (`boot.img`, `system.bin`), the FDL2 table is keyed by partition
+/// (`boot`, `system`). Only well-known image extensions are stripped; any
+/// other name is kept verbatim (existing spd-flash naming rule).
+pub fn entry_partition_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+    let lower = base.to_ascii_lowercase();
+    for ext in [".img", ".bin", ".image", ".mbn"] {
+        if lower.ends_with(ext) {
+            return base[..base.len() - ext.len()].to_string();
+        }
+    }
+    base.to_string()
+}
+
+/// Locate the FDL1 and FDL2 payloads in a parsed PAC.
+///
+/// Matching is case-insensitive on the basename (`FDL1-SIGN.BIN` works) and
+/// covers the known PAC spellings (`fdl1*`/`fdla*`, `fdl2*`/`fdlb*`). When a
+/// loader is missing the error lists every entry name in the PAC and documents
+/// the `--fdl1-addr` / `--fdl2-addr` address overrides (plus the explicit
+/// `spd-*` commands that take extracted FDL files).
+pub fn find_fdl_entries(info: &PacInfo) -> Result<(PacEntry, PacEntry)> {
+    let fdl1 = info.entries.iter().find(|e| is_fdl1_name(&e.name));
+    let fdl2 = info.entries.iter().find(|e| is_fdl2_name(&e.name));
+    let (fdl1, fdl2) = match (fdl1, fdl2) {
+        (Some(a), Some(b)) => (a, b),
+        (a, b) => {
+            let missing = match (a.is_some(), b.is_some()) {
+                (false, false) => "FDL1 and FDL2",
+                (false, true) => "FDL1",
+                (true, false) => "FDL2",
+                (true, true) => unreachable!(),
+            };
+            let names: Vec<&str> = info.entries.iter().map(|e| e.name.as_str()).collect();
+            return Err(BridgeError::InvalidArgument(format!(
+                "PAC '{}' has no {missing} loader entry (expected a name starting with \
+                 'fdl1'/'fdla' and 'fdl2'/'fdlb', case-insensitive, e.g. fdl1-sign.bin \
+                 and fdl2-sign.bin).\nEntries in this PAC: {}\n\
+                 If the loaders are not in the PAC, use the explicit spd-flash/spd-frp \
+                 commands with the extracted FDL files. FDL load addresses can be \
+                 overridden with --fdl1-addr 0x... / --fdl2-addr 0x... (needed when \
+                 the chip has no entry in the built-in chip->address table).",
+                info.path,
+                if names.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    names.join(", ")
+                }
+            )));
+        }
+    };
+    for (which, e) in [("FDL1", fdl1), ("FDL2", fdl2)] {
+        if e.size == 0 {
+            return Err(BridgeError::InvalidArgument(format!(
+                "PAC entry '{}' is the {which} loader but carries 0 bytes; the PAC is \
+                 truncated or uses an operation marker instead of a loader",
+                e.name
+            )));
+        }
+    }
+    Ok((fdl1.clone(), fdl2.clone()))
+}
+
+/// Read one entry's payload, enforcing the declared size and the PAC checksum
+/// (the legacy 0x5433 sentinel is accepted). The one-file pipeline reads FDLs
+/// and images straight from the archive, so this is the single checked reader.
+pub fn read_entry_data(pac_path: &str, entry: &PacEntry) -> Result<Vec<u8>> {
+    use std::io::SeekFrom;
+    let mut f = std::fs::File::open(pac_path)
+        .map_err(|e| BridgeError::Io(format!("read {pac_path}: {e}")))?;
+    f.seek(SeekFrom::Start(entry.data_offset))
+        .map_err(|e| BridgeError::Io(e.to_string()))?;
+    let data = read_up_to(&mut f, entry.size as u64)?;
+    if data.len() != entry.size as usize {
+        return Err(BridgeError::InvalidArgument(format!(
+            "PAC entry '{}' truncated: expected {} bytes, found {}",
+            entry.name,
+            entry.size,
+            data.len()
+        )));
+    }
+    let actual = entry_checksum(&data);
+    if entry.checksum != actual && entry.checksum != PAC_ENTRY_LEGACY_CHECKSUM {
+        return Err(BridgeError::InvalidArgument(format!(
+            "PAC entry '{}' checksum mismatch: stored 0x{:04x}, computed 0x{:04x}",
+            entry.name, entry.checksum, actual
+        )));
+    }
+    Ok(data)
+}
+
+/// Derive the PAC NV flag from an image/partition name. NV payloads are the
+/// RF calibration / IMEI images (`nv`, `nvdata`, `nvitem`, `nvram`, ...).
+pub(crate) fn is_nv_name(name: &str) -> bool {
+    name.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|token| token == "nv" || token.starts_with("nv"))
+}
+
+/// Reject names that cannot be represented in the fixed 512-byte UTF-16LE
+/// slot (the writer caps at 510 bytes, so a longer name would be silently
+/// truncated into a different partition name).
+pub(crate) fn check_entry_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "PAC entry name is empty".to_string(),
+        ));
+    }
+    let bytes = name.encode_utf16().count() * 2;
+    if bytes > 512 - 2 {
+        return Err(BridgeError::InvalidArgument(format!(
+            "PAC entry name too long: '{name}' needs {bytes} UTF-16LE bytes (max 510)"
+        )));
+    }
+    Ok(())
+}
+
 /// Shared 2560-byte entry-slot builder.
-pub(crate) fn build_slot(name: &str, size: u32, is_nv: bool) -> Vec<u8> {
+pub(crate) fn build_slot(name: &str, size: u32, is_nv: bool, checksum: u16) -> Vec<u8> {
     let mut slot = vec![0u8; PAC_ENTRY_SIZE];
     encode_name_capped(&mut slot[..512], name, 512);
     slot[PAC_ENTRY_SIZE_OFF..PAC_ENTRY_SIZE_OFF + 4].copy_from_slice(&size.to_le_bytes());
     slot[PAC_ENTRY_IS_NV_OFF..PAC_ENTRY_IS_NV_OFF + 4]
         .copy_from_slice(&(is_nv as u32).to_le_bytes());
     slot[PAC_ENTRY_CHECKSUM_OFF..PAC_ENTRY_CHECKSUM_OFF + 2]
-        .copy_from_slice(&PAC_ENTRY_CHECKSUM.to_le_bytes());
+        .copy_from_slice(&checksum.to_le_bytes());
     slot
 }
 
@@ -240,10 +451,12 @@ fn sanitize_extract(name: &str, index: usize, out_dir: &std::path::Path) -> std:
 fn read_up_to(f: &mut std::fs::File, mut len: u64) -> Result<Vec<u8>> {
     // Tolerate short reads (sparse footers): return what the file has.
     let mut out = Vec::new();
-    let mut buf = [0u8; 1 << 20];
+    let mut buf = vec![0u8; 1 << 20];
     while len > 0 {
         let want = (len as usize).min(buf.len());
-        let n = f.read(&mut buf[..want]).map_err(|e| BridgeError::Io(e.to_string()))?;
+        let n = f
+            .read(&mut buf[..want])
+            .map_err(|e| BridgeError::Io(e.to_string()))?;
         if n == 0 {
             break;
         }
@@ -268,6 +481,21 @@ pub fn extract_cli(pac_path: &str, out_dir: &str) -> Result<String> {
         f.seek(std::io::SeekFrom::Start(e.data_offset))
             .map_err(|e| BridgeError::Io(e.to_string()))?;
         let data = read_up_to(&mut f, e.size as u64)?;
+        if data.len() != e.size as usize {
+            return Err(BridgeError::InvalidArgument(format!(
+                "PAC entry '{}' truncated: expected {} bytes, found {}",
+                e.name,
+                e.size,
+                data.len()
+            )));
+        }
+        let actual = entry_checksum(&data);
+        if e.checksum != actual && e.checksum != PAC_ENTRY_LEGACY_CHECKSUM {
+            return Err(BridgeError::InvalidArgument(format!(
+                "PAC entry '{}' checksum mismatch: stored 0x{:04x}, computed 0x{:04x}",
+                e.name, e.checksum, actual
+            )));
+        }
         std::fs::write(&dest, &data).map_err(|e| BridgeError::Io(e.to_string()))?;
         written.push(dest.to_string_lossy().to_string());
     }
@@ -283,21 +511,32 @@ pub fn pack_cli(in_dir: &str, out_pac: &str, product: &str) -> Result<String> {
         .collect();
     files.sort();
     if files.is_empty() {
-        return Err(BridgeError::InvalidArgument(format!("No files in {in_dir}")));
+        return Err(BridgeError::InvalidArgument(format!(
+            "No files in {in_dir}"
+        )));
     }
-    let mut entries: Vec<(String, u64)> = Vec::new();
+    if files.len() > 500 {
+        return Err(BridgeError::InvalidArgument(format!(
+            "Too many files for a PAC: {} (max 500)",
+            files.len()
+        )));
+    }
+    let mut entries: Vec<(String, u64, u16, bool)> = Vec::new();
     let mut total: u64 = 0;
     for p in &files {
         let name = p
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
+        check_entry_name(&name)?;
         let size = p
             .metadata()
             .map_err(|e| BridgeError::Io(e.to_string()))?
             .len();
         check_u32(&name, size)?;
-        entries.push((name, size));
+        let checksum = checksum_file(p)?;
+        let is_nv = is_nv_name(&name);
+        entries.push((name, size, checksum, is_nv));
         total += size;
     }
     if total > u32::MAX as u64 {
@@ -308,13 +547,12 @@ pub fn pack_cli(in_dir: &str, out_pac: &str, product: &str) -> Result<String> {
     let mut out = std::fs::File::create(out_pac).map_err(|e| BridgeError::Io(e.to_string()))?;
     out.write_all(&build_header(entries.len() as u32, total, product)?)
         .map_err(|e| BridgeError::Io(e.to_string()))?;
-    for (name, size) in &entries {
-        out.write_all(&build_slot(name, *size as u32, false))
+    for (name, size, checksum, is_nv) in &entries {
+        out.write_all(&build_slot(name, *size as u32, *is_nv, *checksum))
             .map_err(|e| BridgeError::Io(e.to_string()))?;
     }
     for p in &files {
-        let mut f =
-            std::fs::File::open(p).map_err(|e| BridgeError::Io(e.to_string()))?;
+        let mut f = std::fs::File::open(p).map_err(|e| BridgeError::Io(e.to_string()))?;
         std::io::copy(&mut f, &mut out).map_err(|e| BridgeError::Io(e.to_string()))?;
     }
     out.write_all(&vec![0u8; PAC_FOOTER_SIZE])
@@ -337,7 +575,8 @@ mod tests {
         let total: u64 = names.iter().map(|(_, s)| *s as u64).sum();
         let mut buf = build_header(names.len() as u32, total, "TestProduct").unwrap();
         for (name, size) in names {
-            buf.extend_from_slice(&build_slot(name, *size, false));
+            let data = vec![0xABu8; *size as usize];
+            buf.extend_from_slice(&build_slot(name, *size, false, entry_checksum(&data)));
         }
         for (_, size) in names {
             buf.extend(std::iter::repeat(0xAB).take(*size as usize));
@@ -358,7 +597,10 @@ mod tests {
         assert_eq!(info.total_payload, 48);
         assert_eq!(info.entries[0].name, "boot.img");
         assert_eq!(info.entries[0].size, 16);
-        assert_eq!(info.entries[1].data_offset as usize, PAC_HEADER_SIZE + 2 * PAC_ENTRY_SIZE + 16);
+        assert_eq!(
+            info.entries[1].data_offset as usize,
+            PAC_HEADER_SIZE + 2 * PAC_ENTRY_SIZE + 16
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -424,5 +666,241 @@ mod tests {
         assert!(p.ends_with("a_b_c"));
         let p2 = sanitize_extract("   ", 7, &dir);
         assert!(p2.ends_with("part_7"));
+    }
+
+    #[test]
+    fn checksum_is_additive_payload_sum() {
+        assert_eq!(entry_checksum(&[]), 0);
+        assert_eq!(entry_checksum(&[1, 2, 3]), 6);
+        assert_eq!(entry_checksum(&[0xff, 0x02]), 0x0101);
+    }
+
+    #[test]
+    fn nv_flag_is_derived_from_name() {
+        assert!(is_nv_name("nv.bin"));
+        assert!(is_nv_name("nvdata.img"));
+        assert!(is_nv_name("modem_nv.img"));
+        assert!(is_nv_name("NVITEM.bin"));
+        assert!(!is_nv_name("boot.img"));
+        assert!(!is_nv_name("inventory.img"));
+    }
+
+    #[test]
+    fn oversized_entry_name_is_rejected() {
+        assert!(check_entry_name("boot.img").is_ok());
+        let err = check_entry_name(&"x".repeat(256)).unwrap_err();
+        assert!(err.to_string().contains("too long"), "{err}");
+        assert!(check_entry_name("   ").is_err());
+    }
+
+    #[test]
+    fn pack_extract_roundtrip_verifies_checksum_and_nv() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fp_pac_rt_{}_{stamp}", std::process::id()));
+        let in_dir = root.join("in");
+        let out_dir = root.join("out");
+        std::fs::create_dir_all(&in_dir).unwrap();
+        let boot = b"BOOT-IMAGE-DATA".to_vec();
+        let nv = vec![0x11u8; 64];
+        std::fs::write(in_dir.join("boot.img"), &boot).unwrap();
+        std::fs::write(in_dir.join("nvdata.bin"), &nv).unwrap();
+        let pac = root.join("out.pac");
+        pack_cli(
+            in_dir.to_str().unwrap(),
+            pac.to_str().unwrap(),
+            "TestProduct",
+        )
+        .unwrap();
+
+        let info = parse_pac(pac.to_str().unwrap()).unwrap();
+        assert_eq!(info.count, 2);
+        let boot_entry = info.entries.iter().find(|e| e.name == "boot.img").unwrap();
+        let nv_entry = info
+            .entries
+            .iter()
+            .find(|e| e.name == "nvdata.bin")
+            .unwrap();
+        assert_eq!(boot_entry.checksum, entry_checksum(&boot));
+        assert_eq!(nv_entry.checksum, entry_checksum(&nv));
+        assert!(!boot_entry.is_nv);
+        assert!(nv_entry.is_nv);
+
+        extract_cli(pac.to_str().unwrap(), out_dir.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(out_dir.join("boot.img")).unwrap(), boot);
+        assert_eq!(std::fs::read(out_dir.join("nvdata.bin")).unwrap(), nv);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- one-file PAC pipeline: loader discovery + entry classification ----
+
+    fn entry(index: usize, name: &str, size: u32, is_nv: bool) -> PacEntry {
+        PacEntry {
+            index,
+            name: name.to_string(),
+            size,
+            is_nv,
+            checksum: 0,
+            data_offset: 0,
+        }
+    }
+
+    fn info_with(names: &[(&str, u32, bool)]) -> PacInfo {
+        PacInfo {
+            path: "test.pac".to_string(),
+            count: names.len() as u32,
+            flash_size: 0,
+            entries: names
+                .iter()
+                .enumerate()
+                .map(|(i, (n, s, nv))| entry(i, n, *s, *nv))
+                .collect(),
+            total_payload: names.iter().map(|(_, s, _)| *s as u64).sum(),
+        }
+    }
+
+    #[test]
+    fn fdl_discovery_accepts_case_known_and_legacy_names() {
+        for (n1, n2) in [
+            ("fdl1-sign.bin", "fdl2-sign.bin"),
+            ("FDL1.BIN", "FDL2.BIN"),
+            ("Fdl1", "Fdl2"),
+            ("fdl1-dl.bin", "fdl2-dl.bin"),
+            ("FDLA", "FDLB"),
+            ("path/to/fdl1-sign.bin", "fdl2.bin"),
+        ] {
+            let info = info_with(&[("boot.img", 10, false), (n1, 4, false), (n2, 8, false)]);
+            let (a, b) = find_fdl_entries(&info).unwrap();
+            assert_eq!(a.name, n1, "FDL1 discovery failed for {n1}");
+            assert_eq!(b.name, n2, "FDL2 discovery failed for {n2}");
+        }
+    }
+
+    #[test]
+    fn fdl_missing_error_lists_names_and_escape_hatch() {
+        let info = info_with(&[("boot.img", 10, false), ("settings.xml", 4, false)]);
+        let err = find_fdl_entries(&info).unwrap_err().to_string();
+        assert!(err.contains("no FDL1 and FDL2"), "{err}");
+        assert!(err.contains("boot.img, settings.xml"), "{err}");
+        assert!(err.contains("--fdl1-addr"), "{err}");
+        assert!(err.contains("--fdl2-addr"), "{err}");
+
+        // Only FDL1 present: the message must name the missing one.
+        let only1 = info_with(&[("fdl1.bin", 4, false), ("boot.img", 10, false)]);
+        let err = find_fdl_entries(&only1).unwrap_err().to_string();
+        assert!(err.contains("no FDL2 loader"), "{err}");
+        assert!(!err.contains("no FDL1 and FDL2"), "{err}");
+
+        // A zero-size loader slot is unusable, not silently accepted.
+        let empty_loader = info_with(&[("fdl1.bin", 0, false), ("fdl2.bin", 8, false)]);
+        let err = find_fdl_entries(&empty_loader).unwrap_err().to_string();
+        assert!(err.contains("0 bytes"), "{err}");
+    }
+
+    #[test]
+    fn entry_classification_flash_vs_skip() {
+        assert_eq!(
+            classify_pac_entry(&entry(0, "boot.img", 16, false)),
+            PacEntryKind::Partition
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "system.img", 16, false)),
+            PacEntryKind::Partition
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "FDL1-SIGN.BIN", 16, false)),
+            PacEntryKind::Fdl1
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "fdla.bin", 16, false)),
+            PacEntryKind::Fdl1
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "fdl2-sign.bin", 16, false)),
+            PacEntryKind::Fdl2
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "FDLB", 16, false)),
+            PacEntryKind::Fdl2
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "partition.xml", 16, false)),
+            PacEntryKind::Xml
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "settings.XML", 16, false)),
+            PacEntryKind::Xml
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "nvitem.bin", 16, true)),
+            PacEntryKind::Nv
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "NVDATA.img", 16, false)),
+            PacEntryKind::Nv
+        );
+        // NV flag wins over a partition-looking name.
+        assert_eq!(
+            classify_pac_entry(&entry(0, "modem.bin", 16, true)),
+            PacEntryKind::Nv
+        );
+        // Zero-size markers are skipped even when the name looks flashable.
+        assert_eq!(
+            classify_pac_entry(&entry(0, "boot.img", 0, false)),
+            PacEntryKind::Empty
+        );
+        assert_eq!(
+            classify_pac_entry(&entry(0, "fdl1.bin", 0, false)),
+            PacEntryKind::Empty
+        );
+        // NV token matching is whole-token (inventory is not NV).
+        assert_eq!(
+            classify_pac_entry(&entry(0, "inventory.img", 16, false)),
+            PacEntryKind::Partition
+        );
+    }
+
+    #[test]
+    fn entry_partition_name_strips_image_extensions_only() {
+        assert_eq!(entry_partition_name("boot.img"), "boot");
+        assert_eq!(entry_partition_name("system.bin"), "system");
+        assert_eq!(entry_partition_name("UPPER.IMG"), "UPPER");
+        assert_eq!(entry_partition_name("super.image"), "super");
+        assert_eq!(entry_partition_name("dir/vendor.img"), "vendor");
+        assert_eq!(entry_partition_name("persist"), "persist");
+        assert_eq!(entry_partition_name("weird.dat"), "weird.dat");
+    }
+
+    #[test]
+    fn read_entry_data_verifies_checksum_and_size() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("fp_pac_entry_{}_{stamp}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // synthetic_pac fills payloads with 0xAB and writes the matching sum.
+        let payload = vec![0xABu8; 9];
+        let buf = synthetic_pac(&[("boot.img", payload.len() as u32)]);
+        let path = dir.join("t.pac");
+        std::fs::write(&path, &buf).unwrap();
+        let info = parse_pac(path.to_str().unwrap()).unwrap();
+        let data = read_entry_data(path.to_str().unwrap(), &info.entries[0]).unwrap();
+        assert_eq!(data, payload);
+
+        // Corrupt the entry table checksum: the reader must refuse the payload.
+        let mut bad = buf.clone();
+        bad[PAC_HEADER_SIZE + PAC_ENTRY_CHECKSUM_OFF..PAC_HEADER_SIZE + PAC_ENTRY_CHECKSUM_OFF + 2]
+            .copy_from_slice(&0x1234u16.to_le_bytes());
+        let bad_path = dir.join("bad.pac");
+        std::fs::write(&bad_path, &bad).unwrap();
+        let bad_info = parse_pac(bad_path.to_str().unwrap()).unwrap();
+        let err = read_entry_data(bad_path.to_str().unwrap(), &bad_info.entries[0])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("checksum mismatch"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

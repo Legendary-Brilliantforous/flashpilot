@@ -87,6 +87,10 @@ class MtpError(RuntimeError):
 def find_samsung(key=None):
     """Return the first Samsung USB device dict, or None.
 
+    Selection filters merged rows by VID (0x04E8 — every Samsung PID,
+    including 0x6860 which the Rust classifier labels `android-mtp`, not
+    `samsung*`), matched back to the raw detect_usb dict so callers keep
+    full descriptor fields (interfaces for is_adb_composite/is_diag_config).
     ``key`` is a stable device key (see devices.device_key); None means
     the ambient thread-scoped key, which itself defaults to first-match
     for backward compatibility.
@@ -95,8 +99,18 @@ def find_samsung(key=None):
         from . import devices as _dev
 
         key = _dev.current_key()
-    for d in bridge.detect_usb():
-        if d.get("vid") != SAMSUNG_VID:
+    try:
+        rows = [r for r in bridge.list_merged()
+                if r.get("vid") == SAMSUNG_VID
+                or str(r.get("mode", "")).startswith("samsung")]
+        usb = bridge.detect_usb()
+    except Exception:
+        return None
+    by_port = {(d.get("bus"), d.get("address")): d
+               for d in usb if isinstance(d, dict)}
+    for r in rows:
+        d = by_port.get((r.get("bus"), r.get("address")))
+        if not isinstance(d, dict):
             continue
         if key is None:
             return d

@@ -1,7 +1,7 @@
 //! Unified error handling for the project
 
-use std::fmt;
 use serde::Serialize;
+use std::fmt;
 
 /// Main error type for all operations
 #[derive(Debug, Serialize)]
@@ -85,7 +85,10 @@ pub enum AuthError {
 
 #[derive(Debug, Serialize)]
 pub enum DeviceStateError {
-    WrongMode { expected: String, actual: String },
+    WrongMode {
+        expected: String,
+        actual: String,
+    },
     NotInDownloadMode,
     NotInBromMode,
     NotInPreloaderMode,
@@ -94,11 +97,16 @@ pub enum DeviceStateError {
     /// Unscoped target ("auto"/first-device) with several candidates: the
     /// caller must pin an explicit serial/transport instead of letting the
     /// backend guess. `count` is the number of matching devices.
-    AmbiguousTarget { count: usize },
+    AmbiguousTarget {
+        count: usize,
+    },
     /// A DIFFERENT device now occupies the target's bus:addr (device
     /// replaced / re-enumerated onto a reused address). The stored
     /// transport may not be followed — the identity must be revalidated.
-    DeviceIdentityChanged { key: String, current_serial: String },
+    DeviceIdentityChanged {
+        key: String,
+        current_serial: String,
+    },
 }
 
 impl fmt::Display for BridgeError {
@@ -137,7 +145,9 @@ impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProtocolError::HandshakeFailed(s) => write!(f, "Handshake failed: {}", s),
-            ProtocolError::CommandFailed { cmd, sub, reason } => write!(f, "Command 0x{:02X}/0x{:02X} failed: {}", cmd, sub, reason),
+            ProtocolError::CommandFailed { cmd, sub, reason } => {
+                write!(f, "Command 0x{:02X}/0x{:02X} failed: {}", cmd, sub, reason)
+            }
             ProtocolError::UnexpectedResponse(s) => write!(f, "Unexpected response: {}", s),
             ProtocolError::ChecksumMismatch => write!(f, "Checksum mismatch"),
             ProtocolError::SequenceError(s) => write!(f, "Sequence error: {}", s),
@@ -259,7 +269,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[allow(dead_code)]
-pub fn request_cancel() { CANCEL_FLAG.store(true, Ordering::SeqCst); }
+pub fn request_cancel() {
+    CANCEL_FLAG.store(true, Ordering::SeqCst);
+}
 #[allow(dead_code)]
-pub fn clear_cancel() { CANCEL_FLAG.store(false, Ordering::SeqCst); }
-pub fn cancel_requested() -> bool { CANCEL_FLAG.load(Ordering::SeqCst) }
+pub fn clear_cancel() {
+    CANCEL_FLAG.store(false, Ordering::SeqCst);
+}
+pub fn cancel_requested() -> bool {
+    CANCEL_FLAG.load(Ordering::SeqCst)
+}

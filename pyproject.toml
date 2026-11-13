@@ -25,9 +25,16 @@ packages = ["python"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Make the repo root importable as `python.*` even when pytest is invoked as a
+# console script (CI runs `pytest`, not `python -m pytest`, so CWD is not
+# added to sys.path automatically).
+pythonpath = ["."]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+markers = [
+    "hil: hardware-in-the-loop test — needs --hil and attached devices",
+]
 addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",

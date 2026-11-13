@@ -1,9 +1,9 @@
 //! Utility functions
 
 use crate::error::Result;
-use std::path::Path;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 /// Read file to bytes
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
@@ -32,11 +32,13 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
 pub fn parse_hex(hex: &str) -> Result<Vec<u8>> {
     let hex = hex.trim().trim_start_matches("0x");
     if hex.len() % 2 != 0 {
-        return Err(crate::error::BridgeError::InvalidArgument("Hex string must have even length".to_string()));
+        return Err(crate::error::BridgeError::InvalidArgument(
+            "Hex string must have even length".to_string(),
+        ));
     }
     let mut bytes = Vec::with_capacity(hex.len() / 2);
     for i in (0..hex.len()).step_by(2) {
-        let byte = u8::from_str_radix(&hex[i..i+2], 16)
+        let byte = u8::from_str_radix(&hex[i..i + 2], 16)
             .map_err(|_| crate::error::BridgeError::InvalidArgument("Invalid hex".to_string()))?;
         bytes.push(byte);
     }
@@ -45,7 +47,11 @@ pub fn parse_hex(hex: &str) -> Result<Vec<u8>> {
 
 /// Format bytes as hex
 pub fn format_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
+    bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Format bytes as hex with spaces
@@ -62,18 +68,20 @@ pub fn format_hex_spaced(bytes: &[u8], group: usize) -> String {
 pub fn parse_size(size_str: &str) -> Result<u64> {
     let size_str = size_str.trim().to_uppercase();
     let (num_str, unit) = if size_str.ends_with("KB") {
-        (&size_str[..size_str.len()-2], 1024)
+        (&size_str[..size_str.len() - 2], 1024)
     } else if size_str.ends_with("MB") {
-        (&size_str[..size_str.len()-2], 1024 * 1024)
+        (&size_str[..size_str.len() - 2], 1024 * 1024)
     } else if size_str.ends_with("GB") {
-        (&size_str[..size_str.len()-2], 1024 * 1024 * 1024)
+        (&size_str[..size_str.len() - 2], 1024 * 1024 * 1024)
     } else if size_str.ends_with("B") {
-        (&size_str[..size_str.len()-1], 1)
+        (&size_str[..size_str.len() - 1], 1)
     } else {
         (size_str.as_str(), 1)
     };
-    
-    let num: f64 = num_str.trim().parse()
+
+    let num: f64 = num_str
+        .trim()
+        .parse()
         .map_err(|_| crate::error::BridgeError::InvalidArgument("Invalid size".to_string()))?;
 
     // Integer math, not f64-multiply-cast: f64 loses precision above 2^53
@@ -89,13 +97,15 @@ pub fn parse_size(size_str: &str) -> Result<u64> {
         // Fractional sizes (e.g. "1.5GB"): keep the f64 path but bound it.
         let v = num * unit as f64;
         if !(v.is_finite()) || v < 0.0 || v > u64::MAX as f64 {
-            return Err(crate::error::BridgeError::InvalidArgument("Size out of range".to_string()));
+            return Err(crate::error::BridgeError::InvalidArgument(
+                "Size out of range".to_string(),
+            ));
         }
         return Ok(v as u64);
     };
-    Ok(int_part
-        .checked_mul(unit)
-        .ok_or_else(|| crate::error::BridgeError::InvalidArgument("Size overflows u64".to_string()))?)
+    Ok(int_part.checked_mul(unit).ok_or_else(|| {
+        crate::error::BridgeError::InvalidArgument("Size overflows u64".to_string())
+    })?)
 }
 
 /// Format size as human readable
@@ -147,7 +157,12 @@ impl ProgressReporter {
     fn report(&mut self) {
         if self.total > 0 {
             let pct = (self.current as f64 / self.total as f64) * 100.0;
-            eprint!("\rProgress: {:.1}% ({}/{})", pct, crate::util::format_size(self.current), crate::util::format_size(self.total));
+            eprint!(
+                "\rProgress: {:.1}% ({}/{})",
+                pct,
+                crate::util::format_size(self.current),
+                crate::util::format_size(self.total)
+            );
         } else {
             eprint!("\rTransferred: {}", crate::util::format_size(self.current));
         }
@@ -236,7 +251,8 @@ pub fn write_backup_manifest(out_dir: &Path) -> Result<String> {
         sums.push_str(&format!("{sha}  {name}\n"));
     }
     let sums_path = out_dir.join("SHA256SUMS");
-    let mut f = fs::File::create(&sums_path).map_err(|e| crate::error::BridgeError::Io(e.to_string()))?;
+    let mut f =
+        fs::File::create(&sums_path).map_err(|e| crate::error::BridgeError::Io(e.to_string()))?;
     f.write_all(sums.as_bytes())
         .map_err(|e| crate::error::BridgeError::Io(e.to_string()))?;
     let files_json: Vec<String> = entries

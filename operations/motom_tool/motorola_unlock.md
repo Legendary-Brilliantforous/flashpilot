@@ -307,6 +307,95 @@ FlashPilot ships its own minimal device-owner app instead:
 - GUI: Motorola FRP REMOVE gains a "Fake Login · QR" row dispatching the
   flow under ("Remove FRP", "ADB").
 
+## Staged fastboot payloads — FRP remove without a server (FlashPilot, own implementation)
+
+The G6 (ali) has no EDL path: `oem edl` is unsupported, the 05c6:9026
+composite is diag/Android-side (not Sahara), and the EDL flow
+(`moto_edl_adb`) is retired — its key now errors with a pointer to
+`moto_fb_frp`. What remains is fastboot, Moto-M shape, all local.
+Flow `moto_fb_frp` (registry: Remove FRP / FASTBOOT; GUI: Motorola →
+FRP REMOVE → Fastboot Staged FRP):
+
+```
+Stage 0 (--firmware-dir, required): flash signed stock firmware in
+  flashfile.xml order over fastboot. Every image MD5-verified first;
+  refusals (downgrade/validation) abort with the device's own lines.
+Stage 1 (up to 3 cycles): reboot, then act per the mode ACTUALLY seen —
+  ADB authorized -> wipe (moto_adb_frp_wipe) -> reboot -> done;
+  ADB unauthorized -> prompt the on-phone tap (Moto-M style), wipe on
+  success; fastboot back -> state check + cache clear + reboot again;
+  dark -> cable/button guidance.
+Exhausted (no ADB in 3 cycles): honest stop naming QR fake-login
+  (frp_fake_login*), which needs no exploit at all.
+```
+
+Lesson from the first live run (Oct 2026): the initial version kept
+flashing after refusals and then wiped userdata anyway — a wipe with
+zero benefit. Now a device-FAILED flash sets a flag that SKIPS all
+later erase steps (stated in-transcript), and the erase banner prints
+before anything runs. Live result on ali: 8.0 set refused throughout
+on downgrade/validation (9.0 fuses), modem/fsg/dsp/logo OK, userdata
+wiped, cycles saw nothing on USB — exited honestly naming QR.
+
+Scope stated plainly in-flow and here: every command is a documented
+local fastboot/ADB command. Moto-M's per-boot payload bytes come from
+their server and were never visible client-side, so they are NOT
+replicated — and a clean signed flash plus reboots does not itself
+enable ADB. The flow never pretends otherwise.
+
+Why fastboot writes are closed on ali (all proven live on the G6,
+MBM-2.1-32ffece02ed-200416, oem_locked) — kept as the record:
+
+- `fastboot flash boot` (patched, 23 MB): `Image size exeeded partition
+  limits` + `Preflash validation failed`.
+- `fastboot flash boot` (signed stock 8.0): `Security version
+  downgrade` + `Image boot failed validation` (phone runs 9.0 fuses).
+- Same (trimmed to 11 MB content): `Image boot failed validation`.
+- `fastboot erase cache`: OKAY (erase path works, per-partition ACL).
+- `fastboot erase frp`: `Permission denied` — the exact partition is
+  ACL-protected over fastboot.
+- Unsigned boot images could never boot here anyway: a locked
+  bootloader verifies boot.img at every startup.
+
+Supporting pieces (all local, all verified against real ali files):
+
+- `boot-patch-adb --prop-file`: ali's ramdisk `default.prop` is a
+  SYMLINK into /system — the patcher now detects this: without
+  --prop-file it errors honestly (instead of corrupting the link);
+  with it, the link becomes a regular file holding the real system
+  props + forced `ro.adb.secure=0 ro.secure=0 ro.debuggable=1
+  persist.sys.usb.config=mtp,adb`. Verified byte-level on the real
+  OPS27.82-19-4 boot.img (mode 000081A4, fingerprint intact, system
+  untouched so dm-verity stays happy). (Kept as a general tool; the
+  staged flow no longer needs it — unsigned images can't boot locked.)
+- EDL-only helpers (`moto-extract-programmer`, `moto-extract-prop`,
+  Sahara upload) were removed with the retired flow; the findings stay
+  above as the record.
+
+Honest gates: the staged flow needs --firmware-dir (signed stock); a
+version-mismatched set aborts on the device's own downgrade/validation
+lines. If no ADB appears in 3 cycles, it stops and names QR fake-login.
+
+## Live probing notes (Moto G6 ali, MBM-2.1-32ffece02ed-200416, oem_locked)
+
+`fastboot oem help` on this bootloader lists: config, hw, partition,
+fb_mode_set/clear, bp-tools-on/off, qcom-on/off, unlock, lock,
+get_unlock_data, cid_prov_req, read_sv, off-mode-charge, show_screen —
+no EDL command. Live results:
+
+- `fastboot oem edl` → `FAILED ('edl' is not a supported oem command)`.
+- `fastboot oem qcom-on` / `qcom-off` → OKAY but no USB change while in
+  fastboot (no 05c6 switch, no ttyUSB); reverted cleanly.
+- `fastboot boot` → refused (locked); initrd `fsg-id` injection →
+  content-filtered on this 2020 build; unlock code valid but blocked
+  by the Android-side OEM-unlock toggle.
+- The earlier `05c6:9026` composite is a diag/Android-side mode, not
+  Sahara — Firehose needs true 9008/900E.
+
+So on this unit every software EDL entry is closed; the staged flow
+runs up to the EDL gate and waits. Entry is a test-point (or EDL cable)
+step, then the chain proceeds unattended.
+
 ## Three-DPC fake-login (FlashPilot, own implementation)
 
 The software offers three device-owner choices for QR provisioning, all

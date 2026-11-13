@@ -222,13 +222,14 @@ def get_live_identity(pinned_serial=None) -> dict:
     coexist without cross-device bleed.
     """
     out = {"serial": "", "android_ver": "", "build": "", "model": "", "mfr": "", "brand": "", "sdk": ""}
-    # Detect Apple first (05ac) — treat separately
+    # Detect Apple first (Rust mode, no VID tables) — treat separately
     apple = {}
     try:
         from . import bridge
 
-        usb = bridge.detect_all()
-        has_apple = any(isinstance(d, dict) and d.get("vid") == 0x05AC for d in usb)
+        rows = bridge.list_merged() or []
+        has_apple = any(isinstance(d, dict) and str(d.get("mode", "")) == "apple"
+                        for d in rows)
         if has_apple:
             apple = _apple_lockdown_info()
             if apple.get("SerialNumber") and not _is_fake_serial(apple["SerialNumber"]):

@@ -1,6 +1,6 @@
 //! Qualcomm MBN (Multi Boot Image) parsing
 
-use crate::error::{Result, BridgeError, FirmwareError};
+use crate::error::{BridgeError, FirmwareError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -33,43 +33,95 @@ pub struct MbnImage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MbnImageType {
     Unknown,
-    Xbl, ABl, Tz, Hyp, Devcfg, Keymaster, Cmnlib, Cmnlib64, Keymaster64,
-    Dsp, Modem, Boot, Recovery, Dtbo, Vbmeta, VbmetaSystem, VbmetaVendor,
-    Super, Logo, Mdtp, Featenabler, Multiimgoem, Multiimgqti,
+    Xbl,
+    ABl,
+    Tz,
+    Hyp,
+    Devcfg,
+    Keymaster,
+    Cmnlib,
+    Cmnlib64,
+    Keymaster64,
+    Dsp,
+    Modem,
+    Boot,
+    Recovery,
+    Dtbo,
+    Vbmeta,
+    VbmetaSystem,
+    VbmetaVendor,
+    Super,
+    Logo,
+    Mdtp,
+    Featenabler,
+    Multiimgoem,
+    Multiimgqti,
 }
 
 impl MbnImageType {
     pub fn from_name(name: &str) -> Self {
         match name.to_lowercase().as_str() {
-            "xbl" => Self::Xbl, "abl" => Self::ABl, "tz" => Self::Tz,
-            "hyp" => Self::Hyp, "devcfg" => Self::Devcfg, "keymaster" => Self::Keymaster,
-            "cmnlib" => Self::Cmnlib, "cmnlib64" => Self::Cmnlib64, "keymaster64" => Self::Keymaster64,
-            "dsp" => Self::Dsp, "modem" => Self::Modem, "boot" => Self::Boot,
-            "recovery" => Self::Recovery, "dtbo" => Self::Dtbo, "vbmeta" => Self::Vbmeta,
-            "vbmeta_system" => Self::VbmetaSystem, "vbmeta_vendor" => Self::VbmetaVendor,
-            "super" => Self::Super, "logo" => Self::Logo, "mdtp" => Self::Mdtp,
-            "featenabler" => Self::Featenabler, "multiimgoem" => Self::Multiimgoem,
-            "multiimgqti" => Self::Multiimgqti, _ => Self::Unknown,
+            "xbl" => Self::Xbl,
+            "abl" => Self::ABl,
+            "tz" => Self::Tz,
+            "hyp" => Self::Hyp,
+            "devcfg" => Self::Devcfg,
+            "keymaster" => Self::Keymaster,
+            "cmnlib" => Self::Cmnlib,
+            "cmnlib64" => Self::Cmnlib64,
+            "keymaster64" => Self::Keymaster64,
+            "dsp" => Self::Dsp,
+            "modem" => Self::Modem,
+            "boot" => Self::Boot,
+            "recovery" => Self::Recovery,
+            "dtbo" => Self::Dtbo,
+            "vbmeta" => Self::Vbmeta,
+            "vbmeta_system" => Self::VbmetaSystem,
+            "vbmeta_vendor" => Self::VbmetaVendor,
+            "super" => Self::Super,
+            "logo" => Self::Logo,
+            "mdtp" => Self::Mdtp,
+            "featenabler" => Self::Featenabler,
+            "multiimgoem" => Self::Multiimgoem,
+            "multiimgqti" => Self::Multiimgqti,
+            _ => Self::Unknown,
         }
     }
-    
+
     pub fn to_str(&self) -> &'static str {
         match self {
-            Self::Xbl => "xbl", Self::ABl => "abl", Self::Tz => "tz",
-            Self::Hyp => "hyp", Self::Devcfg => "devcfg", Self::Keymaster => "keymaster",
-            Self::Cmnlib => "cmnlib", Self::Cmnlib64 => "cmnlib64", Self::Keymaster64 => "keymaster64",
-            Self::Dsp => "dsp", Self::Modem => "modem", Self::Boot => "boot",
-            Self::Recovery => "recovery", Self::Dtbo => "dtbo", Self::Vbmeta => "vbmeta",
-            Self::VbmetaSystem => "vbmeta_system", Self::VbmetaVendor => "vbmeta_vendor",
-            Self::Super => "super", Self::Logo => "logo", Self::Mdtp => "mdtp",
-            Self::Featenabler => "featenabler", Self::Multiimgoem => "multiimgoem",
-            Self::Multiimgqti => "multiimgqti", _ => "unknown",
+            Self::Xbl => "xbl",
+            Self::ABl => "abl",
+            Self::Tz => "tz",
+            Self::Hyp => "hyp",
+            Self::Devcfg => "devcfg",
+            Self::Keymaster => "keymaster",
+            Self::Cmnlib => "cmnlib",
+            Self::Cmnlib64 => "cmnlib64",
+            Self::Keymaster64 => "keymaster64",
+            Self::Dsp => "dsp",
+            Self::Modem => "modem",
+            Self::Boot => "boot",
+            Self::Recovery => "recovery",
+            Self::Dtbo => "dtbo",
+            Self::Vbmeta => "vbmeta",
+            Self::VbmetaSystem => "vbmeta_system",
+            Self::VbmetaVendor => "vbmeta_vendor",
+            Self::Super => "super",
+            Self::Logo => "logo",
+            Self::Mdtp => "mdtp",
+            Self::Featenabler => "featenabler",
+            Self::Multiimgoem => "multiimgoem",
+            Self::Multiimgqti => "multiimgqti",
+            _ => "unknown",
         }
     }
-    
+
     pub fn detect_type_from_filename(filename: &str) -> Self {
         let name = std::path::Path::new(filename)
-            .file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         Self::from_name(name)
     }
 }
@@ -83,42 +135,47 @@ impl std::fmt::Display for MbnImageType {
 impl MbnImage {
     pub fn parse(data: &[u8]) -> Result<Self> {
         if data.len() < 64 {
-            return Err(BridgeError::Firmware(crate::error::FirmwareError::ScatterParseError(
-                "MBN too small".to_string()
-            )));
+            return Err(BridgeError::Firmware(
+                crate::error::FirmwareError::ScatterParseError("MBN too small".to_string()),
+            ));
         }
-        
+
         let header = Self::parse_header(data)?;
         let header_size = header.header_size as usize;
         let image_size = header.image_size as usize;
         let signature_size = header.signature_size as usize;
         let cert_chain_size = header.cert_chain_size as usize;
-        
+
         let expected_total = header_size + image_size + signature_size + cert_chain_size;
         if data.len() < expected_total {
             return Err(BridgeError::Firmware(FirmwareError::ScatterParseError(
-                format!("MBN data too small: {} < {}", data.len(), expected_total)
+                format!("MBN data too small: {} < {}", data.len(), expected_total),
             )));
         }
-        
+
         let image_data = data[header_size..header_size + image_size].to_vec();
-        let signature = data[header_size + image_size..header_size + image_size + signature_size].to_vec();
+        let signature =
+            data[header_size + image_size..header_size + image_size + signature_size].to_vec();
         let cert_chain = data[header_size + image_size + signature_size..expected_total].to_vec();
-        
+
         Ok(MbnImage {
-            header, image_data, signature, cert_chain,
+            header,
+            image_data,
+            signature,
+            cert_chain,
             image_type: MbnImageType::Unknown,
-            device_model: None, version: None,
+            device_model: None,
+            version: None,
         })
     }
-    
+
     fn parse_header(data: &[u8]) -> Result<MbnHeader> {
         if data.len() < 84 {
             return Err(BridgeError::Firmware(FirmwareError::ScatterParseError(
-                "MBN header too small".to_string()
+                "MBN header too small".to_string(),
             )));
         }
-        
+
         Ok(MbnHeader {
             magic: data[0..4].try_into().unwrap(),
             version: u32::from_le_bytes([data[4], data[5], data[6], data[7]]),
@@ -138,11 +195,11 @@ impl MbnImage {
             hash: data[52..84].try_into().unwrap_or([0; 32]),
         })
     }
-    
+
     pub fn parse_multi(data: &[u8]) -> Result<Vec<MbnImage>> {
         let mut images = Vec::new();
         let mut offset = 0;
-        
+
         while offset + 64 <= data.len() {
             if let Ok(img) = Self::parse(&data[offset..]) {
                 let header_size = img.header.header_size as usize;
@@ -150,19 +207,23 @@ impl MbnImage {
                 let signature_size = img.header.signature_size as usize;
                 let cert_chain_size = img.header.cert_chain_size as usize;
                 let total = header_size + image_size + signature_size + cert_chain_size;
-                
+
                 images.push(img);
                 offset += total;
                 offset = (offset + 4095) & !4095;
-            } else { break; }
+            } else {
+                break;
+            }
         }
-        
+
         Ok(images)
     }
-    
+
     pub fn detect_type_from_filename(filename: &str) -> MbnImageType {
         let name = std::path::Path::new(filename)
-            .file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         MbnImageType::from_name(name)
     }
 }
@@ -178,16 +239,18 @@ pub struct QcomFirmwarePackage {
 impl QcomFirmwarePackage {
     pub fn parse_directory(dir: &std::path::Path) -> Result<Self> {
         let mut package = Self::default();
-        
+
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_file() {
-                let filename = path.file_name()
-                    .and_then(|s| s.to_str()).unwrap_or("");
-                
-                if filename.ends_with(".mbn") || filename.ends_with(".elf") || filename.ends_with(".img") {
+                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                if filename.ends_with(".mbn")
+                    || filename.ends_with(".elf")
+                    || filename.ends_with(".img")
+                {
                     if let Ok(data) = std::fs::read(&path) {
                         if let Ok(images) = MbnImage::parse_multi(&data) {
                             for img in images {
@@ -197,7 +260,7 @@ impl QcomFirmwarePackage {
                         }
                     }
                 }
-                
+
                 if filename == "rawprogram.xml" || filename == "rawprogram0.xml" {
                     package.raw_program_xml = std::fs::read_to_string(&path).ok();
                 }
@@ -206,14 +269,14 @@ impl QcomFirmwarePackage {
                 }
             }
         }
-        
+
         Ok(package)
     }
-    
+
     pub fn get_image(&self, img_type: MbnImageType) -> Option<&MbnImage> {
         self.images.get(img_type.to_str())
     }
-    
+
     pub fn list_images(&self) -> Vec<(&str, &MbnImage)> {
         self.images.iter().map(|(k, v)| (k.as_str(), v)).collect()
     }
