@@ -250,7 +250,12 @@ impl SpdSession {
     /// Switch off HDLC escaping once FDL1 has taken over (some FDL2 builds
     /// require it). Uses BSL_CMD_DISABLE_TRANSCODE so the constant is wired.
     pub fn disable_transcode(&mut self) -> std::result::Result<(), String> {
-        eprintln!("[spd] {} (0x{:04x}) iface={}", bsl_cmd_name(BSL_CMD_DISABLE_TRANSCODE), BSL_CMD_DISABLE_TRANSCODE, self.iface);
+        eprintln!(
+            "[spd] {} (0x{:04x}) iface={}",
+            bsl_cmd_name(BSL_CMD_DISABLE_TRANSCODE),
+            BSL_CMD_DISABLE_TRANSCODE,
+            self.iface
+        );
         let ret = self.cmd_ack(BSL_CMD_DISABLE_TRANSCODE, &[]);
         if ret.is_ok() {
             self.transcode = false;
@@ -416,11 +421,13 @@ impl SpdSession {
                 bsl_cmd_name(cmd),
                 bsl_rep_name(BSL_REP_SIGN_VERIFY_ERROR)
             )),
-            BSL_REP_READ_FLASH | BSL_REP_READ_CHIP_UID | BSL_REP_READ_PARTITION | BSL_REP_VER => Err(format!(
-                "command {} (0x{cmd:04x}): expected ACK got {} (0x{resp:04x})",
-                bsl_cmd_name(cmd),
-                bsl_rep_name(resp)
-            )),
+            BSL_REP_READ_FLASH | BSL_REP_READ_CHIP_UID | BSL_REP_READ_PARTITION | BSL_REP_VER => {
+                Err(format!(
+                    "command {} (0x{cmd:04x}): expected ACK got {} (0x{resp:04x})",
+                    bsl_cmd_name(cmd),
+                    bsl_rep_name(resp)
+                ))
+            }
             _ => Err(format!(
                 "command {} (0x{cmd:04x}): expected ACK, got {} (0x{resp:04x})",
                 bsl_cmd_name(cmd),
@@ -430,7 +437,12 @@ impl SpdSession {
     }
 
     /// Stream `data` to `start_addr` via START/MIDST/END, then EXEC.
-    pub fn load_to_ram(&self, start_addr: u32, data: &[u8], step: usize) -> std::result::Result<(), String> {
+    pub fn load_to_ram(
+        &self,
+        start_addr: u32,
+        data: &[u8],
+        step: usize,
+    ) -> std::result::Result<(), String> {
         let mut hdr = Vec::with_capacity(8);
         hdr.extend_from_slice(&be32(start_addr));
         hdr.extend_from_slice(&be32(data.len() as u32));
@@ -448,7 +460,11 @@ impl SpdSession {
     pub fn handshake(&mut self) -> std::result::Result<String, String> {
         // BootROM stage: CRC16 checksum + transcode. Flush stale bytes first.
         self.flush();
-        eprintln!("[spd] handshake on iface {} using {}", self.iface, bsl_cmd_name(BSL_CMD_CHECK_BAUD));
+        eprintln!(
+            "[spd] handshake on iface {} using {}",
+            self.iface,
+            bsl_cmd_name(BSL_CMD_CHECK_BAUD)
+        );
         self.crc16 = true;
         self.transcode = true;
 
@@ -459,6 +475,11 @@ impl SpdSession {
             return Err(format!("CHECK_BAUD: expected VER, got 0x{resp:04x}"));
         }
         let version = String::from_utf8_lossy(&payload).to_string();
+        // Most BootROMs answer just "SPRD3"; the few that append
+        // "CHIP ID = 0x..." let the pipeline resolve FDL bases before FDL1.
+        if let Some(id) = parse_banner_chip_id(&version) {
+            self.chip_id = id;
+        }
         self.version = version.clone();
         // SPRD3 -> unsecured legacy boot; anything else implies secure boot.
         self.secure_boot = !(payload.len() >= 6 && &payload[..6] == b"SPRD3");
@@ -482,13 +503,8 @@ impl SpdSession {
         }
         let text = String::from_utf8_lossy(&payload).to_string();
         // The banner may contain "CHIP ID = 0x..." — capture it for chip logic.
-        if let Some(pos) = text.find("CHIP ID = 0x") {
-            let end = (pos + 19).min(text.len());
-            if end > pos + 11 {
-                if let Ok(v) = u32::from_str_radix(&text[pos + 11..end], 16) {
-                    self.chip_id = v;
-                }
-            }
+        if let Some(id) = parse_banner_chip_id(&text) {
+            self.chip_id = id;
         }
         self.cmd_ack(BSL_CMD_CONNECT, &[])?;
         Ok(text)
@@ -502,7 +518,14 @@ impl SpdSession {
     /// Read a raw flash region (feature-phone style: address-based).
     /// Returns the number of bytes actually read. Uses Seek/SeekFrom when
     /// streaming to a file via `read_flash_to_file` below.
-    pub fn read_flash(&self, addr: u32, offset: u32, len: usize, step: usize, out: &mut Vec<u8>) -> std::result::Result<usize, String> {
+    pub fn read_flash(
+        &self,
+        addr: u32,
+        offset: u32,
+        len: usize,
+        step: usize,
+        out: &mut Vec<u8>,
+    ) -> std::result::Result<usize, String> {
         let mut done = 0usize;
         while done < len {
             let n = (len - done).min(step);
@@ -510,7 +533,11 @@ impl SpdSession {
             payload.extend_from_slice(&be32(addr));
             payload.extend_from_slice(&be32(n as u32));
             payload.extend_from_slice(&be32(offset + done as u32));
-            eprintln!("[spd] {} addr=0x{addr:08x} off={} len={n}", bsl_cmd_name(BSL_CMD_READ_FLASH), offset + done as u32);
+            eprintln!(
+                "[spd] {} addr=0x{addr:08x} off={} len={n}",
+                bsl_cmd_name(BSL_CMD_READ_FLASH),
+                offset + done as u32
+            );
             self.send_msg(BSL_CMD_READ_FLASH, &payload)?;
             let (resp, data) = self.recv_msg(Duration::from_secs(15))?;
             if resp != BSL_REP_READ_FLASH {
@@ -548,7 +575,10 @@ impl SpdSession {
             return Err(format!("READ_PARTITION: unexpected response 0x{resp:04x}"));
         }
         if data.len() % 0x4c != 0 {
-            return Err(format!("partition table size {} not multiple of 0x4c", data.len()));
+            return Err(format!(
+                "partition table size {} not multiple of 0x4c",
+                data.len()
+            ));
         }
         let mut parts = Vec::new();
         for chunk in data.chunks_exact(0x4c) {
@@ -578,7 +608,12 @@ impl SpdSession {
     }
 
     /// Write a named partition from a file (destructive).
-    pub fn write_partition(&self, name: &str, file_path: &str, step: usize) -> std::result::Result<(), String> {
+    pub fn write_partition(
+        &self,
+        name: &str,
+        file_path: &str,
+        step: usize,
+    ) -> std::result::Result<(), String> {
         let data = fs::read(file_path).map_err(|e| format!("read {file_path}: {e}"))?;
         self.partition_start(name, data.len() as u64, BSL_CMD_START_DATA)?;
         for chunk in data.chunks(step) {
@@ -590,7 +625,14 @@ impl SpdSession {
 
     /// Read a named partition to a file. Uses Seek/SeekFrom to support
     /// resumeable offsets and to satisfy the Seek wiring requirement.
-    pub fn read_partition(&self, name: &str, start: u64, len: u64, out_path: &str, step: usize) -> std::result::Result<u64, String> {
+    pub fn read_partition(
+        &self,
+        name: &str,
+        start: u64,
+        len: u64,
+        out_path: &str,
+        step: usize,
+    ) -> std::result::Result<u64, String> {
         let mode64 = (start + len) >> 32 != 0;
         self.partition_start(name, start + len, BSL_CMD_READ_START)?;
         let mut out = fs::File::create(out_path).map_err(|e| format!("create {out_path}: {e}"))?;
@@ -618,9 +660,12 @@ impl SpdSession {
                 ));
             }
             // Seek to the current file cursor (already there) then write
-            let cur = out.seek(SeekFrom::Current(0)).map_err(|e| format!("tell: {e}"))?;
+            let cur = out
+                .seek(SeekFrom::Current(0))
+                .map_err(|e| format!("tell: {e}"))?;
             debug_assert_eq!(cur, done);
-            out.write_all(&data).map_err(|e| format!("write {out_path}: {e}"))?;
+            out.write_all(&data)
+                .map_err(|e| format!("write {out_path}: {e}"))?;
             done += data.len() as u64;
             if data.len() < n {
                 break;
@@ -630,14 +675,27 @@ impl SpdSession {
         Ok(done)
     }
 
-    /// Erase a named partition.
-    pub fn erase_partition(&self, name: &str) -> std::result::Result<(), String> {
-        self.partition_start(name, 0, BSL_CMD_ERASE_FLASH)
+    /// Erase a named partition using an explicit size (bytes).
+    ///
+    /// The BSL `ERASE_FLASH` command takes the target length; sending 0 asks
+    /// the FDL to erase nothing (or, worse, whatever it likes). Never send a
+    /// zero length silently.
+    pub fn erase_partition_sized(&self, name: &str, size: u64) -> std::result::Result<(), String> {
+        if size == 0 {
+            return Err(format!(
+                "refusing to erase partition '{name}': size is 0 (unknown)"
+            ));
+        }
+        self.partition_start(name, size, BSL_CMD_ERASE_FLASH)
     }
 
     /// Read the chip UID string.
     pub fn chip_uid(&self) -> std::result::Result<String, String> {
-        eprintln!("[spd] {} (0x{:04x})", bsl_cmd_name(BSL_CMD_READ_CHIP_UID), BSL_CMD_READ_CHIP_UID);
+        eprintln!(
+            "[spd] {} (0x{:04x})",
+            bsl_cmd_name(BSL_CMD_READ_CHIP_UID),
+            BSL_CMD_READ_CHIP_UID
+        );
         self.flush();
         self.send_msg(BSL_CMD_READ_CHIP_UID, &[])?;
         let (resp, data) = self.recv_msg(Duration::from_secs(5))?;
@@ -658,14 +716,23 @@ impl SpdSession {
     }
 
     pub fn power_off(&self) -> std::result::Result<(), String> {
-        eprintln!("[spd] {} iface={}", bsl_cmd_name(BSL_CMD_POWER_OFF), self.iface);
+        eprintln!(
+            "[spd] {} iface={}",
+            bsl_cmd_name(BSL_CMD_POWER_OFF),
+            self.iface
+        );
         self.cmd_ack(BSL_CMD_POWER_OFF, &[])
     }
 
     /// Raw START_DATA + MIDST_DATA chunks + END_DATA to an arbitrary address
     /// (mirrors spd_dump `send_buf`: used both for RAM loads and raw flash
     /// writes on feature phones — no EXEC, the flash controller handles it).
-    pub fn write_raw(&self, start_addr: u32, data: &[u8], step: usize) -> std::result::Result<(), String> {
+    pub fn write_raw(
+        &self,
+        start_addr: u32,
+        data: &[u8],
+        step: usize,
+    ) -> std::result::Result<(), String> {
         let mut hdr = Vec::with_capacity(8);
         hdr.extend_from_slice(&be32(start_addr));
         hdr.extend_from_slice(&be32(data.len() as u32));
@@ -701,9 +768,8 @@ pub fn find_bulk<'a>(dev: &'a usb::UsbDeviceInfo) -> Option<(u8, u8, u8)> {
 
 /// Open + claim the SPD download port for `dev`.
 pub fn open_session(dev: &usb::UsbDeviceInfo) -> Result<SpdSession> {
-    let context = Context::new().map_err(|e| {
-        BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string()))
-    })?;
+    let context = Context::new()
+        .map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     let handle = context
         .devices()?
         .iter()
@@ -711,28 +777,26 @@ pub fn open_session(dev: &usb::UsbDeviceInfo) -> Result<SpdSession> {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
                 desc.vendor_id() == SPD_VID && desc.product_id() == dev.pid
-            }) && d.bus_number() == dev.bus && d.address() == dev.address
+            }) && d.bus_number() == dev.bus
+                && d.address() == dev.address
         })
         .ok_or(BridgeError::Usb(crate::error::UsbError::DeviceNotFound))?
         .open()?;
     let _ = handle.set_auto_detach_kernel_driver(true);
 
-    let (iface, in_ep, out_ep) = find_bulk(dev)
-        .ok_or_else(|| BridgeError::InvalidArgument("no bulk endpoints on SPD device".to_string()))?;
+    let (iface, in_ep, out_ep) = find_bulk(dev).ok_or_else(|| {
+        BridgeError::InvalidArgument("no bulk endpoints on SPD device".to_string())
+    })?;
     handle
         .claim_interface(iface)
         .map_err(|e| format!("claim interface {iface}: {e}"))?;
 
     // Activate the download data interface (spd_dump control transfer).
-    let _ = handle.write_control(
-        0x21,
-        34,
-        0x601,
-        0,
-        &[],
-        Duration::from_secs(1),
+    let _ = handle.write_control(0x21, 34, 0x601, 0, &[], Duration::from_secs(1));
+    eprintln!(
+        "[spd] claimed iface {} in_ep=0x{:02x} out_ep=0x{:02x}",
+        iface, in_ep, out_ep
     );
-    eprintln!("[spd] claimed iface {} in_ep=0x{:02x} out_ep=0x{:02x}", iface, in_ep, out_ep);
 
     let session = SpdSession {
         handle,
@@ -808,6 +872,22 @@ pub fn chip_fdl_bases(chip_id: u32) -> Option<(u32, u32)> {
 
 // --------------------------- high-level flows -----------------------------
 
+/// Extract `CHIP ID = 0x...` from a BROM/FDL version banner.
+///
+/// The previous parser sliced a fixed 8 characters starting at the `0`, so
+/// `from_str_radix("0x9832…")` always failed and `chip_id` stayed 0 (breaking
+/// every chip→address lookup). Parse after the `0x` prefix instead.
+pub(crate) fn parse_banner_chip_id(text: &str) -> Option<u32> {
+    const MARK: &str = "CHIP ID = 0x";
+    let pos = text.find(MARK)?;
+    let rest = &text[pos + MARK.len()..];
+    let hex: String = rest.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+    if hex.is_empty() {
+        return None;
+    }
+    u32::from_str_radix(&hex, 16).ok()
+}
+
 /// Open a download session, run the BootROM handshake, load FDL1 and FDL2,
 /// and leave the session ready for partition I/O. `fdl1_addr` / `fdl2_addr`
 /// default from the chip id when known.
@@ -821,24 +901,24 @@ pub fn connect_and_load_fdls(
     step: usize,
 ) -> Result<SpdSession> {
     let mut s = open_session(dev)?;
-    let ver = s.handshake().map_err(|e| {
-        BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e))
-    })?;
+    let ver = s
+        .handshake()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     eprintln!("[spd] BootROM version: {ver}");
 
-    let fdl1_data = fs::read(fdl1).map_err(|e| {
-        BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
-    })?;
-    s.load_to_ram(fdl1_addr, &fdl1_data, step)
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+    let fdl1_data = fs::read(fdl1)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
+    s.load_to_ram(fdl1_addr, &fdl1_data, step).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
             cmd: 0,
             sub: 0,
             reason: format!("FDL1 upload: {e}"),
-        }))?;
-
-    let banner = s.resync_after_fdl1().map_err(|e| {
-        BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e))
+        })
     })?;
+
+    let banner = s
+        .resync_after_fdl1()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     eprintln!("[spd] FDL1 banner: {banner}");
 
     // Prefer explicit FDL2 base, else derive from chip id.
@@ -860,15 +940,15 @@ pub fn connect_and_load_fdls(
         return Ok(s);
     }
 
-    let fdl2_data = fs::read(fdl2).map_err(|e| {
-        BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
-    })?;
-    s.load_to_ram(f2, &fdl2_data, step)
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+    let fdl2_data = fs::read(fdl2)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
+    s.load_to_ram(f2, &fdl2_data, step).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
             cmd: 0,
             sub: 0,
             reason: format!("FDL2 upload: {e}"),
-        }))?;
+        })
+    })?;
     Ok(s)
 }
 
@@ -887,9 +967,7 @@ pub fn spd_info_cli(target: &str) -> Result<String> {
         .find(|d| d.vid == SPD_VID && format!("{}:{}", d.bus, d.address) == target)
         .ok_or_else(|| BridgeError::InvalidArgument(format!("SPD device {target} not found")))?;
 
-    let mut lines = vec![
-        "=== Spreadtrum / UNISOC Device Info ===".to_string(),
-    ];
+    let mut lines = vec!["=== Spreadtrum / UNISOC Device Info ===".to_string()];
     lines.push(format!("VID:PID   1782:{:04x}", dev.pid));
     lines.push(format!("Bus:Addr  {}:{}", dev.bus, dev.address));
     if let Some(p) = &dev.product {
@@ -931,7 +1009,10 @@ pub fn spd_info_cli(target: &str) -> Result<String> {
                 match s.handshake() {
                     Ok(ver) => {
                         lines.push(format!("BootROM version: {}", ver.trim_end_matches('\0')));
-                        lines.push(format!("Secure boot: {}", if s.secure_boot { "yes" } else { "no" }));
+                        lines.push(format!(
+                            "Secure boot: {}",
+                            if s.secure_boot { "yes" } else { "no" }
+                        ));
                         match chip_fdl_bases(s.chip_id) {
                             Some((fw, ram)) => lines.push(format!(
                                 "Chip ID 0x{:08x}: FDL1 base 0x{fw:08x}, FDL2 base 0x{ram:08x}",
@@ -967,6 +1048,821 @@ pub fn spd_info_cli(target: &str) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
+/// How an FDL1 argument should be interpreted.
+#[derive(Debug, PartialEq, Eq)]
+enum FdlMode {
+    /// Explicit `none` / `brom` -> the caller knowingly wants the raw BROM
+    /// erase path (no FDL loaded).
+    BromOnly,
+    /// A real FDL1 file that must exist.
+    File,
+}
+
+/// Resolve the FDL1 argument. A missing/empty/nonexistent path is an error;
+/// only the explicit `none` / `brom` spellings opt into the BROM-only path.
+fn select_fdl_mode(fdl1: &str) -> Result<FdlMode> {
+    let trimmed = fdl1.trim();
+    if trimmed.eq_ignore_ascii_case("none") || trimmed.eq_ignore_ascii_case("brom") {
+        return Ok(FdlMode::BromOnly);
+    }
+    if trimmed.is_empty() {
+        return Err(BridgeError::InvalidArgument(
+            "FDL1 path is required (pass 'none' only for an explicit BROM-only erase)".to_string(),
+        ));
+    }
+    if !std::path::Path::new(fdl1).exists() {
+        return Err(BridgeError::Config(
+            crate::error::ConfigError::FileNotFound(format!(
+                "FDL1 not found: {fdl1} (pass 'none' only for an explicit BROM-only erase)"
+            )),
+        ));
+    }
+    Ok(FdlMode::File)
+}
+
+// ---------------------------------------------------------------------------
+// One-file PAC pipeline: `spd-flash-pac <target> <pac> [--mode ...]`
+//
+// A single .pac drives the whole operation the way vendor tools do: the
+// archive carries FDL1/FDL2 (uploaded for you) and every partition image, so
+// no FDL path or load address is ever typed. Only the *load addresses* come
+// from the built-in chip->address table (overridable with --fdl1-addr /
+// --fdl2-addr) — never guessed.
+// ---------------------------------------------------------------------------
+
+/// Lock-removal partition set erased by `spd-frp` and PAC `--mode frp`.
+/// Present-only and never includes IMEI/NV partitions.
+pub const FRP_WIPE_PARTITIONS: &[&str] = &["frp", "frp_a", "frp_b", "persist", "config", "misc"];
+
+/// Partitions erased by PAC `--mode erase` (explicit factory reset).
+pub const FACTORY_RESET_PARTITIONS: &[&str] = &["userdata", "cache"];
+
+/// Operation selected by `spd-flash-pac --mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacMode {
+    Flash,
+    Frp,
+    Backup,
+    Erase,
+}
+
+impl PacMode {
+    /// Default mode is `flash` (the caller passes "flash" when unspecified).
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "flash" | "" => Ok(PacMode::Flash),
+            "frp" => Ok(PacMode::Frp),
+            "backup" => Ok(PacMode::Backup),
+            "erase" => Ok(PacMode::Erase),
+            other => Err(BridgeError::InvalidArgument(format!(
+                "unknown PAC mode '{other}' (expected flash|frp|backup|erase)"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PacMode::Flash => "flash",
+            PacMode::Frp => "frp",
+            PacMode::Backup => "backup",
+            PacMode::Erase => "erase",
+        }
+    }
+}
+
+/// One PAC payload that maps to a device partition write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlashPlan {
+    pub partition: String,
+    pub entry_name: String,
+    pub index: usize,
+    pub size: u32,
+}
+
+/// Present-only, non-zero-size selection of `wanted` from a device partition
+/// table (name, size). Pure: no USB, usable in tests.
+pub fn select_present_partitions(parts: &[(String, u64)], wanted: &[&str]) -> Vec<(String, u64)> {
+    wanted
+        .iter()
+        .filter_map(|w| {
+            parts
+                .iter()
+                .find(|(n, size)| n == w && *size > 0)
+                .map(|(n, size)| (n.clone(), *size))
+        })
+        .collect()
+}
+
+/// Split a parsed PAC into partition writes and skip log lines. FDL loaders,
+/// partition XML, NV/IMEI metadata and zero-size markers are never flashed.
+/// Pure: depends only on the parsed entry table.
+pub fn plan_pac_flash(info: &crate::pac::PacInfo) -> (Vec<FlashPlan>, Vec<String>) {
+    let mut writes = Vec::new();
+    let mut skips = Vec::new();
+    for e in &info.entries {
+        match crate::pac::classify_pac_entry(e) {
+            crate::pac::PacEntryKind::Partition => writes.push(FlashPlan {
+                partition: crate::pac::entry_partition_name(&e.name),
+                entry_name: e.name.clone(),
+                index: e.index,
+                size: e.size,
+            }),
+            crate::pac::PacEntryKind::Empty => {
+                skips.push(format!("  '{}': zero-size entry, skipped", e.name));
+            }
+            crate::pac::PacEntryKind::Fdl1 => {
+                skips.push(format!(
+                    "  '{}': FDL1 loader, skipped (loaded separately)",
+                    e.name
+                ));
+            }
+            crate::pac::PacEntryKind::Fdl2 => {
+                skips.push(format!(
+                    "  '{}': FDL2 loader, skipped (loaded separately)",
+                    e.name
+                ));
+            }
+            crate::pac::PacEntryKind::Xml => {
+                skips.push(format!("  '{}': partition XML metadata, skipped", e.name));
+            }
+            crate::pac::PacEntryKind::Nv => {
+                skips.push(format!(
+                    "  '{}': NV/IMEI metadata, skipped (never flashed implicitly)",
+                    e.name
+                ));
+            }
+        }
+    }
+    (writes, skips)
+}
+
+/// Resolve the FDL1/FDL2 load addresses for a chip.
+///
+/// Explicit `--fdl1-addr` / `--fdl2-addr` overrides always win. Otherwise the
+/// built-in chip->address table is consulted. An unknown chip with no override
+/// is an error that names the chip id and the missing override flag — a load
+/// address is never guessed.
+pub fn resolve_fdl_addresses(
+    chip_id: u32,
+    fdl1_override: Option<u32>,
+    fdl2_override: Option<u32>,
+) -> Result<(u32, u32)> {
+    let table = chip_fdl_bases(chip_id);
+    let mut missing: Vec<&str> = Vec::new();
+    if fdl1_override.is_none() && table.is_none() {
+        missing.push("FDL1 (--fdl1-addr)");
+    }
+    if fdl2_override.is_none() && table.is_none() {
+        missing.push("FDL2 (--fdl2-addr)");
+    }
+    if !missing.is_empty() {
+        return Err(BridgeError::InvalidArgument(format!(
+            "unknown chip id 0x{chip_id:08x}: no FDL load address in the built-in \
+             chip->address table for {}. Pass {} with the address from the firmware's \
+             config/PAC; refusing to guess a load address.",
+            missing.join(" and "),
+            missing.join(" / "),
+        )));
+    }
+    let (t1, t2) = table.unwrap_or((0, 0));
+    Ok((fdl1_override.unwrap_or(t1), fdl2_override.unwrap_or(t2)))
+}
+
+/// Flash verify decision: a read-back mismatch is fatal unless `--no-verify`.
+/// This is the single place the "verify failure -> Err" rule lives.
+pub fn verify_gate(verify: bool, matched: bool) -> bool {
+    verify && !matched
+}
+
+/// `--mode backup` requires a destination directory. Fails before hardware is
+/// touched when it is missing or empty.
+pub fn resolve_backup_out(out: Option<&str>) -> Result<String> {
+    match out.map(str::trim) {
+        Some(d) if !d.is_empty() => Ok(d.to_string()),
+        _ => Err(BridgeError::InvalidArgument(
+            "--mode backup requires --out <dir> (no destination directory given)".to_string(),
+        )),
+    }
+}
+
+/// Build the final FRP result. A truthful success line is only emitted when
+/// at least one erase actually succeeded; no candidate partitions or an
+/// all-failed run is an error.
+fn frp_result_summary(
+    attempted: usize,
+    succeeded: usize,
+    mut body: Vec<String>,
+    failures: &[String],
+) -> Result<String> {
+    if attempted == 0 {
+        return Err(BridgeError::InvalidArgument(format!(
+            "FRP erase: no eraseable lock partition present on this device (looked for {})",
+            FRP_WIPE_PARTITIONS.join(", ")
+        )));
+    }
+    if succeeded == 0 {
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!(
+                    "FRP erase failed on all {attempted} attempted partition(s): {}",
+                    failures.join("; ")
+                ),
+            },
+        ));
+    }
+    body.insert(
+        0,
+        format!("FRP / lock partitions erased ({succeeded}/{attempted})."),
+    );
+    Ok(body.join("\n"))
+}
+
+/// Build the final backup result. Zero dumped bytes is a failure, never a
+/// "backup complete" success.
+fn backup_result_summary(dumped: u64, body: Vec<String>, failures: &[String]) -> Result<String> {
+    if dumped == 0 {
+        let detail = if failures.is_empty() {
+            "no partition data could be read".to_string()
+        } else {
+            failures.join("; ")
+        };
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("backup failed: 0 bytes dumped ({detail})"),
+            },
+        ));
+    }
+    Ok(body.join("\n"))
+}
+
+/// Build the final factory-reset (PAC `--mode erase`) result. An empty
+/// present-set or an all-failed run is an error, never a success line.
+fn erase_result_summary(
+    attempted: usize,
+    succeeded: usize,
+    mut body: Vec<String>,
+    failures: &[String],
+) -> Result<String> {
+    if attempted == 0 {
+        return Err(BridgeError::InvalidArgument(format!(
+            "factory reset: none of the eraseable partitions are present on this device (looked for {})",
+            FACTORY_RESET_PARTITIONS.join(", ")
+        )));
+    }
+    if succeeded == 0 {
+        return Err(BridgeError::Protocol(
+            crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!(
+                    "factory reset failed on all {attempted} attempted partition(s): {}",
+                    failures.join("; ")
+                ),
+            },
+        ));
+    }
+    body.insert(
+        0,
+        format!("Factory-reset partitions erased ({succeeded}/{attempted})."),
+    );
+    Ok(body.join("\n"))
+}
+
+/// Extract FDL1/FDL2 load addresses from a PAC's FlashTool XML.
+///
+/// Vendor PACs carry the partition/config XML that names the loader
+/// addresses (e.g. `<FDL1 addr="0x5500" .../>`). Only a value that follows
+/// the loader token is accepted; anything else is `None`, so the caller asks
+/// for `--fdl1-addr` instead of guessing an address.
+pub fn pac_xml_fdl_addresses(xml: &str) -> (Option<u32>, Option<u32>) {
+    fn addr_after(text: &str, key: &str) -> Option<u32> {
+        let lower = text.to_ascii_lowercase();
+        let mut from = 0usize;
+        while let Some(pos) = lower[from..].find(key) {
+            let start = from + pos + key.len();
+            let end = (start + 160).min(text.len());
+            let window = &text[start..end];
+            let bytes = window.as_bytes();
+            let mut i = 0usize;
+            while i + 2 < bytes.len() {
+                if bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+                    let hex: String = window[i + 2..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_hexdigit())
+                        .collect();
+                    if hex.len() >= 4 {
+                        if let Ok(v) = u32::from_str_radix(&hex, 16) {
+                            return Some(v);
+                        }
+                    }
+                }
+                i += 1;
+            }
+            from = start;
+        }
+        None
+    }
+    (addr_after(xml, "fdl1"), addr_after(xml, "fdl2"))
+}
+
+/// Options for `spd-flash-pac`.
+#[derive(Debug, Clone)]
+pub struct PacOptions {
+    pub mode: PacMode,
+    pub out: Option<String>,
+    pub fdl1_addr: Option<u32>,
+    pub fdl2_addr: Option<u32>,
+    pub verify: bool,
+    /// Extra `part=file` images written after the selected mode runs.
+    pub extras: Vec<(String, String)>,
+    /// `--mode frp` only: write this prebuilt image to `frp` instead of erasing.
+    pub frp_image: Option<String>,
+}
+
+impl Default for PacOptions {
+    fn default() -> Self {
+        Self {
+            mode: PacMode::Flash,
+            out: None,
+            fdl1_addr: None,
+            fdl2_addr: None,
+            verify: true,
+            extras: Vec::new(),
+            frp_image: None,
+        }
+    }
+}
+
+impl PacOptions {
+    /// Validate flag combinations before any hardware is touched.
+    pub fn validate(&self) -> Result<()> {
+        if self.frp_image.is_some() && self.mode != PacMode::Frp {
+            return Err(BridgeError::InvalidArgument(
+                "--frp-image is only valid with --mode frp (it writes the frp \
+                 partition instead of erasing it)"
+                    .to_string(),
+            ));
+        }
+        if let Some(img) = &self.frp_image {
+            if !std::path::Path::new(img).is_file() {
+                return Err(BridgeError::Config(
+                    crate::error::ConfigError::FileNotFound(format!("--frp-image: {img}")),
+                ));
+            }
+        }
+        for (part, file) in &self.extras {
+            if part.trim().is_empty() {
+                return Err(BridgeError::InvalidArgument(
+                    "--extra needs a partition name (part=file)".to_string(),
+                ));
+            }
+            if !std::path::Path::new(file).is_file() {
+                return Err(BridgeError::Config(
+                    crate::error::ConfigError::FileNotFound(format!("--extra {part}: {file}")),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parse one `part=file` token (shared by `--extra` and the CLI parser).
+pub fn parse_part_file(token: &str) -> Result<(String, String)> {
+    match token.split_once('=') {
+        Some((p, f)) if !p.trim().is_empty() && !f.trim().is_empty() => {
+            Ok((p.trim().to_string(), f.trim().to_string()))
+        }
+        _ => Err(BridgeError::InvalidArgument(format!(
+            "bad image entry '{token}' (expected part=file)"
+        ))),
+    }
+}
+
+/// Write `data` to a named partition and verify it read back (unless
+/// `verify` is false). Shared by the PAC flash plan, `--extra` and
+/// `--frp-image`.
+fn pac_write_image(
+    s: &SpdSession,
+    part: &str,
+    data: &[u8],
+    partition_size: u64,
+    verify: bool,
+    tmp_dir: &std::path::Path,
+) -> std::result::Result<(), String> {
+    let tmp = tmp_dir.join(format!("{}.img", sanitize(part)));
+    std::fs::write(&tmp, data).map_err(|e| format!("write temp {}: {e}", tmp.display()))?;
+    let res = s.write_partition(part, &tmp.to_string_lossy(), 4096);
+    let _ = std::fs::remove_file(&tmp);
+    res?;
+    if verify {
+        let len = data
+            .len()
+            .min(partition_size.max(data.len() as u64) as usize) as u64;
+        if len > 0 {
+            let vtmp = tmp_dir.join(format!("verify_{}.bin", sanitize(part)));
+            match s.read_partition(part, 0, len, &vtmp.to_string_lossy(), 4096) {
+                Ok(_) => {
+                    let ok = std::fs::read(&vtmp)
+                        .map(|actual| {
+                            let n = data.len().min(actual.len());
+                            crate::util::verify_bytes_match(&data[..n], &actual[..n]).is_ok()
+                        })
+                        .unwrap_or(false);
+                    let _ = std::fs::remove_file(&vtmp);
+                    if !ok {
+                        return Err(format!("{part}: VERIFY FAILED - the write did not stick"));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[spd-pac] {part}: verify read-back unsupported ({e})");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `spd-flash-pac <target> <pac> [--mode flash|frp|backup|erase] [--out <dir>]
+/// [--fdl1-addr 0x..] [--fdl2-addr 0x..] [--no-verify]`
+///
+/// One PAC drives the whole session: FDL1/FDL2 are read out of the archive,
+/// their load addresses come from the built-in chip table, the PAC's own XML,
+/// or an explicit override (never guessed), and then the requested mode runs
+/// (flash the partition images, erase the lock partitions, dump a backup, or
+/// factory-reset the user data).
+pub fn spd_flash_pac_cli(target: &str, pac_path: &str, opts: &PacOptions) -> Result<String> {
+    // Reject impossible flag combinations and missing files before hardware.
+    opts.validate()?;
+    let info = crate::pac::parse_pac(pac_path)?;
+    let (fdl1_entry, fdl2_entry) = crate::pac::find_fdl_entries(&info)?;
+    let fdl1_data = crate::pac::read_entry_data(pac_path, &fdl1_entry)?;
+    let fdl2_data = crate::pac::read_entry_data(pac_path, &fdl2_entry)?;
+
+    // Addresses advertised by the PAC's own FlashTool XML (best effort).
+    let xml_addrs = info
+        .entries
+        .iter()
+        .find(|e| {
+            matches!(
+                crate::pac::classify_pac_entry(e),
+                crate::pac::PacEntryKind::Xml
+            )
+        })
+        .and_then(|e| crate::pac::read_entry_data(pac_path, e).ok())
+        .map(|b| pac_xml_fdl_addresses(&String::from_utf8_lossy(&b)))
+        .unwrap_or((None, None));
+
+    // Backup needs a destination before any hardware is touched.
+    let backup_out = if opts.mode == PacMode::Backup {
+        Some(resolve_backup_out(opts.out.as_deref())?)
+    } else {
+        None
+    };
+
+    let dev = find_spd_target(target)?;
+    let mut s = open_session(&dev)?;
+    let mut out: Vec<String> = Vec::new();
+    out.push(format!(
+        "PAC: {pac_path} ({} entries, mode {})",
+        info.entries.len(),
+        opts.mode.as_str()
+    ));
+    let ver = s
+        .handshake()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    out.push(format!("BootROM version: {}", ver.trim_end_matches('\0')));
+
+    let table = chip_fdl_bases(s.chip_id);
+    let resolved1 = resolve_fdl_addresses(s.chip_id, opts.fdl1_addr, opts.fdl2_addr)
+        .ok()
+        .map(|(a, _)| a)
+        .or(table.map(|(a, _)| a));
+    let Some(a1) = resolved1.or(xml_addrs.0).or(opts.fdl1_addr) else {
+        return Err(BridgeError::InvalidArgument(format!(
+            "cannot resolve the FDL1 load address for chip id 0x{:08x}: it is not in the \
+             built-in chip->address table and the PAC XML does not name it. Pass \
+             --fdl1-addr 0x... (value from the firmware's FlashTool config).",
+            s.chip_id
+        )));
+    };
+    s.load_to_ram(a1, &fdl1_data, 528).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("FDL1 upload: {e}"),
+        })
+    })?;
+    out.push(format!(
+        "FDL1 '{}' uploaded @0x{a1:x} ({} bytes)",
+        fdl1_entry.name,
+        fdl1_data.len()
+    ));
+    let banner = s
+        .resync_after_fdl1()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    out.push(format!("FDL1 banner: {}", banner.trim_end_matches('\0')));
+
+    let table2 = chip_fdl_bases(s.chip_id);
+    let resolved2 = resolve_fdl_addresses(s.chip_id, opts.fdl1_addr, opts.fdl2_addr)
+        .ok()
+        .map(|(_, b)| b)
+        .or(table2.map(|(_, b)| b));
+    let Some(a2) = resolved2.or(xml_addrs.1).or(opts.fdl2_addr) else {
+        return Err(BridgeError::InvalidArgument(format!(
+            "cannot resolve the FDL2 load address for chip id 0x{:08x}: it is not in the \
+             built-in chip->address table and the PAC XML does not name it. Pass \
+             --fdl2-addr 0x... (value from the firmware's FlashTool config).",
+            s.chip_id
+        )));
+    };
+    s.load_to_ram(a2, &fdl2_data, 528).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("FDL2 upload: {e}"),
+        })
+    })?;
+    out.push(format!(
+        "FDL2 '{}' uploaded @0x{a2:x} ({} bytes)",
+        fdl2_entry.name,
+        fdl2_data.len()
+    ));
+    let _ = s.enable_write();
+    s.flush();
+
+    // Scratch dir shared by the mode body, `--extra` and `--frp-image`.
+    let extras_tmp = std::env::temp_dir().join(format!("fp_spd_pac_{}", std::process::id()));
+    let _ = fs::create_dir_all(&extras_tmp);
+
+    let mut body: Vec<String> = match opts.mode {
+        PacMode::Frp | PacMode::Erase => {
+            let parts = s.read_partitions().map_err(|e| {
+                BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))
+            })?;
+            // Prebuilt FRP image (vendor extraction) instead of an erase.
+            if let (PacMode::Frp, Some(img)) = (opts.mode, opts.frp_image.as_deref()) {
+                let Some((_, size)) = parts.iter().find(|(n, _)| n == "frp") else {
+                    return Err(BridgeError::InvalidArgument(
+                        "--frp-image: this device exposes no 'frp' partition to write".to_string(),
+                    ));
+                };
+                let data =
+                    fs::read(img).map_err(|e| BridgeError::Io(format!("read {img}: {e}")))?;
+                let mut lines = vec![format!(
+                    "  prebuilt FRP image '{img}' ({} bytes) -> partition 'frp'",
+                    data.len()
+                )];
+                match pac_write_image(&s, "frp", &data, *size, opts.verify, &extras_tmp) {
+                    Ok(_) => {
+                        s.flush();
+                        lines
+                            .push("  'frp' written with the prebuilt image (no erase)".to_string());
+                        lines
+                    }
+                    Err(e) => {
+                        return Err(BridgeError::Protocol(
+                            crate::error::ProtocolError::CommandFailed {
+                                cmd: 0,
+                                sub: 0,
+                                reason: format!("prebuilt FRP image write failed: {e}"),
+                            },
+                        ))
+                    }
+                }
+            } else {
+                let set = if opts.mode == PacMode::Frp {
+                    FRP_WIPE_PARTITIONS
+                } else {
+                    FACTORY_RESET_PARTITIONS
+                };
+                let present = select_present_partitions(&parts, set);
+                let mut lines = Vec::new();
+                let mut attempted = 0usize;
+                let mut succeeded = 0usize;
+                let mut failures = Vec::new();
+                for (name, size) in &present {
+                    attempted += 1;
+                    match s.erase_partition_sized(name, *size) {
+                        Ok(_) => {
+                            succeeded += 1;
+                            lines.push(format!("  erased partition '{name}' ({size} bytes)"));
+                        }
+                        Err(e) => {
+                            lines.push(format!("  '{name}': {e}"));
+                            failures.push(format!("{name}: {e}"));
+                        }
+                    }
+                }
+                s.flush();
+                let summary = if opts.mode == PacMode::Frp {
+                    frp_result_summary(attempted, succeeded, lines, &failures)?
+                } else {
+                    erase_result_summary(attempted, succeeded, lines, &failures)?
+                };
+                summary.lines().map(str::to_string).collect()
+            }
+        }
+        PacMode::Backup => {
+            let out_dir = backup_out.clone().unwrap_or_default();
+            fs::create_dir_all(&out_dir)
+                .map_err(|e| BridgeError::Io(format!("create {out_dir}: {e}")))?;
+            let parts = s.read_partitions().map_err(|e| {
+                BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))
+            })?;
+            let mut lines = Vec::new();
+            let mut dumped = 0u64;
+            let mut failures = Vec::new();
+            for (name, size) in &parts {
+                if *size == 0 {
+                    lines.push(format!("  {name}: size 0, skipped"));
+                    continue;
+                }
+                let path = format!("{out_dir}/{}.bin", sanitize(name));
+                match s.read_partition(name, 0, *size, &path, 4096) {
+                    Ok(n) => {
+                        lines.push(format!("  {name}: read {n} bytes -> {path}"));
+                        dumped += n;
+                    }
+                    Err(e) => {
+                        lines.push(format!("  {name}: FAILED - {e}"));
+                        failures.push(format!("{name}: {e}"));
+                    }
+                }
+            }
+            let summary = backup_result_summary(dumped, lines, &failures)?;
+            let mut out_lines: Vec<String> = summary.lines().map(str::to_string).collect();
+            match crate::util::write_backup_manifest(std::path::Path::new(&out_dir)) {
+                Ok(m) => out_lines.push(m),
+                Err(e) => out_lines.push(format!("manifest warning: {e}")),
+            }
+            out_lines
+        }
+        PacMode::Flash => {
+            let (writes, skips) = plan_pac_flash(&info);
+            let mut lines = skips;
+            if writes.is_empty() {
+                return Err(BridgeError::InvalidArgument(format!(
+                    "PAC '{pac_path}' carries no partition images to flash (only loaders/metadata)"
+                )));
+            }
+            let parts = s.read_partitions().map_err(|e| {
+                BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))
+            })?;
+            let tmp_dir = std::env::temp_dir().join(format!("fp_spd_pac_{}", std::process::id()));
+            let _ = fs::create_dir_all(&tmp_dir);
+            let mut failures: Vec<String> = Vec::new();
+            let mut written = 0usize;
+            for plan in &writes {
+                let entry = info
+                    .entries
+                    .iter()
+                    .find(|e| e.name == plan.entry_name && e.index == plan.index);
+                let Some(entry) = entry else {
+                    failures.push(format!("{}: PAC entry vanished", plan.partition));
+                    continue;
+                };
+                let Some((_, size)) = parts.iter().find(|(n, _)| n == &plan.partition) else {
+                    let msg = format!("{}: partition not present on this device", plan.partition);
+                    lines.push(format!("  {msg}"));
+                    failures.push(msg);
+                    continue;
+                };
+                let data = match crate::pac::read_entry_data(pac_path, entry) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        lines.push(format!("  '{}': {e}", plan.partition));
+                        failures.push(format!("{}: {e}", plan.partition));
+                        continue;
+                    }
+                };
+                let tmp = tmp_dir.join(format!("{}.img", sanitize(&plan.partition)));
+                if let Err(e) = fs::write(&tmp, &data) {
+                    failures.push(format!("{}: {e}", plan.partition));
+                    continue;
+                }
+                match s.write_partition(&plan.partition, &tmp.to_string_lossy(), 4096) {
+                    Ok(_) => {
+                        written += 1;
+                        lines.push(format!(
+                            "  '{}' written ({} bytes)",
+                            plan.partition,
+                            data.len()
+                        ));
+                        if opts.verify {
+                            let len = data.len().min(*size as usize) as u64;
+                            if len > 0 {
+                                let vtmp = tmp_dir
+                                    .join(format!("verify_{}.bin", sanitize(&plan.partition)));
+                                match s.read_partition(
+                                    &plan.partition,
+                                    0,
+                                    len,
+                                    &vtmp.to_string_lossy(),
+                                    4096,
+                                ) {
+                                    Ok(_) => match fs::read(&vtmp) {
+                                        Ok(actual) => {
+                                            let n = data.len().min(actual.len());
+                                            let matched = crate::util::verify_bytes_match(
+                                                &data[..n],
+                                                &actual[..n],
+                                            )
+                                            .is_ok();
+                                            if verify_gate(opts.verify, matched) {
+                                                failures.push(format!(
+                                                    "{}: VERIFY FAILED",
+                                                    plan.partition
+                                                ));
+                                                lines.push(format!(
+                                                    "  '{}': VERIFY FAILED - the write did not stick",
+                                                    plan.partition
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => lines.push(format!(
+                                            "  '{}': verify read-back unreadable ({e})",
+                                            plan.partition
+                                        )),
+                                    },
+                                    Err(e) => lines.push(format!(
+                                        "  '{}': verify read-back unsupported ({e})",
+                                        plan.partition
+                                    )),
+                                }
+                                let _ = fs::remove_file(&vtmp);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        lines.push(format!("  '{}': write failed - {e}", plan.partition));
+                        failures.push(format!("{}: {e}", plan.partition));
+                    }
+                }
+                let _ = fs::remove_file(&tmp);
+            }
+            let _ = fs::remove_dir_all(&tmp_dir);
+            if !failures.is_empty() {
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::CommandFailed {
+                        cmd: 0,
+                        sub: 0,
+                        reason: format!(
+                            "PAC flash failed for {} of {} partition(s): {}",
+                            failures.len(),
+                            writes.len(),
+                            failures.join("; ")
+                        ),
+                    },
+                ));
+            }
+            lines.insert(0, format!("Flashed {written} partition(s) from the PAC."));
+            lines
+        }
+    };
+
+    // `--extra part=file`: write caller-supplied images (e.g. a vendor
+    // misc.img or a pre-unlocked frp dump) on top of the selected mode.
+    if !opts.extras.is_empty() {
+        let parts = s.read_partitions().map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))
+        })?;
+        let _ = fs::create_dir_all(&extras_tmp);
+        for (part, file) in &opts.extras {
+            let data = fs::read(file).map_err(|e| BridgeError::Io(format!("read {file}: {e}")))?;
+            let size = parts
+                .iter()
+                .find(|(n, _)| n == part)
+                .map(|(_, s)| *s)
+                .unwrap_or(data.len() as u64);
+            match pac_write_image(&s, part, &data, size, opts.verify, &extras_tmp) {
+                Ok(_) => body.push(format!(
+                    "  extra: '{part}' written from {file} ({} bytes)",
+                    data.len()
+                )),
+                Err(e) => {
+                    return Err(BridgeError::Protocol(
+                        crate::error::ProtocolError::CommandFailed {
+                            cmd: 0,
+                            sub: 0,
+                            reason: format!("extra image '{part}' failed: {e}"),
+                        },
+                    ))
+                }
+            }
+        }
+        s.flush();
+    }
+    let _ = fs::remove_dir_all(&extras_tmp);
+
+    let _ = s.reset();
+    out.append(&mut body);
+    Ok(out.join("\n"))
+}
+
 /// `spd-format <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]` —
 /// load FDLs then ERASE the user-data / NV areas (feature-phone password
 /// removal without flashing firmware: this is the "Format / Reset to
@@ -982,10 +1878,11 @@ pub fn spd_format_cli(
     let mut out = Vec::new();
     let step = 528usize;
 
-    // BROM-only path: if no FDL provided (user wants immediate factory reset without FDL),
-    // do raw BROM erase without loading FDLs. This matches "brom should not require a fdl file".
-    let fdl_none = fdl1.is_empty() || fdl1 == "none" || !std::path::Path::new(fdl1).exists();
-    if fdl_none {
+    // BROM-only path is opt-in via the explicit `none` / `brom` spelling.
+    // A typo / missing FDL file must never silently turn into raw erases of
+    // guessed addresses.
+    let fdl_mode = select_fdl_mode(fdl1)?;
+    if fdl_mode == FdlMode::BromOnly {
         let mut s = open_session(&dev)?;
         // BROM window is 1.5-2s; retry handshake 3× with flush+delay before giving up
         let mut ver: Option<String> = None;
@@ -997,11 +1894,21 @@ pub fn spd_format_cli(
                 eprintln!("[spd] BROM-only handshake retry {}/3", attempt);
             }
             match s.handshake() {
-                Ok(v) => { ver = Some(v); break; }
-                Err(e) => { last_err = e; if attempt == 3 { break; } }
+                Ok(v) => {
+                    ver = Some(v);
+                    break;
+                }
+                Err(e) => {
+                    last_err = e;
+                    if attempt == 3 {
+                        break;
+                    }
+                }
             }
         }
-        let ver = ver.ok_or(BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(last_err)))?;
+        let ver = ver.ok_or(BridgeError::Protocol(
+            crate::error::ProtocolError::HandshakeFailed(last_err),
+        ))?;
         out.push(format!("BootROM version: {ver} (BROM-only, no FDL)"));
         let _ = s.enable_write();
         out.push("Erasing security / user-data regions (BROM-only)...".to_string());
@@ -1024,31 +1931,57 @@ pub fn spd_format_cli(
             out.push(format!("Chip UID: {}", uid.trim()));
         }
         let _ = s.reset();
-        if any_ok {
-            out.push("Done. Device reset to normal mode (BROM-only).".to_string());
-        } else {
-            out.push("BROM-only erase had no success — provide FDL1/FDL2 for full Android userdata wipe.".to_string());
+        if !any_ok {
+            return Err(BridgeError::Protocol(
+                crate::error::ProtocolError::CommandFailed {
+                    cmd: 0,
+                    sub: 0,
+                    reason: "BROM-only erase failed for every region (no success); provide FDL1/FDL2 for a full Android userdata wipe".to_string(),
+                },
+            ));
         }
+        out.push("Done. Device reset to normal mode (BROM-only).".to_string());
         return Ok(out.join("\n"));
     }
 
     let mut s = open_session(&dev)?;
-    let ver = s.handshake().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    let ver = s
+        .handshake()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("BootROM version: {ver}"));
 
-    let f1 = fs::read(fdl1).map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
-    s.load_to_ram(fdl1_addr, &f1, step)
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("FDL1 upload: {e}") }))?;
-    let banner = s.resync_after_fdl1().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    let f1 = fs::read(fdl1)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
+    s.load_to_ram(fdl1_addr, &f1, step).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("FDL1 upload: {e}"),
+        })
+    })?;
+    let banner = s
+        .resync_after_fdl1()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("FDL1 banner: {}", banner.trim_end_matches('\0')));
 
     // FDL2 present -> Android-style device: erase by named partition.
     let android = fdl2.is_some();
     if let Some(f2path) = fdl2 {
-        let f2 = fs::read(f2path).map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
-        let f2addr = fdl2_addr.unwrap_or_else(|| chip_fdl_bases(s.chip_id).map(|(_, r)| r).unwrap_or(0x1400_0000));
-        s.load_to_ram(f2addr, &f2, step)
-            .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("FDL2 upload: {e}") }))?;
+        let f2 = fs::read(f2path).map_err(|e| {
+            BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
+        })?;
+        let f2addr = fdl2_addr.unwrap_or_else(|| {
+            chip_fdl_bases(s.chip_id)
+                .map(|(_, r)| r)
+                .unwrap_or(0x1400_0000)
+        });
+        s.load_to_ram(f2addr, &f2, step).map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("FDL2 upload: {e}"),
+            })
+        })?;
         out.push("FDL2 loaded (Android partition mode)".to_string());
     } else {
         // Single-stage (feature phones often only need FDL1).
@@ -1057,17 +1990,16 @@ pub fn spd_format_cli(
 
     if android {
         // Android UNISOC device: erase user-data / lock partitions by name.
-        let parts = s
-            .read_partitions()
-            .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
-        let avail: Vec<String> = parts.iter().map(|(n, _)| n.clone()).collect();
+        let parts = s.read_partitions().map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))
+        })?;
         out.push(format!("Partition table: {} entries", parts.len()));
         for want in ["userdata", "cache", "frp", "frp_a", "misc"] {
-            if !avail.contains(&want.to_string()) {
+            let Some((_, size)) = parts.iter().find(|(n, _)| n == want) else {
                 out.push(format!("  '{want}': not present, skipped"));
                 continue;
-            }
-            match s.erase_partition(want) {
+            };
+            match s.erase_partition_sized(want, *size) {
                 Ok(_) => out.push(format!("  erased partition '{want}'")),
                 Err(e) => out.push(format!("  '{want}': {e}")),
             }
@@ -1137,11 +2069,17 @@ pub fn spd_backup_cli(
     let dev = find_spd_target(target)?;
     let s = connect_and_load_fdls(&dev, fdl1, fdl1_addr, fdl2, fdl2_addr, true, 528)?;
     let _ = s.enable_write();
-    let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let parts = s
+        .read_partitions()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     let mut out = Vec::new();
-    out.push(format!("{} partition(s) from Android/SPD device:", parts.len()));
+    out.push(format!(
+        "{} partition(s) from Android/SPD device:",
+        parts.len()
+    ));
 
     let mut dumped = 0u64;
+    let mut failures = Vec::new();
     for (name, size) in &parts {
         let safe = sanitize(name);
         let path = format!("{out_dir}/{safe}.bin");
@@ -1154,16 +2092,22 @@ pub fn spd_backup_cli(
                 out.push(format!("  {name}: read {n} bytes -> {path}"));
                 dumped += n;
             }
-            Err(e) => out.push(format!("  {name}: FAILED - {e}")),
+            Err(e) => {
+                out.push(format!("  {name}: FAILED - {e}"));
+                failures.push(format!("{name}: {e}"));
+            }
         }
     }
     out.push(format!("Total dumped: {dumped} bytes"));
     let _ = s.reset();
+    // No partial "success" with a zero-byte backup: callers must see Err.
+    let summary = backup_result_summary(dumped, out, &failures)?;
+    let mut out_lines: Vec<String> = summary.lines().map(str::to_string).collect();
     match crate::util::write_backup_manifest(std::path::Path::new(out_dir)) {
-        Ok(summary) => out.push(summary),
-        Err(e) => out.push(format!("manifest warning: {e}")),
+        Ok(summary) => out_lines.push(summary),
+        Err(e) => out_lines.push(format!("manifest warning: {e}")),
     }
-    Ok(out.join("\n"))
+    Ok(out_lines.join("\n"))
 }
 
 /// `spd-frp <target> <fdl1> <fdl1_addr> [fdl2] [fdl2_addr]` —
@@ -1177,17 +2121,36 @@ pub fn spd_frp_cli(
 ) -> Result<String> {
     let dev = find_spd_target(target)?;
     let mut s = open_session(&dev)?;
-    s.handshake().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
-    let f1 = fs::read(fdl1).map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
-    s.load_to_ram(fdl1_addr, &f1, 528)
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("FDL1: {e}") }))?;
-    s.resync_after_fdl1().map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    s.handshake()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
+    let f1 = fs::read(fdl1)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
+    s.load_to_ram(fdl1_addr, &f1, 528).map_err(|e| {
+        BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+            cmd: 0,
+            sub: 0,
+            reason: format!("FDL1: {e}"),
+        })
+    })?;
+    s.resync_after_fdl1()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
 
     if let Some(f2p) = fdl2 {
-        let f2 = fs::read(f2p).map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
-        let f2a = fdl2_addr.unwrap_or_else(|| chip_fdl_bases(s.chip_id).map(|(_, r)| r).unwrap_or(0x1400_0000));
-        s.load_to_ram(f2a, &f2, 528)
-            .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed { cmd: 0, sub: 0, reason: format!("FDL2: {e}") }))?;
+        let f2 = fs::read(f2p).map_err(|e| {
+            BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
+        })?;
+        let f2a = fdl2_addr.unwrap_or_else(|| {
+            chip_fdl_bases(s.chip_id)
+                .map(|(_, r)| r)
+                .unwrap_or(0x1400_0000)
+        });
+        s.load_to_ram(f2a, &f2, 528).map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("FDL2: {e}"),
+            })
+        })?;
     }
     let _ = s.enable_write();
     s.flush();
@@ -1206,17 +2169,45 @@ pub fn spd_frp_cli(
             let _ = s.read_flash(0x9000_0000, 0, 512, 512, &mut probe);
             if !probe.is_empty() {
                 let _ = s.write_at_offset(&mut f, 0, &probe);
-                eprintln!("[spd-frp] raw probe {} bytes at {}", probe.len(), tmp.display());
+                eprintln!(
+                    "[spd-frp] raw probe {} bytes at {}",
+                    probe.len(),
+                    tmp.display()
+                );
             }
             // Seek back and verify
             let _ = f.seek(SeekFrom::Start(0));
             let _ = fs::remove_file(&tmp);
         }
     }
-    for name in ["frp", "frp_a", "misc"] {
-        match s.erase_partition(name) {
-            Ok(_) => out.push(format!("  erased partition '{name}'")),
-            Err(e) => out.push(format!("  '{name}': {e}")),
+    let parts = s
+        .read_partitions()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut failures = Vec::new();
+    // Lock-removal set: FRP copies, the persistent/config stores, and misc
+    // (bootloader control block). Present partitions only; NV/IMEI partitions
+    // (nvdata/nvitem/protect*) are deliberately never touched here.
+    for name in FRP_WIPE_PARTITIONS {
+        let Some((_, size)) = parts.iter().find(|(n, _)| n == name) else {
+            out.push(format!("  '{name}': not present, skipped"));
+            continue;
+        };
+        if *size == 0 {
+            out.push(format!("  '{name}': size 0, skipped"));
+            continue;
+        }
+        attempted += 1;
+        match s.erase_partition_sized(name, *size) {
+            Ok(_) => {
+                succeeded += 1;
+                out.push(format!("  erased partition '{name}'"));
+            }
+            Err(e) => {
+                out.push(format!("  '{name}': {e}"));
+                failures.push(format!("{name}: {e}"));
+            }
         }
     }
     s.flush();
@@ -1231,8 +2222,7 @@ pub fn spd_frp_cli(
     } else {
         let _ = s.reset();
     }
-    out.insert(0, "FRP / lock partitions erased.".to_string());
-    Ok(out.join("\n"))
+    frp_result_summary(attempted, succeeded, out, &failures)
 }
 
 /// `spd-reset <target>` — issue a normal reset on a download-mode device.
@@ -1241,7 +2231,9 @@ pub fn spd_reset_cli(target: &str) -> Result<String> {
     let s = open_session(&dev)?;
     match s.reset() {
         Ok(_) => Ok("Device reset to normal mode.".to_string()),
-        Err(e) => Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e))),
+        Err(e) => Err(BridgeError::Protocol(
+            crate::error::ProtocolError::UnexpectedResponse(e),
+        )),
     }
 }
 
@@ -1299,16 +2291,18 @@ pub fn spd_boot_cli(
 
     // Locate misc in the partition table. Feature-phone FDL1-only sessions
     // have no table -> tell the user FDL2 is required for this operation.
-    let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(
-        crate::error::ProtocolError::UnexpectedResponse(e),
-    ))?;
+    let parts = s
+        .read_partitions()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     let misc_size = parts
         .iter()
         .find(|(n, _)| n == "misc" || n == "misc_a")
         .map(|(_, sz)| *sz)
-        .ok_or_else(|| BridgeError::InvalidArgument(
-            "partition 'misc' not found in device partition table".into(),
-        ))?;
+        .ok_or_else(|| {
+            BridgeError::InvalidArgument(
+                "partition 'misc' not found in device partition table".into(),
+            )
+        })?;
     let read_len = MISC_READ_LEN.min(misc_size);
 
     // Read current BCB so we preserve recovery command args if present.
@@ -1324,16 +2318,23 @@ pub fn spd_boot_cli(
     // Android BCB layout: magic[8] command[32] status[32] recovery[768] stage[32] reserved[]
     if &bcb[0..8] != BCB_MAGIC && bcb[..3.min(bcb.len())].to_ascii_uppercase() != *b"BCB" {
         eprintln!("[spd-boot] no BCB magic in misc head - writing fresh BCB");
-        for b in bcb.iter_mut() { *b = 0; }
+        for b in bcb.iter_mut() {
+            *b = 0;
+        }
         bcb[0..3].copy_from_slice(b"BCB");
     }
     // command field @8..40, NUL-terminated
-    for b in bcb[8..40].iter_mut() { *b = 0; }
+    for b in bcb[8..40].iter_mut() {
+        *b = 0;
+    }
     let cmd_bytes = command.as_bytes();
     bcb[8..8 + cmd_bytes.len()].copy_from_slice(cmd_bytes);
 
     // Write patched BCB back (write_raw targets the partition start by name).
-    let patched = std::env::temp_dir().join(format!("flashpilot_misc_patched_{}.bin", std::process::id()));
+    let patched = std::env::temp_dir().join(format!(
+        "flashpilot_misc_patched_{}.bin",
+        std::process::id()
+    ));
     fs::write(&patched, &bcb).map_err(|e| format!("write {}: {e}", patched.display()))?;
     s.write_partition("misc", &patched.to_string_lossy(), 528)
         .or_else(|_| {
@@ -1341,16 +2342,17 @@ pub fn spd_boot_cli(
             // write_partition_by_name-style aliasing used by spd_flash_cli.
             s.write_partition("misc_a", &patched.to_string_lossy(), 528)
         })
-        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
-            cmd: 0,
-            sub: 0,
-            reason: format!("write misc: {e}"),
-        }))?;
+        .map_err(|e| {
+            BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
+                cmd: 0,
+                sub: 0,
+                reason: format!("write misc: {e}"),
+            })
+        })?;
     let _ = fs::remove_file(&patched);
 
-    s.reset().map_err(|e| BridgeError::Protocol(
-        crate::error::ProtocolError::UnexpectedResponse(e),
-    ))?;
+    s.reset()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     Ok(format!(
         "BCB command set to '{command}' and device reset - booting into {mode}."
     ))
@@ -1392,14 +2394,13 @@ pub fn spd_flash_cli_v(
     let mut s = open_session(&dev)?;
     let mut out = Vec::new();
 
-    let ver = s.handshake().map_err(|e| {
-        BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e))
-    })?;
+    let ver = s
+        .handshake()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("BootROM version: {ver}"));
 
-    let f1 = fs::read(fdl1).map_err(|e| {
-        BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
-    })?;
+    let f1 = fs::read(fdl1)
+        .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
     s.load_to_ram(fdl1_addr, &f1, 528).map_err(|e| {
         BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
             cmd: 0,
@@ -1407,9 +2408,9 @@ pub fn spd_flash_cli_v(
             reason: format!("FDL1 upload: {e}"),
         })
     })?;
-    let banner = s.resync_after_fdl1().map_err(|e| {
-        BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e))
-    })?;
+    let banner = s
+        .resync_after_fdl1()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::HandshakeFailed(e)))?;
     out.push(format!("FDL1 banner: {}", banner.trim_end_matches('\0')));
 
     if let Some(f2p) = fdl2 {
@@ -1418,7 +2419,9 @@ pub fn spd_flash_cli_v(
                 BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string()))
             })?;
             let f2a = fdl2_addr.unwrap_or_else(|| {
-                chip_fdl_bases(s.chip_id).map(|(_, r)| r).unwrap_or(0x1400_0000)
+                chip_fdl_bases(s.chip_id)
+                    .map(|(_, r)| r)
+                    .unwrap_or(0x1400_0000)
             });
             s.load_to_ram(f2a, &f2, 528).map_err(|e| {
                 BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
@@ -1450,9 +2453,8 @@ pub fn spd_flash_cli_v(
         })?;
         out.push(format!("Writing '{part}' ({}) from {file}...", data.len()));
         if part.starts_with("0x") {
-            let addr = u32::from_str_radix(part.trim_start_matches("0x"), 16).map_err(|_| {
-                BridgeError::InvalidArgument(format!("bad address '{part}'"))
-            })?;
+            let addr = u32::from_str_radix(part.trim_start_matches("0x"), 16)
+                .map_err(|_| BridgeError::InvalidArgument(format!("bad address '{part}'")))?;
             s.write_raw(addr, &data, 528).map_err(|e| {
                 BridgeError::Protocol(crate::error::ProtocolError::CommandFailed {
                     cmd: 0,
@@ -1482,23 +2484,30 @@ pub fn spd_flash_cli_v(
         // skips): read back via a temp file and compare. Raw-address
         // writes (0x… / feature-phone aliases) are skipped — read_partition
         // is name-based and cannot address those regions.
-        if verify && !part.starts_with("0x")
-            && !raw_aliases.iter().any(|(n, _)| *n == part)
-        {
-            let size = s.read_partitions().ok()
-                .and_then(|parts| {
-                    parts.iter().find(|(n, _)| n == part).map(|(_, sz)| *sz)
-                })
+        if verify && !part.starts_with("0x") && !raw_aliases.iter().any(|(n, _)| *n == part) {
+            let size = s
+                .read_partitions()
+                .ok()
+                .and_then(|parts| parts.iter().find(|(n, _)| n == part).map(|(_, sz)| *sz))
                 .unwrap_or(0);
-            let len = if size > 0 { data.len().min(size as usize) as u64 } else { data.len() as u64 };
+            let len = if size > 0 {
+                data.len().min(size as usize) as u64
+            } else {
+                data.len() as u64
+            };
             if len > 0 {
                 let tmp_out = std::env::temp_dir().join(format!(
-                    "fp_spd_verify_{}_{}.bin", std::process::id(), part));
+                    "fp_spd_verify_{}_{}.bin",
+                    std::process::id(),
+                    part
+                ));
                 match s.read_partition(part, 0, len, &tmp_out.to_string_lossy(), 4096) {
                     Ok(_) => match fs::read(&tmp_out) {
                         Ok(actual) => {
                             let n = (data.len()).min(actual.len());
-                            if let Err(e) = crate::util::verify_bytes_match(&data[..n], &actual[..n]) {
+                            if let Err(e) =
+                                crate::util::verify_bytes_match(&data[..n], &actual[..n])
+                            {
                                 let _ = fs::remove_file(&tmp_out);
                                 return Err(BridgeError::Protocol(
                                     crate::error::ProtocolError::CommandFailed {
@@ -1511,9 +2520,13 @@ pub fn spd_flash_cli_v(
                             }
                             out.push(format!("  '{part}' verified OK"));
                         }
-                        Err(_) => out.push(format!("  '{part}': verify read-back unreadable — skipped")),
+                        Err(_) => {
+                            out.push(format!("  '{part}': verify read-back unreadable — skipped"))
+                        }
                     },
-                    Err(_) => out.push(format!("  '{part}': verify read-back unsupported — skipped")),
+                    Err(_) => out.push(format!(
+                        "  '{part}': verify read-back unsupported — skipped"
+                    )),
                 }
                 let _ = fs::remove_file(&tmp_out);
             }
@@ -1535,7 +2548,13 @@ fn find_spd_target(target: &str) -> Result<usb::UsbDeviceInfo> {
 
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -1573,10 +2592,9 @@ const MAGIC64_FOOTER_LEN: usize = 0x60;
 /// the payload size; the rest are constant. Hand-assembled so output is
 /// deterministic with zero binutils dependency.
 const MAGIC64_SHELLCODE_TEMPLATE: [u32; 28] = [
-    0x90000009, 0x9100412a, 0xd2a0004b, 0xf280000b, 0xd280000c, 0xeb0b018d,
-    0x540000e2, 0xf86c794d, 0xf82c792d, 0xd508711f, 0xd5033fdf, 0x9100058c,
-    0x17fffff9, 0x90000009, 0x91020129, 0xb840452a, 0xb400016a, 0xb840452b,
-    0xd280000c, 0xeb0b018d, 0x54ffff62, 0xb840452d, 0xb800454d, 0xd508711f,
+    0x90000009, 0x9100412a, 0xd2a0004b, 0xf280000b, 0xd280000c, 0xeb0b018d, 0x540000e2, 0xf86c794d,
+    0xf82c792d, 0xd508711f, 0xd5033fdf, 0x9100058c, 0x17fffff9, 0x90000009, 0x91020129, 0xb840452a,
+    0xb400016a, 0xb840452b, 0xd280000c, 0xeb0b018d, 0x54ffff62, 0xb840452d, 0xb800454d, 0xd508711f,
     0xd5033fdf, 0x9100058c, 0x17fffff9, 0x17fbffe1,
 ];
 
@@ -1636,9 +2654,14 @@ pub fn magic64_pack(
     // Stock footer payload_offset (footer+0x18) == 0x200. Magic packing moves
     // it to 0x210, making that field a reliable already-packed marker.
     let po = u64::from_le_bytes([
-        data[foot_off + 0x18], data[foot_off + 0x19], data[foot_off + 0x1A],
-        data[foot_off + 0x1B], data[foot_off + 0x1C], data[foot_off + 0x1D],
-        data[foot_off + 0x1E], data[foot_off + 0x1F],
+        data[foot_off + 0x18],
+        data[foot_off + 0x19],
+        data[foot_off + 0x1A],
+        data[foot_off + 0x1B],
+        data[foot_off + 0x1C],
+        data[foot_off + 0x1D],
+        data[foot_off + 0x1E],
+        data[foot_off + 0x1F],
     ]);
     if po != 0x200 {
         return Err(format!(
@@ -1695,10 +2718,13 @@ pub fn magic64_pack(
     // encode "if this region exists, its data moves past our magic framing".
     let mut footer = data[foot_off..foot_off + MAGIC64_FOOTER_LEN].to_vec();
     footer[0x18..0x20].copy_from_slice(&0x210u64.to_le_bytes());
-    for (so, oo) in [(0x20usize, 0x28usize), (0x30, 0x38), (0x40, 0x48), (0x50, 0x58)] {
-        let cond = u64::from_le_bytes(
-            footer[so..so + 8].try_into().unwrap(),
-        );
+    for (so, oo) in [
+        (0x20usize, 0x28usize),
+        (0x30, 0x38),
+        (0x40, 0x48),
+        (0x50, 0x58),
+    ] {
+        let cond = u64::from_le_bytes(footer[so..so + 8].try_into().unwrap());
         if cond != 0 {
             let v = u64::from_le_bytes(footer[oo..oo + 8].try_into().unwrap());
             footer[oo..oo + 8].copy_from_slice(&(v + MAGIC64_ADD_LENGTH as u64).to_le_bytes());
@@ -1735,7 +2761,10 @@ pub fn parse_magic_patches(specs: &[String]) -> std::result::Result<Vec<MagicPat
             .map_err(|e| format!("bad offset in '{s}': {e}"))?;
         let word = u32::from_str_radix(word_s.trim().trim_start_matches("0x"), 16)
             .map_err(|e| format!("bad word in '{s}': {e}"))?;
-        v.push(MagicPatch { code_offset: off, word });
+        v.push(MagicPatch {
+            code_offset: off,
+            word,
+        });
     }
     Ok(v)
 }
@@ -1751,8 +2780,7 @@ pub fn spd_magic_pack_cli(
     load_base: u32,
     patch_specs: &[String],
 ) -> Result<String> {
-    let patches = parse_magic_patches(patch_specs)
-        .map_err(BridgeError::InvalidArgument)?;
+    let patches = parse_magic_patches(patch_specs).map_err(BridgeError::InvalidArgument)?;
     if patches.is_empty() {
         return Err(BridgeError::InvalidArgument(
             "no --patch off=word given; refusing to pack a no-op".into(),
@@ -1760,8 +2788,7 @@ pub fn spd_magic_pack_cli(
     }
     let data = fs::read(in_img)
         .map_err(|e| BridgeError::Config(crate::error::ConfigError::FileNotFound(e.to_string())))?;
-    let packed = magic64_pack(&data, &patches, load_base)
-        .map_err(BridgeError::InvalidArgument)?;
+    let packed = magic64_pack(&data, &patches, load_base).map_err(BridgeError::InvalidArgument)?;
     fs::write(out_img, &packed).map_err(|e| BridgeError::Io(e.to_string()))?;
     let mut lines = vec![
         format!("magic64 packed: {in_img} -> {out_img}"),
@@ -1837,15 +2864,12 @@ pub fn dhtb_rehash(img: &mut [u8]) -> std::result::Result<[u8; 32], String> {
 /// Instead we expose explicit patch offsets supplied by the caller/GUI after
 /// offline analysis (Ghidra), OR auto-detect via the well-known "SIG" error
 /// string table when present. This keeps us honest - no blind NOPs.
-pub fn spl_find_verify_sites(
-    payload: &[u8],
-    hint_offsets: &[u32],
-) -> Vec<u32> {
+pub fn spl_find_verify_sites(payload: &[u8], hint_offsets: &[u32]) -> Vec<u32> {
     let mut sites: Vec<u32> = Vec::new();
     // 1) explicit hints always win
     for &o in hint_offsets {
         let o = o as usize;
-        if o + 16 <= payload.len() && &payload[o..o+4] == b"\x00\x00\x00\xea" {
+        if o + 16 <= payload.len() && &payload[o..o + 4] == b"\x00\x00\x00\xea" {
             continue; // already NOP'd? (b .) skip
         }
         if o + 4 <= payload.len() {
@@ -1862,21 +2886,29 @@ pub fn spl_find_verify_sites(
             while i + 8 <= pos + 0x40 && i + 8 <= payload.len() {
                 // cmp r0,#0 = 00 00 A0 E3 family varies; match common encodings
                 let w = u32::from_le_bytes([
-                    payload[i], payload[i+1], payload[i+2], payload[i+3],
+                    payload[i],
+                    payload[i + 1],
+                    payload[i + 2],
+                    payload[i + 3],
                 ]);
                 // ARM32 `cmp r0, #0` = 0xE3500000 (mask 0xFFF0FFFF)
                 if w & 0xFFF0_FFFF == 0xE350_0000 {
                     // next instr conditional branch?
                     let n = u32::from_le_bytes([
-                        payload[i+4], payload[i+5], payload[i+6], payload[i+7],
+                        payload[i + 4],
+                        payload[i + 5],
+                        payload[i + 6],
+                        payload[i + 7],
                     ]);
                     if n & 0xF000_0000 != 0xE000_0000 {
                         // conditional - treat i+4 (the branch) as patch site? No:
                         // convention is to NOP the BL *before* cmp. Scan back 4.
                         if i >= 4 {
                             let bl = u32::from_le_bytes([
-                                payload[i-4], payload[i-3],
-                                payload[i-2], payload[i-1],
+                                payload[i - 4],
+                                payload[i - 3],
+                                payload[i - 2],
+                                payload[i - 1],
                             ]);
                             if bl & 0x0F00_0000 == 0x0B00_0000 {
                                 sites.push((i - 4) as u32);
@@ -1922,7 +2954,10 @@ pub fn spl_patch_sites(payload: &mut [u8], sites: &[u32]) -> usize {
 
 /// Full pipeline on one SPL image: parse DHTB, apply patches, re-hash.
 /// Returns list of patched file offsets (absolute, including 0x28 header).
-pub fn spl_bypass_patch(img: &mut [u8], hint_offsets: &[u32]) -> std::result::Result<Vec<u32>, String> {
+pub fn spl_bypass_patch(
+    img: &mut [u8],
+    hint_offsets: &[u32],
+) -> std::result::Result<Vec<u32>, String> {
     dhtb_parse(img)?;
     let payload_off = DHTB_HEADER_LEN;
     // Some builds prepend a 0x200-byte chipram/SIMGHDR before real code -
@@ -1931,7 +2966,8 @@ pub fn spl_bypass_patch(img: &mut [u8], hint_offsets: &[u32]) -> std::result::Re
     let sites = spl_find_verify_sites(&payload, hint_offsets);
     if sites.is_empty() {
         return Err("no verify call-sites found - supply --hint offsets from \
-                    Ghidra analysis (see docs) instead of guessing".into());
+                    Ghidra analysis (see docs) instead of guessing"
+            .into());
     }
     let _patched = spl_patch_sites(&mut payload, &sites);
     img[payload_off..].copy_from_slice(&payload);
@@ -1964,15 +3000,19 @@ pub fn spd_spl_patch_cli(
         true,
         4096,
     )?;
-    let parts = s.read_partitions().map_err(|e| BridgeError::Protocol(
-        crate::error::ProtocolError::UnexpectedResponse(e),
-    ))?;
-    let (_, size) = parts.iter()
-        .find(|(n, _)| *n == part)
-        .ok_or_else(|| BridgeError::InvalidArgument(format!(
+    let parts = s
+        .read_partitions()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
+    let (_, size) = parts.iter().find(|(n, _)| *n == part).ok_or_else(|| {
+        BridgeError::InvalidArgument(format!(
             "partition '{part}' not found (have: {})",
-            parts.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(",")
-        )))?;
+            parts
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+    })?;
 
     let tmp = std::env::temp_dir().join(format!("flashpilot_spl_{}.bin", std::process::id()));
     s.read_partition(part, 0, *size, &tmp.to_string_lossy(), 4096)
@@ -1984,8 +3024,7 @@ pub fn spd_spl_patch_cli(
         return Err(BridgeError::InvalidArgument("SPL readback empty".into()));
     }
 
-    let sites = spl_bypass_patch(&mut img, hints)
-        .map_err(BridgeError::InvalidArgument)?;
+    let sites = spl_bypass_patch(&mut img, hints).map_err(BridgeError::InvalidArgument)?;
 
     fs::write(out_img, &img).map_err(|e| BridgeError::Io(e.to_string()))?;
     let _ = s.reset();
@@ -2038,9 +3077,9 @@ struct PacFileEntry {
     name: String,
     data_offset: u64,
     size: u32,
+    checksum: u16,
+    is_nv: bool,
 }
-
-
 
 /// `spd-readback <target> <fdl1> <fdl1_addr> <fdl2> [fdl2_addr] <out.pac> [part,part]`
 ///
@@ -2068,13 +3107,15 @@ pub fn spd_readback_cli(
     )?;
     let _ = s.enable_write();
 
-    let all = s.read_partitions().map_err(|e| BridgeError::Protocol(
-        crate::error::ProtocolError::UnexpectedResponse(e),
-    ))?;
+    let all = s
+        .read_partitions()
+        .map_err(|e| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(e)))?;
     let wanted: Vec<(String, u64)> = match only {
         Some(list) => {
             let set: std::collections::HashSet<&str> = list.split(',').map(str::trim).collect();
-            all.into_iter().filter(|(n, _)| set.contains(n.as_str())).collect()
+            all.into_iter()
+                .filter(|(n, _)| set.contains(n.as_str()))
+                .collect()
         }
         None => all,
     };
@@ -2090,8 +3131,8 @@ pub fn spd_readback_cli(
     let mut manifest = String::new();
     let mut total_bytes = 0u64;
     // Data region starts right after header + one entry-slot per file.
-    let mut cursor =
-        crate::pac::PAC_HEADER_SIZE as u64 + (wanted.len() as u64) * crate::pac::PAC_ENTRY_SIZE as u64;
+    let mut cursor = crate::pac::PAC_HEADER_SIZE as u64
+        + (wanted.len() as u64) * crate::pac::PAC_ENTRY_SIZE as u64;
     for (idx, (name, size)) in wanted.iter().enumerate() {
         let part_path = tmpdir.join(format!("{idx:03}_{}.bin", sanitize(name)));
         let path_str = part_path.to_string_lossy().to_string();
@@ -2107,10 +3148,17 @@ pub fn spd_readback_cli(
             continue;
         }
         let _ = n;
+        let checksum = crate::pac::checksum_file(&part_path)
+            .map_err(|e| format!("checksum {}: {e}", part_path.display()))?;
+        let entry_name = sanitize(name);
+        let is_nv = crate::pac::is_nv_name(&entry_name);
+        crate::pac::check_entry_name(&entry_name).map_err(|e| format!("entry name: {e}"))?;
         entries.push(PacFileEntry {
-            name: sanitize(name),
+            name: entry_name,
             data_offset: cursor,
             size: actual as u32,
+            checksum,
+            is_nv,
         });
         manifest.push_str(&format!("{name}: {actual} bytes\n"));
         cursor += actual;
@@ -2118,7 +3166,9 @@ pub fn spd_readback_cli(
     }
     if entries.is_empty() {
         let _ = fs::remove_dir_all(&tmpdir);
-        return Err(BridgeError::InvalidArgument("every partition read back empty".into()));
+        return Err(BridgeError::InvalidArgument(
+            "every partition read back empty".into(),
+        ));
     }
 
     // Pass 2: assemble the .pac.
@@ -2133,15 +3183,25 @@ pub fn spd_readback_cli(
         .map_err(|e| format!("pac header: {e}"))?;
     out.write_all(&hdr).map_err(|e| format!("write hdr: {e}"))?;
     for e in &entries {
-        let slot = crate::pac::build_slot(&format!("{}_{}.img", e.name, e.name), e.size, false);
-        out.write_all(&slot).map_err(|err| format!("write entry {}: {err}", e.name))?;
+        let slot = crate::pac::build_slot(
+            &format!("{}_{}.img", e.name, e.name),
+            e.size,
+            e.is_nv,
+            e.checksum,
+        );
+        out.write_all(&slot)
+            .map_err(|err| format!("write entry {}: {err}", e.name))?;
     }
 
     // Partition payloads, streamed from temp files.
     for e in &entries {
-        let idx = entries.iter().position(|x| x.data_offset == e.data_offset).unwrap_or(0);
+        let idx = entries
+            .iter()
+            .position(|x| x.data_offset == e.data_offset)
+            .unwrap_or(0);
         let part_path = tmpdir.join(format!("{idx:03}_{}.bin", e.name));
-        let mut f = fs::File::open(&part_path).map_err(|e| format!("reopen {}: {e}", part_path.display()))?;
+        let mut f = fs::File::open(&part_path)
+            .map_err(|e| format!("reopen {}: {e}", part_path.display()))?;
         std::io::copy(&mut f, &mut out).map_err(|err| format!("stream {}: {err}", e.name))?;
     }
 
@@ -2196,9 +3256,18 @@ mod tests {
 
     #[test]
     fn chip_bases() {
-        assert_eq!(chip_fdl_bases(0x6530_0000), Some((0x3000_0000, 0x3400_0000)));
-        assert_eq!(chip_fdl_bases(0x6531_0000), Some((0x3000_0000, 0x3400_0000)));
-        assert_eq!(chip_fdl_bases(0x6562_0000), Some((0x1000_0000, 0x1400_0000)));
+        assert_eq!(
+            chip_fdl_bases(0x6530_0000),
+            Some((0x3000_0000, 0x3400_0000))
+        );
+        assert_eq!(
+            chip_fdl_bases(0x6531_0000),
+            Some((0x3000_0000, 0x3400_0000))
+        );
+        assert_eq!(
+            chip_fdl_bases(0x6562_0000),
+            Some((0x1000_0000, 0x1400_0000))
+        );
         assert_eq!(chip_fdl_bases(0x1234_5678), None);
         // Android SoCs
         assert_eq!(chip_fdl_bases(0x9818_0000), Some((0x0, 0x8000_0000)));
@@ -2213,6 +3282,72 @@ mod tests {
         assert!(is_download_pid(0x4e00));
         assert!(!is_download_pid(0x0001));
         assert_eq!(stage_label(0x4d00), "SPD download (BROM/FDL)");
+    }
+
+    #[test]
+    fn format_missing_fdl_is_error_not_brom_fallback() {
+        // Empty and typo/missing paths must never silently become a BROM-only
+        // erase of guessed addresses.
+        assert!(select_fdl_mode("").is_err());
+        assert!(select_fdl_mode("/definitely/not/a/real/fdl1.bin").is_err());
+        // Only the explicit flag spellings opt in.
+        assert_eq!(select_fdl_mode("none").unwrap(), FdlMode::BromOnly);
+        assert_eq!(select_fdl_mode("BROM").unwrap(), FdlMode::BromOnly);
+        // A real file is accepted.
+        let p = std::env::temp_dir().join(format!("fp_fdl1_{}.bin", std::process::id()));
+        fs::write(&p, b"fdl1").unwrap();
+        assert_eq!(select_fdl_mode(p.to_str().unwrap()).unwrap(), FdlMode::File);
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn frp_failure_propagates_as_error() {
+        let err = frp_result_summary(
+            2,
+            0,
+            vec!["  frp: READ error".to_string()],
+            &["frp: READ error".to_string(), "misc: timeout".to_string()],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("failed on all 2"), "{err}");
+    }
+
+    #[test]
+    fn frp_with_no_attempted_partitions_is_error() {
+        let err = frp_result_summary(0, 0, vec![], &[]).unwrap_err();
+        assert!(
+            err.to_string().contains("no eraseable lock partition"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn frp_partial_success_reports_truthful_count() {
+        let out = frp_result_summary(
+            2,
+            1,
+            vec!["  'misc': timeout".to_string()],
+            &["misc: timeout".to_string()],
+        )
+        .unwrap();
+        assert!(out.contains("erased (1/2)"), "{out}");
+        assert!(out.contains("'misc': timeout"), "{out}");
+    }
+
+    #[test]
+    fn backup_zero_dumped_is_error() {
+        let err = backup_result_summary(
+            0,
+            vec!["Total dumped: 0 bytes".to_string()],
+            &["userdata: FAILED - timeout".to_string()],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("0 bytes dumped"), "{err}");
+        assert!(err.to_string().contains("userdata"), "{err}");
+        // A real dump stays success.
+        assert!(
+            backup_result_summary(4096, vec!["Total dumped: 4096 bytes".to_string()], &[]).is_ok()
+        );
     }
 }
 #[cfg(test)]
@@ -2247,7 +3382,11 @@ mod spl_tests {
         let sites = spl_bypass_patch(&mut img, &[]).expect("patch ok");
         assert_eq!(sites.len(), 1, "one site expected, got {sites:?}");
         let off = sites[0] as usize;
-        assert_eq!(&img[off..off + 4], &0xE1A00000u32.to_le_bytes(), "NOP written");
+        assert_eq!(
+            &img[off..off + 4],
+            &0xE1A00000u32.to_le_bytes(),
+            "NOP written"
+        );
         // hash must now differ from the original but validate against content
         assert_eq!(&img[0..4], b"DHTB");
         use sha2::{Digest, Sha256};
@@ -2273,8 +3412,10 @@ mod spl_tests {
         // remove BL too so hints-only path is exercised
         let bl_off = 0x40;
         img[bl_off..bl_off + 4].copy_from_slice(&0xE1A00000u32.to_le_bytes());
-        assert!(spl_bypass_patch(&mut img, &[]).is_err(),
-                "must refuse without sites/hints - no blind NOPs");
+        assert!(
+            spl_bypass_patch(&mut img, &[]).is_err(),
+            "must refuse without sites/hints - no blind NOPs"
+        );
         // with explicit hint it patches
         let sites = spl_bypass_patch(&mut img, &[0x40]).expect("hint patch ok");
         assert_eq!(sites, vec![0x40 + DHTB_HEADER_LEN as u32]);
@@ -2298,9 +3439,9 @@ mod magic64_tests {
         // SIMGHDR footer 0x60
         let mut foot = vec![0u8; MAGIC64_FOOTER_LEN];
         foot[0..7].copy_from_slice(b"SIMGHDR");
-        foot[0x18..0x20].copy_from_slice(&0x200u64.to_le_bytes());   // payload_offset
-        foot[0x20..0x28].copy_from_slice(&0x1000u64.to_le_bytes());  // cert_offset
-        foot[0x28..0x30].copy_from_slice(&0x400u64.to_le_bytes());   // cert_size
+        foot[0x18..0x20].copy_from_slice(&0x200u64.to_le_bytes()); // payload_offset
+        foot[0x20..0x28].copy_from_slice(&0x1000u64.to_le_bytes()); // cert_offset
+        foot[0x28..0x30].copy_from_slice(&0x400u64.to_le_bytes()); // cert_size
         img.extend_from_slice(&foot);
         // cert data
         img.extend_from_slice(&vec![0xCCu8; 0x400]);
@@ -2313,7 +3454,10 @@ mod magic64_tests {
     fn magic64_pack_layout() {
         let size = 0x100000usize;
         let orig = make_signed_image(size);
-        let patches = [MagicPatch { code_offset: 0xafe8, word: 0xd503201f }];
+        let patches = [MagicPatch {
+            code_offset: 0xafe8,
+            word: 0xd503201f,
+        }];
         let out = magic64_pack(&orig, &patches, 0xB500_0000).expect("pack ok");
 
         assert_eq!(out.len(), orig.len(), "partition size preserved");
@@ -2326,7 +3470,11 @@ mod magic64_tests {
         let target = ((jump & 0x03FF_FFFF) as usize) * 4;
         assert_eq!(target, size + 0x10);
         // payload untouched at 0x210
-        assert_eq!(&out[0x210..0x210 + size], &orig[0x200..0x200 + size], "signed payload byte-identical");
+        assert_eq!(
+            &out[0x210..0x210 + size],
+            &orig[0x200..0x200 + size],
+            "signed payload byte-identical"
+        );
         // footer payload_offset now 0x210; region@0x28 shifted by 0x100
         // (cond u64 at 0x20 = cert hash non-zero -> offset at 0x28 shifts).
         let foot = 0x200 + 0x10 + size + (MAGIC64_ADD_LENGTH - 0x10);
@@ -2336,14 +3484,18 @@ mod magic64_tests {
         );
         assert_eq!(
             u64::from_le_bytes(out[foot + 0x28..foot + 0x30].try_into().unwrap()),
-            0x500u64  // 0x400 + ADD_LENGTH (field at 0x28 shifts when cond@0x20 set)
+            0x500u64 // 0x400 + ADD_LENGTH (field at 0x28 shifts when cond@0x20 set)
         );
         // shellcode present in magic area
         let magic = &out[0x210 + size..0x210 + size + MAGIC64_ADD_LENGTH - 0x10];
         let shell = magic64_build_shellcode(size);
         assert_eq!(&magic[..MAGIC64_SHELLCODE_LEN], &shell[..]);
         // patch table right after shellcode
-        let addr = u32::from_le_bytes(magic[MAGIC64_SHELLCODE_LEN..MAGIC64_SHELLCODE_LEN+4].try_into().unwrap());
+        let addr = u32::from_le_bytes(
+            magic[MAGIC64_SHELLCODE_LEN..MAGIC64_SHELLCODE_LEN + 4]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(addr, 0xB500_0000u32.wrapping_add(0xafe8));
     }
 
@@ -2354,7 +3506,10 @@ mod magic64_tests {
         orig[0x1200 + 0x18..0x1200 + 0x20].copy_from_slice(&0x210u64.to_le_bytes());
         let err = magic64_pack(
             &orig,
-            &[MagicPatch { code_offset: 0x10, word: 1 }],
+            &[MagicPatch {
+                code_offset: 0x10,
+                word: 1,
+            }],
             0xB500_0000,
         );
         assert!(err.is_err(), "must refuse already-packed image");
@@ -2432,8 +3587,10 @@ mod magic64_safety_tests {
         // header claims a payload size that overruns the file
         let mut img = make_signed_image(0x800);
         img[0x30..0x34].copy_from_slice(&0xFFFFFF00u32.to_le_bytes());
-        assert!(magic64_pack(&img, &[], 0xB500_0000).is_err(),
-                "oversized mImgSize must be refused, not read OOB");
+        assert!(
+            magic64_pack(&img, &[], 0xB500_0000).is_err(),
+            "oversized mImgSize must be refused, not read OOB"
+        );
     }
 
     #[test]
@@ -2451,9 +3608,18 @@ mod magic64_safety_tests {
         let size = 0x2000;
         let orig = make_signed_image(size);
         let patches = [
-            MagicPatch { code_offset: 0x10, word: 0xd503201f },
-            MagicPatch { code_offset: 0x7f00, word: 0xd503201f },
-            MagicPatch { code_offset: 0x1abc, word: 0x14000000 },
+            MagicPatch {
+                code_offset: 0x10,
+                word: 0xd503201f,
+            },
+            MagicPatch {
+                code_offset: 0x7f00,
+                word: 0xd503201f,
+            },
+            MagicPatch {
+                code_offset: 0x1abc,
+                word: 0x14000000,
+            },
         ];
         let out = magic64_pack(&orig, &patches, 0xB500_0000).unwrap();
         assert_eq!(
@@ -2473,7 +3639,10 @@ mod magic64_safety_tests {
         let orig = make_signed_image(size);
         let out = magic64_pack(
             &orig,
-            &[MagicPatch { code_offset: 0x100, word: 0 }],
+            &[MagicPatch {
+                code_offset: 0x100,
+                word: 0,
+            }],
             0xB500_0000,
         )
         .unwrap();
@@ -2492,12 +3661,20 @@ mod magic64_safety_tests {
     fn patch_table_bounds_are_enforced() {
         // 0x80/12 = 10 entries max plus terminator
         let many: Vec<MagicPatch> = (0..11)
-            .map(|i| MagicPatch { code_offset: i * 4, word: i })
+            .map(|i| MagicPatch {
+                code_offset: i * 4,
+                word: i,
+            })
             .collect();
-        assert!(magic64_pack(&make_signed_image(0x800), &many, 0xB500_0000).is_err(),
-                "11 entries must exceed table space and refuse");
+        assert!(
+            magic64_pack(&make_signed_image(0x800), &many, 0xB500_0000).is_err(),
+            "11 entries must exceed table space and refuse"
+        );
         let ok: Vec<MagicPatch> = (0..9)
-            .map(|i| MagicPatch { code_offset: i * 4, word: i })
+            .map(|i| MagicPatch {
+                code_offset: i * 4,
+                word: i,
+            })
             .collect();
         assert!(magic64_pack(&make_signed_image(0x800), &ok, 0xB500_0000).is_ok());
     }
@@ -2513,8 +3690,15 @@ mod magic64_safety_tests {
             *b = 0xEE;
         }
         assert!(
-            magic64_pack(&img, &[MagicPatch { code_offset: 8, word: 1 }], 0xB500_0000)
-                .is_err(),
+            magic64_pack(
+                &img,
+                &[MagicPatch {
+                    code_offset: 8,
+                    word: 1
+                }],
+                0xB500_0000
+            )
+            .is_err(),
             "non-zero overflow must refuse instead of truncating"
         );
     }
@@ -2525,11 +3709,186 @@ mod magic64_safety_tests {
             let orig = make_signed_image(size);
             let out = magic64_pack(
                 &orig,
-                &[MagicPatch { code_offset: 4, word: 0xd503201f }],
+                &[MagicPatch {
+                    code_offset: 4,
+                    word: 0xd503201f,
+                }],
                 0xB500_0000,
             )
             .unwrap_or_else(|e| panic!("size {size:#x}: {e}"));
             assert_eq!(out.len(), orig.len(), "flashers write fixed partitions");
         }
+    }
+
+    // ---------------------- spd-flash-pac (one-PAC session) ----------------
+
+    fn pac_entry(index: usize, name: &str, size: u32, is_nv: bool) -> crate::pac::PacEntry {
+        crate::pac::PacEntry {
+            index,
+            name: name.to_string(),
+            size,
+            is_nv,
+            checksum: 0,
+            data_offset: 0,
+        }
+    }
+
+    fn pac_info(entries: Vec<crate::pac::PacEntry>) -> crate::pac::PacInfo {
+        crate::pac::PacInfo {
+            path: "synthetic.pac".to_string(),
+            count: entries.len() as u32,
+            flash_size: 0,
+            entries,
+            total_payload: 0,
+        }
+    }
+
+    #[test]
+    fn pac_mode_parses_and_rejects_unknown() {
+        assert_eq!(PacMode::parse("").unwrap(), PacMode::Flash);
+        assert_eq!(PacMode::parse("FLASH").unwrap(), PacMode::Flash);
+        assert_eq!(PacMode::parse("frp").unwrap(), PacMode::Frp);
+        assert_eq!(PacMode::parse("Backup").unwrap(), PacMode::Backup);
+        assert_eq!(PacMode::parse("erase").unwrap(), PacMode::Erase);
+        assert!(PacMode::parse("format").is_err());
+        assert_eq!(PacMode::Frp.as_str(), "frp");
+    }
+
+    #[test]
+    fn pac_xml_reads_loader_addresses_only_after_the_token() {
+        let xml = r#"<Config><FDL1 addr="0x5500" name="fdl1.bin"/>
+            <FDL2 addr = "0x9EFFFE00" name="fdl2.bin"/>
+            <Flash size="0x1000000"/></Config>"#;
+        assert_eq!(pac_xml_fdl_addresses(xml), (Some(0x5500), Some(0x9EFFFE00)));
+
+        // No loader token -> no address (never reuse an unrelated one).
+        let unrelated = r#"<Flash size="0x12345678"/>"#;
+        assert_eq!(pac_xml_fdl_addresses(unrelated), (None, None));
+
+        // A token with no hex in reach is also None.
+        assert_eq!(pac_xml_fdl_addresses("fdl1 loader name only"), (None, None));
+    }
+
+    #[test]
+    fn pac_flash_plan_skips_loaders_xml_and_nv() {
+        let info = pac_info(vec![
+            pac_entry(0, "fdl1-sign.bin", 4096, false),
+            pac_entry(1, "fdl2-sign.bin", 8192, false),
+            pac_entry(2, "SC1234.xml", 512, false),
+            pac_entry(3, "system.img", 1024, false),
+            pac_entry(4, "nvdata.bin", 256, true),
+            pac_entry(5, "boot.img", 0, false),
+            pac_entry(6, "boot.img", 4096, false),
+        ]);
+        let (writes, skips) = plan_pac_flash(&info);
+        let names: Vec<&str> = writes.iter().map(|w| w.partition.as_str()).collect();
+        assert_eq!(names, vec!["system", "boot"]);
+        assert!(skips.iter().any(|s| s.contains("FDL1")));
+        assert!(skips.iter().any(|s| s.contains("XML")));
+        assert!(skips.iter().any(|s| s.contains("NV/IMEI")));
+        assert!(skips.iter().any(|s| s.contains("zero-size")));
+    }
+
+    #[test]
+    fn pac_present_partitions_are_present_only_and_nonzero() {
+        let parts = vec![
+            ("frp".to_string(), 1024u64),
+            ("frp_a".to_string(), 0),
+            ("misc".to_string(), 4096),
+            ("persist".to_string(), 2048),
+        ];
+        let got = select_present_partitions(&parts, FRP_WIPE_PARTITIONS);
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        // Selection follows the wanted list (FRP_WIPE_PARTITIONS), so
+        // persist precedes misc.
+        assert_eq!(names, vec!["frp", "persist", "misc"]);
+    }
+
+    #[test]
+    fn pac_backup_requires_out_before_any_hardware() {
+        assert!(resolve_backup_out(None).is_err());
+        assert!(resolve_backup_out(Some("   ")).is_err());
+        assert_eq!(resolve_backup_out(Some("/tmp/x")).unwrap(), "/tmp/x");
+    }
+
+    #[test]
+    fn pac_fdl_address_never_guessed() {
+        // Known chip -> table hit; overrides always win.
+        let (t1, t2) = resolve_fdl_addresses(0x9818_0000, None, None).unwrap();
+        let hit = chip_fdl_bases(0x9818_0000).unwrap();
+        assert_eq!((t1, t2), hit);
+        assert_eq!(
+            resolve_fdl_addresses(0x9818_0000, Some(0x1000), Some(0x2000)).unwrap(),
+            (0x1000, 0x2000)
+        );
+        // Unknown chip without overrides is an error naming both flags.
+        let err = resolve_fdl_addresses(0xDEAD_0000, None, None).unwrap_err();
+        let text = format!("{err}");
+        assert!(text.contains("--fdl1-addr"), "{text}");
+        assert!(text.contains("--fdl2-addr"), "{text}");
+    }
+
+    #[test]
+    fn pac_verify_gate_fails_only_on_mismatch() {
+        assert!(verify_gate(true, false), "mismatch with verify on is fatal");
+        assert!(!verify_gate(true, true));
+        assert!(!verify_gate(false, false), "--no-verify never fails");
+    }
+
+    #[test]
+    fn pac_part_file_parsing_rejects_junk() {
+        assert_eq!(
+            parse_part_file("frp=/tmp/x").unwrap(),
+            ("frp".to_string(), "/tmp/x".to_string())
+        );
+        assert!(parse_part_file("frp").is_err(), "no '=' is a bad entry");
+        assert!(parse_part_file("=/tmp/x").is_err(), "empty name");
+        assert!(parse_part_file("frp=").is_err(), "empty file");
+    }
+
+    #[test]
+    fn pac_options_validate_gates_frp_image_and_extras() {
+        let tmp = std::env::temp_dir().join(format!("fp_pac_opt_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let img = tmp.join("frp.img");
+        std::fs::write(&img, b"x").unwrap();
+        let img_s = img.to_string_lossy().to_string();
+
+        // --frp-image is only meaningful for --mode frp.
+        let mut opts = PacOptions {
+            frp_image: Some(img_s.clone()),
+            ..Default::default()
+        };
+        assert!(
+            opts.validate().is_err(),
+            "flash + --frp-image must be refused"
+        );
+        opts.mode = PacMode::Frp;
+        assert!(opts.validate().is_ok());
+
+        let missing = PacOptions {
+            mode: PacMode::Frp,
+            frp_image: Some("/definitely/not/here.img".to_string()),
+            ..Default::default()
+        };
+        assert!(missing.validate().is_err(), "missing image must fail");
+
+        let good = PacOptions {
+            extras: vec![("misc".to_string(), img_s.clone())],
+            ..Default::default()
+        };
+        assert!(good.validate().is_ok());
+        let missing_extra = PacOptions {
+            extras: vec![("misc".to_string(), "/definitely/not/here.img".to_string())],
+            ..Default::default()
+        };
+        assert!(missing_extra.validate().is_err());
+        let empty_part = PacOptions {
+            extras: vec![("   ".to_string(), img_s.clone())],
+            ..Default::default()
+        };
+        assert!(empty_part.validate().is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

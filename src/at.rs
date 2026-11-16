@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::config::{DeviceInfo, InterfaceInfo};
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use crate::usb;
 use rusb::Context;
 
@@ -18,7 +18,10 @@ struct AtResult {
 /// Locate the CDC ACM interface pair on a Samsung device:
 /// the comm interface (class 2 / subclass 2) and the data interface (class 10).
 fn find_acm_interfaces(dev: &DeviceInfo) -> Option<(&InterfaceInfo, &InterfaceInfo)> {
-    let comm = dev.interfaces.iter().find(|i| i.class == 2 && i.subclass == 2);
+    let comm = dev
+        .interfaces
+        .iter()
+        .find(|i| i.class == 2 && i.subclass == 2);
     let data = dev.interfaces.iter().find(|i| {
         i.class == 10
             && i.endpoints
@@ -55,13 +58,19 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
     let pid = u16::from_str_radix(id.split(':').nth(1).unwrap_or(""), 16)
         .map_err(|_| BridgeError::InvalidArgument("bad pid".to_string()))?;
     if vid != 0x04e8 {
-        return Err(BridgeError::InvalidArgument(format!("vid {vid:04x} is not Samsung 04e8")));
+        return Err(BridgeError::InvalidArgument(format!(
+            "vid {vid:04x} is not Samsung 04e8"
+        )));
     }
     let prefer = match parts.next() {
         Some(loc) => {
             let loc: Vec<&str> = loc.split(':').collect();
-            let bus: u8 = loc[0].parse().map_err(|_| BridgeError::InvalidArgument("bad bus".to_string()))?;
-            let addr: u8 = loc[1].parse().map_err(|_| BridgeError::InvalidArgument("bad addr".to_string()))?;
+            let bus: u8 = loc[0]
+                .parse()
+                .map_err(|_| BridgeError::InvalidArgument("bad bus".to_string()))?;
+            let addr: u8 = loc[1]
+                .parse()
+                .map_err(|_| BridgeError::InvalidArgument("bad addr".to_string()))?;
             Some((bus, addr))
         }
         None => None,
@@ -80,7 +89,8 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
     // context to outlive any DeviceHandle. Using the same context for
     // enumeration and handle open avoids a race where the device disappears
     // between two independent Context::new() calls.
-    let context = Context::new().map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let context = Context::new()
+        .map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     // Use vid/pid to validate against enumerated DeviceInfo, then open a
     // claimed handle that stays alive through the bulk session.
     let info = usb::collect_devices(Some(vid))?;
@@ -95,9 +105,8 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
         })
         .ok_or("device disappeared during enumeration")?;
 
-    let (comm, data) = find_acm_interfaces(target_dev).ok_or(
-        "no CDC ACM interface found - is the phone in diag/modem config (usb-config 2)?",
-    )?;
+    let (comm, data) = find_acm_interfaces(target_dev)
+        .ok_or("no CDC ACM interface found - is the phone in diag/modem config (usb-config 2)?")?;
 
     let in_ep = data
         .endpoints
@@ -122,16 +131,16 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
     if comm.number != data.number {
         let mut line_coding = [0x00u8, 0xc2, 0x01, 0x00, 0x00, 0x00, 0x08];
         let _ = handle.control_transfer(
-            0x21,                       // class, host->device, interface
-            0x20,                       // SET_LINE_CODING
+            0x21, // class, host->device, interface
+            0x20, // SET_LINE_CODING
             0,
             comm.number as u16,
             &mut line_coding,
             Duration::from_secs(2),
         );
         let _ = handle.control_transfer(
-            0x21,                    // class, host->device, interface
-            0x22,                    // SET_CONTROL_LINE_STATE (DTR+RTS)
+            0x21, // class, host->device, interface
+            0x22, // SET_CONTROL_LINE_STATE (DTR+RTS)
             0x0003,
             comm.number as u16,
             &mut [],
@@ -186,7 +195,8 @@ pub fn at_send(target: &str, cmd: &str, timeout_ms: u64) -> Result<String> {
 /// do this brute-force when user doesn't know bus/addr. Weak-area fix: avoids
 /// `no Samsung device for AT channel` when bus/addr not supplied.
 pub fn at_auto_detect() -> Result<String> {
-    let context = Context::new().map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
+    let context = Context::new()
+        .map_err(|e| BridgeError::Usb(crate::error::UsbError::TransferFailed(e.to_string())))?;
     let info = usb::collect_devices(Some(0x04e8))?;
     for d in &info {
         if find_acm_interfaces(d).is_some() {
@@ -196,7 +206,9 @@ pub fn at_auto_detect() -> Result<String> {
         }
     }
     drop(context);
-    Err(BridgeError::InvalidArgument("no Samsung CDC ACM device found — is phone in diag/modem config 2?".to_string()))
+    Err(BridgeError::InvalidArgument(
+        "no Samsung CDC ACM device found — is phone in diag/modem config 2?".to_string(),
+    ))
 }
 
 /// KG lock bypass — commercial *#0808# + AT sequence not yet in research tools.
@@ -204,7 +216,12 @@ pub fn at_auto_detect() -> Result<String> {
 /// KnoxGuard. Returns JSON array of per-command results. Weak-area: retries
 /// with 400ms backoff and keeps Context alive (fixes re-enum flake).
 pub fn at_kg_unlock(target: &str, timeout_ms: u64) -> Result<String> {
-    let seq = ["+KSTRINGB=0,3", "+KGLOCK=0,0", "+DEVCONINFO", "+ACTIVATE=0,0,0"];
+    let seq = [
+        "+KSTRINGB=0,3",
+        "+KGLOCK=0,0",
+        "+DEVCONINFO",
+        "+ACTIVATE=0,0,0",
+    ];
     let mut out = Vec::new();
     for cmd in seq {
         match at_send(target, cmd, timeout_ms) {
@@ -227,11 +244,16 @@ pub fn at_kg_unlock(target: &str, timeout_ms: u64) -> Result<String> {
 /// AT commands supported by the baseband. Helps discover new FRP/MDM/KG
 /// commands without commercial leaked docs. Returns hex+ascii per prefix.
 pub fn at_fuzz(target: &str, prefixes: &str, timeout_ms: u64) -> Result<String> {
-    let list: Vec<&str> = prefixes.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let list: Vec<&str> = prefixes
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut out = Vec::new();
     for p in list {
         let cmd = format!("+{p}=?");
-        let res = at_send(target, &cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        let res =
+            at_send(target, &cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
         out.push(format!("{{\"prefix\":\"{p}\",\"result\":{res}}}"));
     }
     Ok(format!("[{}]", out.join(",")))
@@ -243,7 +265,8 @@ pub fn at_mdm_disable(target: &str, timeout_ms: u64) -> Result<String> {
     let seq = ["+MDMCONFIG=0", "+KSTRINGB=0,3", "+ACTIVATE=0,0,0"];
     let mut out = Vec::new();
     for cmd in seq {
-        let r = at_send(target, cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        let r =
+            at_send(target, cmd, timeout_ms).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
         out.push(r);
         std::thread::sleep(Duration::from_millis(300));
     }
@@ -288,7 +311,9 @@ pub fn ai_fingerprint(target: &str) -> Result<String> {
     let mut best: Option<(&DeviceInfo, u8)> = None;
     for d in &info {
         let mut score: u8 = 0;
-        if format!("{:04x}", d.vid) == needle || target.contains(&format!("{:04x}:{:04x}", d.vid, d.pid)) {
+        if format!("{:04x}", d.vid) == needle
+            || target.contains(&format!("{:04x}:{:04x}", d.vid, d.pid))
+        {
             score += 50;
         }
         for i in &d.interfaces {
@@ -299,7 +324,17 @@ pub fn ai_fingerprint(target: &str) -> Result<String> {
                 score += 15; // vendor
             }
         }
-        if d.product.as_deref().unwrap_or("").to_lowercase().contains("unisoc") || d.manufacturer.as_deref().unwrap_or("").to_lowercase().contains("spreadtrum") {
+        if d.product
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains("unisoc")
+            || d.manufacturer
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("spreadtrum")
+        {
             score += 25;
         }
         if score > best.map(|(_, s)| s).unwrap_or(0) {
@@ -317,6 +352,8 @@ pub fn ai_fingerprint(target: &str) -> Result<String> {
         let prod = d.product.as_deref().unwrap_or("");
         Ok(format!("{{\"vid\":{},\"pid\":{},\"chip\":\"{chip}\",\"score\":{score},\"product\":\"{prod}\"}}", d.vid, d.pid))
     } else {
-        Err(BridgeError::InvalidArgument("no device matched AI fingerprint".to_string()))
+        Err(BridgeError::InvalidArgument(
+            "no device matched AI fingerprint".to_string(),
+        ))
     }
 }

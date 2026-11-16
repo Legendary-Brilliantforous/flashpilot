@@ -1,4 +1,4 @@
-# FlashPilot 1.2.0 — Stable
+# FlashPilot 1.2.1 — Stable
 
 Open-source Linux flashing & repair workbench for Android devices — the free
 equivalent of commercial Windows flashing suites. **1.2.0 is a stability +
@@ -8,7 +8,7 @@ pass, live GitHub release channel, and auditable history.**
 A native **Rust** core (`flashpilot-bridge`, ~9,300 LOC, vendored libusb)
 speaks bootloader protocols directly — Samsung Odin/HID, MediaTek BROM/DA,
 Qualcomm Sahara/Firehose, Spreadtrum/UNISOC BSL — while a polished **PyQt6**
-studio presents 8 transports, 8 job categories and ~120 operations: flashing,
+studio presents 9 transports, 13 job categories and ~120 operations: flashing,
 FRP bypass, screen-lock removal, MDM unlock, partition tools, device info,
 reboot, and battery/network repair on any ADB device.
 

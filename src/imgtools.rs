@@ -27,7 +27,7 @@ use std::io::{Read, Write};
 
 pub const BOOT_MAGIC: &[u8; 8] = b"ANDROID!";
 const KERNEL_SIZE_OFF: usize = 8;
-const RAMDISK_SIZE_OFF: usize = 24;
+const RAMDISK_SIZE_OFF: usize = 16;
 const PAGE_SIZE_OFF: usize = 36;
 const HEADER_MIN: usize = 40;
 
@@ -65,7 +65,9 @@ fn parse_boot_header(img: &[u8]) -> Result<(u32, u32, u32)> {
     let ramdisk_size = read_u32_le(img, RAMDISK_SIZE_OFF)?;
     let page_size = read_u32_le(img, PAGE_SIZE_OFF)?;
     if page_size == 0 {
-        return Err(BridgeError::InvalidArgument("invalid page size 0".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "invalid page size 0".to_string(),
+        ));
     }
     Ok((kernel_size, ramdisk_size, page_size))
 }
@@ -93,7 +95,9 @@ fn scan_cpio(raw: &[u8]) -> Vec<(usize, String, usize, usize)> {
     let mut out = Vec::new();
     let mut idx = 0usize;
     while idx + 6 <= raw.len() {
-        let rel = raw[idx..].windows(b"070701".len()).position(|w| w == b"070701");
+        let rel = raw[idx..]
+            .windows(b"070701".len())
+            .position(|w| w == b"070701");
         let at = match rel {
             Some(r) => idx + r,
             None => break,
@@ -123,7 +127,9 @@ fn scan_cpio(raw: &[u8]) -> Vec<(usize, String, usize, usize)> {
             idx += 6;
             continue;
         }
-        let name_end = name_start.saturating_add(namesize.saturating_sub(1)).min(raw.len());
+        let name_end = name_start
+            .saturating_add(namesize.saturating_sub(1))
+            .min(raw.len());
         let name = ascii_name(&raw[name_start..name_end]);
         let mut data_start = name_start + namesize;
         data_start = (data_start + 3) & !3;
@@ -165,7 +171,10 @@ fn patch_prop_text(text: &str, name: &str) -> (String, Vec<String>) {
         }
         if let Some((ak, av)) = matched {
             seen.insert(ak.to_string());
-            let old_v = stripped.split_once('=').map(|(_, v)| v.trim()).unwrap_or("");
+            let old_v = stripped
+                .split_once('=')
+                .map(|(_, v)| v.trim())
+                .unwrap_or("");
             if old_v != av {
                 logs.push(format!("      {ak}: {old_v} -> {av}"));
             }
@@ -214,7 +223,14 @@ fn gzip_mtime0(data: &[u8]) -> Result<Vec<u8>> {
 
 /// Patch prop files inside a (possibly gzipped) ramdisk blob. Returns
 /// (new_blob, patched_names). Errors when nothing matched.
-fn patch_ramdisk(ramdisk: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
+///
+/// `prop_override`: when `default.prop` is a SYMLINK into /system (Motorola
+/// layout) instead of a real file, its target-path bytes must NOT be
+/// rewritten as prop text (that corrupts the link). With `Some(text)` the
+/// link is replaced by a regular file holding `text` + forced ADB props;
+/// with `None` this is an honest error telling the caller to supply
+/// --prop-file.
+fn patch_ramdisk(ramdisk: &[u8], prop_override: Option<&str>) -> Result<(Vec<u8>, Vec<String>)> {
     let (raw, was_gz) = gunzip_maybe(ramdisk);
     let mut buf = raw;
     let mut patched_names: Vec<String> = Vec::new();
@@ -263,12 +279,40 @@ fn patch_ramdisk(ramdisk: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
             continue;
         }
         let data_end = data_start.saturating_add(filesize).min(buf.len());
+        // newc c_mode lives at header+14 (8 ASCII hex chars). A symlink
+        // entry (S_IFLNK) holds a path, never props.
+        let mode = parse_hex(&buf[at + 14..at + 22]).unwrap_or(0);
+        let is_symlink = (mode & 0o170000) == 0o120000;
+        let mut make_regular = false;
         // Clamp like Python slicing (never panic on corrupt entries). Note:
         // on valid inputs content.len() == filesize, so padding matches
         // Python exactly; on truncated inputs we pad to available bytes
         // instead of splicing in extra ones.
         let content_len = data_end.saturating_sub(data_start);
-        let nb: Vec<u8> = {
+        let nb: Vec<u8> = if name == "default.prop" && is_symlink {
+            let prop_text = match prop_override {
+                Some(t) => t.to_string(),
+                None => {
+                    return Err(BridgeError::InvalidArgument(
+                        "default.prop is a symlink into /system (not a real file); re-run with --prop-file <path to system etc/prop.default> so it can be replaced with ADB-enabled props".to_string(),
+                    ))
+                }
+            };
+            make_regular = true;
+            let (new_text, mut logs) = patch_prop_text(&prop_text, &name);
+            for l in logs.drain(..) {
+                eprintln!("{l}");
+            }
+            eprintln!(
+                "    default.prop: symlink -> regular file ({}B)",
+                new_text.len()
+            );
+            new_text.into_bytes()
+        } else if is_symlink {
+            // Never rewrite a symlink target path as prop text.
+            idx = data_start.saturating_add((filesize + 3) & !3).max(at + 6);
+            continue;
+        } else {
             let content = &buf[data_start..data_start + content_len];
             let text = String::from_utf8_lossy(content);
             let (new_text, mut logs) = patch_prop_text(&text, &name);
@@ -279,6 +323,12 @@ fn patch_ramdisk(ramdisk: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
         };
         if nb.len() <= content_len {
             // Pad in place with newlines (offsets after us never move).
+            if make_regular {
+                buf[at + 14..at + 22].copy_from_slice(b"000081A4");
+                buf[at + 26..at + 34].copy_from_slice(b"00000001");
+                let fl = format!("{:08X}", nb.len());
+                buf[at + 54..at + 62].copy_from_slice(fl.as_bytes());
+            }
             let mut filled = nb;
             filled.extend(std::iter::repeat_n(b'\n', content_len - filled.len()));
             buf[data_start..data_start + content_len].copy_from_slice(&filled);
@@ -300,6 +350,11 @@ fn patch_ramdisk(ramdisk: &[u8]) -> Result<(Vec<u8>, Vec<String>)> {
         let mut fields = buf[at..at + 110].to_vec();
         let fs = format!("{:08X}", nb.len());
         fields[54..62].copy_from_slice(fs.as_bytes());
+        if make_regular {
+            // Symlink -> regular file, owner-readable.
+            fields[14..22].copy_from_slice(b"000081A4");
+            fields[26..34].copy_from_slice(b"00000001");
+        }
         let data_pos = (110 + namesize + 3) & !3;
         let pad1_len = data_pos - 110 - namesize;
         let pad2_len = (4 - (nb.len() % 4)) % 4;
@@ -341,9 +396,16 @@ pub struct BootPatchSummary {
     pub recompressed: bool,
 }
 
-/// `boot-patch-adb <in.img> <out.img>` — patch ramdisk props for ADB.
-pub fn boot_patch_adb_cli(in_path: &str, out_path: &str) -> Result<String> {
-    let img = std::fs::read(in_path).map_err(|e| BridgeError::Io(format!("read {in_path}: {e}")))?;
+/// `boot-patch-adb <in.img> <out.img> [--prop-file P]` — patch ramdisk
+/// props for ADB. `P` (system etc/prop.default text) is required when the
+/// ramdisk's default.prop is a symlink into /system.
+pub fn boot_patch_adb_cli(
+    in_path: &str,
+    out_path: &str,
+    prop_file: Option<&str>,
+) -> Result<String> {
+    let img =
+        std::fs::read(in_path).map_err(|e| BridgeError::Io(format!("read {in_path}: {e}")))?;
     let (kernel_size, ramdisk_size, page_size) = parse_boot_header(&img)?;
     let rd_off = page_size as u64 + page_align(kernel_size as u64, page_size as u64);
     let rd_end = rd_off
@@ -355,12 +417,19 @@ pub fn boot_patch_adb_cli(in_path: &str, out_path: &str) -> Result<String> {
         ));
     }
     let ramdisk = &img[rd_off as usize..rd_end as usize];
+    let prop_text: Option<String> = match prop_file {
+        Some(p) => Some(
+            std::fs::read_to_string(p)
+                .map_err(|e| BridgeError::Io(format!("read --prop-file {p}: {e}")))?,
+        ),
+        None => None,
+    };
     let was_gz = {
         let (raw, gz) = gunzip_maybe(ramdisk);
         let _ = raw;
         gz
     };
-    let (new_rd, patched_files) = patch_ramdisk(ramdisk)?;
+    let (new_rd, patched_files) = patch_ramdisk(ramdisk, prop_text.as_deref())?;
     let grew_by = new_rd.len() as i64 - ramdisk_size as i64;
     let mut out_img = img;
     if new_rd.len() as u64 > ramdisk_size as u64 {
@@ -376,7 +445,8 @@ pub fn boot_patch_adb_cli(in_path: &str, out_path: &str) -> Result<String> {
         padded.resize(ramdisk_size as usize, 0);
         out_img[rd_off as usize..rd_end as usize].copy_from_slice(&padded);
     }
-    std::fs::write(out_path, &out_img).map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
+    std::fs::write(out_path, &out_img)
+        .map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
     let summary = BootPatchSummary {
         kernel_size,
         ramdisk_size,
@@ -396,7 +466,9 @@ pub fn boot_info_cli(path: &str) -> Result<String> {
     let img = std::fs::read(path).map_err(|e| BridgeError::Io(format!("read {path}: {e}")))?;
     let (kernel_size, ramdisk_size, page_size) = parse_boot_header(&img)?;
     let rd_off = page_size as u64 + page_align(kernel_size as u64, page_size as u64);
-    let rd_end = rd_off.saturating_add(ramdisk_size as u64).min(img.len() as u64);
+    let rd_end = rd_off
+        .saturating_add(ramdisk_size as u64)
+        .min(img.len() as u64);
     let prop_files = if rd_end > rd_off {
         let (raw, _) = gunzip_maybe(&img[rd_off as usize..rd_end as usize]);
         scan_cpio(&raw)
@@ -430,14 +502,16 @@ pub const AVB_MIN: usize = 96;
 /// on success; exit 0 + {"patched": false} when the input is not an AVB
 /// image (mirrors Python returning None instead of raising).
 pub fn vbmeta_patch_cli(in_path: &str, out_path: &str, flags: u32) -> Result<String> {
-    let data = std::fs::read(in_path).map_err(|e| BridgeError::Io(format!("read {in_path}: {e}")))?;
+    let data =
+        std::fs::read(in_path).map_err(|e| BridgeError::Io(format!("read {in_path}: {e}")))?;
     if data.len() < AVB_MIN || &data[..4] != AVB_MAGIC || data.len() < AVB_FLAGS_OFF + 4 {
         let out = serde_json::json!({"patched": false, "size": data.len()});
         return serde_json::to_string(&out).map_err(|e| BridgeError::Io(e.to_string()));
     }
     let mut patched = data;
     patched[AVB_FLAGS_OFF..AVB_FLAGS_OFF + 4].copy_from_slice(&flags.to_le_bytes());
-    std::fs::write(out_path, &patched).map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
+    std::fs::write(out_path, &patched)
+        .map_err(|e| BridgeError::Io(format!("write {out_path}: {e}")))?;
     let out = serde_json::json!({"patched": true, "size": patched.len(), "flags": flags});
     serde_json::to_string(&out).map_err(|e| BridgeError::Io(e.to_string()))
 }
@@ -450,6 +524,28 @@ mod tests {
         // newc 110-byte ASCII-hex header.
         let mut hdr = vec![b'0'; 110];
         hdr[0..6].copy_from_slice(b"070701");
+        let finfo = format!("{:08X}", data.len());
+        hdr[54..62].copy_from_slice(finfo.as_bytes());
+        let ns = format!("{:08X}", name.len() + 1);
+        hdr[94..102].copy_from_slice(ns.as_bytes());
+        let mut e = hdr;
+        e.extend_from_slice(name.as_bytes());
+        e.push(0);
+        while e.len() % 4 != 0 {
+            e.push(0);
+        }
+        e.extend_from_slice(data);
+        while e.len() % 4 != 0 {
+            e.push(0);
+        }
+        e
+    }
+
+    fn cpio_entry_mode(name: &str, data: &[u8], mode_hex: &str) -> Vec<u8> {
+        // newc entry with an explicit c_mode (e.g. "0000A1FF" = symlink).
+        let mut hdr = vec![b'0'; 110];
+        hdr[0..6].copy_from_slice(b"070701");
+        hdr[14..22].copy_from_slice(mode_hex.as_bytes());
         let finfo = format!("{:08X}", data.len());
         hdr[54..62].copy_from_slice(finfo.as_bytes());
         let ns = format!("{:08X}", name.len() + 1);
@@ -486,7 +582,7 @@ mod tests {
         let mut img = vec![0u8; page as usize];
         img[..8].copy_from_slice(BOOT_MAGIC);
         img[8..12].copy_from_slice(&(kernel.len() as u32).to_le_bytes());
-        img[24..28].copy_from_slice(&(rd_blob.len() as u32).to_le_bytes());
+        img[16..20].copy_from_slice(&(rd_blob.len() as u32).to_le_bytes());
         img[36..40].copy_from_slice(&page.to_le_bytes());
         let mut aligned_kernel = kernel.clone();
         while aligned_kernel.len() % page as usize != 0 {
@@ -505,15 +601,16 @@ mod tests {
         let inp = dir.join("boot.img");
         let outp = dir.join("boot_adb.img");
         std::fs::write(&inp, &img).unwrap();
-        let summary: BootPatchSummary =
-            serde_json::from_str(&boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap()).unwrap())
-                .unwrap();
+        let summary: BootPatchSummary = serde_json::from_str(
+            &boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None).unwrap(),
+        )
+        .unwrap();
         assert_eq!(summary.patched_files, vec!["default.prop".to_string()]);
         assert!(summary.recompressed);
         // Patched content visible after gunzip.
         let patched = std::fs::read(&outp).unwrap();
         let rd_off = summary.ramdisk_offset as usize;
-        let new_size = u32::from_le_bytes(patched[24..28].try_into().unwrap()) as usize;
+        let new_size = u32::from_le_bytes(patched[16..20].try_into().unwrap()) as usize;
         let (raw, was_gz) = gunzip_maybe(&patched[rd_off..rd_off + new_size]);
         assert!(was_gz);
         let text = String::from_utf8_lossy(&raw);
@@ -524,7 +621,7 @@ mod tests {
         // Idempotent: patching twice does not grow the image.
         let out2 = dir.join("boot_adb2.img");
         let s2: BootPatchSummary = serde_json::from_str(
-            &boot_patch_adb_cli(outp.to_str().unwrap(), out2.to_str().unwrap()).unwrap(),
+            &boot_patch_adb_cli(outp.to_str().unwrap(), out2.to_str().unwrap(), None).unwrap(),
         )
         .unwrap();
         assert_eq!(s2.grew_by, 0);
@@ -541,15 +638,16 @@ mod tests {
         let inp = dir.join("b.img");
         let outp = dir.join("b2.img");
         std::fs::write(&inp, &img).unwrap();
-        let s: BootPatchSummary =
-            serde_json::from_str(&boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap()).unwrap())
-                .unwrap();
+        let s: BootPatchSummary = serde_json::from_str(
+            &boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None).unwrap(),
+        )
+        .unwrap();
         assert!(s.grew_by > 0, "expected growth, got {}", s.grew_by);
         assert!(!s.recompressed);
         // Header size field tracks the new ramdisk.
         let patched = std::fs::read(&outp).unwrap();
         assert_eq!(
-            u32::from_le_bytes(patched[24..28].try_into().unwrap()) as usize,
+            u32::from_le_bytes(patched[16..20].try_into().unwrap()) as usize,
             s.ramdisk_new
         );
         // Patched image re-parses: values present.
@@ -568,7 +666,7 @@ mod tests {
             let mut img = vec![0u8; page as usize];
             img[..8].copy_from_slice(BOOT_MAGIC);
             img[8..12].copy_from_slice(&100u32.to_le_bytes());
-            img[24..28].copy_from_slice(&(rd_raw.len() as u32).to_le_bytes());
+            img[16..20].copy_from_slice(&(rd_raw.len() as u32).to_le_bytes());
             img[36..40].copy_from_slice(&page.to_le_bytes());
             let mut k = vec![0xAAu8; 100];
             while k.len() % page as usize != 0 {
@@ -583,8 +681,87 @@ mod tests {
         let inp = dir.join("b.img");
         let outp = dir.join("b2.img");
         std::fs::write(&inp, &img).unwrap();
-        let err = boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap()).unwrap_err();
+        let err =
+            boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None).unwrap_err();
         assert!(err.to_string().contains("no prop file found/patched"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn symlink_default_prop_needs_prop_file_then_replaces() {
+        // Motorola layout: default.prop is a symlink into /system.
+        let page = 2048u32;
+        let kernel = vec![0xAAu8; 100];
+        let mut rd_raw = Vec::new();
+        rd_raw.extend_from_slice(&cpio_entry_mode(
+            "default.prop",
+            b"system/etc/prop.default",
+            "0000A1FF",
+        ));
+        let rd_blob = gzip_bytes(&rd_raw);
+        let mut img = vec![0u8; page as usize];
+        img[..8].copy_from_slice(BOOT_MAGIC);
+        img[8..12].copy_from_slice(&(kernel.len() as u32).to_le_bytes());
+        img[16..20].copy_from_slice(&(rd_blob.len() as u32).to_le_bytes());
+        img[36..40].copy_from_slice(&page.to_le_bytes());
+        let mut aligned_kernel = kernel.clone();
+        while aligned_kernel.len() % page as usize != 0 {
+            aligned_kernel.push(0);
+        }
+        img.extend_from_slice(&aligned_kernel);
+        img.extend_from_slice(&rd_blob);
+        let dir = std::env::temp_dir().join(format!("fp_symlink_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let inp = dir.join("b.img");
+        let outp = dir.join("b2.img");
+        std::fs::write(&inp, &img).unwrap();
+        // Without --prop-file: honest error, and no output is written.
+        let err =
+            boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None).unwrap_err();
+        assert!(err.to_string().contains("--prop-file"));
+        assert!(!outp.exists());
+        // With prop file: the link becomes a regular file with ADB props.
+        let propf = dir.join("prop.default");
+        std::fs::write(&propf, "ro.secure=1\nro.adb.secure=1\n").unwrap();
+        let s: BootPatchSummary = serde_json::from_str(
+            &boot_patch_adb_cli(
+                inp.to_str().unwrap(),
+                outp.to_str().unwrap(),
+                Some(propf.to_str().unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s.patched_files, vec!["default.prop".to_string()]);
+        let patched = std::fs::read(&outp).unwrap();
+        let (raw, _) = gunzip_maybe(&patched[s.ramdisk_offset as usize..][..s.ramdisk_new]);
+        let at = raw
+            .windows(6)
+            .position(|w| w == b"070701")
+            .expect("cpio entry");
+        assert_eq!(
+            &raw[at + 14..at + 22],
+            b"000081A4",
+            "must be a regular file"
+        );
+        let namesize = usize::from_str_radix(
+            std::str::from_utf8(&raw[at + 94..at + 102]).unwrap().trim(),
+            16,
+        )
+        .unwrap();
+        let filesize = usize::from_str_radix(
+            std::str::from_utf8(&raw[at + 54..at + 62]).unwrap().trim(),
+            16,
+        )
+        .unwrap();
+        let data_start = (at + 110 + namesize + 3) & !3;
+        let text = String::from_utf8_lossy(&raw[data_start..data_start + filesize]);
+        assert!(text.contains("ro.adb.secure=0"));
+        assert!(text.contains("persist.sys.usb.config=mtp,adb"));
+        assert!(
+            !text.contains("system/etc/prop.default"),
+            "link target must be gone"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -595,18 +772,22 @@ mod tests {
         let inp = dir.join("b.img");
         let outp = dir.join("b2.img");
         std::fs::write(&inp, b"NOPE").unwrap();
-        assert!(boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap())
-            .unwrap_err()
-            .to_string()
-            .contains("ANDROID"));
+        assert!(
+            boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("ANDROID")
+        );
         // Zero page size is a clean error, not a divide-by-zero.
         let mut z = vec![0u8; 64];
         z[..8].copy_from_slice(BOOT_MAGIC);
         std::fs::write(&inp, &z).unwrap();
-        assert!(boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap())
-            .unwrap_err()
-            .to_string()
-            .contains("page size"));
+        assert!(
+            boot_patch_adb_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("page size")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -627,16 +808,18 @@ mod tests {
         vb[..4].copy_from_slice(b"AVB0");
         vb[80..84].copy_from_slice(&0u32.to_le_bytes());
         std::fs::write(&inp, &vb).unwrap();
-        let r: serde_json::Value =
-            serde_json::from_str(&vbmeta_patch_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), 0x03).unwrap())
-                .unwrap();
+        let r: serde_json::Value = serde_json::from_str(
+            &vbmeta_patch_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), 0x03).unwrap(),
+        )
+        .unwrap();
         assert_eq!(r["patched"], true);
         let back = std::fs::read(&outp).unwrap();
         assert_eq!(u32::from_le_bytes(back[80..84].try_into().unwrap()), 0x03);
         std::fs::write(&inp, b"junkjunkjunk").unwrap();
-        let r2: serde_json::Value =
-            serde_json::from_str(&vbmeta_patch_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), 0x03).unwrap())
-                .unwrap();
+        let r2: serde_json::Value = serde_json::from_str(
+            &vbmeta_patch_cli(inp.to_str().unwrap(), outp.to_str().unwrap(), 0x03).unwrap(),
+        )
+        .unwrap();
         assert_eq!(r2["patched"], false);
         let _ = std::fs::remove_dir_all(&dir);
     }

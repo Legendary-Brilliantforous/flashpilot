@@ -56,8 +56,7 @@ fn mmc_device_dir() -> Option<String> {
 pub fn host_emmc_health() -> Result<HostEmmcHealth> {
     let dev = mmc_device_dir().ok_or_else(|| {
         BridgeError::Io(
-            "no mmc_host device in /sys - this host has no eMMC (SD-only or NVMe system?)"
-                .into(),
+            "no mmc_host device in /sys - this host has no eMMC (SD-only or NVMe system?)".into(),
         )
     })?;
     let mut out = HostEmmcHealth {
@@ -67,14 +66,11 @@ pub fn host_emmc_health() -> Result<HostEmmcHealth> {
     out.life_time = read_trim(&format!("{dev}/life_time"));
     out.pre_eol_info = read_trim(&format!("{dev}/pre_eol_info"));
     // Block-device identity (the block node mirrors the card: mmcblk0).
-    if let Some(blk) = std::fs::read_dir("/sys/block")
-        .ok()
-        .and_then(|ents| {
-            ents.flatten()
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .find(|n| n.starts_with("mmcblk") && !n.contains('p'))
-        })
-    {
+    if let Some(blk) = std::fs::read_dir("/sys/block").ok().and_then(|ents| {
+        ents.flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .find(|n| n.starts_with("mmcblk") && !n.contains('p'))
+    }) {
         out.model = read_trim(&format!("/sys/block/{blk}/device/model"));
         out.rev = read_trim(&format!("/sys/block/{blk}/device/rev"));
         out.cid = read_trim(&format!("/sys/block/{blk}/device/cid"));

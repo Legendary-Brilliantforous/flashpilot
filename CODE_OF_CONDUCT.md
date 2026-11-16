@@ -1,5 +1,7 @@
 # Contributor Covenant Code of Conduct
 
+**Documentation languages:** **English** · [Français](docs/fr/CODE_OF_CONDUCT.md) · [Español](docs/es/CODE_OF_CONDUCT.md) · [Deutsch](docs/de/CODE_OF_CONDUCT.md) · [简体中文](docs/zh/CODE_OF_CONDUCT.md) · [Русский](docs/ru/CODE_OF_CONDUCT.md) · [Português](docs/pt/CODE_OF_CONDUCT.md) · [日本語](docs/ja/CODE_OF_CONDUCT.md) · [العربية](docs/ar/CODE_OF_CONDUCT.md) · [हिन्दी](docs/hi/CODE_OF_CONDUCT.md) · [Türkçe](docs/tr/CODE_OF_CONDUCT.md) · [Translation guide](docs/TRANSLATION.md)
+
 ## Our pledge
 
 We as members, contributors, and leaders pledge to make participation in our

@@ -10,7 +10,7 @@
 //! Lockdown speaks XML plists: `{"Request": "GetValue"}` returns
 //! `{Status, Value{...}}` for non-protected keys without pairing.
 
-use crate::error::{Result, BridgeError};
+use crate::error::{BridgeError, Result};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -37,9 +37,7 @@ pub struct AppleDevice {
 // ---- minimal XML plist subset (dict/string/integer/array) ----------------
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&")
-        .replace('<', "<")
-        .replace('>', ">")
+    s.replace('&', "&").replace('<', "<").replace('>', ">")
 }
 
 pub fn plist_dict_xml(pairs: &[(&str, String)]) -> String {
@@ -61,7 +59,12 @@ fn plist_string_after_tag(xml: &str, tag: &str) -> Option<String> {
     if let Some(start) = xml.find(&key_pat) {
         let rest = &xml[start + key_pat.len()..];
         if let Some(end) = rest.find("</string>") {
-            return Some(rest[..end].replace("<", "<").replace(">", ">").replace("&", "&"));
+            return Some(
+                rest[..end]
+                    .replace("<", "<")
+                    .replace(">", ">")
+                    .replace("&", "&"),
+            );
         }
     }
     None
@@ -134,8 +137,11 @@ fn read_mux_message(stream: &mut UnixStream) -> Result<(u32, String)> {
 }
 
 fn usbmuxd_socket() -> Result<UnixStream> {
-    let stream = UnixStream::connect(USBMUXD_SOCKET)
-        .map_err(|e| BridgeError::Io(format!("connect {USBMUXD_SOCKET}: {e} (is usbmuxd running?)")))?;
+    let stream = UnixStream::connect(USBMUXD_SOCKET).map_err(|e| {
+        BridgeError::Io(format!(
+            "connect {USBMUXD_SOCKET}: {e} (is usbmuxd running?)"
+        ))
+    })?;
     stream
         .set_read_timeout(Some(SOCKET_TIMEOUT))
         .map_err(|e| BridgeError::Io(format!("usbmuxd read-timeout setup: {e}")))?;
@@ -167,7 +173,8 @@ pub fn usbmuxd_list() -> Result<Vec<AppleDevice>> {
         cursor = abs + 1;
         if let Some(id) = plist_int_after_tag(&block, "DeviceID") {
             let udid = plist_string_after_tag(&block, "SerialNumber").unwrap_or_default();
-            let conn = plist_string_after_tag(&block, "ConnectionType").unwrap_or_else(|| "USB".into());
+            let conn =
+                plist_string_after_tag(&block, "ConnectionType").unwrap_or_else(|| "USB".into());
             if !udid.is_empty() {
                 out.push(AppleDevice {
                     device_id: id as u32,
@@ -274,7 +281,10 @@ mod tests {
     fn plist_string_extraction() {
         let xml = "<plist><dict><key>SerialNumber</key><string>R9X&1</string>\
                    <key>DeviceID</key><integer>7</integer></dict></plist>";
-        assert_eq!(plist_string_after_tag(xml, "SerialNumber").unwrap(), "R9X&1");
+        assert_eq!(
+            plist_string_after_tag(xml, "SerialNumber").unwrap(),
+            "R9X&1"
+        );
         assert_eq!(plist_int_after_tag(xml, "DeviceID").unwrap(), 7);
         assert!(plist_string_after_tag(xml, "Missing").is_none());
     }

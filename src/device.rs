@@ -41,7 +41,12 @@ pub enum StableDeviceIdentity {
     /// Stable USB port path (no usable serial on the device).
     PortPath(String),
     /// Volatile last resort: exact VID/PID/bus/addr snapshot.
-    Volatile { vid: u16, pid: u16, bus: u8, addr: u8 },
+    Volatile {
+        vid: u16,
+        pid: u16,
+        bus: u8,
+        addr: u8,
+    },
 }
 
 impl StableDeviceIdentity {
@@ -51,7 +56,12 @@ impl StableDeviceIdentity {
         match self {
             StableDeviceIdentity::Serial(s) => format!("adb:{s}"),
             StableDeviceIdentity::PortPath(p) => format!("usb:{p}"),
-            StableDeviceIdentity::Volatile { vid, pid, bus, addr } => {
+            StableDeviceIdentity::Volatile {
+                vid,
+                pid,
+                bus,
+                addr,
+            } => {
                 format!("usb:{vid:04x}:{pid:04x}@{bus}:{addr}")
             }
         }
@@ -116,7 +126,12 @@ fn parse_volatile(s: &str) -> Option<StableDeviceIdentity> {
     let pid = u16::from_str_radix(pid.trim(), 16).ok()?;
     let bus: u8 = bus.trim().parse().ok()?;
     let addr: u8 = addr.trim().parse().ok()?;
-    Some(StableDeviceIdentity::Volatile { vid, pid, bus, addr })
+    Some(StableDeviceIdentity::Volatile {
+        vid,
+        pid,
+        bus,
+        addr,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +162,11 @@ impl CurrentTransport {
             addr: d.address,
             serial: {
                 let s = normalize_serial(d.serial.as_deref());
-                if s.is_empty() { None } else { Some(s) }
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
             },
             port_numbers: d.port_numbers.clone(),
             interfaces: d.interfaces.clone(),
@@ -161,7 +180,10 @@ impl CurrentTransport {
     /// follow-up (open exactly this transport for the validated action).
     #[allow(dead_code)]
     pub fn target(&self) -> String {
-        format!("{:04x}:{:04x}@{}:{}", self.vid, self.pid, self.bus, self.addr)
+        format!(
+            "{:04x}:{:04x}@{}:{}",
+            self.vid, self.pid, self.bus, self.addr
+        )
     }
 }
 
@@ -185,23 +207,27 @@ pub fn resolve_transport(ident: &StableDeviceIdentity) -> Result<CurrentTranspor
             match hits.len() {
                 0 => Err(BridgeError::Usb(UsbError::DeviceNotFound)),
                 1 => Ok(CurrentTransport::from_device_info(hits[0])),
-                n => Err(BridgeError::DeviceState(DeviceStateError::AmbiguousTarget {
-                    count: n,
-                })),
+                n => Err(BridgeError::DeviceState(
+                    DeviceStateError::AmbiguousTarget { count: n },
+                )),
             }
         }
         StableDeviceIdentity::PortPath(p) => {
-            let hits: Vec<&DeviceInfo> =
-                devices.iter().filter(|d| &d.port_numbers == p).collect();
+            let hits: Vec<&DeviceInfo> = devices.iter().filter(|d| &d.port_numbers == p).collect();
             match hits.len() {
                 0 => Err(BridgeError::Usb(UsbError::DeviceNotFound)),
                 1 => Ok(CurrentTransport::from_device_info(hits[0])),
-                n => Err(BridgeError::DeviceState(DeviceStateError::AmbiguousTarget {
-                    count: n,
-                })),
+                n => Err(BridgeError::DeviceState(
+                    DeviceStateError::AmbiguousTarget { count: n },
+                )),
             }
         }
-        StableDeviceIdentity::Volatile { vid, pid, bus, addr } => {
+        StableDeviceIdentity::Volatile {
+            vid,
+            pid,
+            bus,
+            addr,
+        } => {
             // vid/pid 0 = bare "bus:addr" fallback: match transport only.
             devices
                 .iter()
@@ -367,9 +393,7 @@ pub fn detect_capabilities(
             } else if has_adb {
                 mode = BootMode::AndroidAdb;
                 proto = Protocol::Adb;
-            } else if has_iface(&t.interfaces, 6, 0)
-                || t.interfaces.iter().any(|i| i.class == 6)
-            {
+            } else if has_iface(&t.interfaces, 6, 0) || t.interfaces.iter().any(|i| i.class == 6) {
                 mode = BootMode::AndroidMtp;
                 push_cap(&mut caps, Capability::DeviceInfo);
             }
@@ -673,11 +697,18 @@ fn action_allowed(profile: &DeviceProfile, a: &ActionDef) -> bool {
     if !a.platforms.is_empty() && !a.platforms.contains(&profile.platform) {
         return false;
     }
-    if !a.requires_all.iter().all(|c| profile.capabilities.contains(c)) {
+    if !a
+        .requires_all
+        .iter()
+        .all(|c| profile.capabilities.contains(c))
+    {
         return false;
     }
     if !a.requires_any.is_empty()
-        && !a.requires_any.iter().any(|c| profile.capabilities.contains(c))
+        && !a
+            .requires_any
+            .iter()
+            .any(|c| profile.capabilities.contains(c))
     {
         return false;
     }
@@ -687,23 +718,21 @@ fn action_allowed(profile: &DeviceProfile, a: &ActionDef) -> bool {
 /// The valid action set for this device right now. The GUI must offer
 /// exactly this set — nothing more.
 pub fn allowed_actions(profile: &DeviceProfile) -> Vec<&'static ActionDef> {
-    ACTION_REGISTRY.iter().filter(|a| action_allowed(profile, a)).collect()
+    ACTION_REGISTRY
+        .iter()
+        .filter(|a| action_allowed(profile, a))
+        .collect()
 }
 
 /// Backend enforcement: is `action_id` valid for this device right now?
 /// Unknown action ids and unmet requirements are rejected with a
 /// structured error — even if the GUI sends them manually.
-pub fn validate_action(
-    profile: &DeviceProfile,
-    action_id: &str,
-) -> Result<&'static ActionDef> {
+pub fn validate_action(profile: &DeviceProfile, action_id: &str) -> Result<&'static ActionDef> {
     let def = ACTION_REGISTRY
         .iter()
         .find(|a| a.id == action_id)
         .ok_or_else(|| {
-            crate::error::BridgeError::InvalidArgument(format!(
-                "unknown action: {action_id}"
-            ))
+            crate::error::BridgeError::InvalidArgument(format!("unknown action: {action_id}"))
         })?;
     if action_allowed(profile, def) {
         Ok(def)
@@ -842,7 +871,12 @@ mod tests {
         );
         assert_eq!(
             StableDeviceIdentity::parse("1:5"),
-            Some(StableDeviceIdentity::Volatile { vid: 0, pid: 0, bus: 1, addr: 5 })
+            Some(StableDeviceIdentity::Volatile {
+                vid: 0,
+                pid: 0,
+                bus: 1,
+                addr: 5
+            })
         );
         assert_eq!(StableDeviceIdentity::parse(""), None);
         assert_eq!(StableDeviceIdentity::parse("-"), None);
@@ -852,10 +886,7 @@ mod tests {
 
     #[test]
     fn keys_are_canonical() {
-        assert_eq!(
-            StableDeviceIdentity::Serial("A".to_string()).key(),
-            "adb:A"
-        );
+        assert_eq!(StableDeviceIdentity::Serial("A".to_string()).key(), "adb:A");
         assert_eq!(
             StableDeviceIdentity::PortPath("1-2".to_string()).key(),
             "usb:1-2"

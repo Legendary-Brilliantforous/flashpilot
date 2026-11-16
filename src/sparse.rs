@@ -51,7 +51,9 @@ pub fn expand(data: &[u8]) -> Result<Vec<u8>> {
     let mut off = file_hdr_sz;
     for _ in 0..total_chunks {
         if off + chunk_hdr_sz > data.len() {
-            return Err(BridgeError::InvalidArgument("sparse chunk truncated".into()));
+            return Err(BridgeError::InvalidArgument(
+                "sparse chunk truncated".into(),
+            ));
         }
         let ctype = hw(off)?;
         let chunk_sz = hexword(off + 4)? as usize; // blocks this chunk produces

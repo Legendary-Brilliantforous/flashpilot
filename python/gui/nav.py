@@ -207,6 +207,7 @@ class OemChipBar(QFrame):
                 "QPushButton:hover { border:1px solid #94a3b8; color:#e2e8f0; }"
                 "QPushButton:checked { background:#94a3b8; color:#0b0f14;"
                 " border:1px solid #94a3b8; }"
+                "QPushButton:disabled { color:#5b6b80; border:1px dashed rgba(255,255,255,0.06); }"
                 "QPushButton:focus { border:1px dashed #334155; outline:none; }"
                 "QPushButton:checked:focus { border:1px solid #94a3b8; outline:none; }"
             )
@@ -218,6 +219,18 @@ class OemChipBar(QFrame):
     def select(self, key):
         for k, b in self._buttons.items():
             b.setChecked(k == key)
+
+    def set_tool_enabled(self, key, enabled, tip=None):
+        """Grey a tool chip in/out without removing it (tool-chip pattern).
+
+        Disabled chips are visible but not clickable; the tooltip always
+        says why, so there are no dead popups."""
+        b = self._buttons.get(key)
+        if b is None:
+            return
+        b.setEnabled(bool(enabled))
+        if tip is not None:
+            b.setToolTip(tip)
 
     def keys(self):
         return list(self._buttons.keys())

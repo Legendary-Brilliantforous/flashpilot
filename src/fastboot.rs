@@ -76,9 +76,7 @@ fn getvar_name(cmd: &str) -> Option<String> {
     let mut parts = cmd.split_whitespace();
     match parts.next() {
         Some("getvar") => parts.next().map(|s| s.to_string()),
-        Some(other) if other.starts_with("getvar:") => {
-            Some(other["getvar:".len()..].to_string())
-        }
+        Some(other) if other.starts_with("getvar:") => Some(other["getvar:".len()..].to_string()),
         _ => None,
     }
 }
@@ -138,14 +136,23 @@ fn open_session(target: &str) -> Result<(UsbDevice, u8, u8)> {
     Ok((dev, ep_in, ep_out))
 }
 
+/// Map a device-side FAIL reply to a transport-level error, preserving the
+/// bootloader's message. A FAILED command must never exit 0.
+fn fail_reply_error(cmd: &str, reason: &str) -> BridgeError {
+    BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+        "fastboot command '{cmd}' failed: {reason}"
+    )))
+}
+
 /// Run one raw fastboot command, returning the system-fastboot-style
-/// transcript (`(bootloader) ...` lines + `OKAY [...]` / `FAILED ...`).
-/// A device-side FAIL is *not* a transport error: it is rendered as
-/// `FAILED (remote: 'reason')` with exit 0, so Python-side `FAILED`-in-output
-/// checks keep working exactly like the system binary.
+/// transcript (`(bootloader) ...` lines + `OKAY [...]`).
+/// A device-side FAIL is a real failure: it propagates as Err including the
+/// bootloader message (previously it was rendered as text and returned Ok).
 pub fn run_command(target: &str, cmd: &str, timeout: Duration) -> Result<String> {
     if cmd.is_empty() {
-        return Err(BridgeError::InvalidArgument("empty fastboot command".to_string()));
+        return Err(BridgeError::InvalidArgument(
+            "empty fastboot command".to_string(),
+        ));
     }
     if cmd.len() > FB_CMD_MAX {
         return Err(BridgeError::InvalidArgument(format!(
@@ -179,9 +186,8 @@ pub fn run_command(target: &str, cmd: &str, timeout: Duration) -> Result<String>
                 return Ok(lines.join("\n"));
             }
             Reply::Fail(reason) => {
-                lines.push(format!("FAILED (remote: '{reason}')"));
                 eprintln!("[fastboot] command '{cmd}' refused by device: {reason}");
-                return Ok(lines.join("\n"));
+                return Err(fail_reply_error(cmd, &reason));
             }
             Reply::Data(_) => {
                 return Err(BridgeError::NotSupported(
@@ -202,9 +208,11 @@ pub fn fastboot_devices_cli() -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let mut out = Vec::new();
     for d in &devices {
-        if let Some(iface) = d.interfaces.iter().find(|i| {
-            i.class == FB_CLASS && i.subclass == FB_SUBCLASS && i.protocol == FB_PROTOCOL
-        }) {
+        if let Some(iface) = d
+            .interfaces
+            .iter()
+            .find(|i| i.class == FB_CLASS && i.subclass == FB_SUBCLASS && i.protocol == FB_PROTOCOL)
+        {
             out.push(json!({
                 "vid": format!("{:04x}", d.vid),
                 "pid": format!("{:04x}", d.pid),
@@ -248,25 +256,33 @@ pub fn flash_partition(
     let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
     match parse_packet(&buf[..n]) {
         Reply::Data(total_hex) => {
-            let total = usize::from_str_radix(&total_hex, 16)
-                .map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("bad DATA size '{total_hex}'"),
-                )))?;
+            let total = usize::from_str_radix(&total_hex, 16).map_err(|_| {
+                BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "bad DATA size '{total_hex}'"
+                )))
+            })?;
             if total != image.len() {
-                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("DATA size mismatch: device wants {total}, image is {}", image.len()),
-                )));
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::UnexpectedResponse(format!(
+                        "DATA size mismatch: device wants {total}, image is {}",
+                        image.len()
+                    )),
+                ));
             }
         }
         Reply::Fail(reason) => {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                format!("download refused: {reason}"),
-            )));
+            return Err(BridgeError::Protocol(
+                crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "download refused: {reason}"
+                )),
+            ));
         }
         other => {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                format!("expected DATA after download, got {other:?}"),
-            )));
+            return Err(BridgeError::Protocol(
+                crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "expected DATA after download, got {other:?}"
+                )),
+            ));
         }
     }
 
@@ -283,9 +299,11 @@ pub fn flash_partition(
             Reply::Info(payload) => eprintln!("[fastboot] {payload}"),
             Reply::Okay(_) => break,
             Reply::Fail(reason) => {
-                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("download failed: {reason}"),
-                )));
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::UnexpectedResponse(format!(
+                        "download failed: {reason}"
+                    )),
+                ));
             }
             _ => {}
         }
@@ -323,11 +341,7 @@ pub fn flash_partition(
 /// bootloader's download buffer at its scratch address; a later
 /// `continue`/`boot` command can consume it (the kernel-cmdline-injection
 /// strategy points `initrd=<addr>,<size>` at exactly this buffer).
-pub fn download_to_buffer(
-    target: &str,
-    image_path: &str,
-    timeout: Duration,
-) -> Result<String> {
+pub fn download_to_buffer(target: &str, image_path: &str, timeout: Duration) -> Result<String> {
     let image = std::fs::read(image_path)
         .map_err(|e| BridgeError::Io(format!("read image {image_path}: {e}")))?;
     if image.is_empty() {
@@ -348,25 +362,33 @@ pub fn download_to_buffer(
     let n = dev.read_bulk(ep_in, &mut buf, timeout)?;
     match parse_packet(&buf[..n]) {
         Reply::Data(total_hex) => {
-            let total = usize::from_str_radix(&total_hex, 16)
-                .map_err(|_| BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("bad DATA size '{total_hex}'"),
-                )))?;
+            let total = usize::from_str_radix(&total_hex, 16).map_err(|_| {
+                BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "bad DATA size '{total_hex}'"
+                )))
+            })?;
             if total != image.len() {
-                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("DATA size mismatch: device wants {total}, payload is {}", image.len()),
-                )));
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::UnexpectedResponse(format!(
+                        "DATA size mismatch: device wants {total}, payload is {}",
+                        image.len()
+                    )),
+                ));
             }
         }
         Reply::Fail(reason) => {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                format!("download refused: {reason}"),
-            )));
+            return Err(BridgeError::Protocol(
+                crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "download refused: {reason}"
+                )),
+            ));
         }
         other => {
-            return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                format!("expected DATA after download, got {other:?}"),
-            )));
+            return Err(BridgeError::Protocol(
+                crate::error::ProtocolError::UnexpectedResponse(format!(
+                    "expected DATA after download, got {other:?}"
+                )),
+            ));
         }
     }
 
@@ -387,9 +409,11 @@ pub fn download_to_buffer(
                 ));
             }
             Reply::Fail(reason) => {
-                return Err(BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(
-                    format!("download failed: {reason}"),
-                )));
+                return Err(BridgeError::Protocol(
+                    crate::error::ProtocolError::UnexpectedResponse(format!(
+                        "download failed: {reason}"
+                    )),
+                ));
             }
             _ => {}
         }
@@ -397,7 +421,7 @@ pub fn download_to_buffer(
 }
 
 /// `fastboot-cmd <target> <timeout_ms> <cmd...>` — run one raw command.
-/// Prints the transcript; exit 0 unless the *transport* failed.
+/// Prints the transcript; a device FAIL (or transport error) is an Err.
 pub fn fastboot_cmd_cli(target: &str, timeout_ms: u64, cmd: &[String]) -> Result<String> {
     if cmd.is_empty() {
         return Err(BridgeError::InvalidArgument(
@@ -419,10 +443,7 @@ mod tests {
             Reply::Info("securestate: oem_locked".to_string())
         );
         assert_eq!(parse_packet(b"OKAY"), Reply::Okay(String::new()));
-        assert_eq!(
-            parse_packet(b"OKAY0.012"),
-            Reply::Okay("0.012".to_string())
-        );
+        assert_eq!(parse_packet(b"OKAY0.012"), Reply::Okay("0.012".to_string()));
         assert_eq!(
             parse_packet(b"FAILPermission denied"),
             Reply::Fail("Permission denied".to_string())
@@ -445,6 +466,18 @@ mod tests {
             parse_packet(b"hello?"),
             Reply::Garbage("hello?".to_string())
         );
+    }
+
+    #[test]
+    fn failed_reply_propagates_as_error_with_device_message() {
+        let err = fail_reply_error("erase:frp", "Permission denied");
+        assert!(matches!(
+            err,
+            BridgeError::Protocol(crate::error::ProtocolError::UnexpectedResponse(_))
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("erase:frp"), "{msg}");
+        assert!(msg.contains("Permission denied"), "{msg}");
     }
 
     #[test]
@@ -471,12 +504,12 @@ mod tests {
             format_info(Some("all"), "version: 0.5"),
             "(bootloader) version: 0.5"
         );
-        assert_eq!(
-            format_info(None, "oem_locked"),
-            "(bootloader) oem_locked"
-        );
+        assert_eq!(format_info(None, "oem_locked"), "(bootloader) oem_locked");
         // Command-shape parsing for both `getvar:foo` and `getvar foo`.
-        assert_eq!(getvar_name("getvar:securestate"), Some("securestate".to_string()));
+        assert_eq!(
+            getvar_name("getvar:securestate"),
+            Some("securestate".to_string())
+        );
         assert_eq!(
             getvar_name("getvar securestate"),
             Some("securestate".to_string())

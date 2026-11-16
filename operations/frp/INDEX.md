@@ -4,7 +4,7 @@
 > see `operations/apple/`.
 
 This directory holds **per-engine documentation trees** for FRP bypass.
-The actual code lives in `python/core/flows/`. When you have a real
+The actual code lives in `src/flows.rs` (Rust). When you have a real
 recipe for a device (chip, FDL pair, partition offsets, etc.) you drop a
 short research note in `devices/<brand>/<model>.md`. The README at the
 root of this file maps every FRP flow in the codebase to where it lives
@@ -76,8 +76,8 @@ Every flow the GUI's FRP actions can call. Keys are Rust registry rows
    `operations/frp/devices/nokia/nokia_g20.md` for the format.
 
 5. **If the engine itself doesn't have a flow** for this chipset, register
-   the flow in `python/core/flows/<engine>.py` under `FLOWS` and add
-   the CLI dispatch in `src/<engine>.rs` + `src/main.rs`.
+   the flow in `src/flows.rs` (a `flow!(...)` row) and add the CLI
+   dispatch in `src/<engine>.rs` + `src/main.rs`.
 
 ## Why the per-chip files are gone
 

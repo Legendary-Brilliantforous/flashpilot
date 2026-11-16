@@ -8,9 +8,11 @@
 #
 #   /usr/bin/flashpilot                     launcher
 #   /usr/lib/flashpilot/flashpilot-bridge    compiled Rust bridge
+#   /usr/lib/flashpilot/payloads/mtk/       MediaTek BROM payloads (GPLv3)
+#   /usr/lib/flashpilot/payloads/qcom/      Qualcomm firehose programmers + index
 #   /usr/lib/flashpilot/venv/               bundled Python venv (PyQt6 + segno)
 #   /usr/share/flashpilot/                  python/, main.py, scripts/, root/,
-#                                          pit/, docs/, LICENSE, README
+#                                          pit/, docs/, i18n/, LICENSE, README
 #   /usr/lib/udev/rules.d/60-odin4.rules   Samsung USB rules (no sudo flashing)
 #   /usr/share/applications/flashpilot.desktop
 #   /usr/share/icons/hicolor/{256,512}x{256,512}/apps/flashpilot.png
@@ -22,7 +24,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="$(.venv/bin/python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
+# Resolve the version without assuming a repo .venv exists (CI builds the
+# package from a clean checkout): prefer .venv's interpreter, fall back to the
+# system one. tomllib needs 3.11+, which the package's python3 dependency
+# already requires.
+PYBIN="/usr/bin/python3"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    PYBIN="$ROOT/.venv/bin/python"
+fi
+VERSION="$("$PYBIN" -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 PYVER="$(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])')"
 PKG="flashpilot_${VERSION}_${ARCH}.deb"
@@ -49,6 +59,19 @@ mkdir -p "$STAGE/usr/share/icons/hicolor/512x512/apps"
 
 # 3. Rust bridge.
 install -m 0755 target/release/flashpilot-bridge "$STAGE/usr/lib/flashpilot/flashpilot-bridge"
+
+# 3b. Bundled MediaTek BROM payloads (GPLv3, see payloads/mtk/README.md).
+#     resolve_payload() looks next to the binary: /usr/lib/flashpilot/payloads/mtk.
+mkdir -p "$STAGE/usr/lib/flashpilot/payloads/mtk"
+install -m 0644 payloads/mtk/*.bin "$STAGE/usr/lib/flashpilot/payloads/mtk/"
+install -m 0644 payloads/mtk/README.md "$STAGE/usr/lib/flashpilot/payloads/mtk/README.md"
+
+# 3c. Bundled Qualcomm firehose programmers (see payloads/qcom/README.md).
+#     Same lookup: <exe_dir>/payloads/qcom/{*.mbn,index.json}.
+mkdir -p "$STAGE/usr/lib/flashpilot/payloads/qcom"
+install -m 0644 payloads/qcom/*.mbn "$STAGE/usr/lib/flashpilot/payloads/qcom/"
+install -m 0644 payloads/qcom/index.json "$STAGE/usr/lib/flashpilot/payloads/qcom/index.json"
+install -m 0644 payloads/qcom/README.md "$STAGE/usr/lib/flashpilot/payloads/qcom/README.md"
 
 # 4. Bundled venv (PyQt6 + segno + lz4 + samloader + requests + tqdm).
 #    Default: build a FRESH, clean venv from requirements so the .deb is
@@ -147,6 +170,9 @@ cp -r scripts "$STAGE/usr/share/flashpilot/"
 rsync -a root/ "$STAGE/usr/share/flashpilot/root/"
 [ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
+# UI translation catalogs + manifest (runtime lookup expects them next to
+# python/, i.e. /usr/share/flashpilot/i18n/json/*.json).
+cp -r i18n "$STAGE/usr/share/flashpilot/"
 cp LICENSE README.md DESCRIPTION.md "$STAGE/usr/share/flashpilot/"
 find "$STAGE/usr/share/flashpilot" -name "__pycache__" -type d -prune -exec rm -rf {} +
 rm -rf "$STAGE/usr/share/flashpilot/tests"

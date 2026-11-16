@@ -13,22 +13,13 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def win():
-    from PyQt6.QtWidgets import QApplication
-
-    global _qapp
-    try:
-        _qapp
-    except NameError:
-        _qapp = QApplication([])
-    from python.gui import qt_app as _qt
-
-    w = _qt.FlashPilotWindow()
+def win(test_window):
+    # Shared harness: builds the real window, joins the monitor poll thread
+    # (its next poll would otherwise emit over the corner mid-assertion and
+    # repopulate the live-identity cache from a later module), stops the
+    # periodic timers and fully tears everything down at module end.
+    w = test_window()
     assert len(w._gated_buttons) > 100, "gated registry unexpectedly small"
-    # Tests drive _on_device_state with synthetic states directly: the live
-    # monitor thread would race them (its next poll emits over the corner
-    # mid-assertion — flaky full-suite ordering).
-    w._monitor.stop()
     return w
 
 
@@ -622,3 +613,46 @@ def test_detect_mode_qualcomm_9006_is_diag_not_generic():
     modem = {"vid": 0x05C6, "pid": 0x90DB, "interfaces": []}
     assert _detect_mode([], [], [], [], [], [modem]) == \
         "QUALCOMM DEVICE (modem / normal mode)"
+
+
+def test_merged_rows_surface_adb_without_descriptor_interfaces():
+    """Regression: the monitor moved to Rust merged rows, which carry NO USB
+    descriptor `interfaces`. `_has_adb_iface` only understood a raw device dict
+    or a bare interface list, so an authorized phone rendered as
+    'ANDROID DEVICE (VID ...)' at the top right and the 'ADB Status' card
+    stayed 'Not connected' - even though the row carried an explicit ADB
+    transport. For that shape, transports/adb_state is the ADB signature."""
+    from python.gui.qt_app import (
+        _adb_overlay, _detect_mode, _generic_android_mode, _has_adb_iface,
+    )
+
+    row = {
+        "key": "usb:0e8d:201c@2:120", "transports": ["ADB"],
+        "vid": 0x0E8D, "pid": 0x201C, "bus": 2, "address": 120,
+        "serial": "06977371AD102074", "is_adb": False, "adb_state": "device",
+        "usb_product": "TECNO SPARK 8", "usb_manufacturer": "TECNO",
+        "mode": "mediatek",
+    }
+    adb = [{"serial": "06977371AD102074", "state": "device",
+            "extra": "model:KG6-GL"}]
+
+    assert _has_adb_iface(row)
+    # These labels feed the top-right "USB Mode" card + the ModeBadge, and the
+    # "ADB Status" probe gate keys on "ADB" being present in the mode string.
+    assert "ADB" in _generic_android_mode(row)
+    assert "ADB" in _detect_mode([], [], adb, [], [], [], [],
+                                 other_android=[row])
+    assert _adb_overlay(adb, row) == "\nADB · connected (06977371AD102074)"
+
+    # The pre-existing shapes keep working.
+    assert _has_adb_iface({"interfaces": [
+        {"class": 255, "subclass": 66, "protocol": 1}]})
+    assert _has_adb_iface([{"class": 255, "subclass": 66, "protocol": 1}])
+    assert not _has_adb_iface({"interfaces": [
+        {"class": 6, "subclass": 1, "protocol": 1}]})
+
+    # A non-ADB merged row is unchanged - never a false ADB claim.
+    plain = dict(row, transports=["MTP"], adb_state=None)
+    assert not _has_adb_iface(plain)
+    assert "ADB" not in _generic_android_mode(plain)
+    assert _adb_overlay(adb, plain) is None
