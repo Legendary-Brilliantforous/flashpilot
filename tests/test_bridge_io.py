@@ -133,6 +133,48 @@ def test_flow_success_gating_rejects_failed_transcript():
     assert len(bad) == 3
 
 
+def test_frp_success_transcript_is_not_read_as_failure():
+    """The reported bug: a cleared phone was announced as 'operation failed'
+    because optional clean-up steps failed. Success now rests on the FRP
+    flags read back from the phone, so those optional failures must not trip
+    the GUI's failure gating."""
+    from python.gui.qt_app import _flow_failure_markers
+
+    transcript = [
+        "PHONE: USB debugging must be on and this PC authorized",
+        "  > adb shell pm disable-user --user 0 com.google.android.setupwizard",
+        "      ERROR: java.lang.IllegalArgumentException: Unknown package",
+        "      note: skipped (optional): disable Google setup wizard",
+        "  verify setup_wizard_has_run: 1",
+        "  verify user_setup_complete: 1",
+        "  verify device_provisioned: 1",
+        "Done. Verified on the phone: setup_wizard_has_run=1, "
+        "user_setup_complete=1, device_provisioned=1.",
+        "  Note: 1 optional clean-up step(s) skipped. The flags that gate FRP "
+        "above are set.",
+        "Reboot the phone (adb reboot) - it should go straight to the launcher.",
+    ]
+    assert _flow_failure_markers(transcript) == []
+
+    # An unverified run says so in words instead of claiming verification.
+    unverified = [
+        "  verify setup_wizard_has_run: could not read (timeout)",
+        "Done. The write commands succeeded; the phone did not answer every "
+        "read-back, so this rests on their exit status alone.",
+    ]
+    assert _flow_failure_markers(unverified) == []
+
+
+def test_frp_failure_transcript_is_read_as_failure():
+    from python.gui.qt_app import _flow_failure_markers
+
+    bad = _flow_failure_markers([
+        "[error] FRP is NOT cleared: the phone did not accept these FRP "
+        "flags: user_setup_complete=0.",
+    ])
+    assert len(bad) == 1
+
+
 def test_spd_adb_import_is_safe_and_refuses():
     """The GUI's SPD ADB button imports this module; it must never raise
     ImportError and must never pretend a boot patch was written."""

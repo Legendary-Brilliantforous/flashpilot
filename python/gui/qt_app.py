@@ -90,6 +90,7 @@ from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
 from .i18n import tr_key
+from .startup import stage as _startup_stage, set_hook as _set_startup_hook
 from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, SPACE, RADIUS, _BASE_QSS, _get_base_qss,
@@ -1164,33 +1165,51 @@ def _metal_gradient(x0, y0, x1, y1):
 # Splash screen
 # ---------------------------------------------------------------------------
 _SPLASH_MESSAGES = [
-    "Loading Rust bridge...",
-    "Mounting USB subsystem...",
-    "Preparing protocol modules...",
-    "Warming the console...",
-    "Nearly there...",
+    "Starting up…",
+    "Building device pages…",
+    "Preparing operation panels…",
+    "Laying out the workspace…",
+    "Almost ready…",
 ]
 
 
+# Build progress is reported through `python/gui/startup.py`; `main()` installs
+# the hook there and page builders call `stage()` at natural boundaries.
+
+
 class SplashScreen(QWidget):
-    """Frameless splash with the classic badge logo, an animated progress bar
-    and cycling status lines; pulses then fades out before the main window."""
+    """Frameless splash with the badge logo, a live progress bar and a fade.
+
+    The bar follows the window build through ``set_progress`` and keeps
+    creeping on a time curve between reports, so it never looks hung while a
+    single page takes a while to construct. The whole card (background
+    included) fades in and out through the ``fade`` property.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._alpha = 1.0
+        self._fade = 0.0
+        self._closing = False
+        self._fade_out_started = False
         self._pulse = 0.0
         self._progress = 0.0
-        self._msg_idx = 0
+        self._reported = 0.0
+        self._clock = _time.monotonic()
 
         logo_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "..", "docs", "logo_256.png",
         )
-        if os.path.exists(logo_path):
-            self._logo = QPixmap(logo_path)
-        else:
-            self._logo = _draw_logo(256)
+        src = QPixmap(logo_path) if os.path.exists(logo_path) else QPixmap()
+        if src.isNull():
+            src = _draw_logo(256)
+        # Decode + scale once: regenerating the vector logo every frame made
+        # the splash expensive to paint.
+        self._logo = src.scaled(
+            128, 128,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -1206,96 +1225,176 @@ class SplashScreen(QWidget):
             screen.center().y() - self.height() // 2,
         )
 
+        # Static artwork is rendered once; only the pulse, logo, text and bar
+        # are repainted per frame.
+        self._static = self._render_static()
+
+        self._font_title = QFont("Inter", 22, QFont.Weight.ExtraBold)
+        self._font_sub = QFont("Inter", 11, QFont.Weight.Medium)
+        self._font_tag = QFont("JetBrains Mono", 9, QFont.Weight.DemiBold)
+        self._font_status = QFont("Inter", 10, QFont.Weight.Medium)
+        self._font_footer = QFont("Inter", 9, QFont.Weight.DemiBold)
+        self._font_ver = QFont("JetBrains Mono", 8)
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
 
-    def _tick(self):
-        self._pulse += 0.05
-        self._progress = min(1.0, self._progress + 0.006)
-        self._msg_idx = min(len(_SPLASH_MESSAGES) - 1,
-                            int(self._progress * len(_SPLASH_MESSAGES)))
+        self._fade_anim = QPropertyAnimation(self, b"fade", self)
+        self._fade_anim.setDuration(260)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    # -- animated opacity ---------------------------------------------------
+    def _get_fade(self):
+        return self._fade
+
+    def _set_fade(self, value):
+        try:
+            self._fade = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            self._fade = 0.0
         self.update()
-        if self._progress >= 1.0:
-            self._alpha = max(0.0, self._alpha - 0.025)
-            self.update()
-            if self._alpha <= 0.0:
-                self._timer.stop()
-                self.close()
 
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    fade = pyqtProperty(float, _get_fade, _set_fade)
 
+    # -- build progress -----------------------------------------------------
+    def set_progress(self, fraction):
+        """Report real construction progress (0..1); never moves backwards."""
+        try:
+            value = max(0.0, min(1.0, float(fraction)))
+        except (TypeError, ValueError):
+            return
+        self._reported = max(self._reported, value)
+        # Construction blocks the GUI thread, so ticks are sparse exactly when
+        # progress jumps. Keep the drawn bar close to the reported stage instead
+        # of lagging whole percent-points behind (it still eases the last bit).
+        if not self._closing:
+            self._progress = max(self._progress, self._reported - 0.12, 0.0)
+
+    def finish(self):
+        """Complete the bar, fade the card out and close (idempotent)."""
+        if self._closing:
+            return
+        self._closing = True
+        self._reported = 1.0
+        # Let the bar visibly complete first: fading straight from ~40% made
+        # the splash look like it gave up.
+        QTimer.singleShot(220, self._start_fade_out)
+
+    def _start_fade_out(self):
+        if self._fade_out_started:
+            return
+        self._fade_out_started = True
+        anim = QPropertyAnimation(self, b"fade", self)
+        anim.setDuration(320)
+        anim.setStartValue(float(self._fade))
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        anim.finished.connect(self._finish_done)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._fade_anim = anim
+
+    def _finish_done(self):
+        self._timer.stop()
+        self.close()
+
+    # -- animation ----------------------------------------------------------
+    def _tick(self):
+        self._pulse += 0.12
+        if self._closing:
+            # Finish the bar quickly while the card is still opaque.
+            target = 1.0
+            self._progress += (target - self._progress) * 0.35
+        else:
+            # Time-based creep: bar motion continues even while the GUI thread
+            # is busy inside a long page constructor between progress reports.
+            elapsed = _time.monotonic() - self._clock
+            creep = 0.96 * (1.0 - math.exp(-elapsed / 6.0))
+            target = min(0.96, max(self._reported, creep))
+            self._progress += (target - self._progress) * 0.16
+        self.update()
+
+    def _render_static(self):
         w, h = self.width(), self.height()
+        pm = QPixmap(self.size())
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Premium deep space background with rich gradient
         bg_grad = QLinearGradient(0, 0, w, h)
         bg_grad.setColorAt(0, QColor("#0f172a"))
         bg_grad.setColorAt(0.3, QColor("#1e293b"))
         bg_grad.setColorAt(0.7, QColor("#0f172a"))
         bg_grad.setColorAt(1, QColor("#020617"))
-        p.setBrush(bg_grad)
-        p.setPen(QPen(QColor(C["border_hi"]), 1.5))
-        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 16, 16)
+        q.setBrush(bg_grad)
+        q.setPen(QPen(QColor(C["border_hi"]), 1.5))
+        q.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 16, 16)
 
-        # Animated circuit grid with premium glow
         grid = QColor(C["accent"])
         grid.setAlpha(20)
-        p.setPen(QPen(grid, 1.2))
+        q.setPen(QPen(grid, 1.2))
         step = 28.0
         gx = 0.0
         while gx < w:
-            p.drawLine(QPointF(gx, 0), QPointF(gx, h))
+            q.drawLine(QPointF(gx, 0), QPointF(gx, h))
             gx += step
         gy = 0.0
         while gy < h:
-            p.drawLine(QPointF(0, gy), QPointF(w, gy))
+            q.drawLine(QPointF(0, gy), QPointF(w, gy))
             gy += step
 
-        # Premium radial glow with multiple layers
         glow1 = QRadialGradient(w / 2, 140, 250)
         glow1.setColorAt(0, QColor(99, 102, 241, 60))
         glow1.setColorAt(0.5, QColor(139, 92, 246, 30))
         glow1.setColorAt(1, QColor(139, 92, 246, 0))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(glow1)
-        p.drawRect(QRect(0, 0, w, h))
+        q.setPen(Qt.PenStyle.NoPen)
+        q.setBrush(glow1)
+        q.drawRect(QRect(0, 0, w, h))
 
-        # Secondary accent glow
         glow2 = QRadialGradient(w / 2, 180, 180)
         glow2.setColorAt(0, QColor(34, 211, 238, 35))
         glow2.setColorAt(1, QColor(34, 211, 238, 0))
-        p.setBrush(glow2)
-        p.drawRect(QRect(0, 0, w, h))
+        q.setBrush(glow2)
+        q.drawRect(QRect(0, 0, w, h))
 
-        # Premium top accent bar with enhanced pulse
+        q.end()
+        return pm
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Fade the entire card, not just the accent bar.
+        p.setOpacity(self._fade)
+
+        w, h = self.width(), self.height()
+        p.drawPixmap(0, 0, self._static)
+
+        # Pulsing top accent bar.
         pulse = 0.75 + 0.25 * math.sin(self._pulse)
         ag = QLinearGradient(0, 0, w, 0)
         ag.setColorAt(0, QColor("#6366f1"))
         ag.setColorAt(0.5, QColor("#8b5cf6"))
         ag.setColorAt(1, QColor("#22d3ee"))
         p.setBrush(ag)
-        p.setOpacity(pulse)
+        p.setOpacity(self._fade * pulse)
         p.drawRoundedRect(QRectF(24, 18, w - 48, 5), 2.5, 2.5)
-        p.setOpacity(self._alpha)
+        p.setOpacity(self._fade)
 
-        # Enhanced logo with glow effect
+        # Logo with a static glow behind it.
         logo_size = 128
         logo_rect = QRect((w - logo_size) // 2, 38, logo_size, logo_size)
-        
-        # Logo glow
         logo_glow = QRadialGradient(QPointF(logo_rect.center()), logo_size * 0.8)
         logo_glow.setColorAt(0, QColor(99, 102, 241, 50))
         logo_glow.setColorAt(1, QColor(99, 102, 241, 0))
-        p.setBrush(logo_glow)
         p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(logo_glow)
         p.drawEllipse(logo_rect)
-        
-        p.drawPixmap(logo_rect, _draw_logo(logo_size))
+        p.drawPixmap(logo_rect, self._logo)
 
-        # Premium title with gradient text effect
-        p.setFont(QFont("Inter", 22, QFont.Weight.ExtraBold))
+        p.setFont(self._font_title)
         p.setPen(QPen(QColor("#f8fafc")))
         p.drawText(
             QRectF(0, 178, w, 38),
@@ -1303,8 +1402,7 @@ class SplashScreen(QWidget):
             "FlashPilot",
         )
 
-        # Subtitle
-        p.setFont(QFont("Inter", 11, QFont.Weight.Medium))
+        p.setFont(self._font_sub)
         p.setPen(QPen(QColor(C["accent_hi"])))
         p.drawText(
             QRectF(0, 208, w, 24),
@@ -1312,8 +1410,7 @@ class SplashScreen(QWidget):
             "Professional Flashing Tool",
         )
 
-        # Premium tagline
-        p.setFont(QFont("JetBrains Mono", 9, QFont.Weight.DemiBold))
+        p.setFont(self._font_tag)
         p.setPen(QPen(QColor(C["accent"])))
         p.drawText(
             QRectF(0, 235, w, 22),
@@ -1321,23 +1418,22 @@ class SplashScreen(QWidget):
             "FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD",
         )
 
-        # Premium segmented progress bar with glow
+        # Segmented progress bar.
         bar_w, bar_h = w - 100, 12
         bx = (w - bar_w) / 2
         by = 272
         segs = 35
         seg_w = (bar_w - (segs - 1) * 3) / segs
         filled = int(segs * self._progress)
-        
-        # Progress bar background glow
+
         if filled > 0:
-            progress_glow = QRadialGradient(bx + bar_w/2, by + bar_h/2, bar_w)
+            progress_glow = QRadialGradient(bx + bar_w / 2, by + bar_h / 2, bar_w)
             progress_glow.setColorAt(0, QColor(99, 102, 241, 30))
             progress_glow.setColorAt(1, QColor(99, 102, 241, 0))
             p.setBrush(progress_glow)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRect(QRectF(bx - 20, by - 10, bar_w + 40, bar_h + 20))
-        
+
         for i in range(segs):
             sx = bx + i * (seg_w + 3)
             if i < filled:
@@ -1351,22 +1447,24 @@ class SplashScreen(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(QRectF(sx, by, seg_w, bar_h), 2, 2)
 
-        # Premium status line with accent
-        p.setFont(QFont("Inter", 10, QFont.Weight.Medium))
+        msg_idx = min(
+            len(_SPLASH_MESSAGES) - 1,
+            int(self._progress * len(_SPLASH_MESSAGES)),
+        )
+        p.setFont(self._font_status)
         p.setPen(QPen(QColor(C["text"])))
         p.drawText(
             QRectF(0, 298, w, 22),
             Qt.AlignmentFlag.AlignCenter,
-            _SPLASH_MESSAGES[self._msg_idx],
+            _SPLASH_MESSAGES[msg_idx],
         )
 
-        # Premium footer with enhanced styling
         footer_grad = QLinearGradient(0, 0, w, 0)
         footer_grad.setColorAt(0, QColor(C["accent"]))
         footer_grad.setColorAt(0.5, QColor(C["accent_hi"]))
         footer_grad.setColorAt(1, QColor(C["accent"]))
         chips = "SAMSUNG  /  MEDIATEK  /  QUALCOMM  /  UNISOC"
-        p.setFont(QFont("Inter", 9, QFont.Weight.DemiBold))
+        p.setFont(self._font_footer)
         text_pen = QPen()
         text_pen.setBrush(footer_grad)
         p.setPen(text_pen)
@@ -1376,8 +1474,7 @@ class SplashScreen(QWidget):
             chips,
         )
 
-        # Version info - beta shows beta tag + exact display version
-        p.setFont(QFont("JetBrains Mono", 8))
+        p.setFont(self._font_ver)
         p.setPen(QPen(QColor(C["mute"])))
         _ver_disp = _display_version(APP_VERSION)
         _beta_suffix = "  BETA" if _is_beta_version(APP_VERSION) else ""
@@ -1506,6 +1603,7 @@ class FlashPilotWindow(
             self,
             position=str(self.settings.value("toast/position", "top-right")),
         )
+        self._toasts.set_safe_top_provider(self._toast_safe_top)
         self._toasts.show()
 
         # thread -> UI bridge
@@ -1654,6 +1752,7 @@ class FlashPilotWindow(
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
+        _startup_stage(0.02)
         central = QWidget()
         central.setStyleSheet("background: transparent;")
         self.setCentralWidget(central)
@@ -1696,6 +1795,7 @@ class FlashPilotWindow(
         titlebar = DragBar(self)
         titlebar.setFixedHeight(46)
         titlebar.setObjectName("dragbar")
+        self._titlebar = titlebar
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             f" stop:0 rgba(20, 32, 50, 110), stop:0.5 rgba(10, 15, 23, 0),"
@@ -1909,39 +2009,55 @@ class FlashPilotWindow(
         self._device_stacks = {}
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        # Pages build on first visit: the eager build took ~16 s and froze the
+        # splash. `_section_index` is fixed at registration time, so navigation
+        # keeps stable indices even though a placeholder is swapped in place.
+        self._lazy_sections = {}
 
-        # Samsung hub page (operations/console panel).
+        # Samsung hub page (operations/console panel) — the landing page.
+        _startup_stage(0.04)
         dash = QWidget()
         dash_lay = QHBoxLayout(dash)
         dash_lay.setContentsMargins(0, 0, 0, 0)
         dash_lay.setSpacing(14)
         dash_lay.addWidget(self._build_right(), 1)
         self._stack.addWidget(dash)
+        _startup_stage(0.14)
+
+        def _defer(key, builder):
+            """Register a page to build on first visit, keeping its index."""
+            index = self._stack.count()
+            holder = QWidget()
+            holder.setStyleSheet("background: transparent;")
+            self._stack.addWidget(holder)
+            self._section_index[key] = index
+            self._lazy_sections[key] = (index, builder)
 
         # Brand drill-down pages (level 2/3 live inside each stack entry).
         # Samsung's Supported-Devices lives INSIDE the Samsung hub instead.
         self._device_stacks = getattr(self, "_device_stacks", {})
-        for b in device_pages.BRANDS:
-            if b["key"] == "samsung":
-                continue
-            self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
-            self._section_index[f"dev_{b['key']}"] = len(self._section_index)
+        brand_pages = [b for b in device_pages.BRANDS if b["key"] != "samsung"]
+        for b in brand_pages:
+            _defer(
+                f"dev_{b['key']}",
+                lambda k=b["key"]: device_pages.build_brand_page(self, k),
+            )
+        _startup_stage(0.36)
 
-        gen = self._build_general_page()
-
-        for key, widget in (
-            ("general", gen),
-            ("adb", device_pages.build_adb_hub_page(self)),
-            ("fastboot", device_pages.build_fastboot_hub_page(self)),
-            ("easylogin", device_pages.build_easylogin_hub_page(self)),
-            ("fus", self._build_fus_page()),
-            ("mtk", self._build_mtk_page()),
-            ("qc", self._build_qc_page()),
-            ("spd", self._build_spd_page()),
-            ("settings", self._build_settings_page()),
-        ):
-            self._stack.addWidget(widget)
-            self._section_index[key] = len(self._section_index)
+        hub_builders = (
+            ("general", lambda: self._build_general_page()),
+            ("adb", lambda: device_pages.build_adb_hub_page(self)),
+            ("fastboot", lambda: device_pages.build_fastboot_hub_page(self)),
+            ("easylogin", lambda: device_pages.build_easylogin_hub_page(self)),
+            ("fus", lambda: self._build_fus_page()),
+            ("mtk", lambda: self._build_mtk_page()),
+            ("qc", lambda: self._build_qc_page()),
+            ("spd", lambda: self._build_spd_page()),
+            ("settings", lambda: self._build_settings_page()),
+        )
+        for key, builder in hub_builders:
+            _defer(key, builder)
+        _startup_stage(0.6)
 
         # LEFT: connection scene (keeps its size) + state + compact metrics.
         left_panel = QFrame()
@@ -2063,7 +2179,9 @@ class FlashPilotWindow(
 
         # RIGHT dock: the shared console is resizable (horizontal splitter,
         # console on the right) + collapsible (header chevron).
+        _startup_stage(0.7)
         self._console_dock = self._build_console()
+        _startup_stage(0.8)
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setObjectName("consoleDock")
         self._splitter.setChildrenCollapsible(True)
@@ -2074,6 +2192,7 @@ class FlashPilotWindow(
         self._splitter.setStretchFactor(1, 0)
         self._splitter.splitterMoved.connect(self._on_dock_splitter_moved)
         self._style_console_splitter()
+        _startup_stage(0.94)
         self._apply_console_state_from_settings()
 
         root_lay.addWidget(self._splitter, 1)
@@ -2083,6 +2202,7 @@ class FlashPilotWindow(
         root_lay.addWidget(
             self._grip, 0, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight
         )
+        _startup_stage(0.99)
 
     def _set_conn_glow(self, color=None):
         accent = color or C["accent"]
@@ -2695,6 +2815,7 @@ class FlashPilotWindow(
                         [max(self._DOCK_MIN_TOP, total - console), console])
         except Exception:
             pass
+        self._nudge_toasts()
         if persist:
             self._save_console_state()
 
@@ -2736,6 +2857,7 @@ class FlashPilotWindow(
                     self._set_console_collapsed(True, persist=False)
         except Exception:
             pass
+        self._nudge_toasts()
         if persist:
             self._save_console_state()
 
@@ -3299,10 +3421,44 @@ class FlashPilotWindow(
         elif index == 4:
             self._open_cmd_tab()
 
+    # --------------------- deferred page construction ----------------------
+    def _build_section(self, key):
+        """Materialise a deferred stack page in place (no-op when already built).
+
+        The placeholder is replaced at the page's registered index, so
+        `_section_index` and every later index stay valid.
+        """
+        entry = getattr(self, "_lazy_sections", {}).pop(key, None)
+        if entry is None:
+            return False
+        index, builder = entry
+        page = builder()
+        holder = self._stack.widget(index)
+        self._stack.insertWidget(index, page)
+        if holder is not None and holder is not page:
+            self._stack.removeWidget(holder)
+            holder.deleteLater()
+        return True
+
+    def _ensure_all_pages(self):
+        """Build every deferred page.
+
+        Production builds pages on first visit; tests and the inventory call
+        this so a single pass still sees every page, gated button and action.
+        """
+        for key in list(getattr(self, "_lazy_sections", {})):
+            self._build_section(key)
+
     def _on_section(self, key):
         self._current_section = key
         idx = getattr(self, "_section_index", {}).get(key, 0)
+        # Build on first visit, then show it.
+        self._build_section(key)
         self._stack.setCurrentIndex(idx)
+        try:
+            self._refresh_gates()
+        except Exception:
+            pass
         if hasattr(self, "oem_bar"):
             self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
@@ -11183,10 +11339,71 @@ class FlashPilotWindow(
             pass
         super().closeEvent(event)
 
+    def _toast_safe_top(self):
+        """Top of the window's content area, in window coordinates.
+
+        A 340 px toast occupies the top-right corner, which is exactly where
+        the OEM tool chips (FUS / MTK / Qualcomm / SPD) and the console's
+        header / toolbar chips (Copy, Save, Clear, Wrap, Find…) sit. Clearing
+        only the title bar still laid the toast over them, so the anchor goes
+        below all of that chrome — at the console transcript's top edge, which
+        is the first pixel of the window with no buttons in it.
+        """
+        bottom = 0
+
+        def _bottom(widget):
+            try:
+                if widget is None or not widget.isVisible() or widget.height() <= 0:
+                    return 0
+                return max(0, widget.mapTo(self, QPoint(0, widget.height())).y())
+            except Exception:
+                return 0
+
+        def _top(widget):
+            try:
+                if widget is None or not widget.isVisible() or widget.height() <= 0:
+                    return 0
+                return max(0, widget.mapTo(self, QPoint(0, 0)).y())
+            except Exception:
+                return 0
+
+        for name in ("_titlebar", "oem_bar", "_dev_strip"):
+            bottom = max(bottom, _bottom(getattr(self, name, None)))
+        dock = getattr(self, "_console_dock", None)
+        header = getattr(self, "_console_header", None)
+        try:
+            if dock is not None and dock.isVisible():
+                rect = header.geometry() if header is not None else None
+                if rect is not None and rect.height() > 0:
+                    bottom = max(
+                        bottom,
+                        dock.mapTo(self, QPoint(0, rect.bottom())).y(),
+                    )
+                # The transcript starts below the toolbar/find rows: anchor
+                # there so no console button can ever sit under a toast.
+                log_top = _top(getattr(self, "log", None))
+                if log_top > 0:
+                    bottom = max(bottom, log_top)
+        except Exception:
+            pass
+        return max(0, bottom)
+
+    def _nudge_toasts(self):
+        """Re-anchor the toast overlay after the top chrome moves."""
+        toasts = getattr(self, "_toasts", None)
+        if toasts is None:
+            return
+        toasts._relayout()
+        # Geometry settles after the state change; anchor again once it has.
+        QTimer.singleShot(0, toasts._relayout)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_toasts"):
             self._toasts._relayout()
+            # Child geometry settles after the resize event is delivered, so
+            # re-anchor once more to pick up the title bar's final position.
+            QTimer.singleShot(0, self._toasts._relayout)
         if hasattr(self, "_splitter"):
             self._apply_default_dock_split()
         if hasattr(self, "_body_splitter"):
@@ -13137,22 +13354,40 @@ def main():
     splash = SplashScreen()
     splash.show()
 
-    def _boot():
-        win = FrpWindow()
-        win.setWindowIcon(_app_icon())
-        # Window memory: restore size/position/maximized from the last
-        # session (saved in closeEvent).
-        try:
-            st = win.settings
-            if st.value("win_maximized", False, type=bool):
-                win.showMaximized()
-            else:
-                geo = st.value("win_geometry")
-                if geo is not None:
-                    win.restoreGeometry(geo)
-                win.show()
-        except Exception:
-            win.show()
+    # Lets the window build keep the splash animating (and report real
+    # progress) instead of freezing the GUI thread for the whole page build.
+    last_pump = [0.0]
 
-    QTimer.singleShot(2500, _boot)
+    def _pump(fraction=None):
+        if fraction is not None:
+            splash.set_progress(fraction)
+        now = _time.monotonic()
+        if now - last_pump[0] >= 0.04:
+            last_pump[0] = now
+            app.processEvents()
+
+    _set_startup_hook(_pump)
+
+    def _boot():
+        try:
+            win = FrpWindow()
+            win.setWindowIcon(_app_icon())
+            # Window memory: restore size/position/maximized from the last
+            # session (saved in closeEvent).
+            try:
+                st = win.settings
+                if st.value("win_maximized", False, type=bool):
+                    win.showMaximized()
+                else:
+                    geo = st.value("win_geometry")
+                    if geo is not None:
+                        win.restoreGeometry(geo)
+                    win.show()
+            except Exception:
+                win.show()
+        finally:
+            _set_startup_hook(None)
+            splash.finish()
+
+    QTimer.singleShot(800, _boot)
     app.exec()

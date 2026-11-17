@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 
 from ..animations import ShimmerBar
 from ..common import _experimental_banner, _risk_banner
+from ..startup import stage as _stage
 from ..theme import C, _btn_danger, _btn_ghost, _btn_primary, _card_qss
 from ..widgets import CollapsibleSection, FlowLayout, SamsungSubTabs, SectionTitle
 
@@ -72,6 +73,7 @@ class SamsungPageMixin:
         self.samsung_stack.setStyleSheet("QStackedWidget { background: transparent; }")
 
         self._build_flash_inputs()
+        _stage(0.06)
         flash_page = QWidget()
         flash_page.setStyleSheet("background: transparent;")
         fp_lay = QVBoxLayout(flash_page)
@@ -114,6 +116,7 @@ class SamsungPageMixin:
         flash_scroll.setWidget(flash_host)
         fp_lay.addWidget(flash_scroll)
         self.samsung_stack.addWidget(flash_page)
+        _stage(0.08)
 
         # SUPPORTED DEVICES — reuse the devices drill-down (level2/3) here
         from . import devices as _dp
@@ -121,6 +124,7 @@ class SamsungPageMixin:
         if self._device_stacks.get("samsung") is None:
             self._device_stacks["samsung"] = _dp.build_brand_page(self, "samsung")
         self.samsung_stack.addWidget(self._device_stacks["samsung"])
+        _stage(0.10)
 
         # UNLOCK — nested tabs: FRP / MDM / CARRIER / SCREEN LOCK
         unlock_wrap = QWidget()
@@ -151,6 +155,7 @@ class SamsungPageMixin:
         uv.addWidget(unlock_stack, 1)
         self._unlock_stack = unlock_stack
         self.samsung_stack.addWidget(unlock_wrap)
+        _stage(0.12)
 
         # ADVANCED FLASH — dedicated tab (was collapsed section on FLASH)
         adv_page = QWidget()
@@ -172,6 +177,7 @@ class SamsungPageMixin:
         adv_scroll.setWidget(adv_host)
         av.addWidget(adv_scroll)
         self.samsung_stack.addWidget(adv_page)
+        _stage(0.13)
 
         tools_combo = QWidget()
         tools_combo.setStyleSheet("background: transparent;")

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from ..common import _DESTRUCTIVE_CONFIRM, _EXPERIMENTAL_FLOW_MAP
 from ..flow_meta import risk_for, route_for
 from ..i18n import stable_key, tr, tr_key
+from ..startup import stage as _stage
 from ..theme import C, _btn_ghost
 from ..widgets import FlowBrowser, FlowRow, SamsungSubTabs
 from ...core import core, experimental
@@ -150,6 +151,7 @@ class FlowRenderMixin:
         """
         if modes is not None:
             modes = set(modes)
+        _stage()
         rows = self._flow_rows(jobs, modes=modes, methods=methods)
         browser = FlowBrowser(spacing=8)
         browser.set_legend(True)
@@ -188,6 +190,7 @@ class FlowRenderMixin:
             self._add_qr_provisioning(hv, run_cb=run_cb)
         hv.addStretch(1)
         scroll.setWidget(host)
+        _stage()
         v.addWidget(scroll)
         return page
 

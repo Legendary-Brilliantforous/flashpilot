@@ -360,3 +360,134 @@ def test_host_shown_before_parent_has_size():
     assert card.geometry().x() > 0
     assert card.width() == 340
     _reset(host)
+
+
+# --------------------------------------------------------------------------
+# 9. Safe area: top toasts must not cover the title-bar controls
+# --------------------------------------------------------------------------
+def test_safe_top_pushes_top_anchored_toasts_down():
+    from PyQt6.QtWidgets import QWidget
+
+    from python.gui.toast import ToastHost
+
+    parent = QWidget()
+    parent.resize(800, 600)
+    host = ToastHost(parent)
+    host.show()
+
+    card = host.show_info("a", "d", duration=100000)
+    assert card.y() == host._MARGIN
+
+    host.dismiss(card)
+    host.set_safe_top(52)
+    below = host.show_info("b", "d", duration=100000)
+    assert below.y() == 52 + host._MARGIN
+    _reset(host)
+    host.close()
+
+
+def test_safe_top_provider_is_re_evaluated_on_every_relayout():
+    from PyQt6.QtWidgets import QWidget
+
+    from python.gui.toast import ToastHost
+
+    parent = QWidget()
+    parent.resize(800, 600)
+    host = ToastHost(parent)
+    host.show()
+
+    inset = [0]
+    host.set_safe_top_provider(lambda: inset[0])
+    card = host.show_info("a", "d", duration=100000)
+    assert card.y() == host._MARGIN
+
+    inset[0] = 90
+    host._relayout()
+    assert card.y() == 90 + host._MARGIN
+    _reset(host)
+    host.close()
+
+
+def test_safe_top_provider_failure_does_not_break_layout():
+    from PyQt6.QtWidgets import QWidget
+
+    from python.gui.toast import ToastHost
+
+    parent = QWidget()
+    parent.resize(800, 600)
+    host = ToastHost(parent)
+    host.show()
+    host.set_safe_top(20)
+
+    def boom():
+        raise RuntimeError("no geometry yet")
+
+    host.set_safe_top_provider(boom)
+    assert host.safe_top() == 20
+    card = host.show_info("a", "d", duration=100000)
+    assert card.y() == 20 + host._MARGIN
+    _reset(host)
+    host.close()
+
+
+def test_window_toasts_clear_the_real_title_bar(win):
+    """Regression: a top-right toast used to cover STOP / settings / close."""
+    from PyQt6.QtWidgets import QApplication
+
+    host = win._toasts
+    _reset(host)
+    win.show()
+    QApplication.processEvents()
+    host._relayout()
+
+    bar = win._titlebar
+    title_bar_bottom = bar.mapTo(win, QPoint(0, bar.height())).y()
+    assert title_bar_bottom > 0
+
+    card = host.show_info("notification", "d", duration=100000)
+    assert card.y() >= title_bar_bottom + host._MARGIN
+    _reset(host)
+
+
+def test_window_toasts_never_cover_a_top_row_button(win):
+    """Regression: toasts landed on the OEM tool chips and the console's
+    Copy / Save / Clear / Wrap buttons, which live in the top-right corner."""
+    from PyQt6.QtCore import QRect
+    from PyQt6.QtWidgets import QAbstractButton, QApplication
+
+    host = win._toasts
+    _reset(host)
+    win.show()
+    QApplication.processEvents()
+    host._relayout()
+
+    card = host.show_info("notification", "d", duration=100000)
+    QApplication.processEvents()
+    host._relayout()
+
+    # Anchored below the top chrome, not merely below the title bar.
+    assert card.y() >= host.safe_top() + host._MARGIN
+    chips = getattr(win, "oem_bar", None)
+    if chips is not None and chips.isVisible():
+        chips_bottom = chips.mapTo(win, QPoint(0, chips.height())).y()
+        assert card.y() >= chips_bottom + host._MARGIN
+
+    # The console's own header/toolbar controls (Copy, Save, Clear, Wrap, Find)
+    # sit in the toast's corner and must stay clickable.
+    card_rect = QRect(card.mapTo(win, card.rect().topLeft()),
+                      card.mapTo(win, card.rect().bottomRight()))
+    dock = getattr(win, "_console_dock", None)
+    console_buttons = [
+        btn for btn in dock.findChildren(QAbstractButton)
+        if btn.isVisible() and btn.width() > 0 and btn.height() > 0
+    ] if dock is not None else []
+    covered = []
+    for btn in console_buttons:
+        rect = QRect(btn.mapTo(win, btn.rect().topLeft()),
+                     btn.mapTo(win, btn.rect().bottomRight()))
+        if rect.intersects(card_rect):
+            covered.append((btn.text() or btn.objectName() or "button"))
+    assert console_buttons, "console controls should exist for this guard"
+    assert covered == [], f"toast covers console control(s): {covered}"
+    _reset(host)
+
