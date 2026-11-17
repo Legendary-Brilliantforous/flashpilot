@@ -13107,6 +13107,15 @@ def _app_icon():
 
 
 def main():
+    # Qt logs a benign "OpenType support missing" notice for every fallback
+    # candidate when a label uses a script the UI font cannot shape (the
+    # language picker's native names, or a Hindi/Arabic/CJK interface).
+    # Rendering is correct — Qt falls back per glyph — so drop just that
+    # notice and let every other Qt message through.
+    from .qt_logging import install as _install_qt_logging
+
+    _install_qt_logging()
+
     app = QApplication([])
     QApplication.setDesktopFileName("flashpilot")
     app.setWindowIcon(_app_icon())
