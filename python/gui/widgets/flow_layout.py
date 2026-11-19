@@ -111,3 +111,20 @@ class FlowHost(QFrame):
         super().resizeEvent(event)
         # Trigger height recalculation when width changes (wrap)
         self.updateGeometry()
+
+
+def flow_row(spacing=8, margins=(0, 0, 0, 0)):
+    """Wrapping row for a group of buttons: returns ``(host, layout)``.
+
+    Add the controls to ``layout`` and the ``host`` widget to the parent
+    layout. A plain ``QHBoxLayout`` grows to the sum of its labels, and
+    translated labels are routinely 40-80% longer than the English source
+    ("Rebuild bridge (cargo)" → "Recompiler le bridge (cargo)"): the page then
+    became wider than its viewport and the right-hand controls sat off-screen.
+    A wrapping row moves the extra buttons onto a second line instead.
+    """
+    host = FlowHost()
+    host.setStyleSheet("background: transparent;")
+    row = FlowLayout(host, spacing=spacing)
+    row.setContentsMargins(*margins)
+    return host, row

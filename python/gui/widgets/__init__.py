@@ -22,7 +22,7 @@ from .controls import (
     _SettingsCatButton,
 )
 from .flow_browser import FlowBrowser, FlowRow
-from .flow_layout import FlowHost, FlowLayout
+from .flow_layout import FlowHost, FlowLayout, flow_row
 from .method_card import MethodCard
 from .metric_card import MetricCard
 
@@ -47,5 +47,6 @@ __all__ = [
     "_ComboItemDelegate",
     "_SettingsCatButton",
     "apply_sgr",
+    "flow_row",
     "parse_ansi",
 ]

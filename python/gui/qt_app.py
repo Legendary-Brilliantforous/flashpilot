@@ -120,6 +120,7 @@ from .widgets import (  # noqa: F401
     WindowButton,
     _ComboItemDelegate,
     _SettingsCatButton,
+    flow_row,
     parse_ansi,
 )
 from . import devices as device_pages
@@ -2410,26 +2411,33 @@ class FlashPilotWindow(
         body_lay.setSpacing(SPACE['sm'])
 
         # ---- advanced console toolbar ----
-        console_row = QHBoxLayout()
-        console_row.setSpacing(SPACE['sm'])
+        # Wrapping row: the console column can be dragged narrow and translated
+        # labels are often much wider than the English baseline ("Save" →
+        # "Enregistrer"), so a fixed-width button would truncate the text. The
+        # buttons keep the baseline as a *minimum* and flow onto a second row
+        # when a translation needs the space.
+        console_tools = FlowHost()
+        console_tools.setStyleSheet("background: transparent;")
+        console_row = FlowLayout(console_tools, spacing=SPACE['sm'])
+        console_row.setContentsMargins(0, 0, 0, 0)
 
         self.wrap_btn = self._tool_button(self.tr("Wrap"), self._toggle_wrap)
         self.wrap_btn.setToolTip(self.tr("Toggle line wrap"))
-        self.wrap_btn.setFixedWidth(52)
+        self.wrap_btn.setMinimumWidth(52)
         self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
         self.clear_btn = self._tool_button(self.tr("Clear"), self._clear_console)
-        self.clear_btn.setFixedWidth(52)
+        self.clear_btn.setMinimumWidth(52)
         self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.clear_btn.setToolTip(self.tr("Clear console (Ctrl+L)"))
         console_row.addWidget(self.clear_btn)
         self.copy_btn = self._tool_button(self.tr("Copy"), self._copy_console)
-        self.copy_btn.setFixedWidth(52)
+        self.copy_btn.setMinimumWidth(52)
         self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.copy_btn.setToolTip(self.tr("Copy console to clipboard (Ctrl+Shift+C)"))
         console_row.addWidget(self.copy_btn)
         self.save_btn = self._tool_button(self.tr("Save"), self._save_console)
-        self.save_btn.setFixedWidth(52)
+        self.save_btn.setMinimumWidth(52)
         self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.save_btn.setToolTip(self.tr("Save console to a text file (Ctrl+S)"))
         console_row.addWidget(self.save_btn)
@@ -2440,8 +2448,7 @@ class FlashPilotWindow(
         # setChecked() can never desync the chip from the render mode.
         self.time_btn.toggled.connect(self._set_timestamps)
         console_row.addWidget(self.time_btn)
-        console_row.addStretch(1)
-        body_lay.addLayout(console_row)
+        body_lay.addWidget(console_tools)
 
         # Console | CMD tabs: the transcript lives on Console; the CMD tab
         # is created only when called (Transports ▸ CMD Console) and has
@@ -2481,7 +2488,11 @@ class FlashPilotWindow(
         self.find_edit = QLineEdit()
         self.find_edit.setPlaceholderText(self.tr("Search console...  (Ctrl+F)"))
         self.find_edit.setClearButtonEnabled(True)
-        self.find_edit.setMinimumWidth(80)  # yield space instead of clipping chips
+        # Yield space to the nav chips instead of clipping them: translated
+        # labels ("Next" → "Siguiente", "Далее") are wider than English, and a
+        # row minimum larger than the dock squeezes *every* child — the search
+        # box can shrink far further than the buttons before anything is lost.
+        self.find_edit.setMinimumWidth(40)
         self.find_edit.textChanged.connect(self._apply_console_search)
         self.find_edit.setStyleSheet(
             f"QLineEdit {{ background:{C['card']}; border:1px solid {C['border']};"
@@ -2526,8 +2537,10 @@ class FlashPilotWindow(
         self.clear_search_btn = self.search_clear_btn
         self.console_search_clear = self.search_clear_btn
 
-        flt_row = QHBoxLayout()
-        flt_row.setSpacing(6)
+        flt_row_host = FlowHost()
+        flt_row_host.setStyleSheet("background: transparent;")
+        flt_row = FlowLayout(flt_row_host, spacing=6)
+        flt_row.setContentsMargins(0, 0, 0, 0)
 
         self._filter_btns = {}
         for level, label, color, width, tip in (
@@ -2540,7 +2553,9 @@ class FlashPilotWindow(
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(width)
+            # Baseline width as a minimum only: "Warnings" needs 91 px in
+            # French, and the row now wraps instead of clipping.
+            btn.setMinimumWidth(width)
             btn.setToolTip(tip)
             btn.setStyleSheet(
                 f"QPushButton {{ background: transparent; border:1px solid {C['border']};"
@@ -2563,9 +2578,8 @@ class FlashPilotWindow(
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         flt_row.addWidget(self.clear_on_run)
-        flt_row.addStretch(1)
         cons_lay.addLayout(find_row)
-        cons_lay.addLayout(flt_row)
+        cons_lay.addWidget(flt_row_host)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -2934,7 +2948,7 @@ class FlashPilotWindow(
             self._cmd_mode = QComboBox()
             self._cmd_mode.addItems(["ADB", "Fastboot"])
             self._cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self._cmd_mode.setFixedWidth(110)
+            self._cmd_mode.setMinimumWidth(110)
             self._cmd_mode.setToolTip(self.tr("Which transport the custom command uses"))
             self._cmd_mode.setStyleSheet(
                 f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
@@ -2957,11 +2971,10 @@ class FlashPilotWindow(
             mode_row.addWidget(self._cmd_code, 1)
             lay.addLayout(mode_row)
 
-            adb_row = QHBoxLayout()
-            adb_row.setSpacing(6)
+            adb_host, adb_row = flow_row(spacing=6)
             adb_lbl = QLabel("ADB")
             adb_lbl.setStyleSheet("color:#34d399; font-size:10px; font-weight:800;")
-            adb_lbl.setFixedWidth(52)
+            adb_lbl.setMinimumWidth(52)
             adb_row.addWidget(adb_lbl)
             for label, shell_cmd in (
                 (self.tr("Reboot"), "reboot"),
@@ -2982,26 +2995,13 @@ class FlashPilotWindow(
                 )
                 b.clicked.connect(lambda _=False, c=shell_cmd: self._cmd_adb_preset(c))
                 adb_row.addWidget(b)
-            adb_row.addStretch(1)
-            lay.addLayout(adb_row)
+            lay.addWidget(adb_host)
 
-            fb_row = QHBoxLayout()
-            fb_row.setSpacing(6)
+            fb_host, fb_row = flow_row(spacing=6)
             fb_lbl = QLabel(self.tr("Fastboot"))
             fb_lbl.setStyleSheet("color:#fbbf24; font-size:10px; font-weight:800;")
-            fb_lbl.setFixedWidth(52)
+            fb_lbl.setMinimumWidth(52)
             fb_row.addWidget(fb_lbl)
-            fb_scroll = QScrollArea()
-            fb_scroll.setWidgetResizable(True)
-            fb_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            fb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            fb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            fb_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-            fb_inner = QWidget()
-            fb_inner.setStyleSheet("background: transparent;")
-            fb_btns = QHBoxLayout(fb_inner)
-            fb_btns.setContentsMargins(0, 0, 0, 0)
-            fb_btns.setSpacing(6)
             for label, fb_cmd, tip in (
                 (self.tr("Unlock BL"), None, self.tr("oem unlock <code> (two-step, uses the code above)")),
                 (self.tr("Relock BL"), "relock", self.tr("flashing lock (re-lock the bootloader)")),
@@ -3032,11 +3032,8 @@ class FlashPilotWindow(
                 else:
                     b.clicked.connect(lambda _=False, c=fb_cmd: self._cmd_fb_preset(c))
                 b.setFixedHeight(30)
-                fb_btns.addWidget(b)
-            fb_scroll.setWidget(fb_inner)
-            fb_scroll.setFixedHeight(36)
-            fb_row.addWidget(fb_scroll, 1)
-            lay.addLayout(fb_row)
+                fb_row.addWidget(b)
+            lay.addWidget(fb_host)
 
             custom_row = QHBoxLayout()
             custom_row.setSpacing(6)
@@ -6407,7 +6404,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
 
         ok = QPushButton(confirm_label)
         # Chip-colored confirm button (high-risk = red/orange, flash = blue)
@@ -6417,7 +6414,7 @@ class FlashPilotWindow(
             f"QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[1]}, stop:1 {grad[0]}); }}"
         )
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(180)
+        ok.setMinimumWidth(180)
         ok.setFocus()
 
         def close():
@@ -6571,7 +6568,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
 
         ok = QPushButton(confirm_label)
         ok.setStyleSheet(
@@ -6581,7 +6578,7 @@ class FlashPilotWindow(
             "QPushButton:disabled { background: #334155; color: #94a3b8; }"
         )
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(180)
+        ok.setMinimumWidth(180)
         ok.setEnabled(False)
 
         def _recheck(*_):
@@ -6864,7 +6861,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Exit"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
         cancel.setToolTip(self.tr("Close the application"))
         accept = QPushButton(self.tr("OK — I Accept"))
         accept.setEnabled(False)
@@ -6875,7 +6872,7 @@ class FlashPilotWindow(
             "QPushButton:hover:!disabled { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #fbbf24, stop:1 #f59e0b); }"
         )
         accept.setCursor(Qt.CursorShape.PointingHandCursor)
-        accept.setFixedWidth(190)
+        accept.setMinimumWidth(190)
         btns.addStretch(1)
         btns.addWidget(cancel)
         btns.addWidget(accept)
@@ -7036,7 +7033,7 @@ class FlashPilotWindow(
         if secondary_label and secondary_callback:
             sec_btn = QPushButton(secondary_label)
             sec_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            sec_btn.setFixedWidth(160)
+            sec_btn.setMinimumWidth(160)
             sec_btn.setStyleSheet(
                 "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #10b981, stop:1 #06b6d4); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
                 "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #34d399, stop:1 #06b6d4); }"
@@ -7049,7 +7046,7 @@ class FlashPilotWindow(
 
         ok = QPushButton(ok_label)
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(160)
+        ok.setMinimumWidth(160)
         ok.setStyleSheet(
             "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0ea5e9, stop:1 #22d3ee); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
             "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #38bdf8, stop:1 #22d3ee); }"
@@ -8979,13 +8976,19 @@ class FlashPilotWindow(
         return btn
 
     def _console_chip(self, text, tip, checked=False, width=48):
-        """Compact checkable console chip (theme tokens only)."""
+        """Compact checkable console chip (theme tokens only).
+
+        ``width`` is the English design baseline used as a *minimum*: a chip
+        never shrinks below it, but it grows to fit a longer translated label
+        (``Time`` → ``Heure`` is shorter, other locales are not) instead of
+        clipping the text.
+        """
         btn = QPushButton(text)
         btn.setCheckable(True)
         btn.setChecked(bool(checked))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setFixedWidth(width)
+        btn.setMinimumWidth(width)
         btn.setToolTip(tip)
         btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border:1px solid {C['border']};"

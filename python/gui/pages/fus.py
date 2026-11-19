@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import C, _btn_ghost, _btn_primary, _card_qss
-from ..widgets import SectionTitle
+from ..widgets import SectionTitle, flow_row
 
 
 class FusPageMixin:
@@ -51,7 +51,9 @@ class FusPageMixin:
         form_lay = QVBoxLayout(form_card)
         form_lay.setSpacing(10)
 
-        # Model row
+        # Model + region row. Inputs only: the query buttons live on their own
+        # wrapping row below, because translated labels ("🔍 Detect Connected
+        # Device" is 330 px in Russian) used to widen the whole page.
         r1 = QHBoxLayout()
         lbl1 = QLabel(self.tr("Device Model:"))
         lbl1.setStyleSheet(f"color:{C['text']}; font-weight:600;")
@@ -60,13 +62,6 @@ class FusPageMixin:
         self.fus_model_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
         r1.addWidget(self.fus_model_input, 1)
 
-        self.fus_detect_btn = QPushButton(self.tr("🔍 Detect Connected Device"))
-        self.fus_detect_btn.setStyleSheet(_btn_ghost())
-        self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.fus_detect_btn.clicked.connect(self._fus_detect_device)
-        self._gate_button(self.fus_detect_btn, command="adb_shell")
-        r1.addWidget(self.fus_detect_btn)
-        
         lbl_reg = QLabel(self.tr("Region:"))
         lbl_reg.setStyleSheet(f"color:{C['text']}; font-weight:600;")
         r1.addWidget(lbl_reg)
@@ -85,19 +80,29 @@ class FusPageMixin:
         self.fus_version_input.setPlaceholderText(self.tr("e.g. S918BXXU3BWCV/S918BOXM3BWCV/S918BXXU3BWCV (or click Check Version)"))
         self.fus_version_input.setStyleSheet(f"background:{C['panel']}; color:{C['text']}; border:1px solid {C['border']}; border-radius:6px; padding:6px;")
         r2.addWidget(self.fus_version_input, 1)
+        form_lay.addLayout(r2)
+
+        # Query buttons (wrapping row: long translations drop to a second line)
+        q_host, q_row = flow_row(spacing=8)
+        self.fus_detect_btn = QPushButton(self.tr("🔍 Detect Connected Device"))
+        self.fus_detect_btn.setStyleSheet(_btn_ghost())
+        self.fus_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fus_detect_btn.clicked.connect(self._fus_detect_device)
+        self._gate_button(self.fus_detect_btn, command="adb_shell")
+        q_row.addWidget(self.fus_detect_btn)
 
         self.fus_check_btn = QPushButton(self.tr("Check Version"))
         self.fus_check_btn.setStyleSheet(_btn_primary())
         self.fus_check_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_check_btn.clicked.connect(self._fus_check_version)
-        r2.addWidget(self.fus_check_btn)
+        q_row.addWidget(self.fus_check_btn)
 
         self.fus_list_btn = QPushButton(self.tr("List All Versions"))
         self.fus_list_btn.setStyleSheet(_btn_ghost())
         self.fus_list_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fus_list_btn.clicked.connect(self._fus_list_versions)
-        r2.addWidget(self.fus_list_btn)
-        form_lay.addLayout(r2)
+        q_row.addWidget(self.fus_list_btn)
+        form_lay.addWidget(q_host)
 
         # Output dir row
         r3 = QHBoxLayout()
@@ -147,8 +152,8 @@ class FusPageMixin:
         details_lay.addLayout(details_grid)
         lay.addWidget(details_card)
 
-        # Actions row
-        act_row = QHBoxLayout()
+        # Actions row (wrapping)
+        act_host, act_row = flow_row(spacing=8)
         self.fus_download_btn = QPushButton(self.tr("⬇ Download & Decrypt Firmware"))
         self.fus_download_btn.setStyleSheet(_btn_primary())
         self.fus_download_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -162,7 +167,7 @@ class FusPageMixin:
         self.fus_load_ap_btn.setFixedHeight(38)
         self.fus_load_ap_btn.clicked.connect(self._fus_load_into_ap)
         act_row.addWidget(self.fus_load_ap_btn)
-        lay.addLayout(act_row)
+        lay.addWidget(act_host)
 
         # Progress bar
         self.fus_progress = QProgressBar()

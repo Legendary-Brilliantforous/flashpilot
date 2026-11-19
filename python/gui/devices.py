@@ -363,7 +363,7 @@ def _build_model_page(win, brand, m, back):
         back_btn = QPushButton(tr("← Back"))
         back_btn.setStyleSheet(_btn_ghost())
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        back_btn.setFixedWidth(90)
+        back_btn.setMinimumWidth(90)
         back_btn.clicked.connect(lambda: back())
         top.addWidget(back_btn)
     title = _Lbl(f"{brand['label']} · {m['model']}")

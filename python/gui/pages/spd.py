@@ -135,7 +135,7 @@ class SpdPageMixin:
             btn = QPushButton(self.tr("Browse..."))
             btn.setStyleSheet(_btn_ghost())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
+            btn.setMinimumWidth(90)
             btn.clicked.connect(
                 lambda _=False, e=edit, n=name, f=flt: self._spd_browse(e, n, f)
             )
@@ -270,7 +270,7 @@ class SpdPageMixin:
         stock_btn = QPushButton(self.tr("Browse..."))
         stock_btn.setStyleSheet(_btn_ghost())
         stock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        stock_btn.setFixedWidth(90)
+        stock_btn.setMinimumWidth(90)
         stock_btn.clicked.connect(lambda: self._spd_browse(
             self.spd_magic_stock, "stock image", "Images (*.img *.bin);;All files (*)"))
         stock_row.addWidget(stock_btn)
@@ -435,7 +435,7 @@ class SpdPageMixin:
         fw_btn.setStyleSheet(_btn_ghost())
         fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fw_btn.clicked.connect(self._spd_browse_dir)
-        fw_btn.setFixedWidth(90)
+        fw_btn.setMinimumWidth(90)
         fw_row.addWidget(fw_btn)
         lay.addLayout(fw_row)
         lay.addWidget(

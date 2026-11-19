@@ -294,7 +294,7 @@ class SamsungPageMixin:
             btn = QPushButton(self.tr("Browse"))
             btn.setStyleSheet(_btn_ghost())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(66)
+            btn.setMinimumWidth(66)
             btn.clicked.connect(
                 (lambda e=edit, n=label: lambda: self._browse_slot(e, n))()
             )
@@ -580,14 +580,14 @@ class SamsungPageMixin:
         img_btn = QPushButton(self.tr("Browse..."))
         img_btn.setStyleSheet(_btn_ghost())
         img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        img_btn.setFixedWidth(80)
+        img_btn.setMinimumWidth(80)
         img_btn.clicked.connect(lambda: self._browse_slot(self.image_edit, "partition image"))
         p_row.addWidget(img_btn)
         p_run = _adv_run(
             "odin_flash_partition", "Flash",
             "Flash one partition (raw) with the partition name + image above"
         )
-        p_run.setFixedWidth(64)
+        p_run.setMinimumWidth(64)
         p_row.addWidget(p_run)
         a_lay.addLayout(p_row)
 
@@ -601,7 +601,7 @@ class SamsungPageMixin:
             "odin_sales_code", "Apply",
             "Change the CSC / sales code on the device (needs a matching CSC archive)"
         )
-        sc_run.setFixedWidth(64)
+        sc_run.setMinimumWidth(64)
         sc_row.addWidget(sc_run)
         a_lay.addLayout(sc_row)
 
@@ -615,7 +615,7 @@ class SamsungPageMixin:
             "odin_flash_multi", "Flash",
             "Flash multiple partitions from partition=image;partition=image specs"
         )
-        ms_run.setFixedWidth(64)
+        ms_run.setMinimumWidth(64)
         ms_row.addWidget(ms_run)
         a_lay.addLayout(ms_row)
 
@@ -628,13 +628,13 @@ class SamsungPageMixin:
         pit_btn = QPushButton(self.tr("Browse..."))
         pit_btn.setStyleSheet(_btn_ghost())
         pit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        pit_btn.setFixedWidth(80)
+        pit_btn.setMinimumWidth(80)
         pit_btn.clicked.connect(lambda: self._browse_slot(self.pit_file_edit, "pit"))
         pit_run = _adv_run(
             "odin_send_pit", "Send",
             "Send the PIT to the device (repartition)"
         )
-        pit_run.setFixedWidth(64)
+        pit_run.setMinimumWidth(64)
         pit_row.addWidget(pit_run)
         a_lay.addLayout(pit_row)
 
@@ -652,13 +652,13 @@ class SamsungPageMixin:
         vb_img_btn = QPushButton(self.tr("Browse..."))
         vb_img_btn.setStyleSheet(_btn_ghost())
         vb_img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        vb_img_btn.setFixedWidth(80)
+        vb_img_btn.setMinimumWidth(80)
         vb_img_btn.clicked.connect(lambda: self._browse_slot(self.vbmeta_edit, "vbmeta image"))
         vb_row.addWidget(vb_img_btn)
         vb_run = _adv_run(
             "odin_flash_partition", "Flash vbmeta",
             "Flash vbmeta partition (use pre-modified image to disable verification)"
         )
-        vb_run.setFixedWidth(64)
+        vb_run.setMinimumWidth(64)
         vb_row.addWidget(vb_run)
         a_lay.addLayout(vb_row)
