@@ -71,16 +71,18 @@ class SettingsPageMixin:
         )
         self._settings_cats = {}
 
+        # Labels go through tr() at the call site so scripts/i18n_extract.py
+        # can see the literal (a dynamic tr(label) would not be extractable).
         categories = [
-            ("general", "◈", "General",
+            ("general", "◈", self.tr("General"),
              self._build_settings_general),
-            ("updates", "↻", "Updates",
+            ("updates", "↻", self.tr("Updates"),
              self._build_settings_updates),
-            ("appearance", "✦", "Appearance",
+            ("appearance", "✦", self.tr("Appearance"),
              self._build_settings_appearance),
-            ("tools", "▤", "Tools",
+            ("tools", "▤", self.tr("Tools"),
              self._build_settings_tools),
-            ("about", "ℹ", "About",
+            ("about", "ℹ", self.tr("About"),
              self._build_settings_about),
         ]
         for key, glyph, label, builder in categories:
@@ -315,7 +317,9 @@ class SettingsPageMixin:
         lay.setSpacing(18)
 
         # THEME — 10 cards only (no dropdown) — progressively advanced, fit-well
-        bl = self._settings_box(self.tr("THEME — 10 professional accents (click a card)"), lay)
+        # Short on purpose: the title is painted on one line, and a longer
+        # sentence widened the whole settings page past the viewport.
+        bl = self._settings_box(self.tr("THEME — 10 PRO ACCENTS"), lay)
         # Hidden combo for back-compat (cards drive it)
         self._s_theme = QComboBox()
         self._s_theme.addItems(list(ACCENT_THEMES))

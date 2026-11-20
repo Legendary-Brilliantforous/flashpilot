@@ -110,6 +110,7 @@ from .widgets import (  # noqa: F401
     CollapsibleSection,
     ConsoleHighlighter,
     DragBar,
+    ElidedButton,
     FlowHost,
     FlowLayout,
     LogHighlighter,
@@ -2112,14 +2113,21 @@ class FlashPilotWindow(
         mgrid = QGridLayout()
         mgrid.setSpacing(4)
         self.info = {}
+        # (English key, translated caption, accent). The caption is rendered by
+        # MetricCard; the key stays English because callers look the card up by
+        # it. Each caption is a literal tr() call so the extractor can see it.
         tiles = [
-            ("Device Model", C["grad_b"]), ("USB Mode", C["accent"]),
-            ("Interface", C["ok"]), ("ADB Status", C["warn"]),
-            ("Build Number", C["warn_dim"]), ("Android Ver", C["ok_dim"]),
-            ("Serial", C["err_dim"]), ("PIT Health", C["err_dim"]),
+            ("Device Model", self.tr("Device Model"), C["grad_b"]),
+            ("USB Mode", self.tr("USB Mode"), C["accent"]),
+            ("Interface", self.tr("Interface"), C["ok"]),
+            ("ADB Status", self.tr("ADB Status"), C["warn"]),
+            ("Build Number", self.tr("Build Number"), C["warn_dim"]),
+            ("Android Ver", self.tr("Android Ver"), C["ok_dim"]),
+            ("Serial", self.tr("Serial"), C["err_dim"]),
+            ("PIT Health", self.tr("PIT Health"), C["err_dim"]),
         ]
-        for i, (name, accent) in enumerate(tiles):
-            card = MetricCard(name, "--", accent)
+        for i, (name, caption, accent) in enumerate(tiles):
+            card = MetricCard(caption, "--", accent)
             self.info[name] = card
             mgrid.addWidget(card, i // 2, i % 2)
         for i in range(2):
@@ -2128,7 +2136,8 @@ class FlashPilotWindow(
             mgrid.setRowStretch(r, 1)
         ll.addLayout(mgrid)
         # Quick "Copy Info" helper for current device
-        self.info_copy_btn = QPushButton(self.tr("Copy Device Info"))
+        # ElidedButton: a long translation must never widen this column.
+        self.info_copy_btn = ElidedButton(self.tr("Copy Device Info"))
         self.info_copy_btn.setStyleSheet(_btn_ghost())
         self.info_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.info_copy_btn.setToolTip(self.tr("Copy model / build / android / serial to clipboard"))
@@ -2261,14 +2270,14 @@ class FlashPilotWindow(
         grid.setSpacing(6)
         self.info = {}
         tiles = [
-            ("Device Model", C["grad_b"]),
-            ("USB Mode", C["accent"]),
-            ("Interface", C["ok"]),
-            ("ADB Status", C["warn"]),
-            ("PIT Health", C["err_dim"]),
+            ("Device Model", self.tr("Device Model"), C["grad_b"]),
+            ("USB Mode", self.tr("USB Mode"), C["accent"]),
+            ("Interface", self.tr("Interface"), C["ok"]),
+            ("ADB Status", self.tr("ADB Status"), C["warn"]),
+            ("PIT Health", self.tr("PIT Health"), C["err_dim"]),
         ]
-        for i, (name, accent) in enumerate(tiles):
-            card = MetricCard(name, "--", accent)
+        for i, (name, caption, accent) in enumerate(tiles):
+            card = MetricCard(caption, "--", accent)
             self.info[name] = card
             grid.addWidget(card, 0, i)   # single horizontal row -> banner stays short
             grid.setColumnStretch(i, 1)
@@ -8093,6 +8102,10 @@ class FlashPilotWindow(
         col.setSpacing(2)
         lab = QLabel(text)
         lab.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:700;")
+        # Wraps like the detail line: a translated row title ("Автоматическая
+        # проверка обновлений") is much longer than the English one and used to
+        # raise the whole settings page minimum past the viewport.
+        lab.setWordWrap(True)
         col.addWidget(lab)
         if detail:
             d = QLabel(detail)
