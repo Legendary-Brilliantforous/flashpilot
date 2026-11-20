@@ -164,14 +164,14 @@ class GeneralPageMixin:
         net_grid.setVerticalSpacing(12)
         for i, (key, cap) in enumerate(
             (
-                ("sim", "SIM STATE"),
-                ("net", "NETWORK TYPE"),
-                ("mode", "PREFERRED MODE"),
-                ("signal", "SIGNAL"),
-                ("data", "MOBILE DATA"),
-                ("wifi", "WI-FI"),
-                ("dns", "PRIVATE DNS"),
-                ("airplane", "AIRPLANE MODE"),
+                ("sim", self.tr("SIM STATE")),
+                ("net", self.tr("NETWORK TYPE")),
+                ("mode", self.tr("PREFERRED MODE")),
+                ("signal", self.tr("SIGNAL")),
+                ("data", self.tr("MOBILE DATA")),
+                ("wifi", self.tr("WI-FI")),
+                ("dns", self.tr("PRIVATE DNS")),
+                ("airplane", self.tr("AIRPLANE MODE")),
             )
         ):
             mc = MetricCard(cap, "--", accent=C["accent"])

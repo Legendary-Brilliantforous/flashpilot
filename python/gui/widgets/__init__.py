@@ -15,6 +15,7 @@ from .console import (
 from .controls import (
     BeautifulToggle,
     DragBar,
+    ElidedButton,
     ModeBadge,
     SamsungSubTabs,
     WindowButton,
@@ -33,6 +34,7 @@ __all__ = [
     "CollapsibleSection",
     "ConsoleHighlighter",
     "DragBar",
+    "ElidedButton",
     "FlowBrowser",
     "FlowHost",
     "FlowLayout",

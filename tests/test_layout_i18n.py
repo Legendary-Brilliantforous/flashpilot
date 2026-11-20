@@ -246,3 +246,95 @@ def test_browse_button_grows_for_french_label(fr_win):
     assert browse, "expected the translated MTK browse buttons"
     for btn in browse:
         _assert_not_truncated(btn)
+
+
+def _caption_of(card):
+    """The uppercase caption label inside a :class:`MetricCard`."""
+    from PyQt6.QtWidgets import QLabel
+
+    caps = [lab for lab in card.findChildren(QLabel)
+            if lab.wordWrap() and lab.text().isupper()]
+    assert len(caps) == 1, f"expected one caption label, got {len(caps)}"
+    return caps[0]
+
+
+def test_device_metric_captions_are_translated_and_wrap(fr_win):
+    """Tile captions follow the language and wrap instead of widening the panel."""
+    _settle(fr_win)
+    card = fr_win.info["Device Model"]
+    cap = _caption_of(card)
+    assert cap.text() == "MODÈLE DE L'APPAREIL"
+    # Wrapping is what keeps the panel at its design width.
+    assert cap.width() >= min(cap.minimumSizeHint().width(), card.width() - 30)
+    assert cap.height() >= cap.fontMetrics().height()
+
+
+def test_device_panel_does_not_squeeze_the_page_in_french(fr_win):
+    """A longer translated caption must not widen the panel.
+
+    The page keeps whatever width the splitter gives it: the panel's minimum is
+    what used to grow from 228 to 303 px in Russian and drag the page behind a
+    horizontal scrollbar.
+    """
+    fr_win.resize(1366, 736)
+    fr_win._on_section("general")
+    _settle(fr_win, 12)
+    panel = fr_win._conn
+    assert panel.minimumSizeHint().width() <= 240, (
+        "the device panel grew with French labels: "
+        f"{panel.minimumSizeHint().width()}px"
+    )
+    assert fr_win.info_copy_btn.width() <= panel.width(), (
+        "the copy-info button is wider than the panel it sits in"
+    )
+
+def test_settings_category_labels_are_translated(fr_win):
+    """The five settings categories are looked up in the catalog, not hard-coded."""
+    fr_win._on_section("settings")
+    _settle(fr_win, 12)
+    labels = {key: btn._label for key, btn in fr_win._settings_cats.items()}
+    assert labels == {
+        "general": "Général",
+        "updates": "Mises à jour",
+        "appearance": "Apparence",
+        "tools": "Outils",
+        "about": "À propos",
+    }
+
+
+def test_elided_button_never_widens_its_parent():
+    """``ElidedButton`` reports no minimum width, so a column cannot grow."""
+    from PyQt6.QtWidgets import QFrame, QHBoxLayout
+
+    from python.gui.widgets import ElidedButton
+
+    frame = QFrame()
+    frame.setFixedWidth(140)
+    lay = QHBoxLayout(frame)
+    lay.setContentsMargins(0, 0, 0, 0)
+    btn = ElidedButton("Копировать информацию об устройстве")
+    lay.addWidget(btn)
+    frame.show()
+    QApplication.processEvents()
+    assert btn.minimumSizeHint().width() == 0
+    assert btn.sizeHint().width() <= btn._MAX_HINT
+    assert btn.width() <= 140
+    assert frame.width() == 140
+
+
+
+def test_settings_row_titles_wrap(fr_win):
+    """A long translated row title wraps instead of raising the page minimum."""
+    from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    fr_win._settings_row(
+        lay,
+        "Автоматическая проверка обновлений",
+        "Автоматически проверять новые версии при запуске.",
+    )
+    title = next(lab for lab in host.findChildren(QLabel)
+                 if lab.text().startswith("Автоматическая"))
+    assert title.wordWrap(), "settings row titles must wrap when translated"
+    assert title.heightForWidth(title.width()) >= title.fontMetrics().height()
