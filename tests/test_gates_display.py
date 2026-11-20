@@ -569,6 +569,9 @@ def test_detect_mode_tecno_normal_boot_names_protocol_not_other():
     assert "PRELOADER" in _detect_mode([], [dict(tecno, pid=0x2000, interfaces=[])])
     assert "DA (flashing active)" in _detect_mode(
         [], [dict(tecno, pid=0x0004, interfaces=[])])
+    # Preloader USB VCOM variant (0x2001) names the preloader stage too.
+    assert "PRELOADER" in _detect_mode(
+        [], [dict(tecno, pid=0x2001, interfaces=[])])
 
     # A Samsung device with no recognizable interfaces still resolves via
     # the PID table (existing behavior unchanged).

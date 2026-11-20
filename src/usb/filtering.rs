@@ -263,7 +263,7 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
     } else if vid == 0x0E8D {
         match pid {
             0x0003 => transports.push("MTK BROM".to_string()),
-            0x2000 => transports.push("MTK BROM".to_string()),
+            0x2000 | 0x2001 => transports.push("MTK".to_string()),
             0x0004 | 0x1004 => transports.push("MTK".to_string()),
             _ => {}
         }
@@ -791,6 +791,19 @@ mod tests {
         assert_eq!(
             compute_transports(&brom, &serials),
             vec!["MTK BROM".to_string()]
+        );
+
+        // Preloader (USB VCOM) and the preloader VCOM variant both map to
+        // the MTK flashing-stage transport - not BROM.
+        let preloader = dev(0x0E8D, 0x2000, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader, &serials),
+            vec!["MTK".to_string()]
+        );
+        let preloader_vcom = dev(0x0E8D, 0x2001, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader_vcom, &serials),
+            vec!["MTK".to_string()]
         );
     }
 }

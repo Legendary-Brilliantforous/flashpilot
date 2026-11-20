@@ -1110,7 +1110,7 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
         # protocol naming below - the badge names the actual USB protocol.
         if pid == 0x0003:
             return f"{prefix} BROM (held state)"
-        elif pid == 0x2000:
+        elif pid in (0x2000, 0x2001):
             return f"{prefix} PRELOADER (first bootloader stage)"
         elif pid in (0x0004, 0x1004):
             return f"{prefix} DA (flashing active)"

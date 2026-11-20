@@ -54,6 +54,7 @@ BOOT_STAGE = {
 _PID_STAGE = {
     0x0003: "brom",
     0x2000: "preloader",
+    0x2001: "preloader",
     0x0004: "da",
     0x1004: "da",
     0x0a0a: "mtk-adb",

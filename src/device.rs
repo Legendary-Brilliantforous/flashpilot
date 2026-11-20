@@ -408,9 +408,10 @@ pub fn detect_capabilities(
                 push_cap(&mut caps, Capability::DeviceInfo);
                 push_cap(&mut caps, Capability::Reboot);
             }
-            0x2000 => {
-                // Preloader: BROM ops are NOT available; the crash-to-BROM
-                // path is (separate action). Info + reboot only.
+            0x2000 | 0x2001 => {
+                // Preloader (incl. the USB VCOM variant 0x2001): BROM ops are
+                // NOT available; the crash-to-BROM path is (separate action).
+                // Info + reboot only.
                 mode = BootMode::MtkPreloader;
                 proto = Protocol::MtkBrom;
                 push_cap(&mut caps, Capability::MtkPreloader);

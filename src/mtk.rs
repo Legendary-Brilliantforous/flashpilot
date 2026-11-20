@@ -34,6 +34,11 @@ pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
             "MediaTek ADB/Android composite - the phone is booted to Android, \
              not in a low-level mode.",
         ),
+        0x2001 => (
+            "preloader",
+            "MediaTek Preloader (USB VCOM variant) - first bootloader stage, \
+             waits for the Download Agent (DA) handshake before flashing.",
+        ),
         _ => ("other", "MediaTek USB device (unspecified boot stage)"),
     }
 }
@@ -913,6 +918,7 @@ mod tests {
         // 0x2000 = preloader ("MT65xx Preloader").
         assert_eq!(boot_stage_for(0x0003).0, "brom");
         assert_eq!(boot_stage_for(0x2000).0, "preloader");
+        assert_eq!(boot_stage_for(0x2001).0, "preloader");
         assert_eq!(boot_stage_for(0x0004).0, "da");
         assert_eq!(boot_stage_for(0x1004).0, "da");
         assert_eq!(boot_stage_for(0x0a0a).0, "mtk-adb");
