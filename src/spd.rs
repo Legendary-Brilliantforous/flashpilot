@@ -26,8 +26,12 @@ use rusb::{Context, UsbContext};
 pub const SPD_VID: u16 = 0x1782;
 
 /// PIDs that put a Spreadtrum/UNISOC device in download/engineering mode.
+/// Union of the BSL-native download ports (0x4D00 / 0x4D02 / 0x4E00) and the
+/// doc-observed download PIDs (0x0001 / 0x0002).
+pub const SPD_DOWNLOAD_PIDS: &[u16] = &[0x4D00, 0x4D02, 0x4E00, 0x0001, 0x0002];
+
 pub fn is_download_pid(pid: u16) -> bool {
-    matches!(pid, 0x4D00 | 0x4D02 | 0x4E00)
+    SPD_DOWNLOAD_PIDS.contains(&pid)
 }
 
 pub fn stage_label(pid: u16) -> &'static str {
@@ -35,6 +39,7 @@ pub fn stage_label(pid: u16) -> &'static str {
         0x4D00 => "SPD download (BROM/FDL)",
         0x4D02 => "SPD download (engineering)",
         0x4E00 => "SPD download (FDL stage)",
+        0x0001 | 0x0002 => "SPD download (BROM/FDL)",
         _ => "SPD device (normal/other)",
     }
 }
@@ -3280,7 +3285,9 @@ mod tests {
         assert!(is_download_pid(0x4d00));
         assert!(is_download_pid(0x4d02));
         assert!(is_download_pid(0x4e00));
-        assert!(!is_download_pid(0x0001));
+        assert!(is_download_pid(0x0001));
+        assert!(is_download_pid(0x0002));
+        assert!(!is_download_pid(0x1234));
         assert_eq!(stage_label(0x4d00), "SPD download (BROM/FDL)");
     }
 

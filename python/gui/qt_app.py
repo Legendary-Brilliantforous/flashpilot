@@ -903,7 +903,9 @@ def _generic_android_mode(d):
 
 # Spreadtrum / UNISOC feature-phone download & engineering modes (VID 0x1782).
 # 0x4d00 is the classic SC6531-family download (BROM/FDL) port.
-_SPD_DOWNLOAD_PIDS = (0x4D00, 0x4D02, 0x4E00)
+# Union with the doc-observed download PIDs (0x0001/0x0002) to match the
+# Rust `spd::is_download_pid` SPD_DOWNLOAD_PIDS table.
+_SPD_DOWNLOAD_PIDS = (0x4D00, 0x4D02, 0x4E00, 0x0001, 0x0002)
 
 
 def _spd_mode(d):

@@ -4231,7 +4231,7 @@ pub fn flow_qcom_verify(target: &str, parts_spec: &str, out: &mut Vec<String>) -
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let edl: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+            .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
             .collect();
         if edl.is_empty() {
             out.push("  no EDL device (05c6:9008) on the bus.".to_string());
@@ -4266,7 +4266,7 @@ pub fn flow_edl_detect(out: &mut Vec<String>) -> Result<()> {
     while Instant::now() < deadline {
         if let Ok(devices) = crate::usb::collect_devices(None) {
             for d in &devices {
-                if d.vid == 0x05C6 && d.pid == 0x9008 {
+                if d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) {
                     out.push(format!(
                         "  EDL device: {:04x}:{:04x} bus={} addr={}",
                         d.vid, d.pid, d.bus, d.address
@@ -4395,7 +4395,7 @@ pub fn flow_qcn_backup(
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let edl: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+            .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
             .collect();
         if edl.is_empty() {
             out.push("  no EDL device (05c6:9008) on the bus - test-point EDL first.".to_string());
@@ -7249,7 +7249,7 @@ pub fn flow_edl(action: &str, out: &mut Vec<String>) -> Result<()> {
     let devices = crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
     let edl: Vec<_> = devices
         .iter()
-        .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+        .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
         .collect();
     if edl.is_empty() {
         out.push(
@@ -7259,7 +7259,7 @@ pub fn flow_edl(action: &str, out: &mut Vec<String>) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Ok(devs) = crate::usb::collect_devices(None) {
-                if devs.iter().any(|d| d.vid == 0x05C6 && d.pid == 0x9008) {
+                if devs.iter().any(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid)) {
                     out.push("  EDL device detected!".to_string());
                     break;
                 }
@@ -7517,7 +7517,7 @@ pub fn flow_screen_lock_edl(out: &mut Vec<String>) -> Result<()> {
     out.push(String::new());
     // Check if EDL device is present
     if let Ok(devices) = crate::usb::collect_devices(None) {
-        if devices.iter().any(|d| d.vid == 0x05C6 && d.pid == 0x9008) {
+        if devices.iter().any(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid)) {
             out.push("  EDL device detected! Use 'edl_frp' to clear FRP (the lock".to_string());
             out.push("  lives in /data which the Firehose wipe clears).".to_string());
             return Ok(());

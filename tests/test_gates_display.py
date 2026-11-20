@@ -659,3 +659,24 @@ def test_merged_rows_surface_adb_without_descriptor_interfaces():
     assert not _has_adb_iface(plain)
     assert "ADB" not in _generic_android_mode(plain)
     assert _adb_overlay(adb, plain) is None
+
+
+def test_detect_mode_spd_download_pids_0001_0002_and_4d00():
+    """Regression: the SPD download/engineering mode must cover the full
+    BSL-native download PID set (0x4D00/0x4D02/0x4E00) plus the doc-observed
+    download PIDs (0x0001/0x0002) — parity with the Rust
+    `spd::is_download_pid` SPD_DOWNLOAD_PIDS union."""
+    from python.gui.qt_app import _detect_mode, _spd_mode
+
+    for pid in (0x4D00, 0x4D02, 0x4E00, 0x0001, 0x0002):
+        d = {"vid": 0x1782, "pid": pid, "bus": 2, "address": 7,
+             "interfaces": []}
+        assert _spd_mode(d) == "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)", \
+            f"pid {pid:#06x} should be a download mode"
+        # _detect_mode routes the download-mode SPD row into the SPD branch.
+        assert _detect_mode([], [], [], [], [], [], [d]) == \
+            "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
+
+    d = {"vid": 0x1782, "pid": 0x1234, "bus": 2, "address": 7,
+         "interfaces": []}
+    assert _spd_mode(d) == "SPREADTRUM DEVICE (normal / other)"
