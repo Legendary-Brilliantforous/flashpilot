@@ -261,11 +261,15 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
             }
         }
     } else if vid == 0x0E8D {
-        match pid {
-            0x0003 => transports.push("MTK BROM".to_string()),
-            0x2000 | 0x2001 => transports.push("MTK".to_string()),
-            0x0004 | 0x1004 => transports.push("MTK".to_string()),
-            _ => {}
+        // Stage comes from the MTK PID table (BROM / preloader / DA /
+        // mtk-adb), not from a hardcoded pid list — one source of truth in
+        // `crate::mtk::boot_stage_for`, which also covers the preloader VCOM
+        // and OEM-variant family.
+        let stage = crate::mtk::boot_stage_for(pid).0;
+        if stage == "brom" {
+            transports.push("MTK BROM".to_string());
+        } else if stage == "preloader" || stage == "da" {
+            transports.push("MTK".to_string());
         }
     } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) {
         // Documented/observed DIAG composites (9006, 9026) - DIAG flows,
@@ -467,12 +471,22 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             }
             "samsung".to_string()
         }
-        0x0E8D => match pid {
-            0x0003 => "mediatek-brom".to_string(),
-            0x2000 => "mediatek-preloader".to_string(),
-            0x0004 | 0x1004 => "mediatek-da".to_string(),
-            _ => "mediatek".to_string(),
-        },
+        0x0E8D => {
+            // Stage-aware MTK classification via the single PID table in
+            // `crate::mtk::boot_stage_for` (BROM / preloader / DA / mtk-adb).
+            let stage = crate::mtk::boot_stage_for(pid).0;
+            if stage == "brom" {
+                "mediatek-brom".to_string()
+            } else if stage == "preloader" {
+                "mediatek-preloader".to_string()
+            } else if stage == "da" {
+                "mediatek-da".to_string()
+            } else {
+                // mtk-adb composites and unknown MTK PIDs stay coarse
+                // ("mediatek") — the GUI re-checks interfaces for the rest.
+                "mediatek".to_string()
+            }
+        }
         0x05C6 if crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) => {
             "qualcomm-diag".to_string()
         }
@@ -589,6 +603,11 @@ mod tests {
         assert_eq!(classify_mode(0x04E8, 0x685D, &[]), "samsung-odin");
         assert_eq!(classify_mode(0x0E8D, 0x0003, &[]), "mediatek-brom");
         assert_eq!(classify_mode(0x0E8D, 0x2000, &[]), "mediatek-preloader");
+        // Preloader USB-VCOM variant + OEM preloader family are preloader.
+        assert_eq!(classify_mode(0x0E8D, 0x2001, &[]), "mediatek-preloader");
+        assert_eq!(classify_mode(0x0E8D, 0xf200, &[]), "mediatek-preloader");
+        // Normal-boot MTK ADB composites stay coarse mediatek.
+        assert_eq!(classify_mode(0x0E8D, 0x0a0a, &[]), "mediatek");
         assert_eq!(classify_mode(0x05C6, 0x9008, &[]), "qualcomm-edl");
     }
 
@@ -803,6 +822,13 @@ mod tests {
         let preloader_vcom = dev(0x0E8D, 0x2001, None, vec![]);
         assert_eq!(
             compute_transports(&preloader_vcom, &serials),
+            vec!["MTK".to_string()]
+        );
+
+        // Preloader OEM family (mtkclient SYNC_NO_EXTRA_BYTE entries) too.
+        let preloader_oem = dev(0x0E8D, 0xf200, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader_oem, &serials),
             vec!["MTK".to_string()]
         );
     }

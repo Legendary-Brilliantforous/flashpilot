@@ -4074,7 +4074,7 @@ pub fn flow_mtk_verify(
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let mtk: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x0E8D && (d.pid == 0x0003 || d.pid == 0x2000))
+            .filter(|d| d.vid == 0x0E8D && crate::mtk::is_mtk_flashing_stage(d.pid))
             .collect();
         if mtk.is_empty() {
             out.push("  no MediaTek device in BROM/preloader on the bus.".to_string());
@@ -4173,7 +4173,9 @@ pub fn flow_mtk_crash_brom(target: &str, out: &mut Vec<String>) -> Result<()> {
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let pre: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x0E8D && d.pid == 0x2000)
+            .filter(|d| {
+                d.vid == 0x0E8D && crate::mtk::boot_stage_for(d.pid).0 == "preloader"
+            })
             .collect();
         if pre.is_empty() {
             out.push("  no preloader (0e8d:2000) on the bus - boot the phone with".to_string());
@@ -7004,12 +7006,12 @@ fn wait_mtk_brom(timeout: Duration, out: &mut Vec<String>) -> Option<(String, St
         if let Ok(devices) = crate::usb::collect_devices(None) {
             for d in &devices {
                 if d.vid == 0x0E8D {
-                    if d.pid == 0x0003 {
+                    if crate::mtk::boot_stage_for(d.pid).0 == "brom" {
                         let t = format!("{:04x}:{:04x}@{}:{}", d.vid, d.pid, d.bus, d.address);
                         out.push(format!("  caught BROM: {t}"));
                         return Some((t, "brom".to_string()));
                     }
-                    if d.pid == 0x2000 {
+                    if crate::mtk::boot_stage_for(d.pid).0 == "preloader" {
                         let t = format!("{:04x}:{:04x}@{}:{}", d.vid, d.pid, d.bus, d.address);
                         out.push(format!(
                             "  caught preloader: {t} (crashing to held BROM ...)"
@@ -7023,7 +7025,7 @@ fn wait_mtk_brom(timeout: Duration, out: &mut Vec<String>) -> Option<(String, St
                                 // Re-enumerate as BROM
                                 if let Ok(devs2) = crate::usb::collect_devices(None) {
                                     for d2 in &devs2 {
-                                        if d2.vid == 0x0E8D && d2.pid == 0x0003 {
+                                        if d2.vid == 0x0E8D && crate::mtk::boot_stage_for(d2.pid).0 == "brom" {
                                             let t2 = format!(
                                                 "{:04x}:{:04x}@{}:{}",
                                                 d2.vid, d2.pid, d2.bus, d2.address

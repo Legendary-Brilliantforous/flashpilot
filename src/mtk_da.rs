@@ -2810,10 +2810,11 @@ pub fn mtk_detect_emergency_mode() -> Result<String> {
 
     for d in devices.iter().filter(|d| d.vid == MTK_VID) {
         let (stage, _) = boot_stage_for(d.pid);
-        // Emergency mode PIDs: 0x0003 (BROM), 0x2000 (preloader) — plus
-        // 0x0001/0x0002 variants on some boards.
+        // Emergency mode PIDs: 0x0003 (BROM), 0x2000/0x2001 (preloader) — plus
+        // 0x0001/0x0002 full-access variants on some boards.
         // Some devices show 0x0001, 0x0002 in emergency mode
-        let is_emergency = matches!(d.pid, 0x2000 | 0x0001 | 0x0002 | 0x0003);
+        let is_emergency = crate::mtk::is_mtk_flashing_stage(d.pid)
+            || matches!(d.pid, 0x0001 | 0x0002);
 
         if is_emergency
             || d.product.as_ref().map_or(false, |p| {
