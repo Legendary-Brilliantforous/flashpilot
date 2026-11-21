@@ -2754,6 +2754,23 @@ class FlashPilotWindow(
         self._page_scroll.setMinimumWidth(max(1, splitter.sizes()[1]))
 
 
+    def _apply_splitter_sizes(self, dock_sizes, body_sizes):
+        """Restore the splitter proportions after an in-place UI rebuild.
+
+        A rebuilt splitter has no useful width until the first layout pass,
+        so ``setSizes()`` is ignored while its width is zero.  Apply the
+        captured sizes when possible and let the normal default handlers
+        refresh the persisted widths for splitters the user has not moved.
+        """
+        splitter = getattr(self, "_splitter", None)
+        if splitter is not None and splitter.width() > 0 and dock_sizes:
+            splitter.setSizes(list(dock_sizes))
+        body = getattr(self, "_body_splitter", None)
+        if body is not None and body.width() > 0 and body_sizes:
+            body.setSizes(list(body_sizes))
+        self._apply_default_dock_split()
+        self._apply_default_body_split()
+
     def _on_body_splitter_moved(self, *_args):
         """Remember the user's device-panel width (persisted via QSettings)."""
         try:
@@ -8227,6 +8244,38 @@ class FlashPilotWindow(
         self.settings.setValue("beta_warning_mode", mode)
         self._ui.line.emit(f"[settings] beta warning mode -> {mode}")
 
+    def _apply_animation_prefs(self):
+        """Apply persisted animation preferences to the current widgets.
+
+        This is intentionally read-only: callers that change a setting can
+        persist it first and then use this method to refresh the widgets.
+        The granular status-orb and shimmer toggles are independent of the
+        master animation switch and must survive a UI rebuild.
+        """
+        master = self.settings.value("animations", "true", type=bool)
+        self._anim_enabled = bool(master)
+
+        scene = getattr(self, "scene", None)
+        if scene is not None:
+            scene.set_animations(bool(master))
+
+        orb = getattr(self, "orb", None)
+        if orb is not None:
+            orb_animations = bool(master) and bool(
+                self.settings.value("anim_orb", "true", type=bool)
+            )
+            orb.set_animations(orb_animations)
+
+        shimmer = getattr(self, "shimmer", None)
+        if shimmer is not None:
+            shimmer_animations = bool(master) and bool(
+                self.settings.value("anim_shimmer", "true", type=bool)
+            )
+            if not shimmer_animations:
+                shimmer.setVisible(False)
+            # When the preference is on, leave the visibility to the flow
+            # runner — the shimmer must stay hidden while no flash runs.
+
     def _apply_built_widget_settings(self, section="samsung"):
         """Post-build wiring that depends on freshly built widgets."""
         # Global fix: action buttons should not retain focus rect (was
@@ -8240,9 +8289,7 @@ class FlashPilotWindow(
             self.oem_bar.select(section)
 
         # Apply persisted effect settings to the freshly-built widgets.
-        if not self.settings.value("animations", "true", type=bool):
-            self.scene.set_animations(False)
-            self.orb.set_animations(False)
+        self._apply_animation_prefs()
         if not self.settings.value("blur", "true", type=bool):
             self._root_shadow.setEnabled(False)
 
@@ -8278,6 +8325,28 @@ class FlashPilotWindow(
             regex_enabled = bool(getattr(self, "_console_regex", False))
             timestamps_enabled = bool(getattr(self, "_show_timestamps", True))
             old_central = self.centralWidget()
+
+            # The rebuild creates fresh splitter and animation widgets. Keep
+            # the live geometry and motion state so a language change does
+            # not reset the user's layout or replay the connection intro.
+            old_splitter = getattr(self, "_splitter", None)
+            old_body_splitter = getattr(self, "_body_splitter", None)
+            dock_sizes = list(old_splitter.sizes()) if old_splitter is not None else []
+            body_sizes = (
+                list(old_body_splitter.sizes())
+                if old_body_splitter is not None else []
+            )
+            dock_moved = bool(getattr(self, "_dock_user_moved", False))
+            body_moved = bool(getattr(self, "_body_user_moved", False))
+
+            old_scene = getattr(self, "scene", None)
+            old_orb = getattr(self, "orb", None)
+            scene_connected = bool(getattr(old_scene, "_connected", False))
+            scene_plug_t = getattr(old_scene, "_plug_t", 0.0)
+            scene_phase = getattr(old_scene, "_phase", 0.0)
+            scene_bubbles = list(getattr(old_scene, "_bubbles", []) or [])
+            orb_connected = bool(getattr(old_orb, "_connected", False))
+            orb_phase = getattr(old_orb, "_phase", 0.0)
 
             # _build_console() restores these values from QSettings. Persist
             # the live geometry first so collapsing/maximising/dock width are
@@ -8325,69 +8394,118 @@ class FlashPilotWindow(
             if not active:
                 raise RuntimeError(f"could not activate UI language {code!r}")
 
-            self._build_ui()
-            if old_central is not None and old_central is not self.centralWidget():
+            # Suppress painting while the old tree is replaced. The deferred
+            # splitter restore below runs after the first layout pass, so no
+            # intermediate distribution is shown to the user.
+            self.setUpdatesEnabled(False)
+            try:
+                self._build_ui()
+
+                # Restore the motion state before the post-build refresh can
+                # call set_connected() on the fresh widgets. In particular,
+                # this makes an already-connected scene a no-op transition,
+                # rather than replaying the plug/bubble intro.
+                new_scene = getattr(self, "scene", None)
+                if new_scene is not None:
+                    new_scene._connected = scene_connected
+                    new_scene._plug_t = scene_plug_t
+                    new_scene._phase = scene_phase
+                    new_scene._bubbles = list(scene_bubbles)
+                new_orb = getattr(self, "orb", None)
+                if new_orb is not None:
+                    new_orb._connected = orb_connected
+                    new_orb._phase = orb_phase
+
+                if old_central is not None and old_central is not self.centralWidget():
+                    try:
+                        old_central.hide()
+                        old_central.setParent(None)
+                        old_central.deleteLater()
+                    except Exception:
+                        pass
+
+                # _build_ui() resets these flags while constructing the new
+                # splitters. Put the user's choices back before applying the
+                # captured geometry and the normal defaults.
+                self._dock_user_moved = dock_moved
+                self._body_user_moved = body_moved
+                self._apply_splitter_sizes(dock_sizes, body_sizes)
+                # The rebuilt splitters have no width until the first layout
+                # pass. Re-apply the same geometry one event-loop turn later.
+                QTimer.singleShot(
+                    0,
+                    lambda: self._apply_splitter_sizes(dock_sizes, body_sizes),
+                )
+
+                self._apply_built_widget_settings(section)
+
+                # The refresh may have touched the motion phase or bubble
+                # list; restore those details without changing the
+                # connection state that the refresh established.
+                new_scene = getattr(self, "scene", None)
+                if new_scene is not None:
+                    new_scene._phase = scene_phase
+                    new_scene._bubbles = list(scene_bubbles)
+                new_orb = getattr(self, "orb", None)
+                if new_orb is not None:
+                    new_orb._phase = orb_phase
+
+                # Restore the current section; this materialises its deferred
+                # page in the new language and refreshes gates/device state.
+                self._on_section(section)
+
+                # Restore the console's live filter/search/timestamp state on
+                # the newly-created controls.
+                self._filter = filter_state
+                for level, btn in (getattr(self, "_filter_btns", {}) or {}).items():
+                    try:
+                        btn.blockSignals(True)
+                        btn.setChecked(bool(self._filter.get(level, True)))
+                    finally:
+                        btn.blockSignals(False)
+                self._show_timestamps = timestamps_enabled
+                self._console_regex = regex_enabled
+                self._console_regex_obj = None
+                self._sync_console_chip("time_btn", timestamps_enabled)
+                self._sync_console_chip("regex_btn", regex_enabled)
                 try:
-                    old_central.hide()
-                    old_central.setParent(None)
-                    old_central.deleteLater()
+                    self.find_edit.blockSignals(True)
+                    self.find_edit.setText(search_text)
+                finally:
+                    self.find_edit.blockSignals(False)
+                self._console_search_text = search_text
+                self._refresh_search_regex()
+                self._rebuild_console()
+                if not self._log_buffer:
+                    self.log.setPlainText(self.tr("Ready. Connect a device to begin."))
+                self._apply_find()
+
+                # Refresh the device list, then reuse _on_device_picked() so
+                # the selected row, tiles, scene, badge, and gates follow one
+                # path.
+                try:
+                    self._refresh_device_list()
                 except Exception:
                     pass
+                self._display_key = device_key
+                if device_key is not None:
+                    for row in range(self.device_list.count()):
+                        item = self.device_list.item(row)
+                        if item.data(Qt.ItemDataRole.UserRole) == device_key:
+                            self._on_device_picked(item)
+                            break
 
-            self._apply_built_widget_settings(section)
-
-            # Restore the current section; this materialises its deferred
-            # page in the new language and refreshes gates/device state.
-            self._on_section(section)
-
-            # Restore the console's live filter/search/timestamp state on
-            # the newly-created controls.
-            self._filter = filter_state
-            for level, btn in (getattr(self, "_filter_btns", {}) or {}).items():
+                self.setWindowTitle(self.tr("FlashPilot"))
+                self._pending_ui_language = None
                 try:
-                    btn.blockSignals(True)
-                    btn.setChecked(bool(self._filter.get(level, True)))
-                finally:
-                    btn.blockSignals(False)
-            self._show_timestamps = timestamps_enabled
-            self._console_regex = regex_enabled
-            self._console_regex_obj = None
-            self._sync_console_chip("time_btn", timestamps_enabled)
-            self._sync_console_chip("regex_btn", regex_enabled)
-            try:
-                self.find_edit.blockSignals(True)
-                self.find_edit.setText(search_text)
+                    self._nudge_toasts()
+                except Exception:
+                    pass
+                self._toasts.show_ok(self.tr("Language changed."))
+                return True
             finally:
-                self.find_edit.blockSignals(False)
-            self._console_search_text = search_text
-            self._refresh_search_regex()
-            self._rebuild_console()
-            if not self._log_buffer:
-                self.log.setPlainText(self.tr("Ready. Connect a device to begin."))
-            self._apply_find()
-
-            # Refresh the device list, then reuse _on_device_picked() so the
-            # selected row, tiles, scene, badge, and gates follow one path.
-            try:
-                self._refresh_device_list()
-            except Exception:
-                pass
-            self._display_key = device_key
-            if device_key is not None:
-                for row in range(self.device_list.count()):
-                    item = self.device_list.item(row)
-                    if item.data(Qt.ItemDataRole.UserRole) == device_key:
-                        self._on_device_picked(item)
-                        break
-
-            self.setWindowTitle(self.tr("FlashPilot"))
-            self._pending_ui_language = None
-            try:
-                self._nudge_toasts()
-            except Exception:
-                pass
-            self._toasts.show_ok(self.tr("Language changed."))
-            return True
+                # Always restore painting, including when the rebuild raises.
+                self.setUpdatesEnabled(True)
         except Exception as exc:  # noqa: BLE001
             # A language switch must never take down the main window.
             try:

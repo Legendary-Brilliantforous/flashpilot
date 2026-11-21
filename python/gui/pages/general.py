@@ -331,7 +331,8 @@ class GeneralPageMixin:
         gv.setContentsMargins(0, 0, 0, 0)
         gv.setSpacing(8)
         gen_tabs = SamsungSubTabs(
-            [("quick", "QUICK"), ("battery", "BATTERY"), ("network", "NETWORK")]
+            [("quick", self.tr("QUICK")), ("battery", self.tr("BATTERY")),
+             ("network", self.tr("NETWORK"))]
         )
         gv.addWidget(gen_tabs)
         gen_stack = QStackedWidget()

@@ -59,11 +59,11 @@ class SamsungPageMixin:
         # Unlock opens its own inner tab row (FRP / MDM / CARRIER / SCREEN LOCK).
         self.samsung_tabs = SamsungSubTabs(
             [
-                ("supported", "SUPPORTED DEVICES"),
-                ("flash", "ODIN FLASH"),
-                ("unlock", "UNLOCK"),
-                ("adv", "ADVANCED FLASH"),
-                ("tools", "INFO & TOOLS"),
+                ("supported", self.tr("SUPPORTED DEVICES")),
+                ("flash", self.tr("ODIN FLASH")),
+                ("unlock", self.tr("UNLOCK")),
+                ("adv", self.tr("ADVANCED FLASH")),
+                ("tools", self.tr("INFO & TOOLS")),
             ]
         )
         self.samsung_tabs.tab_selected.connect(self._on_samsung_tab)
@@ -134,7 +134,8 @@ class SamsungPageMixin:
         uv.setSpacing(8)
         unlock_tabs = SamsungSubTabs(
             [("frp", "FRP"), ("mdm", "MDM"),
-             ("carrier", "CARRIER LOCK"), ("lock", "SCREEN LOCK")]
+             ("carrier", self.tr("CARRIER LOCK")),
+             ("lock", self.tr("SCREEN LOCK"))]
         )
         uv.addWidget(unlock_tabs)
         unlock_stack = QStackedWidget()

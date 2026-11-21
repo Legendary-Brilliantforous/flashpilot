@@ -24,6 +24,7 @@ Contracts guarded here:
 
 Run:  QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/test_layout_i18n.py -q
 """
+import json
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -68,6 +69,70 @@ def fr_win(test_window):
 def _settle(window, rounds=10):
     for _ in range(rounds):
         QApplication.processEvents()
+
+
+def _fr_catalog():
+    """Read the French catalog used by the French-window fixture."""
+    from python.gui import i18n
+
+    path = i18n.catalog_dir() / "fr.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_samsung_hub_tabs_are_translated(fr_win):
+    """The Samsung hub tab labels follow the installed language."""
+    catalog = _fr_catalog()
+    labels = {
+        "supported": "SUPPORTED DEVICES",
+        "flash": "ODIN FLASH",
+        "unlock": "UNLOCK",
+        "adv": "ADVANCED FLASH",
+        "tools": "INFO & TOOLS",
+    }
+    expected = {
+        key: catalog["strings"].get(source, source)
+        for key, source in labels.items()
+    }
+    actual = {
+        key: button.text()
+        for key, button in fr_win.samsung_tabs._buttons.items()
+    }
+    assert actual == expected
+
+
+def test_mode_badge_not_connected_is_translated(fr_win):
+    """The no-device mode badge uses the translated user-facing label."""
+    fr_win.badge.set_state(None)
+    catalog = _fr_catalog()
+    expected = catalog["strings"].get("NOT CONNECTED", "NOT CONNECTED")
+    assert fr_win.badge._label.text() == expected
+
+
+def test_general_page_tabs_are_translated(fr_win):
+    """The General page tab labels follow the installed language."""
+    from python.gui.widgets import SamsungSubTabs
+
+    fr_win._on_section("general")
+    _settle(fr_win, 12)
+    page = fr_win._stack.currentWidget()
+    tabs = page.findChildren(SamsungSubTabs)
+    assert tabs, "expected the General page tab strip"
+    general_tabs = tabs[0]
+    catalog = _fr_catalog()
+    labels = {
+        "quick": "QUICK",
+        "battery": "BATTERY",
+        "network": "NETWORK",
+    }
+    expected = {
+        key: catalog["strings"].get(source, source)
+        for key, source in labels.items()
+    }
+    actual = {
+        key: button.text()
+        for key, button in general_tabs._buttons.items()
+    }
+    assert actual == expected
 
 
 def _assert_not_truncated(widget):

@@ -23,7 +23,7 @@ offline.
 - `en.json` is the identity catalog and defines the required key set.
 - Empty/missing keys fall back to the English source text.
 
-Current size: **634 `strings` + 138 `keys`** per language, all translated.
+Current size: **641 `strings` + 138 `keys`** per language, all translated.
 They cover the shared chrome, every operations page (Samsung/Odin, MediaTek,
 Qualcomm, SPD/UNISOC, FUS, quick actions, battery/network, settings), the
 device board, QR provisioning helpers, toasts and the app's own console

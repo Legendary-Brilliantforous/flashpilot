@@ -3,12 +3,13 @@
 """
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
+from .i18n import tr
 from .theme import C
 
 
 def _mode_chip(mode):
     if not mode:
-        return "NOT CONNECTED", C["card"], C["mute"], C["mute"]
+        return tr("NOT CONNECTED"), C["card"], C["mute"], C["mute"]
     m = mode.upper()
     if "RECOVERY" in m:
         return "RECOVERY", C["warn_dim"], C["warn"], C["warn"]
