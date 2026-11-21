@@ -854,9 +854,21 @@ _USB_BRAND_TOKENS = (
     ("honor", "HONOR"),
     ("huawei", "HUAWEI"),
     ("google", "GOOGLE"),
+    ("pixel", "GOOGLE"),
     ("lg electronics", "LG"),
+    ("lge", "LG"),
     ("sony", "SONY"),
+    ("transsion", "TRANSSION"),
 )
+
+# OEM vendor IDs that ARE the brand (no chip vendor here): Samsung's VID is
+# always Samsung hardware, Apple's is always Apple hardware. MediaTek /
+# Qualcomm VIDs say nothing about the phone brand, so they are absent.
+# Mirrors `VID_BRANDS` in src/usb/filtering.rs.
+_USB_VID_BRANDS = {
+    0x04E8: "SAMSUNG",
+    0x05AC: "APPLE",
+}
 
 
 def _usb_brand(d):
@@ -867,7 +879,9 @@ def _usb_brand(d):
     for token, label in _USB_BRAND_TOKENS:
         if token in text:
             return label
-    return None
+    # No usable strings (a bare Odin/BROM stage): the OEM VID still names
+    # the brand.
+    return _USB_VID_BRANDS.get(d.get("vid"))
 
 
 
@@ -1554,6 +1568,12 @@ class FlashPilotWindow(
         self._cached_build = None
         self._cached_android = None
         self._cached_serial = None
+        # Form factor (phone/tablet/tv/watch/automotive) — "" until a live
+        # probe reports one. Never guessed.
+        self._cached_device_type = ""
+        # Which device the cached form factor belongs to (a type never
+        # leaks from one phone to the next).
+        self._cached_type_serial = ""
         self._update_in_progress = False
         self._last_pid = None
         self._device_connected = False
@@ -3320,10 +3340,21 @@ class FlashPilotWindow(
                 mode = r.get("mode") or "phone"
                 self._dev_dot.setText("●")
                 self._dev_dot.setStyleSheet("color:#34d399; font-size:15px; font-weight:800;")
-                self._dev_title.setText(f"{r.get('label', mode)[:60]}")
-                self._dev_text.setText(
-                    self.tr("{mode} · [{transports}] — only matching actions are lit")
-                    .format(mode=mode, transports=transports))
+                # Brand · model when the merged row knows them (ADB `model:`
+                # extra / USB strings); otherwise the honest USB label.
+                row_model = (r.get("model") or "").strip()
+                row_brand = (r.get("brand") or "").strip()
+                title = r.get("label", mode)
+                if row_model:
+                    title = f"{row_brand} · {row_model}" if row_brand else row_model
+                self._dev_title.setText(f"{title[:60]}")
+                dtype = (getattr(self, "_cached_device_type", "") or "").strip().upper()
+                mode_line = self.tr(
+                    "{mode} · [{transports}] — only matching actions are lit"
+                ).format(mode=mode, transports=transports)
+                if dtype:
+                    mode_line = f"{dtype} · {mode_line}"
+                self._dev_text.setText(mode_line)
                 try:
                     ports = device_pages.usb_serial_ports(
                         int(r.get("bus", 0) or 0), int(r.get("address", 0) or 0))
@@ -10725,7 +10756,21 @@ class FlashPilotWindow(
             usb = row.get("usb") or {}
             adb = row.get("adb") or {}
             serial = (usb.get("serial") or adb.get("serial") or "--").strip() or "--"
-            model = (usb.get("product") or usb.get("manufacturer") or "--").strip() or "--"
+            # The form factor belongs to ONE device: drop the previous
+            # device's type when the selection changes (the live probe
+            # fills the new one in). The row key is the device identity.
+            scope_key = (row.get("key") or serial or "").strip()
+            if getattr(self, "_cached_type_serial", "") != scope_key:
+                self._cached_type_serial = scope_key
+                self._cached_device_type = ""
+            # Brand + model come from the Rust merged row (ADB `model:`
+            # extra + USB strings) — the real identity, not the generic
+            # USB product string.
+            row_model = (row.get("model") or usb.get("model") or "").strip()
+            row_brand = (row.get("brand") or usb.get("brand") or "").strip()
+            model = row_model or (usb.get("product") or usb.get("manufacturer") or "--").strip() or "--"
+            if row_brand and row_model:
+                model = f"{row_brand} · {row_model}"
             try:
                 self.info["Serial"].set(serial)
                 self.info["Device Model"].set(model)
@@ -10744,6 +10789,9 @@ class FlashPilotWindow(
             self._cached_build = None
             self._cached_android = None
             self._cached_serial = None
+            # Form factor of the previous device must not leak into the next.
+            self._cached_device_type = ""
+            self._cached_type_serial = ""
             self._model_refresh_in_progress = False
             self._last_pid = None
             self._device_connected = False
@@ -11212,8 +11260,22 @@ class FlashPilotWindow(
                         # Update mfr for vendor badge if live has it
                         if live.get("mfr") and not mfr:
                             mfr = live["mfr"]
+                    # Form factor (phone/tablet/tv/watch/automotive) — only a
+                    # live getprop can answer it. Unknown stays empty; never
+                    # guess a type for a device that did not report one.
+                    live_type = (live.get("device_type") or "").strip().lower()
+                    if live_type and live_type != getattr(self, "_cached_device_type", ""):
+                        self._cached_device_type = live_type
+                        self._ui.line.emit(f"Device Type: {live_type}")
+                        try:
+                            # Re-render the strip so the type shows up there.
+                            self.update_device_strip()
+                        except Exception:
+                            pass
+                    # Brand family (ro.product.brand) for the model tile.
+                    live_brand = (live.get("brand") or "").strip()
                 except Exception:
-                    pass
+                    live_brand = ""
                 # Never emit a hard-coded "adb" as model - use real product/model or placeholder
                 fallback = f"0x{pid:04x}" if pid is not None else "--"
                 # If we still have no model, keep previous cached or show fallback
@@ -11221,6 +11283,10 @@ class FlashPilotWindow(
                 # Guard against the literal "adb" sneaking in as model (bridge bug)
                 if isinstance(emit_model, str) and emit_model.strip().lower() == "adb":
                     emit_model = fallback if fallback != "--" else "--"
+                # Brand · model when both are known (SAMSUNG · SM-G973F).
+                if (live_brand and " · " not in emit_model
+                        and not emit_model.upper().startswith(live_brand.upper())):
+                    emit_model = f"{live_brand} · {emit_model}"
                 self._ui.metric.emit("Device Model", emit_model)
                 self._ui.metric.emit("ADB Status", adb_status)
                 # Extended info: build, android, serial (cached) — filtered fake serial

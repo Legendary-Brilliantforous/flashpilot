@@ -406,9 +406,16 @@ def list_merged(vid_filter=None, timeout=30):
     """Unified, phone-filtered USB + ADB device rows (Rust core).
 
     Returns a list of dicts, each: {key, label, transports, vid, pid, bus,
-    address, serial, is_adb, adb_state}. Phones and ADB entries are merged by
+    address, serial, is_adb, adb_state, usb_product, usb_manufacturer,
+    model, brand, device_type}. Phones and ADB entries are merged by
     serial; classes/modes are classified by the Rust bridge (single source of
     truth under the "Rust core, Python GUI" split).
+
+    ``model`` is the real model from the ADB server row (``model:`` extra),
+    ``brand`` the brand family from the USB/ADB strings, and ``device_type``
+    the form factor — the last one stays None until a live
+    ``ro.build.characteristics`` probe answers it (the zero-touch poll never
+    guesses a model or a type).
     """
     args = ["detect-merged"]
     if vid_filter is not None:

@@ -128,6 +128,68 @@ pub struct MergedDeviceInfo {
     pub adb: Option<AdbDevice>,
 }
 
+/// Parse a `key:value` field from an `adb devices -l` extras string, e.g.
+/// `... product:beyond1 model:SM_G973F device:beyond1 transport_id:1`.
+/// Values are returned verbatim; `unknown`/empty is treated as absent.
+pub fn adb_extra_field(extra: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}:");
+    extra
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix(&needle))
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("unknown"))
+        .map(str::to_string)
+}
+
+/// Brand tokens derived from USB/ADB strings. Order matters (first match wins).
+pub const BRAND_TOKENS: &[(&str, &str)] = &[
+    ("samsung", "SAMSUNG"),
+    ("tecno", "TECNO"),
+    ("infinix", "INFINIX"),
+    ("itel", "ITEL"),
+    ("oppo", "OPPO"),
+    ("vivo", "VIVO"),
+    ("redmi", "REDMI"),
+    ("xiaomi", "XIAOMI"),
+    ("realme", "REALME"),
+    ("oneplus", "ONEPLUS"),
+    ("motorola", "MOTOROLA"),
+    ("nokia", "NOKIA"),
+    ("honor", "HONOR"),
+    ("huawei", "HUAWEI"),
+    ("google", "GOOGLE"),
+    ("pixel", "GOOGLE"),
+    ("lg electronics", "LG"),
+    ("lge", "LG"),
+    ("sony", "SONY"),
+    ("transsion", "TRANSSION"),
+];
+
+/// Best-effort brand family from USB manufacturer/product or an ADB model
+/// string. Returns an uppercase display token, never a guessed model.
+pub fn brand_hint(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    BRAND_TOKENS
+        .iter()
+        .find(|(needle, _)| lower.contains(needle))
+        .map(|(_, brand)| (*brand).to_string())
+}
+
+/// OEM vendor IDs that ARE the brand (no chip vendor here): Samsung's VID
+/// is always Samsung hardware, Apple's is always Apple hardware. Chip
+/// vendors (MediaTek/Qualcomm) are deliberately absent — their VIDs say
+/// nothing about the phone brand.
+pub const VID_BRANDS: &[(u16, &str)] = &[(0x04E8, "SAMSUNG"), (0x05AC, "APPLE")];
+
+/// Brand family from the USB vendor ID — used when the device exposes no
+/// usable strings (a bare Samsung Odin/BROM stage).
+pub fn brand_from_vid(vid: u16) -> Option<String> {
+    VID_BRANDS
+        .iter()
+        .find(|(known, _)| *known == vid)
+        .map(|(_, brand)| (*brand).to_string())
+}
+
 /// Normalize a serial number string (filter noise like "null", "?", etc.)
 pub fn normalize_serial(s: Option<&str>) -> String {
     let s = (s.unwrap_or("")).trim();
@@ -886,6 +948,57 @@ mod tests {
             compute_transports(&normal, &serials),
             vec!["USB".to_string()]
         );
+    }
+
+    #[test]
+    fn adb_extra_field_reads_model_and_skips_unknown() {
+        let extra = "product:beyond1 model:SM_G973F device:beyond1 transport_id:1";
+        assert_eq!(
+            adb_extra_field(extra, "model").as_deref(),
+            Some("SM_G973F")
+        );
+        assert_eq!(adb_extra_field(extra, "product").as_deref(), Some("beyond1"));
+        assert_eq!(adb_extra_field("model:unknown device:x", "model"), None);
+        assert_eq!(adb_extra_field("model: device:x", "model"), None);
+        assert_eq!(adb_extra_field(extra, "missing"), None);
+    }
+
+    #[test]
+    fn brand_hint_matches_oem_families_not_just_the_main_vendor() {        // The reported gap: detection knew the chip (MTK) but not the brand,
+        // so a Tecno MTK stage read as a bare "MEDIATEK".
+        assert_eq!(
+            brand_hint("TECNO Mobile MTK").as_deref(),
+            Some("TECNO")
+        );
+        assert_eq!(
+            brand_hint("Infinix Electronics").as_deref(),
+            Some("INFINIX")
+        );
+        assert_eq!(
+            brand_hint("LG Electronics Android Debug").as_deref(),
+            Some("LG")
+        );
+        assert_eq!(
+            brand_hint("SAMSUNG").as_deref(),
+            Some("SAMSUNG")
+        );
+        // Unknown manufacturers must not get a brand guess.
+        assert_eq!(brand_hint("Acme Electronics"), None);
+        assert_eq!(brand_hint(""), None);
+        // A Pixel is a Google phone, whatever the wording.
+        assert_eq!(brand_hint("Google").as_deref(), Some("GOOGLE"));
+    }
+
+    #[test]
+    fn brand_from_vid_only_covers_oem_brands() {
+        // A bare Samsung Odin stage has no product string — the VID still
+        // names the brand.
+        assert_eq!(brand_from_vid(0x04E8).as_deref(), Some("SAMSUNG"));
+        assert_eq!(brand_from_vid(0x05AC).as_deref(), Some("APPLE"));
+        // Chip vendors are NOT brands: their VIDs say nothing about the OEM.
+        assert_eq!(brand_from_vid(0x0E8D), None);
+        assert_eq!(brand_from_vid(0x05C6), None);
+        assert_eq!(brand_from_vid(0x1234), None);
     }
 }
 #[cfg(test)]
