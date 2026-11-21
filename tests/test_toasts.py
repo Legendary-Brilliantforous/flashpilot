@@ -491,3 +491,42 @@ def test_window_toasts_never_cover_a_top_row_button(win):
     assert covered == [], f"toast covers console control(s): {covered}"
     _reset(host)
 
+
+
+def test_toasts_clear_the_console_toolbar_on_the_cmd_tab(win):
+    """The transcript is hidden on the CMD tab, but the console toolbar and
+    tab bar stay visible — a top-anchored toast must still clear them."""
+    from PyQt6.QtCore import QRect
+    from PyQt6.QtWidgets import QAbstractButton, QApplication
+
+    host = win._toasts
+    _reset(host)
+    win.show()
+    win._open_cmd_tab()
+    QApplication.processEvents()
+    host._relayout()
+
+    assert win.console_tabs.currentWidget() is win._cmd_tab
+    assert not win.log.isVisible(), "the transcript should be hidden on CMD"
+
+    card = host.show_info("notification", "d", duration=100000)
+    QApplication.processEvents()
+    host._relayout()
+    card_rect = QRect(card.mapTo(win, card.rect().topLeft()),
+                      card.mapTo(win, card.rect().bottomRight()))
+
+    toolbar = getattr(win, "_console_tools", None)
+    buttons = [
+        btn for btn in toolbar.findChildren(QAbstractButton)
+        if btn.isVisible() and btn.width() > 0 and btn.height() > 0
+    ] if toolbar is not None else []
+    covered = []
+    for btn in buttons:
+        rect = QRect(btn.mapTo(win, btn.rect().topLeft()),
+                     btn.mapTo(win, btn.rect().bottomRight()))
+        if rect.intersects(card_rect):
+            covered.append(btn.text() or btn.objectName() or "button")
+    assert buttons, "the console toolbar should be visible on the CMD tab"
+    assert covered == [], f"toast covers console control(s): {covered}"
+    _reset(host)
+    win.console_tabs.setCurrentIndex(0)

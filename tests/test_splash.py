@@ -227,6 +227,10 @@ def test_build_ui_reports_stages_and_main_finishes_the_splash():
     assert "_set_startup_hook(None)" in main_src
     assert "splash.finish()" in main_src
     assert "singleShot(800" in main_src
+    # A window-construction failure must be reported and quit, never leave
+    # the event loop running with no visible window.
+    assert "QMessageBox.critical" in main_src
+    assert "app.quit()" in main_src
 
 
 @pytest.fixture(scope="module")
@@ -248,6 +252,7 @@ def test_pages_are_deferred_until_first_visit(raw_window):
     key = next(iter(w._lazy_sections))
     index = w._section_index[key]
     count = w._stack.count()
+    holder = w._stack.widget(index)
 
     assert w._build_section(key) is True
     assert key not in w._lazy_sections
@@ -255,9 +260,34 @@ def test_pages_are_deferred_until_first_visit(raw_window):
     # replaced in place, not appended.
     assert w._section_index[key] == index
     assert w._stack.count() == count
-    assert w._stack.widget(index) is not None
+    page = w._stack.widget(index)
+    assert page is not None
+    # The builder ran and its page replaced the bare placeholder — a
+    # placeholder left in the stack must not pass as a built page.
+    assert page is not holder
     # Idempotent: a second call is a no-op.
     assert w._build_section(key) is False
+
+
+def test_failed_page_build_keeps_the_deferred_entry(raw_window):
+    """A builder that raises must not leave the section permanently blank:
+    the entry is restored so the next visit can retry."""
+    w = raw_window
+    if not w._lazy_sections:
+        pytest.skip("every page has already been built")
+    key = next(iter(w._lazy_sections))
+    index, builder = w._lazy_sections[key]
+
+    def _boom():
+        raise RuntimeError("page build failed")
+
+    w._lazy_sections[key] = (index, _boom)
+    try:
+        with pytest.raises(RuntimeError, match="page build failed"):
+            w._build_section(key)
+        assert key in w._lazy_sections, "the retry entry must survive a failure"
+    finally:
+        w._lazy_sections[key] = (index, builder)
 
 
 def test_on_section_builds_and_shows(raw_window):
@@ -271,6 +301,10 @@ def test_on_section_builds_and_shows(raw_window):
 
 def test_ensure_all_pages_materialises_everything(raw_window):
     w = raw_window
+    holders = {
+        key: w._stack.widget(w._section_index[key])
+        for key in list(w._lazy_sections)
+    }
     w._ensure_all_pages()
     assert w._lazy_sections == {}
     assert w._stack.count() == len(w._section_index)
@@ -278,4 +312,6 @@ def test_ensure_all_pages_materialises_everything(raw_window):
     for key, index in w._section_index.items():
         page = w._stack.widget(index)
         assert page is not None, key
+        if key in holders:
+            assert page is not holders[key], f"{key} still shows its placeholder"
 

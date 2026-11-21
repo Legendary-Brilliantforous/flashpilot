@@ -2499,6 +2499,7 @@ class FlashPilotWindow(
         self.time_btn.toggled.connect(self._set_timestamps)
         console_row.addWidget(self.time_btn)
         body_lay.addWidget(console_tools)
+        self._console_tools = console_tools
 
         # Console | CMD tabs: the transcript lives on Console; the CMD tab
         # is created only when called (Transports ▸ CMD Console) and has
@@ -3479,7 +3480,13 @@ class FlashPilotWindow(
         if entry is None:
             return False
         index, builder = entry
-        page = builder()
+        try:
+            page = builder()
+        except Exception:
+            # Keep the deferred entry so a later visit can retry instead of
+            # leaving the placeholder permanently unusable.
+            self._lazy_sections[key] = entry
+            raise
         holder = self._stack.widget(index)
         self._stack.insertWidget(index, page)
         if holder is not None and holder is not page:
@@ -11436,11 +11443,22 @@ class FlashPilotWindow(
                         bottom,
                         dock.mapTo(self, QPoint(0, rect.bottom())).y(),
                     )
-                # The transcript starts below the toolbar/find rows: anchor
-                # there so no console button can ever sit under a toast.
                 log_top = _top(getattr(self, "log", None))
                 if log_top > 0:
+                    # The transcript starts below the toolbar/find rows:
+                    # anchor there so no console button can sit under a toast.
                     bottom = max(bottom, log_top)
+                else:
+                    # Transcript hidden (CMD tab selected) but the console
+                    # toolbar and tab bar are still visible. Anchor below
+                    # them so no console control sits under a toast.
+                    tab_bar = None
+                    try:
+                        tab_bar = self.console_tabs.tabBar()
+                    except Exception:
+                        pass
+                    for widget in (getattr(self, "_console_tools", None), tab_bar):
+                        bottom = max(bottom, _bottom(widget))
         except Exception:
             pass
         return max(0, bottom)
@@ -13442,7 +13460,25 @@ def main():
                     win.show()
             except Exception:
                 win.show()
-        finally:
+        except Exception as exc:
+            # Never leave a dead event loop behind: report the failure and
+            # quit instead of finishing the splash on a window that does not
+            # exist (the app would look hung/blank).
+            _set_startup_hook(None)
+            splash.finish()
+            try:
+                QMessageBox.critical(
+                    None,
+                    "FlashPilot failed to start",
+                    "The main window could not be built:\n\n"
+                    f"{exc}\n\n"
+                    "Restart the application. If this repeats, run it from a "
+                    "terminal to see the full traceback.",
+                )
+            except Exception:
+                print(f"FlashPilot failed to start: {exc}")
+            app.quit()
+        else:
             _set_startup_hook(None)
             splash.finish()
 
