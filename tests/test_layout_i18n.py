@@ -42,8 +42,11 @@ def fr_win(test_window):
     Labels are resolved in ``tr()`` at construction time, so the translator has
     to be installed *before* the window is built — installing it afterwards
     would leave every widget with its English text and the test would pass
-    vacuously. Qt does not own the translator, so it is removed explicitly at
-    teardown; otherwise every later test in the session would see French.
+    vacuously. (The runtime language switch in the GUI is a different path:
+    it swaps the translator *and* rebuilds the widget tree, see
+    ``FlashPilotWindow._switch_ui_language``.) Qt does not own the translator,
+    so it is removed explicitly at teardown; otherwise every later test in the
+    session would see French.
     """
     from python.gui import i18n
 

@@ -152,7 +152,8 @@ fresh interpreter.
    .venv/bin/pytest tests/test_i18n.py tests/test_i18n_pseudo.py -q
    ```
 
-5. Test the switch in **Settings → Language & region** (applies on restart).
+5. Test the switch in **Settings → Language & region** (applies immediately,
+   no restart needed).
 
 Only run `--prune` when you intend to delete keys that no longer exist in the
 source; it drops them from every catalog.

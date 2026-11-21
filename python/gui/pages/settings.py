@@ -189,7 +189,7 @@ class SettingsPageMixin:
         self._s_language.currentIndexChanged.connect(self._apply_ui_language)
         self._settings_row(
             bl, self.tr("Interface language"),
-            self.tr("Display language for menus and buttons. Requires a restart."),
+            self.tr("Display language for menus and buttons. Applies immediately."),
             self._s_language,
         )
 
@@ -202,6 +202,9 @@ class SettingsPageMixin:
             self.settings.setValue("ui_language", code)
         except Exception:
             pass
+        # The switch rebuilds this page, so it must not run inside the
+        # combo box's own signal handler.
+        QTimer.singleShot(0, lambda: self._switch_ui_language(code))
 
     def _build_settings_updates(self):
         page = QWidget()

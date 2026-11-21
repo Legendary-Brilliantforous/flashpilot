@@ -89,7 +89,7 @@ from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, expe
 from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
-from .i18n import tr_key
+from .i18n import current_language, set_language, tr_key
 from .startup import stage as _startup_stage, set_hook as _set_startup_hook
 from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
@@ -1590,6 +1590,9 @@ class FlashPilotWindow(
         # synchronously, the rest flush on a single-shot timer / size cap.
         self._pending_console = []
         self._console_flush_timer = None
+        # A language chosen while an operation is running is applied by
+        # _on_finished(), after the worker no longer owns old widgets.
+        self._pending_ui_language = None
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
         self._console_search_text = ""
         self._console_regex = False
@@ -1646,20 +1649,6 @@ class FlashPilotWindow(
         self.setStyleSheet(_get_base_qss() + _console_qss())
 
         self._build_ui()
-        # Global fix: action buttons should not retain focus rect (was flashing red in Crimson)
-        for btn in self.findChildren(QPushButton):
-            if not btn.isCheckable():
-                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                btn.setAutoDefault(False)
-                btn.setDefault(False)
-        if hasattr(self, "oem_bar"): self.oem_bar.select("samsung")
-
-        # apply persisted effect settings to the freshly-built widgets
-        if not self.settings.value("animations", "true", type=bool):
-            self.scene.set_animations(False)
-            self.orb.set_animations(False)
-        if not self.settings.value("blur", "true", type=bool):
-            self._root_shadow.setEnabled(False)
 
         # toast overlay on top of everything (corner from toast/position)
         self._toasts = ToastHost(
@@ -1711,11 +1700,7 @@ class FlashPilotWindow(
             QApplication.instance().installEventFilter(self)
         except Exception:
             pass
-        self.refresh_device()
-        try:
-            self.update_device_strip()
-        except Exception:
-            pass
+        self._apply_built_widget_settings("samsung")
         self.log_line(
             f"FlashPilot — console ready "
             f"({_time.strftime('%Y-%m-%d %H:%M:%S')})"
@@ -8242,6 +8227,187 @@ class FlashPilotWindow(
         self.settings.setValue("beta_warning_mode", mode)
         self._ui.line.emit(f"[settings] beta warning mode -> {mode}")
 
+    def _apply_built_widget_settings(self, section="samsung"):
+        """Post-build wiring that depends on freshly built widgets."""
+        # Global fix: action buttons should not retain focus rect (was
+        # flashing red in Crimson).
+        for btn in self.findChildren(QPushButton):
+            if not btn.isCheckable():
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setAutoDefault(False)
+                btn.setDefault(False)
+        if hasattr(self, "oem_bar"):
+            self.oem_bar.select(section)
+
+        # Apply persisted effect settings to the freshly-built widgets.
+        if not self.settings.value("animations", "true", type=bool):
+            self.scene.set_animations(False)
+            self.orb.set_animations(False)
+        if not self.settings.value("blur", "true", type=bool):
+            self._root_shadow.setEnabled(False)
+
+        self.refresh_device()
+        try:
+            self.update_device_strip()
+        except Exception:
+            pass
+
+    def _switch_ui_language(self, code):
+        """Apply `code` to the UI immediately, without restarting FlashPilot."""
+        code = str(code or "en")
+        if code == current_language():
+            return False
+
+        # A running flow worker captured stop/progress widgets from the
+        # current tree. Destroying those widgets mid-run is a crash risk, so
+        # remember the choice and apply it when the operation finishes.
+        if _flows_running() > 0:
+            self._pending_ui_language = code
+            self._toasts.show_info(
+                self.tr("Language change will apply when the current operation finishes.")
+            )
+            return False
+
+        try:
+            # Capture all window-owned state whose widgets are about to be
+            # recreated by _build_ui().
+            section = getattr(self, "_current_section", "samsung")
+            device_key = getattr(self, "_display_key", None)
+            filter_state = dict(getattr(self, "_filter", {}) or {})
+            search_text = getattr(self, "_console_search_text", "") or ""
+            regex_enabled = bool(getattr(self, "_console_regex", False))
+            timestamps_enabled = bool(getattr(self, "_show_timestamps", True))
+            old_central = self.centralWidget()
+
+            # _build_console() restores these values from QSettings. Persist
+            # the live geometry first so collapsing/maximising/dock width are
+            # not lost during the rebuild.
+            self._save_console_state()
+
+            # Flush coalesced lines while the old transcript widget still
+            # exists. log_line(), _start_flush_timer(), and _flush_console()
+            # all tolerate a None flush timer; the new console creates a
+            # fresh timer before any further logging.
+            try:
+                self._flush_console()
+            except Exception:
+                pass
+            for attr in (
+                "_global_stop_timer",
+                "_row_state_timer",
+                "_console_flush_timer",
+            ):
+                timer = getattr(self, attr, None)
+                if timer is not None:
+                    try:
+                        timer.stop()
+                    except Exception:
+                        pass
+                    try:
+                        timer.deleteLater()
+                    except Exception:
+                        pass
+                setattr(self, attr, None)
+
+            # These registries contain references to widgets in the old tree.
+            # The newly built pages repopulate them as they are constructed.
+            self._gated_buttons = []
+            self._stop_job = {}
+            self._flow_browsers = []
+
+            # Install the translator before constructing any widgets so every
+            # new label resolves in the requested language. set_language()
+            # also applies the app-level LTR/RTL direction.
+            app = QApplication.instance()
+            if app is None:
+                raise RuntimeError("QApplication is not available")
+            active = set_language(app, code)
+            if not active:
+                raise RuntimeError(f"could not activate UI language {code!r}")
+
+            self._build_ui()
+            if old_central is not None and old_central is not self.centralWidget():
+                try:
+                    old_central.hide()
+                    old_central.setParent(None)
+                    old_central.deleteLater()
+                except Exception:
+                    pass
+
+            self._apply_built_widget_settings(section)
+
+            # Restore the current section; this materialises its deferred
+            # page in the new language and refreshes gates/device state.
+            self._on_section(section)
+
+            # Restore the console's live filter/search/timestamp state on
+            # the newly-created controls.
+            self._filter = filter_state
+            for level, btn in (getattr(self, "_filter_btns", {}) or {}).items():
+                try:
+                    btn.blockSignals(True)
+                    btn.setChecked(bool(self._filter.get(level, True)))
+                finally:
+                    btn.blockSignals(False)
+            self._show_timestamps = timestamps_enabled
+            self._console_regex = regex_enabled
+            self._console_regex_obj = None
+            self._sync_console_chip("time_btn", timestamps_enabled)
+            self._sync_console_chip("regex_btn", regex_enabled)
+            try:
+                self.find_edit.blockSignals(True)
+                self.find_edit.setText(search_text)
+            finally:
+                self.find_edit.blockSignals(False)
+            self._console_search_text = search_text
+            self._refresh_search_regex()
+            self._rebuild_console()
+            if not self._log_buffer:
+                self.log.setPlainText(self.tr("Ready. Connect a device to begin."))
+            self._apply_find()
+
+            # Refresh the device list, then reuse _on_device_picked() so the
+            # selected row, tiles, scene, badge, and gates follow one path.
+            try:
+                self._refresh_device_list()
+            except Exception:
+                pass
+            self._display_key = device_key
+            if device_key is not None:
+                for row in range(self.device_list.count()):
+                    item = self.device_list.item(row)
+                    if item.data(Qt.ItemDataRole.UserRole) == device_key:
+                        self._on_device_picked(item)
+                        break
+
+            self.setWindowTitle(self.tr("FlashPilot"))
+            self._pending_ui_language = None
+            try:
+                self._nudge_toasts()
+            except Exception:
+                pass
+            self._toasts.show_ok(self.tr("Language changed."))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            # A language switch must never take down the main window.
+            try:
+                self._toasts.show_error(self.tr("Operation failed"), str(exc))
+            except Exception:
+                pass
+            try:
+                self.log_line(f"[error] UI language switch failed: {exc}")
+            except Exception:
+                pass
+            return False
+
+    def _apply_pending_ui_language(self):
+        """Apply a language change deferred until the running operation ends."""
+        code = getattr(self, "_pending_ui_language", None)
+        if not code:
+            return False
+        self._pending_ui_language = None
+        return self._switch_ui_language(code)
+
     def _apply_theme(self, name):
         self.settings.setValue("theme", name)
         if name in ACCENT_THEMES:
@@ -10147,6 +10313,12 @@ class FlashPilotWindow(
         show(sel.currentIndex() if sel else 0)
 
     def _on_finished(self):
+        # Apply a language change requested while this operation was running
+        # before touching any progress widgets from the rebuilt tree.
+        try:
+            self._apply_pending_ui_language()
+        except Exception:
+            pass
         self.stop_btn.setEnabled(False)
         self.shimmer.set_active(False)
         self.shimmer.setVisible(False)

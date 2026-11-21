@@ -26,7 +26,7 @@ import re
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTranslator
+from PyQt6.QtCore import QEvent, Qt, QTranslator
 
 DEFAULT_LANGUAGE = "en"
 CATALOG_ENV = "FLASHPILOT_I18N_DIR"
@@ -38,6 +38,7 @@ RTL_LANGUAGES = frozenset({"ar", "fa", "he", "ur"})
 
 _INSTALLED = []
 _INSTALLED_LOCK = threading.Lock()
+_CURRENT_LANGUAGE = DEFAULT_LANGUAGE
 
 # Placeholders that must survive translation unchanged: Python/str.format
 # (``{model}``, ``{0}``), printf-style Qt/Qt6 plurals (``%n``) and Qt's
@@ -249,6 +250,128 @@ class JsonTranslator(QTranslator):
         return len(self._strings)
 
 
+def _application_instance():
+    """Return the current QApplication, if one exists."""
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        return QApplication.instance()
+    except Exception:
+        return None
+
+
+def _remove_installed_translator(app=None):
+    """Remove the retained translator from Qt applications."""
+    global _CURRENT_LANGUAGE
+
+    with _INSTALLED_LOCK:
+        translators = list(_INSTALLED)
+        _INSTALLED.clear()
+        _CURRENT_LANGUAGE = DEFAULT_LANGUAGE
+
+    applications = []
+    for candidate in (app, _application_instance()):
+        if candidate is None:
+            continue
+        if not any(candidate is existing for existing in applications):
+            applications.append(candidate)
+
+    for translator in translators:
+        for application in applications:
+            try:
+                application.removeTranslator(translator)
+            except Exception:
+                pass
+
+
+def _apply_layout_direction(app, code):
+    """Apply the layout direction for ``code`` without failing on a bad app."""
+    try:
+        app.setLayoutDirection(layout_direction(code))
+    except Exception:
+        pass
+
+
+def _notify_language_change(app):
+    """Notify the application and its top-level widgets of a language change."""
+    if app is None:
+        return
+    try:
+        event = QEvent(QEvent.Type.LanguageChange)
+    except Exception:
+        return
+    try:
+        widgets = list(app.topLevelWidgets())
+    except Exception:
+        widgets = []
+    for widget in widgets:
+        try:
+            app.sendEvent(widget, event)
+        except Exception:
+            pass
+    try:
+        app.sendEvent(app, event)
+    except Exception:
+        pass
+
+
+def _switch_language(app, lang):
+    """Switch to ``lang`` and return ``(active_code, translator)``."""
+    global _CURRENT_LANGUAGE
+
+    code = language_code(lang) or DEFAULT_LANGUAGE
+    _remove_installed_translator(app)
+
+    translator = None
+    active = DEFAULT_LANGUAGE
+    if code != DEFAULT_LANGUAGE:
+        path = json_path_for(code)
+        if not path.is_file():
+            # A missing catalog is not fatal: English remains readable. In
+            # development, FLASHPILOT_I18N_STRICT=1 turns the silent fallback
+            # into a loud error so packaging mistakes cannot ship unnoticed.
+            if os.environ.get(STRICT_ENV) == "1":
+                _apply_layout_direction(app, DEFAULT_LANGUAGE)
+                _notify_language_change(app)
+                raise FileNotFoundError(
+                    f"no UI translation catalog for {code!r}: {path}"
+                )
+        else:
+            candidate = JsonTranslator(str(path))
+            try:
+                installed = bool(app.installTranslator(candidate))
+            except Exception:
+                installed = False
+            if installed:
+                translator = candidate
+                active = code
+                with _INSTALLED_LOCK:
+                    _INSTALLED.append(translator)
+                    _CURRENT_LANGUAGE = code
+
+    _apply_layout_direction(app, active)
+    _notify_language_change(app)
+    return active, translator
+
+
+def current_language():
+    """The UI language code that is currently installed (e.g. "en", "tr")."""
+    with _INSTALLED_LOCK:
+        return _CURRENT_LANGUAGE if _INSTALLED else DEFAULT_LANGUAGE
+
+
+def set_language(app, lang):
+    """Install ``lang``'s catalog, replacing any translator installed before.
+
+    Removes the previously installed translator from the QApplication (so
+    switching back to English really restores English), applies the matching
+    layout direction (Arabic -> RTL), notifies top-level widgets with a
+    QEvent.LanguageChange, and returns the language code that is now active.
+    """
+    code, _ = _switch_language(app, lang)
+    return code
+
+
 def install(app, lang):
     """Install a JSON-backed translator for ``lang`` if one is available.
 
@@ -257,31 +380,14 @@ def install(app, lang):
     does not take ownership: without a reference Python would garbage-collect
     it and every ``tr()`` call would silently fall back to English.
     """
-    code = language_code(lang) or DEFAULT_LANGUAGE
-    app.setLayoutDirection(layout_direction(code))
-    if code == DEFAULT_LANGUAGE:
-        return None
-
-    path = json_path_for(code)
-    if not path.is_file():
-        # A missing catalog is not fatal: English remains readable. In
-        # development, FLASHPILOT_I18N_STRICT=1 turns the silent fallback into
-        # a loud error so packaging mistakes cannot ship unnoticed.
-        if os.environ.get(STRICT_ENV) == "1":
-            raise FileNotFoundError(
-                f"no UI translation catalog for {code!r}: {path}"
-            )
-        return None
-
-    translator = JsonTranslator(str(path))
-    if not app.installTranslator(translator):
-        return None
-    with _INSTALLED_LOCK:
-        _INSTALLED.append(translator)
+    _, translator = _switch_language(app, lang)
     return translator
 
 
 def reset_for_tests():
     """Drop retained translators (tests only)."""
+    global _CURRENT_LANGUAGE
+
+    _remove_installed_translator()
     with _INSTALLED_LOCK:
-        _INSTALLED.clear()
+        _CURRENT_LANGUAGE = DEFAULT_LANGUAGE
