@@ -887,6 +887,7 @@ _ENGINE_CHIPS = [
     ("apple", "Apple", "🍎", "dev_apple"),
     ("motorola", "Motorola", "📱", "dev_motorola"),
     ("kirin", "Kirin", "🐉", None),
+    ("rockchip", "Rockchip", "🌐", None),
 ]
 
 

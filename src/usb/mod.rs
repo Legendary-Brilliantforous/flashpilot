@@ -43,6 +43,7 @@ pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
         vid if crate::mtk::is_mtk_vid(vid) => "mediatek".to_string(),
         0x1782 => "spd".to_string(),
         0x05ac => "apple".to_string(),
+        0x2207 => "rockchip".to_string(),
         0x22b8 => {
             if has_adb {
                 "motorola-adb".to_string()
@@ -954,9 +955,10 @@ mod tests {
         // Qualcomm DIAG composites stay diag, never EDL.
         assert_eq!(mode_hint(0x05c6, 0x9006, &[]), "qualcomm-diag");
         assert_eq!(mode_hint(0x05c6, 0x9026, &[]), "qualcomm-diag");
-        // SPD, Apple, Motorola and MTK OEM VIDs classify without tables.
+        // SPD, Apple, Motorola, Rockchip and MTK OEM VIDs classify without tables.
         assert_eq!(mode_hint(0x1782, 0x4d00, &[]), "spd");
         assert_eq!(mode_hint(0x05ac, 0x1222, &[]), "apple");
+        assert_eq!(mode_hint(0x2207, 0x0001, &[]), "rockchip");
         assert_eq!(mode_hint(0x22b8, 0x2e80, &[]), "motorola");
         assert_eq!(mode_hint(0x1004, 0x2000, &[]), "mediatek");
         assert_eq!(mode_hint(0x22d9, 0x0003, &[]), "mediatek");

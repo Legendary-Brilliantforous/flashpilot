@@ -585,6 +585,7 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             "google".to_string()
         }
         0x1782 => "spd".to_string(),
+        0x2207 => "rockchip".to_string(),
         0x05AC => "apple".to_string(),
         0x22B8 => {
             if has_adb_iface {
