@@ -25,10 +25,8 @@ const KNOWN_PHONE_VIDS: &[u16] = &[
 ];
 
 /// MTK vendor IDs: the main 0x0E8D plus the OEM VIDs under which an MTK
-/// preloader/BROM re-enumerates (Sony 0x0FCE, LG 0x1004, OPPO 0x22D9,
-/// InFocus 0x9BB5). A bare stage (no interfaces, no strings) on any of
-/// these is still a phone flashing stage — never dropped.
-const MTK_OEM_VIDS: &[u16] = &[0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5];
+/// preloader/BROM re-enumerates. Defined once in `crate::mtk::MTK_OEM_VIDS`
+/// so filtering, classification and transport mapping cannot drift apart.
 
 /// Generic Android vendor IDs (mirrors `ANDROID_GENERIC_VIDS`)
 const ANDROID_GENERIC_VIDS: &[u16] = &[
@@ -130,6 +128,68 @@ pub struct MergedDeviceInfo {
     pub adb: Option<AdbDevice>,
 }
 
+/// Parse a `key:value` field from an `adb devices -l` extras string, e.g.
+/// `... product:beyond1 model:SM_G973F device:beyond1 transport_id:1`.
+/// Values are returned verbatim; `unknown`/empty is treated as absent.
+pub fn adb_extra_field(extra: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}:");
+    extra
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix(&needle))
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("unknown"))
+        .map(str::to_string)
+}
+
+/// Brand tokens derived from USB/ADB strings. Order matters (first match wins).
+pub const BRAND_TOKENS: &[(&str, &str)] = &[
+    ("samsung", "SAMSUNG"),
+    ("tecno", "TECNO"),
+    ("infinix", "INFINIX"),
+    ("itel", "ITEL"),
+    ("oppo", "OPPO"),
+    ("vivo", "VIVO"),
+    ("redmi", "REDMI"),
+    ("xiaomi", "XIAOMI"),
+    ("realme", "REALME"),
+    ("oneplus", "ONEPLUS"),
+    ("motorola", "MOTOROLA"),
+    ("nokia", "NOKIA"),
+    ("honor", "HONOR"),
+    ("huawei", "HUAWEI"),
+    ("google", "GOOGLE"),
+    ("pixel", "GOOGLE"),
+    ("lg electronics", "LG"),
+    ("lge", "LG"),
+    ("sony", "SONY"),
+    ("transsion", "TRANSSION"),
+];
+
+/// Best-effort brand family from USB manufacturer/product or an ADB model
+/// string. Returns an uppercase display token, never a guessed model.
+pub fn brand_hint(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    BRAND_TOKENS
+        .iter()
+        .find(|(needle, _)| lower.contains(needle))
+        .map(|(_, brand)| (*brand).to_string())
+}
+
+/// OEM vendor IDs that ARE the brand (no chip vendor here): Samsung's VID
+/// is always Samsung hardware, Apple's is always Apple hardware. Chip
+/// vendors (MediaTek/Qualcomm) are deliberately absent — their VIDs say
+/// nothing about the phone brand.
+pub const VID_BRANDS: &[(u16, &str)] = &[(0x04E8, "SAMSUNG"), (0x05AC, "APPLE")];
+
+/// Brand family from the USB vendor ID — used when the device exposes no
+/// usable strings (a bare Samsung Odin/BROM stage).
+pub fn brand_from_vid(vid: u16) -> Option<String> {
+    VID_BRANDS
+        .iter()
+        .find(|(known, _)| *known == vid)
+        .map(|(_, brand)| (*brand).to_string())
+}
+
 /// Normalize a serial number string (filter noise like "null", "?", etc.)
 pub fn normalize_serial(s: Option<&str>) -> String {
     let s = (s.unwrap_or("")).trim();
@@ -147,7 +207,7 @@ pub fn is_phone(d: &DeviceInfo) -> bool {
 
     // MTK OEM VIDs (plus the main 0x0E8D): a bare preloader/BROM stage
     // (no interfaces, no strings) is still captured.
-    if MTK_OEM_VIDS.contains(&d.vid) {
+    if crate::mtk::is_mtk_vid(d.vid) {
         return true;
     }
 
@@ -260,12 +320,17 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
                 transports.push("ADB".to_string());
             }
         }
-    } else if vid == 0x0E8D {
-        match pid {
-            0x0003 => transports.push("MTK BROM".to_string()),
-            0x2000 => transports.push("MTK BROM".to_string()),
-            0x0004 | 0x1004 => transports.push("MTK".to_string()),
-            _ => {}
+    } else if crate::mtk::is_mtk_vid(vid) {
+        // Stage comes from the MTK PID table (BROM / preloader / DA /
+        // mtk-adb), not from a hardcoded pid list — one source of truth in
+        // `crate::mtk::boot_stage_for`, which also covers the preloader VCOM
+        // and OEM-variant family. OEM VIDs (0x0FCE/0x1004/0x22D9/0x9BB5)
+        // are treated exactly like 0x0E8D here.
+        let stage = crate::mtk::boot_stage_for(pid).0;
+        if stage == "brom" {
+            transports.push("MTK BROM".to_string());
+        } else if stage == "preloader" || stage == "da" {
+            transports.push("MTK".to_string());
         }
     } else if vid == 0x05C6 && crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) {
         // Documented/observed DIAG composites (9006, 9026) - DIAG flows,
@@ -467,12 +532,37 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             }
             "samsung".to_string()
         }
-        0x0E8D => match pid {
-            0x0003 => "mediatek-brom".to_string(),
-            0x2000 => "mediatek-preloader".to_string(),
-            0x0004 | 0x1004 => "mediatek-da".to_string(),
-            _ => "mediatek".to_string(),
-        },
+        vid if vid != crate::mtk::MTK_VID
+            && crate::mtk::is_mtk_vid(vid)
+            && crate::mtk::boot_stage_for(pid).0 != "other" =>
+        {
+            // OEM-VID MediaTek stage (0x0FCE / 0x1004 / 0x22D9 / 0x9BB5):
+            // classify via the same PID table as 0x0E8D, but only claim MTK
+            // when the PID proves a stage — an OEM VID in normal Android mode
+            // must still fall through to the generic ADB/MTP arms below.
+            match crate::mtk::boot_stage_for(pid).0 {
+                "brom" => "mediatek-brom".to_string(),
+                "preloader" => "mediatek-preloader".to_string(),
+                "da" => "mediatek-da".to_string(),
+                _ => "mediatek".to_string(),
+            }
+        }
+        0x0E8D => {
+            // Stage-aware MTK classification via the single PID table in
+            // `crate::mtk::boot_stage_for` (BROM / preloader / DA / mtk-adb).
+            let stage = crate::mtk::boot_stage_for(pid).0;
+            if stage == "brom" {
+                "mediatek-brom".to_string()
+            } else if stage == "preloader" {
+                "mediatek-preloader".to_string()
+            } else if stage == "da" {
+                "mediatek-da".to_string()
+            } else {
+                // mtk-adb composites and unknown MTK PIDs stay coarse
+                // ("mediatek") — the GUI re-checks interfaces for the rest.
+                "mediatek".to_string()
+            }
+        }
         0x05C6 if crate::qualcomm::sahara::QCOM_DIAG_PIDS.contains(&pid) => {
             "qualcomm-diag".to_string()
         }
@@ -495,6 +585,7 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             "google".to_string()
         }
         0x1782 => "spd".to_string(),
+        0x2207 => "rockchip".to_string(),
         0x05AC => "apple".to_string(),
         0x22B8 => {
             if has_adb_iface {
@@ -589,7 +680,24 @@ mod tests {
         assert_eq!(classify_mode(0x04E8, 0x685D, &[]), "samsung-odin");
         assert_eq!(classify_mode(0x0E8D, 0x0003, &[]), "mediatek-brom");
         assert_eq!(classify_mode(0x0E8D, 0x2000, &[]), "mediatek-preloader");
+        // Preloader USB-VCOM variant + OEM preloader family are preloader.
+        assert_eq!(classify_mode(0x0E8D, 0x2001, &[]), "mediatek-preloader");
+        assert_eq!(classify_mode(0x0E8D, 0xf200, &[]), "mediatek-preloader");
+        // Normal-boot MTK ADB composites stay coarse mediatek.
+        assert_eq!(classify_mode(0x0E8D, 0x0a0a, &[]), "mediatek");
         assert_eq!(classify_mode(0x05C6, 0x9008, &[]), "qualcomm-edl");
+    }
+
+    #[test]
+    fn classify_mode_oem_vid_mtk_stages() {
+        // OEM VIDs classify through the same MTK PID table as 0x0E8D.
+        assert_eq!(classify_mode(0x1004, 0x0003, &[]), "mediatek-brom");
+        assert_eq!(classify_mode(0x0FCE, 0x2000, &[]), "mediatek-preloader");
+        assert_eq!(classify_mode(0x22D9, 0x0004, &[]), "mediatek-da");
+        assert_eq!(classify_mode(0x9BB5, 0x2001, &[]), "mediatek-preloader");
+        // An OEM VID in normal Android mode must not be claimed as MTK:
+        // it falls through to the generic classifier.
+        assert_eq!(classify_mode(0x22D9, 0x1234, &[]), "other");
     }
 
     #[test]
@@ -792,6 +900,106 @@ mod tests {
             compute_transports(&brom, &serials),
             vec!["MTK BROM".to_string()]
         );
+
+        // Preloader (USB VCOM) and the preloader VCOM variant both map to
+        // the MTK flashing-stage transport - not BROM.
+        let preloader = dev(0x0E8D, 0x2000, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader, &serials),
+            vec!["MTK".to_string()]
+        );
+        let preloader_vcom = dev(0x0E8D, 0x2001, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader_vcom, &serials),
+            vec!["MTK".to_string()]
+        );
+
+        // Preloader OEM family (mtkclient SYNC_NO_EXTRA_BYTE entries) too.
+        let preloader_oem = dev(0x0E8D, 0xf200, None, vec![]);
+        assert_eq!(
+            compute_transports(&preloader_oem, &serials),
+            vec!["MTK".to_string()]
+        );
+    }
+
+    #[test]
+    fn compute_transports_oem_vid_mtk_stage_matches_main_vid() {
+        // An OEM-VID preloader/BROM must get the same MTK transport as the
+        // main 0x0E8D table entry — otherwise the row is listed without the
+        // MTK transport and the flashing UI never lights up.
+        let serials: HashSet<String> = HashSet::new();
+        for vid in [0x0FCE, 0x1004, 0x22D9, 0x9BB5] {
+            let brom = dev(vid, 0x0003, None, vec![]);
+            assert_eq!(
+                compute_transports(&brom, &serials),
+                vec!["MTK BROM".to_string()],
+                "vid {vid:#06x} BROM"
+            );
+            let preloader = dev(vid, 0x2000, None, vec![]);
+            assert_eq!(
+                compute_transports(&preloader, &serials),
+                vec!["MTK".to_string()],
+                "vid {vid:#06x} preloader"
+            );
+        }
+
+        // An OEM VID in normal Android mode stays a generic USB device.
+        let normal = dev(0x22D9, 0x1234, None, vec![]);
+        assert_eq!(
+            compute_transports(&normal, &serials),
+            vec!["USB".to_string()]
+        );
+    }
+
+    #[test]
+    fn adb_extra_field_reads_model_and_skips_unknown() {
+        let extra = "product:beyond1 model:SM_G973F device:beyond1 transport_id:1";
+        assert_eq!(
+            adb_extra_field(extra, "model").as_deref(),
+            Some("SM_G973F")
+        );
+        assert_eq!(adb_extra_field(extra, "product").as_deref(), Some("beyond1"));
+        assert_eq!(adb_extra_field("model:unknown device:x", "model"), None);
+        assert_eq!(adb_extra_field("model: device:x", "model"), None);
+        assert_eq!(adb_extra_field(extra, "missing"), None);
+    }
+
+    #[test]
+    fn brand_hint_matches_oem_families_not_just_the_main_vendor() {        // The reported gap: detection knew the chip (MTK) but not the brand,
+        // so a Tecno MTK stage read as a bare "MEDIATEK".
+        assert_eq!(
+            brand_hint("TECNO Mobile MTK").as_deref(),
+            Some("TECNO")
+        );
+        assert_eq!(
+            brand_hint("Infinix Electronics").as_deref(),
+            Some("INFINIX")
+        );
+        assert_eq!(
+            brand_hint("LG Electronics Android Debug").as_deref(),
+            Some("LG")
+        );
+        assert_eq!(
+            brand_hint("SAMSUNG").as_deref(),
+            Some("SAMSUNG")
+        );
+        // Unknown manufacturers must not get a brand guess.
+        assert_eq!(brand_hint("Acme Electronics"), None);
+        assert_eq!(brand_hint(""), None);
+        // A Pixel is a Google phone, whatever the wording.
+        assert_eq!(brand_hint("Google").as_deref(), Some("GOOGLE"));
+    }
+
+    #[test]
+    fn brand_from_vid_only_covers_oem_brands() {
+        // A bare Samsung Odin stage has no product string — the VID still
+        // names the brand.
+        assert_eq!(brand_from_vid(0x04E8).as_deref(), Some("SAMSUNG"));
+        assert_eq!(brand_from_vid(0x05AC).as_deref(), Some("APPLE"));
+        // Chip vendors are NOT brands: their VIDs say nothing about the OEM.
+        assert_eq!(brand_from_vid(0x0E8D), None);
+        assert_eq!(brand_from_vid(0x05C6), None);
+        assert_eq!(brand_from_vid(0x1234), None);
     }
 }
 #[cfg(test)]

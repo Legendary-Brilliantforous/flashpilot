@@ -76,7 +76,7 @@ class QcPageMixin:
             btn = QPushButton(self.tr("Browse..."))
             btn.setStyleSheet(_btn_ghost())
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(90)
+            btn.setMinimumWidth(90)
             btn.clicked.connect(
                 lambda _=False, e=edit, n=name, f=flt: self._qc_browse(e, n, f)
             )
@@ -150,7 +150,7 @@ class QcPageMixin:
         fw_btn.setStyleSheet(_btn_ghost())
         fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fw_btn.clicked.connect(self._qc_browse_dir)
-        fw_btn.setFixedWidth(90)
+        fw_btn.setMinimumWidth(90)
         fw_row.addWidget(fw_btn)
         lay.addLayout(fw_row)
         lay.addWidget(
@@ -196,7 +196,7 @@ class QcPageMixin:
         fb_browse = QPushButton(self.tr("Browse..."))
         fb_browse.setStyleSheet(_btn_ghost())
         fb_browse.setCursor(Qt.CursorShape.PointingHandCursor)
-        fb_browse.setFixedWidth(80)
+        fb_browse.setMinimumWidth(80)
         fb_browse.clicked.connect(lambda: self._qc_browse(fb_img, "fastboot image", "Images (*.img *.img.gz *.tar);;All files (*)"))
         fb_row.addWidget(fb_browse)
         fb_lay.addLayout(fb_row)

@@ -36,7 +36,7 @@ from ..theme import (
     _display_version,
     _is_beta_version,
 )
-from ..widgets import FlowHost, FlowLayout, _SettingsCatButton
+from ..widgets import FlowHost, FlowLayout, _SettingsCatButton, flow_row
 from ...core import APP_VERSION, bridge
 
 
@@ -71,16 +71,18 @@ class SettingsPageMixin:
         )
         self._settings_cats = {}
 
+        # Labels go through tr() at the call site so scripts/i18n_extract.py
+        # can see the literal (a dynamic tr(label) would not be extractable).
         categories = [
-            ("general", "◈", "General",
+            ("general", "◈", self.tr("General"),
              self._build_settings_general),
-            ("updates", "↻", "Updates",
+            ("updates", "↻", self.tr("Updates"),
              self._build_settings_updates),
-            ("appearance", "✦", "Appearance",
+            ("appearance", "✦", self.tr("Appearance"),
              self._build_settings_appearance),
-            ("tools", "▤", "Tools",
+            ("tools", "▤", self.tr("Tools"),
              self._build_settings_tools),
-            ("about", "ℹ", "About",
+            ("about", "ℹ", self.tr("About"),
              self._build_settings_about),
         ]
         for key, glyph, label, builder in categories:
@@ -237,7 +239,7 @@ class SettingsPageMixin:
             f" QPushButton:hover {{ background:{C['card_hover']}; }}"
             f" QPushButton:disabled {{ background:{C['border']}; color:{C['mute']}; }}"
         )
-        self._check_updates_btn.setFixedWidth(200)
+        self._check_updates_btn.setMinimumWidth(200)
         self._check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._check_updates_btn.clicked.connect(self._manual_check_update)
         self._settings_row(
@@ -254,7 +256,7 @@ class SettingsPageMixin:
             f" QPushButton:hover {{ border-color:{C['accent']}; }}"
             f" QPushButton:disabled {{ color:{C['mute']}; }}"
         )
-        self._apply_patch_btn.setFixedWidth(200)
+        self._apply_patch_btn.setMinimumWidth(200)
         self._apply_patch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply_patch_btn.setToolTip(
             self.tr("Tier-1 update: pulls only the python/ tree from GitHub main when\n"
@@ -285,7 +287,7 @@ class SettingsPageMixin:
             f" border:1px solid {C['border']}; border-radius:6px; font-size:12px; font-weight:600; }}"
             f" QPushButton:hover {{ border-color:{C['accent']}; }}"
         )
-        prev_btn.setFixedWidth(200)
+        prev_btn.setMinimumWidth(200)
         prev_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         prev_btn.clicked.connect(lambda: self._show_beta_risk_dialog(
             APP_VERSION, "", force=True))
@@ -315,7 +317,9 @@ class SettingsPageMixin:
         lay.setSpacing(18)
 
         # THEME — 10 cards only (no dropdown) — progressively advanced, fit-well
-        bl = self._settings_box(self.tr("THEME — 10 professional accents (click a card)"), lay)
+        # Short on purpose: the title is painted on one line, and a longer
+        # sentence widened the whole settings page past the viewport.
+        bl = self._settings_box(self.tr("THEME — 10 PRO ACCENTS"), lay)
         # Hidden combo for back-compat (cards drive it)
         self._s_theme = QComboBox()
         self._s_theme.addItems(list(ACCENT_THEMES))
@@ -570,8 +574,7 @@ class SettingsPageMixin:
             bl.addLayout(row)
 
         bl = self._settings_box(self.tr("ACTIONS"), lay)
-        act = QHBoxLayout()
-        act.setSpacing(10)
+        act_host, act = flow_row(spacing=10)
         b1 = QPushButton(self.tr("Rebuild bridge (cargo)"))
         b1.setStyleSheet(_btn_ghost())
         b1.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -587,8 +590,7 @@ class SettingsPageMixin:
         b3.setCursor(Qt.CursorShape.PointingHandCursor)
         b3.clicked.connect(self._reset_settings)
         act.addWidget(b3)
-        act.addStretch(1)
-        bl.addLayout(act)
+        bl.addWidget(act_host)
 
         lay.addStretch(1)
         return page
@@ -655,6 +657,7 @@ class SettingsPageMixin:
             self.tr("Samsung · MediaTek · Qualcomm low-level flashing & repair\n"
             "FRP bypass · screen-lock removal · download-mode tooling")
         )
+        tag.setWordWrap(True)
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tag.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
         cl.addWidget(tag)

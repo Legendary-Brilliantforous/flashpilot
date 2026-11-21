@@ -662,15 +662,31 @@ pub fn detect_qcom_edl() -> Result<Vec<crate::config::DeviceInfo>> {
     Ok(edl_devices)
 }
 
-/// Boot stage detection
+/// Boot stage detection — resolves via the EDL / DIAG / broad PID groups so
+/// every documented Qualcomm boot-mode PID classifies instead of falling
+/// through to "unknown" (EDL `0x9008`, broad EDL family `0x900E/0x901D/0x9025/
+/// 0x9046/0x9066/0x90DB`, DIAG composites `0x9006`/`0x9026`, broad modem
+/// qualifiers covered by `QCOM_ALL_PIDS`).
 pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
-    match pid {
-        0x9008 => ("edl", "Qualcomm Emergency Download (EDL)"),
-        0x900E => ("sahara", "Qualcomm Sahara"),
-        0x9025 => ("edl", "Qualcomm EDL (Xiaomi)"),
-        0x90DB => ("edl", "Qualcomm EDL (OPPO/Vivo)"),
-        _ => ("unknown", "Unknown Qualcomm mode"),
+    if QCOM_EDL_PIDS.contains(&pid) {
+        return (
+            "edl",
+            "Qualcomm Emergency Download (EDL)",
+        );
     }
+    if QCOM_DIAG_PIDS.contains(&pid) {
+        return (
+            "diag",
+            "Qualcomm DIAG composite (never a Sahara hello)",
+        );
+    }
+    if QCOM_ALL_PIDS.contains(&pid) {
+        return (
+            "sahara",
+            "Qualcomm port (broad qualifier: EDL family / modem class)",
+        );
+    }
+    ("unknown", "Unknown Qualcomm mode")
 }
 
 pub fn sahara_command_name(cmd: SaharaCommand) -> &'static str {
@@ -823,5 +839,26 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("max_packet_size is 0"));
+    }
+
+    #[test]
+    fn boot_stage_for_resolves_full_qualcomm_pid_family() {
+        // EDL family -> edl (incl. the broad qualifiers not hardcoded before).
+        assert_eq!(boot_stage_for(0x9008).0, "edl");
+        assert_eq!(boot_stage_for(0x900E).0, "edl");
+        assert_eq!(boot_stage_for(0x901D).0, "edl");
+        assert_eq!(boot_stage_for(0x9025).0, "edl");
+        assert_eq!(boot_stage_for(0x9046).0, "edl");
+        assert_eq!(boot_stage_for(0x9066).0, "edl");
+        assert_eq!(boot_stage_for(0x90DB).0, "edl");
+        // DIAG composites -> diag (never a Sahara hello).
+        assert_eq!(boot_stage_for(0x9006).0, "diag");
+        assert_eq!(boot_stage_for(0x9026).0, "diag");
+        // Broad non-EDL qualifiers -> sahara.
+        assert_eq!(boot_stage_for(0x9091).0, "sahara");
+        assert_eq!(boot_stage_for(0x903A).0, "sahara");
+        assert_eq!(boot_stage_for(0x6000).0, "sahara");
+        // Unknown -> unknown.
+        assert_eq!(boot_stage_for(0x1234).0, "unknown");
     }
 }

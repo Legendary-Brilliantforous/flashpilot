@@ -24,6 +24,12 @@ class MetricCard(QFrame):
         col = QVBoxLayout()
         col.setSpacing(0)
         cap = QLabel(caption.upper())
+        # Captions wrap: translated labels are longer than the terse English
+        # ones ("Build Number" -> "Numéro de build"), and a single-line caption
+        # widened the device panel enough to squeeze the page behind a
+        # horizontal scrollbar. Wrapping keeps the panel at its design width.
+        cap.setWordWrap(True)
+        cap.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         cap.setStyleSheet(
             f"color:{C['mute']}; font-size:8px; font-weight:700; letter-spacing:1px;"
         )

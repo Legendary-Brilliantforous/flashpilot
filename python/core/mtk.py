@@ -23,6 +23,11 @@ from . import bridge
 
 MTK_VID = 0x0E8D
 
+# OEM VIDs under which an MTK preloader/BROM re-enumerates (Sony 0x0FCE,
+# LG 0x1004, OPPO 0x22D9, InFocus 0x9BB5). Mirrors the Rust
+# `mtk::MTK_OEM_VIDS` list — keep them in lockstep.
+MTK_OEM_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
+
 # MediaTek hw code -> SoC / marketing name (mtkclient hw codes).
 CHIP_NAMES = {
     0x0708: "MT6762 (Helio P22 / G25 family)",
@@ -54,6 +59,7 @@ BOOT_STAGE = {
 _PID_STAGE = {
     0x0003: "brom",
     0x2000: "preloader",
+    0x2001: "preloader",
     0x0004: "da",
     0x1004: "da",
     0x0a0a: "mtk-adb",
@@ -79,7 +85,7 @@ def find_mtk():
         from . import bridge as _bridge2
         return [r for r in (_bridge2.list_merged() or [])
                 if isinstance(r, dict)
-                and (r.get("vid") == MTK_VID
+                and (r.get("vid") in MTK_OEM_VIDS
                      or str(r.get("mode", "")).startswith("mediatek"))]
     except bridge.BridgeError:
         return []

@@ -569,6 +569,9 @@ def test_detect_mode_tecno_normal_boot_names_protocol_not_other():
     assert "PRELOADER" in _detect_mode([], [dict(tecno, pid=0x2000, interfaces=[])])
     assert "DA (flashing active)" in _detect_mode(
         [], [dict(tecno, pid=0x0004, interfaces=[])])
+    # Preloader USB VCOM variant (0x2001) names the preloader stage too.
+    assert "PRELOADER" in _detect_mode(
+        [], [dict(tecno, pid=0x2001, interfaces=[])])
 
     # A Samsung device with no recognizable interfaces still resolves via
     # the PID table (existing behavior unchanged).
@@ -656,3 +659,56 @@ def test_merged_rows_surface_adb_without_descriptor_interfaces():
     assert not _has_adb_iface(plain)
     assert "ADB" not in _generic_android_mode(plain)
     assert _adb_overlay(adb, plain) is None
+
+
+def test_detect_mode_spd_download_pids_0001_0002_and_4d00():
+    """Regression: the SPD download/engineering mode must cover the full
+    BSL-native download PID set (0x4D00/0x4D02/0x4E00) plus the doc-observed
+    download PIDs (0x0001/0x0002) — parity with the Rust
+    `spd::is_download_pid` SPD_DOWNLOAD_PIDS union."""
+    from python.gui.qt_app import _detect_mode, _spd_mode
+
+    for pid in (0x4D00, 0x4D02, 0x4E00, 0x0001, 0x0002):
+        d = {"vid": 0x1782, "pid": pid, "bus": 2, "address": 7,
+             "interfaces": []}
+        assert _spd_mode(d) == "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)", \
+            f"pid {pid:#06x} should be a download mode"
+        # _detect_mode routes the download-mode SPD row into the SPD branch.
+        assert _detect_mode([], [], [], [], [], [], [d]) == \
+            "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
+
+    d = {"vid": 0x1782, "pid": 0x1234, "bus": 2, "address": 7,
+         "interfaces": []}
+    assert _spd_mode(d) == "SPREADTRUM DEVICE (normal / other)"
+
+
+def test_detect_mode_mtk_prefix_is_brand_aware():
+    """Chip detection knows the model brand: a TECNO/Samsung/LG MediaTek
+    stage is labelled with its brand, not as a generic MEDIATEK device."""
+    from python.gui.qt_app import _detect_mode
+
+    tecno = {"vid": 0x0E8D, "pid": 0x2000, "bus": 2, "address": 9,
+             "manufacturer": "TECNO", "product": "MT65xx Preloader",
+             "interfaces": []}
+    assert _detect_mode([], [tecno], [], []) == \
+        "TECNO MTK PRELOADER (first bootloader stage)"
+
+    samsung = {"vid": 0x0E8D, "pid": 0x2001, "bus": 2, "address": 9,
+               "manufacturer": "SAMSUNG", "product": "MT65xx Preloader",
+               "interfaces": []}
+    assert _detect_mode([], [samsung], [], []) == \
+        "SAMSUNG MTK PRELOADER (first bootloader stage)"
+
+    # OEM VID BROM (LG 0x1004) names both the chip and the brand.
+    lg = {"vid": 0x1004, "pid": 0x0003, "bus": 2, "address": 9,
+          "manufacturer": "LG Electronics", "product": "",
+          "interfaces": []}
+    assert _detect_mode([], [lg], [], []) == "LG MTK BROM (held state)"
+
+
+def test_spd_mode_is_brand_aware():
+    from python.gui.qt_app import _spd_mode
+
+    d = {"vid": 0x1782, "pid": 0x4D00, "bus": 2, "address": 7,
+         "manufacturer": "itel", "product": "", "interfaces": []}
+    assert _spd_mode(d) == "ITEL SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"

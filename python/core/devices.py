@@ -147,6 +147,10 @@ def _merged_row_to_legacy(row):
             "serial": row.get("serial"),
             "product": row.get("usb_product"),
             "manufacturer": row.get("usb_manufacturer"),
+            # Real model / brand from the ADB server row or USB strings
+            # (Rust `DeviceRow.model` / `.brand`). None until known.
+            "model": row.get("model"),
+            "brand": row.get("brand"),
         }
     return {
         "key": row.get("key", ""),
@@ -154,6 +158,10 @@ def _merged_row_to_legacy(row):
         "transports": row.get("transports", []),
         "usb": usb,
         "adb": adb,
+        # Identity fields surfaced for GUI display (model/brand/device_type).
+        "model": row.get("model"),
+        "brand": row.get("brand"),
+        "device_type": row.get("device_type"),
     }
 
 

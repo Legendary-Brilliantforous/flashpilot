@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 
 from ..common import _experimental_banner, _risk_banner
 from ..theme import C, _btn_danger, _btn_ghost, _btn_primary, _card_qss
-from ..widgets import CollapsibleSection, SectionTitle
+from ..widgets import CollapsibleSection, SectionTitle, flow_row
 
 
 class MtkPageMixin:
@@ -94,7 +94,7 @@ class MtkPageMixin:
         scatter_btn = QPushButton(self.tr("Browse..."))
         scatter_btn.setStyleSheet(_btn_ghost())
         scatter_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        scatter_btn.setFixedWidth(90)
+        scatter_btn.setMinimumWidth(90)
         scatter_btn.clicked.connect(
             lambda: self._mtk_browse(self.mtk_scatter_edit, "scatter", "Scatter (*.txt);;All files (*)")
         )
@@ -119,7 +119,7 @@ class MtkPageMixin:
         da_btn = QPushButton(self.tr("Browse..."))
         da_btn.setStyleSheet(_btn_ghost())
         da_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        da_btn.setFixedWidth(90)
+        da_btn.setMinimumWidth(90)
         da_btn.clicked.connect(
             lambda: self._mtk_browse(self.mtk_da_edit, "da", "DA (*.bin);;All files (*)")
         )
@@ -144,7 +144,7 @@ class MtkPageMixin:
         fw_btn = QPushButton(self.tr("Browse..."))
         fw_btn.setStyleSheet(_btn_ghost())
         fw_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        fw_btn.setFixedWidth(90)
+        fw_btn.setMinimumWidth(90)
         fw_btn.clicked.connect(self._mtk_browse_dir)
         fw_row.addWidget(fw_btn)
         combo_lay.addLayout(fw_row)
@@ -166,9 +166,8 @@ class MtkPageMixin:
         auth_row.addStretch(1)
         combo_lay.addLayout(auth_row)
 
-        # Flash button
-        flash_row = QHBoxLayout()
-        flash_row.setSpacing(10)
+        # Flash buttons (wrapping: translated labels are much wider)
+        flash_host, flash_row = flow_row(spacing=10)
         self.mtk_flash_combo_btn = QPushButton(self.tr("Flash Firmware (Combination)"))
         self.mtk_flash_combo_btn.setStyleSheet(_btn_primary())
         self.mtk_flash_combo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -187,8 +186,7 @@ class MtkPageMixin:
         self.mtk_check_combo_btn.clicked.connect(self._mtk_check_scatter)
         self._gate_button(self.mtk_check_combo_btn, command="mtk-check-scatter")
         flash_row.addWidget(self.mtk_check_combo_btn)
-        flash_row.addStretch(1)
-        combo_lay.addLayout(flash_row)
+        combo_lay.addWidget(flash_host)
 
         lay.addWidget(combo_panel)
 
@@ -214,7 +212,7 @@ class MtkPageMixin:
         )
 
         # Generate scatter / Dump preloader row
-        gen_row = QHBoxLayout()
+        gen_host, gen_row = flow_row(spacing=8)
         gen_btn = QPushButton(self.tr("Generate Scatter (from device GPT)"))
         gen_btn.setStyleSheet(_btn_ghost())
         gen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -239,14 +237,12 @@ class MtkPageMixin:
         )
         dump_btn.clicked.connect(self._mtk_dump_preloader)
         gen_row.addWidget(dump_btn)
-        gen_row.addStretch(1)
-        adv_lay.addLayout(gen_row)
+        adv_lay.addWidget(gen_host)
 
         # Action buttons
         acts = QVBoxLayout()
         acts.setSpacing(8)
-        acts_row1 = QHBoxLayout()
-        acts_row1.setSpacing(10)
+        acts_host1, acts_row1 = flow_row(spacing=10)
         for label, slot in (
             ("Backup Partitions", self._mtk_backup),
             ("Get Device Info", self._mtk_info),
@@ -257,10 +253,8 @@ class MtkPageMixin:
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
             acts_row1.addWidget(b)
-        acts_row1.addStretch(1)
-        acts.addLayout(acts_row1)
-        acts_row2 = QHBoxLayout()
-        acts_row2.setSpacing(10)
+        acts.addWidget(acts_host1)
+        acts_host2, acts_row2 = flow_row(spacing=10)
         for label, slot in (
             ("FRP Bypass", self._mtk_frp),
             ("Enable ADB", self._mtk_adb),
@@ -270,7 +264,6 @@ class MtkPageMixin:
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
             acts_row2.addWidget(b)
-        acts_row2.addStretch(1)
         self.mtk_stop_btn = QPushButton(self.tr("Stop"))
         self.mtk_stop_btn.setEnabled(False)
         self.mtk_stop_btn.setStyleSheet(_btn_danger())
@@ -279,9 +272,8 @@ class MtkPageMixin:
         self.mtk_stop_btn.setToolTip(self.tr("Cancel the running MTK operation"))
         acts_row2.addWidget(self.mtk_stop_btn)
         self.mtk_stop_btn.setVisible(False)
-        acts.addLayout(acts_row2)
-        acts_row3 = QHBoxLayout()
-        acts_row3.setSpacing(10)
+        acts.addWidget(acts_host2)
+        acts_host3, acts_row3 = flow_row(spacing=10)
         self.mtk_flash_part_btn = QPushButton(self.tr("Flash Partition (No Scatter)"))
         self.mtk_flash_part_btn.setStyleSheet(_btn_ghost())
         self.mtk_flash_part_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -302,8 +294,7 @@ class MtkPageMixin:
         frp_gpt_btn.clicked.connect(self._mtk_frp_gpt)
         self._gate_button(frp_gpt_btn, command="mtk-frp-gpt")
         acts_row3.addWidget(frp_gpt_btn)
-        acts_row3.addStretch(1)
-        acts.addLayout(acts_row3)
+        acts.addWidget(acts_host3)
         adv_lay.addLayout(acts)
 
         lay.addWidget(adv_panel)

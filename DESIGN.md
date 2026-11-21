@@ -297,7 +297,14 @@ pub async fn main_bridge() {
             // Usage: flashpilot-bridge detect-merged [--vid 0x04e8]
             // Output: JSON array of DeviceRow (GUI schema, src/devices.rs):
             //   {key, label, transports, vid, pid, bus, address, serial,
-            //    is_adb, adb_state}
+            //    is_adb, adb_state, usb_product, usb_manufacturer,
+            //    model, brand, device_type}
+            //   model    — real model from the ADB server row (`model:` extra)
+            //   brand    — brand family from the USB/ADB strings
+            //              (SAMSUNG/TECNO/ITEL/…), None when unknown
+            //   device_type — form factor (phone/tablet/tv/watch/…); None
+            //              until a live `ro.build.characteristics` probe
+            //              answers it (the zero-touch poll never guesses)
             let merged = devices::list_devices_filtered_vid(vid_filter)?;  // Or None
             println!("{}", merged);
         }

@@ -22,6 +22,7 @@ and what it needs.
 | **Samsung MTK (A05/A06)** | A05/A06 with Helio G85 — uses MTK BROM (above) | Rust flows (`mtk_brom_info`, `mtk_brom_backup`) | `flow-run mtk_brom_backup` |
 | **UNISOC/SPD** | 1782:4d00 FDL1+FDL2 (SC9863A, T606/UMS9230) | Rust flows (`spd_*` rows) + `src/spd.rs` | `flow-run spd_detect_info` (CLI: `spd-detect`, `spd-frp`, `spd-format`, `spd-magic-pack`) |
 | **HiSilicon Kirin** | 12d1 — no open flow yet (not reverse-engineered) | (none yet) | (none) |
+| **Rockchip** | 0x2207 fastboot (Rockchip family: RK2818–RK3288 + RK3562/RK3528/RK3566/RK3568/RK3576/RK3588/RK3399, entries in `python/gui/supported_devices.json` as planned) — no FRP flows wired; use the `fastboot` CLI | research notes in `operations/flashing/rockchip/README.md` | none yet |
 
 (The old `python/core/flows/*.py` engine modules never shipped; `mtk-brom-backup`
 is the `mtk_brom_backup` flow row. Verify any key with `flow-list`.)

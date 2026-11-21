@@ -26,6 +26,7 @@ class TestMTKBootStages:
         'MT65xx Preloader' 0e8d:2000 device)."""
         assert pid_stage(0x0003) == "brom"
         assert pid_stage(0x2000) == "preloader"
+        assert pid_stage(0x2001) == "preloader"
         assert pid_stage(0x0004) == "da"
         assert pid_stage(0x1004) == "da"
         assert pid_stage(0x0a0a) == "mtk-adb"

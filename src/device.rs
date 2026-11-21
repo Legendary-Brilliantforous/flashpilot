@@ -398,8 +398,11 @@ pub fn detect_capabilities(
                 push_cap(&mut caps, Capability::DeviceInfo);
             }
         }
-        0x0E8D => match t.pid {
-            0x0003 => {
+        vid if crate::mtk::is_mtk_vid(vid) => {
+            // Stage-aware MTK capability matrix via the shared PID table in
+            // `crate::mtk::boot_stage_for` (BROM / preloader / DA / mtk-adb).
+            let stage = crate::mtk::boot_stage_for(t.pid).0;
+            if stage == "brom" {
                 mode = BootMode::MtkBrom;
                 proto = Protocol::MtkBrom;
                 push_cap(&mut caps, Capability::MtkBrom);
@@ -407,24 +410,22 @@ pub fn detect_capabilities(
                 push_cap(&mut caps, Capability::Backup);
                 push_cap(&mut caps, Capability::DeviceInfo);
                 push_cap(&mut caps, Capability::Reboot);
-            }
-            0x2000 => {
-                // Preloader: BROM ops are NOT available; the crash-to-BROM
-                // path is (separate action). Info + reboot only.
+            } else if stage == "preloader" {
+                // Preloader (incl. the USB VCOM variant): BROM ops are NOT
+                // available; the crash-to-BROM path is (separate action).
+                // Info + reboot only.
                 mode = BootMode::MtkPreloader;
                 proto = Protocol::MtkBrom;
                 push_cap(&mut caps, Capability::MtkPreloader);
                 push_cap(&mut caps, Capability::DeviceInfo);
                 push_cap(&mut caps, Capability::Reboot);
-            }
-            0x0004 | 0x1004 => {
+            } else if stage == "da" {
                 // DA stage: same conservative stance — info + reboot until
                 // live stage probing lands.
                 mode = BootMode::MtkDa;
                 push_cap(&mut caps, Capability::DeviceInfo);
                 push_cap(&mut caps, Capability::Reboot);
-            }
-            _ => {
+            } else {
                 push_cap(&mut caps, Capability::DeviceInfo);
             }
         },
@@ -970,6 +971,36 @@ mod tests {
         assert!(ids.contains(&"mtk_crash_to_brom"));
         assert!(!ids.contains(&"mtk_brom_flash"));
         assert!(!ids.contains(&"frp_workflow"));
+    }
+
+    #[test]
+    fn mtk_preloader_vcom_variant_exposes_crash_not_flash() {
+        // Preloader USB-VCOM variant (0x2001) is the same first-bootloader
+        // stage: crash-to-BROM is offered, BROM flash is not.
+        let p = profile_for(0x0E8D, 0x2001, vec![]);
+        let ids = action_ids(&p);
+        assert!(ids.contains(&"mtk_crash_to_brom"));
+        assert!(!ids.contains(&"mtk_brom_flash"));
+        assert!(!ids.contains(&"frp_workflow"));
+    }
+
+    #[test]
+    fn mtk_oem_vid_stages_use_the_same_capability_matrix() {
+        // OEM VIDs (Sony/LG/OPPO/InFocus) re-enumerate MTK preloaders and
+        // BROMs. They must expose exactly the same MTK actions as 0x0E8D.
+        for vid in [0x0FCE, 0x1004, 0x22D9, 0x9BB5] {
+            let brom = profile_for(vid, 0x0003, vec![]);
+            let ids = action_ids(&brom);
+            assert!(ids.contains(&"mtk_brom_flash"), "vid {vid:#06x} BROM");
+
+            let preloader = profile_for(vid, 0x2000, vec![]);
+            let ids = action_ids(&preloader);
+            assert!(
+                ids.contains(&"mtk_crash_to_brom"),
+                "vid {vid:#06x} preloader"
+            );
+            assert!(!ids.contains(&"mtk_brom_flash"), "vid {vid:#06x} preloader");
+        }
     }
 
     // -- matrix: Qualcomm / SPD / fastboot ------------------------------------

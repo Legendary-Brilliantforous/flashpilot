@@ -266,7 +266,14 @@ pub fn flow_moto_fb_factory_adb(target: &str, out: &mut Vec<String>) -> Result<(
         match factory_cycle_wait(target, out) {
             FactorySee::Authorized(serial) => {
                 out.push(format!("  ADB authorized ({serial}) - wiping FRP ..."));
-                crate::flows::moto_adb_frp_wipe(&serial, out);
+                let (required_failed, _) =
+                    crate::flows::moto_adb_frp_wipe(&serial, out);
+                if !required_failed.is_empty() {
+                    return Err(crate::error::BridgeError::Io(format!(
+                        "Moto FRP required write(s) failed: {}",
+                        required_failed.join(", ")
+                    )));
+                }
                 crate::flows::adb_step(&serial, "reboot", Duration::from_secs(30), out);
                 wiped = true;
                 break;
@@ -278,7 +285,14 @@ pub fn flow_moto_fb_factory_adb(target: &str, out: &mut Vec<String>) -> Result<(
                     crate::flows::wait_authorized_adb(target, Duration::from_secs(120), out)
                 {
                     out.push(format!("  authorized ({serial}) - wiping FRP ..."));
-                    crate::flows::moto_adb_frp_wipe(&serial, out);
+                    let (required_failed, _) =
+                        crate::flows::moto_adb_frp_wipe(&serial, out);
+                    if !required_failed.is_empty() {
+                        return Err(crate::error::BridgeError::Io(format!(
+                            "Moto FRP required write(s) failed: {}",
+                            required_failed.join(", ")
+                        )));
+                    }
                     crate::flows::adb_step(&serial, "reboot", Duration::from_secs(30), out);
                     wiped = true;
                     break;
@@ -471,7 +485,13 @@ fn tap_and_wipe(target: &str, out: &mut Vec<String>) -> Result<bool> {
 
 fn wipe_and_done(serial: &str, out: &mut Vec<String>) -> Result<()> {
     out.push(format!("  ADB authorized ({serial}) — wiping FRP ..."));
-    crate::flows::moto_adb_frp_wipe(serial, out);
+    let (required_failed, _) = crate::flows::moto_adb_frp_wipe(serial, out);
+    if !required_failed.is_empty() {
+        return Err(crate::error::BridgeError::Io(format!(
+            "Moto FRP required write(s) failed: {}",
+            required_failed.join(", ")
+        )));
+    }
     crate::flows::adb_step(serial, "reboot", Duration::from_secs(30), out);
     out.push("Done. The phone should boot past FRP as a fresh device.".to_string());
     Ok(())
