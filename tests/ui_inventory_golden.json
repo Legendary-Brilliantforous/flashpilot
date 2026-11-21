@@ -16,6 +16,7 @@
   "dev_oppo",
   "dev_others",
   "dev_realme",
+  "dev_rockchip",
   "dev_tcl_zte",
   "dev_tecno",
   "dev_vivo",
@@ -31,7 +32,7 @@
   "settings",
   "spd"
  ],
- "stack_count": 30,
+ "stack_count": 31,
  "gated_count": 418,
  "gated_triples_sha256": "c89accef0ab188c339ca32c5a494e8d20d456d83b57c448639d8b9d665637d75",
  "gated_unique_triples": 61,
@@ -39,8 +40,8 @@
  "action_meta": 62,
  "pages": {
   "samsung": {
-   "widgets": 486,
-   "buttons": 225,
+   "widgets": 487,
+   "buttons": 226,
    "acts": [
     "_qr_generator",
     "adb_enable",
@@ -53,22 +54,22 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "1a51a8bdfb105f1b"
+   "btn_sha": "2907dbbaecccb92b"
   },
   "dev_apple": {
-   "widgets": 63,
-   "buttons": 14,
+   "widgets": 64,
+   "buttons": 15,
    "acts": [
     "apple_icloud_add",
     "apple_icloud_remove",
     "apple_info",
     "apple_passcode_guide"
    ],
-   "btn_sha": "3b1dc5aac03bb818"
+   "btn_sha": "5bc76f3e0c665036"
   },
   "dev_tecno": {
-   "widgets": 161,
-   "buttons": 74,
+   "widgets": 162,
+   "buttons": 75,
    "acts": [
     "_qr_generator",
     "tecno_device_info",
@@ -80,17 +81,17 @@
     "tecno_screen_lock_adb",
     "tecno_screen_lock_brom"
    ],
-   "btn_sha": "d638148e5f63089c"
+   "btn_sha": "3d76d4abe3ca364c"
   },
   "dev_infinix": {
-   "widgets": 76,
-   "buttons": 54,
+   "widgets": 77,
+   "buttons": 55,
    "acts": [],
-   "btn_sha": "77cec3c5d20edf6d"
+   "btn_sha": "4fe925f5a78802f1"
   },
   "dev_itel": {
-   "widgets": 115,
-   "buttons": 32,
+   "widgets": 116,
+   "buttons": 33,
    "acts": [
     "adb_enable",
     "backup",
@@ -102,47 +103,47 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "d55f71b47f8e3aff"
+   "btn_sha": "8a1f18004b9c1fde"
   },
   "dev_xiaomi": {
-   "widgets": 141,
-   "buttons": 119,
+   "widgets": 142,
+   "buttons": 120,
    "acts": [],
-   "btn_sha": "779e4a25ad66b6ec"
+   "btn_sha": "10d6a94bbb2e4ea2"
   },
   "dev_oppo": {
-   "widgets": 109,
-   "buttons": 87,
+   "widgets": 110,
+   "buttons": 88,
    "acts": [],
-   "btn_sha": "cc840c263cfb3c58"
+   "btn_sha": "ecf1d02a670e64c5"
   },
   "dev_realme": {
-   "widgets": 97,
-   "buttons": 75,
+   "widgets": 98,
+   "buttons": 76,
    "acts": [],
-   "btn_sha": "0d60ea149f8dad01"
+   "btn_sha": "6fce1bcea17b2d77"
   },
   "dev_oneplus": {
-   "widgets": 36,
-   "buttons": 14,
+   "widgets": 37,
+   "buttons": 15,
    "acts": [],
-   "btn_sha": "3f23d8739397d7ab"
+   "btn_sha": "49f36baea361b804"
   },
   "dev_vivo": {
-   "widgets": 99,
-   "buttons": 77,
+   "widgets": 100,
+   "buttons": 78,
    "acts": [],
-   "btn_sha": "197ec075386ae542"
+   "btn_sha": "eeb882488d43fda5"
   },
   "dev_huawei": {
-   "widgets": 69,
-   "buttons": 47,
+   "widgets": 70,
+   "buttons": 48,
    "acts": [],
-   "btn_sha": "b6b3afbb37d9f425"
+   "btn_sha": "560ef23569ccd483"
   },
   "dev_motorola": {
-   "widgets": 109,
-   "buttons": 25,
+   "widgets": 110,
+   "buttons": 26,
    "acts": [
     "_qr_generator",
     "adb_enable",
@@ -154,11 +155,11 @@
     "moto_frp",
     "screen_lock"
    ],
-   "btn_sha": "916b7f33c861e87a"
+   "btn_sha": "fe26d3f712220724"
   },
   "dev_nokia": {
-   "widgets": 107,
-   "buttons": 23,
+   "widgets": 108,
+   "buttons": 24,
    "acts": [
     "adb_enable",
     "backup",
@@ -170,23 +171,23 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "e0a09bd1bf82144a"
+   "btn_sha": "fbb83eb97479c2b1"
   },
   "dev_tcl_zte": {
-   "widgets": 63,
-   "buttons": 41,
+   "widgets": 64,
+   "buttons": 42,
    "acts": [],
-   "btn_sha": "e3ff0b1a8ddfb5fd"
+   "btn_sha": "f7dd1ff62cee18c7"
   },
   "dev_asus_sharp": {
-   "widgets": 32,
-   "buttons": 10,
+   "widgets": 33,
+   "buttons": 11,
    "acts": [],
-   "btn_sha": "1623e42e497e332a"
+   "btn_sha": "c4152edb9a46e4af"
   },
   "dev_blu": {
-   "widgets": 102,
-   "buttons": 18,
+   "widgets": 103,
+   "buttons": 19,
    "acts": [
     "adb_enable",
     "backup",
@@ -198,11 +199,11 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "1c183037780dcf7f"
+   "btn_sha": "fc57b3f846319daa"
   },
   "dev_lava": {
-   "widgets": 107,
-   "buttons": 23,
+   "widgets": 108,
+   "buttons": 24,
    "acts": [
     "adb_enable",
     "backup",
@@ -214,11 +215,11 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "95c47f322dc0ffde"
+   "btn_sha": "bf7a438aab30e077"
   },
   "dev_lenovo": {
-   "widgets": 105,
-   "buttons": 21,
+   "widgets": 106,
+   "buttons": 22,
    "acts": [
     "adb_enable",
     "backup",
@@ -230,11 +231,11 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "78c9823571dbd484"
+   "btn_sha": "eec47da44f6bbba9"
   },
   "dev_meizu": {
-   "widgets": 96,
-   "buttons": 12,
+   "widgets": 97,
+   "buttons": 13,
    "acts": [
     "adb_enable",
     "backup",
@@ -246,11 +247,11 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "38fd50386d263a22"
+   "btn_sha": "06089396e219e989"
   },
   "dev_others": {
-   "widgets": 102,
-   "buttons": 18,
+   "widgets": 103,
+   "buttons": 19,
    "acts": [
     "adb_enable",
     "backup",
@@ -262,11 +263,11 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "a6286df506c2b1c3"
+   "btn_sha": "7471c985f9bdf1ca"
   },
   "dev_wiko": {
-   "widgets": 99,
-   "buttons": 15,
+   "widgets": 100,
+   "buttons": 16,
    "acts": [
     "adb_enable",
     "backup",
@@ -278,7 +279,13 @@
     "pac_pack",
     "screen_lock"
    ],
-   "btn_sha": "ad3565721e6e32fb"
+   "btn_sha": "2914fc1f3a8ea38c"
+  },
+  "dev_rockchip": {
+   "widgets": 44,
+   "buttons": 21,
+   "acts": [],
+   "btn_sha": "525e9df7bccdf0aa"
   },
   "general": {
    "widgets": 142,
@@ -321,13 +328,13 @@
    "btn_sha": "4f53cda18c2baa0c"
   },
   "fus": {
-   "widgets": 45,
+   "widgets": 47,
    "buttons": 5,
    "acts": [],
    "btn_sha": "c5721102787ab85b"
   },
   "mtk": {
-   "widgets": 221,
+   "widgets": 226,
    "buttons": 111,
    "acts": [
     "_qr_generator"
@@ -351,7 +358,7 @@
    "btn_sha": "fe40b48df3ac24b2"
   },
   "settings": {
-   "widgets": 221,
+   "widgets": 222,
    "buttons": 12,
    "acts": [],
    "btn_sha": "ecbd660ba835f9ac"

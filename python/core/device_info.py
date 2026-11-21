@@ -72,6 +72,45 @@ def _adb_getprop(name: str, timeout=6, serial=None) -> str:
         return ""
 
 
+# Form factor from `ro.build.characteristics` (AOSP: phone / tablet / tv /
+# watch / automotive). The property is a single token on stock builds but may
+# be a space-separated list on OEM builds, so scan every token.
+_DEVICE_TYPE_TOKENS = ("tablet", "tv", "watch", "automotive", "phone")
+
+
+def device_type_from_characteristics(raw: str) -> str:
+    """Canonical device type from `ro.build.characteristics`.
+
+    Returns one of phone/tablet/tv/watch/automotive, or "" when the value is
+    missing/unknown — never a guess. A device that reports any non-phone
+    token wins over the (very common) bare "phone" token.
+    """
+    text = (raw or "").strip().lower()
+    if not text:
+        return ""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    for want in _DEVICE_TYPE_TOKENS:
+        if want == "phone":
+            continue
+        if want in tokens:
+            return want
+    if "phone" in tokens:
+        return "phone"
+    return ""
+
+
+def _device_type_from_product_type(product_type: str) -> str:
+    """Apple form factor from the lockdown ProductType (iPhone…/iPad…)."""
+    text = (product_type or "").strip()
+    if not text:
+        return ""
+    if text.lower().startswith("ipad"):
+        return "tablet"
+    if text.lower().startswith("iphone") or text.lower().startswith("ipod"):
+        return "phone"
+    return ""
+
+
 # Live-identity cache: the ADB getprop burst below is ~10 native sessions
 # (open + claim + CNXN each). Re-running it on every 3s poll re-enumerates
 # fragile hardware — USB cellular modems reset their USB function on our
@@ -88,7 +127,7 @@ def _probe_android_identity(pinned_serial):
     real was learned (caller falls through to MTP/USB fallbacks).
     """
     out = {"serial": "", "android_ver": "", "build": "", "model": "",
-           "mfr": "", "brand": "", "sdk": ""}
+           "mfr": "", "brand": "", "sdk": "", "device_type": ""}
     serial_prop = (_adb_getprop("ro.serialno", serial=pinned_serial)
                    or _adb_getprop("ro.boot.serialno", serial=pinned_serial)
                    or _adb_getprop("sys.serialnumber", serial=pinned_serial)
@@ -110,6 +149,13 @@ def _probe_android_identity(pinned_serial):
         out["mfr"] = mfr
     if brand and brand.lower() != "adb":
         out["brand"] = brand
+
+    # Form factor (phone / tablet / tv / watch / automotive). Only a live
+    # getprop can answer this — the USB poll has no such signal, so the
+    # zero-touch rows keep device_type=None.
+    out["device_type"] = device_type_from_characteristics(
+        _adb_getprop("ro.build.characteristics", serial=pinned_serial)
+    )
 
     # Android ver + sdk
     rel = _adb_getprop("ro.build.version.release", serial=pinned_serial)
@@ -210,7 +256,8 @@ def _apple_lockdown_info() -> dict:
 
 
 def get_live_identity(pinned_serial=None) -> dict:
-    """Return real {serial, android_ver, build, model, mfr, brand} or empty strings if unavailable.
+    """Return real {serial, android_ver, build, model, mfr, brand, device_type}
+    or empty strings if unavailable.
 
     Never returns fake 01234... placeholders — caller should show "--" instead.
 
@@ -220,8 +267,13 @@ def get_live_identity(pinned_serial=None) -> dict:
     and switching falls back to the first phone's details every cycle).
     The cache is keyed by the probed serial, so pinned and ambient probes
     coexist without cross-device bleed.
+
+    ``device_type`` is the form factor (phone/tablet/tv/watch/automotive);
+    it is "" when the phone has not told us (low-level stages, unauthorized
+    devices) — never a guess.
     """
-    out = {"serial": "", "android_ver": "", "build": "", "model": "", "mfr": "", "brand": "", "sdk": ""}
+    out = {"serial": "", "android_ver": "", "build": "", "model": "", "mfr": "",
+           "brand": "", "sdk": "", "device_type": ""}
     # Detect Apple first (Rust mode, no VID tables) — treat separately
     apple = {}
     try:
@@ -243,6 +295,9 @@ def get_live_identity(pinned_serial=None) -> dict:
                 out["build"] = apple.get("BuildVersion", "")
             if apple.get("ProductType"):
                 out["model"] = apple["ProductType"]
+                out["device_type"] = _device_type_from_product_type(
+                    apple["ProductType"]
+                )
             # Apple device present → return Apple identity even if Android adb also present (dual bus)
             # Only return if we got something real
             if any(out[k] for k in ("serial", "android_ver", "model")):

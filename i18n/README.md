@@ -23,7 +23,7 @@ offline.
 - `en.json` is the identity catalog and defines the required key set.
 - Empty/missing keys fall back to the English source text.
 
-Current size: **612 `strings` + 138 `keys`** per language, all translated.
+Current size: **634 `strings` + 138 `keys`** per language, all translated.
 They cover the shared chrome, every operations page (Samsung/Odin, MediaTek,
 Qualcomm, SPD/UNISOC, FUS, quick actions, battery/network, settings), the
 device board, QR provisioning helpers, toasts and the app's own console
@@ -65,8 +65,8 @@ Language codes: `en` (default), `fr`, `es`, `de`, `zh`, `ru`, `pt`,
    .venv/bin/python scripts/i18n_extract.py --check
    .venv/bin/pytest tests/test_i18n.py tests/test_i18n_pseudo.py -q
    ```
-5. Switch language in Settings (requires restart). Arabic switches the layout
-   direction to right-to-left automatically.
+5. Switch language in Settings — the change applies immediately, no restart
+   needed. Arabic switches the layout direction to right-to-left automatically.
 
 Rules: translate whole phrases, keep placeholders (`{model}`, `%n`, `%1`)
 intact, and leave brands/model numbers/protocol terms (FRP, BROM, EDL,

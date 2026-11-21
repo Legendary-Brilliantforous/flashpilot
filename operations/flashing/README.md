@@ -8,6 +8,7 @@ flashing/
   qualcomm/  — QCOM Sahara/Firehose (src/qualcomm/{sahara,firehose,mbn,gpt,mod}.rs)
   unisoc/    — SPD FDL + PAC (src/spd.rs 2496, `pac_extract`/`pac_pack` + `ofp_extract` rows in `src/flows.rs`; the old `python/core/pac.py` was retired with the Python engine)
   pit/       — PIT intelligence (python/core/pit.py 636 lines, pitstore, odin4 verifier)
+  rockchip/  — Rockchip fastboot research (U-Boot gadget, 0x2207; no transport yet)
 ```
 Big files will be split per-feature: sam_flash.rs -> samsung/{pit.rs, odin_session.rs, vbmeta.rs, flash.rs}
 

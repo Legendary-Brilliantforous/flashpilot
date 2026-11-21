@@ -89,7 +89,8 @@ from ..core import bridge, core, mtk, mtp, fus, pit, pitstore, device_info, expe
 from ..core import devices as _devices
 from ..core import APP_VERSION
 from .toast import ToastHost
-from .i18n import tr_key
+from .i18n import current_language, set_language, tr_key
+from .startup import stage as _startup_stage, set_hook as _set_startup_hook
 from .nav import NavRail, OemChipBar
 from .theme import (  # noqa: F401
     C, ACCENT_THEMES, SPACE, RADIUS, _BASE_QSS, _get_base_qss,
@@ -109,6 +110,7 @@ from .widgets import (  # noqa: F401
     CollapsibleSection,
     ConsoleHighlighter,
     DragBar,
+    ElidedButton,
     FlowHost,
     FlowLayout,
     LogHighlighter,
@@ -119,6 +121,7 @@ from .widgets import (  # noqa: F401
     WindowButton,
     _ComboItemDelegate,
     _SettingsCatButton,
+    flow_row,
     parse_ansi,
 )
 from . import devices as device_pages
@@ -831,6 +834,56 @@ _ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
 _MTK_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
 _MOTOROLA_VID = 0x22B8
 
+# Brand tokens derived from USB manufacturer/product strings. Chip detection
+# is brand-aware: a Tecno/Infinix/itel/Samsung MTK stage is reported as such,
+# not as a generic "MEDIATEK" — the same chip has model-specific flashing
+# paths (Samsung Odin vs Transsion ADB/BROM recipes).
+_USB_BRAND_TOKENS = (
+    ("samsung", "SAMSUNG"),
+    ("tecno", "TECNO"),
+    ("infinix", "INFINIX"),
+    ("itel", "ITEL"),
+    ("oppo", "OPPO"),
+    ("vivo", "VIVO"),
+    ("redmi", "REDMI"),
+    ("xiaomi", "XIAOMI"),
+    ("realme", "REALME"),
+    ("oneplus", "ONEPLUS"),
+    ("motorola", "MOTOROLA"),
+    ("nokia", "NOKIA"),
+    ("honor", "HONOR"),
+    ("huawei", "HUAWEI"),
+    ("google", "GOOGLE"),
+    ("pixel", "GOOGLE"),
+    ("lg electronics", "LG"),
+    ("lge", "LG"),
+    ("sony", "SONY"),
+    ("transsion", "TRANSSION"),
+)
+
+# OEM vendor IDs that ARE the brand (no chip vendor here): Samsung's VID is
+# always Samsung hardware, Apple's is always Apple hardware. MediaTek /
+# Qualcomm VIDs say nothing about the phone brand, so they are absent.
+# Mirrors `VID_BRANDS` in src/usb/filtering.rs.
+_USB_VID_BRANDS = {
+    0x04E8: "SAMSUNG",
+    0x05AC: "APPLE",
+}
+
+
+def _usb_brand(d):
+    """Best-effort brand token from a device row's USB strings, or None."""
+    if not isinstance(d, dict):
+        return None
+    text = f"{d.get('manufacturer') or ''} {d.get('product') or ''}".lower()
+    for token, label in _USB_BRAND_TOKENS:
+        if token in text:
+            return label
+    # No usable strings (a bare Odin/BROM stage): the OEM VID still names
+    # the brand.
+    return _USB_VID_BRANDS.get(d.get("vid"))
+
+
 
 def _is_apple(d):
     """Apple devices enumerate under VID 0x05ac (iPhone/iPad/iPod)."""
@@ -859,7 +912,7 @@ def _is_generic_android(d):
     if not isinstance(d, dict):
         return False
     vid = d.get("vid", 0)
-    if vid in (0x04E8, 0x05C6, 0x0E8D, 0x1782, _APPLE_VID):
+    if vid in (0x04E8, 0x05C6, 0x1782, _APPLE_VID) or vid in _MTK_VIDS:
         return False
     if _has_adb_iface(d):
         return True
@@ -900,7 +953,9 @@ def _generic_android_mode(d):
 
 # Spreadtrum / UNISOC feature-phone download & engineering modes (VID 0x1782).
 # 0x4d00 is the classic SC6531-family download (BROM/FDL) port.
-_SPD_DOWNLOAD_PIDS = (0x4D00, 0x4D02, 0x4E00)
+# Union with the doc-observed download PIDs (0x0001/0x0002) to match the
+# Rust `spd::is_download_pid` SPD_DOWNLOAD_PIDS table.
+_SPD_DOWNLOAD_PIDS = (0x4D00, 0x4D02, 0x4E00, 0x0001, 0x0002)
 
 
 def _spd_mode(d):
@@ -908,9 +963,11 @@ def _spd_mode(d):
     if d.get("vid") != 0x1782:
         return None
     pid = d.get("pid")
+    brand = _usb_brand(d)
+    prefix = f"{brand} " if brand else ""
     if pid in _SPD_DOWNLOAD_PIDS:
-        return "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
-    return "SPREADTRUM DEVICE (normal / other)"
+        return f"{prefix}SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
+    return f"{prefix}SPREADTRUM DEVICE (normal / other)"
 
 
 _IFACE_CLASS = {
@@ -1098,17 +1155,15 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # low-level modes appear as their own USB vendor, not under 04e8.
     for d in (mtk_devs or []):
         pid = d.get("pid")
-        mfr = (d.get("manufacturer") or "").lower()
-        prod = (d.get("product") or "").lower()
-        is_samsung_mtk = "samsung" in mfr or "samsung" in prod
-        prefix = "SAMSUNG MTK" if is_samsung_mtk else "MEDIATEK"
+        brand = _usb_brand(d)
+        prefix = f"{brand} MTK" if brand else "MEDIATEK"
         # Only flashing-mode PIDs claim the low-level label. Any other PID
         # (e.g. a normal-boot Tecno in PTP/MTP: 0e8d:2008, product string
         # "Android ADB Interface") must fall through to interface-based
         # protocol naming below - the badge names the actual USB protocol.
         if pid == 0x0003:
             return f"{prefix} BROM (held state)"
-        elif pid == 0x2000:
+        elif pid in (0x2000, 0x2001):
             return f"{prefix} PRELOADER (first bootloader stage)"
         elif pid in (0x0004, 0x1004):
             return f"{prefix} DA (flashing active)"
@@ -1143,7 +1198,10 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # interface (vendor-specific modem port): name the vendor + PID
     # instead of a bare OTHER.
     for d in (mtk_devs or []):
-        return f"MEDIATEK MODE (VID 0x0E8D PID 0x{d.get('pid', 0) & 0xFFFF:04X})"
+        brand = _usb_brand(d)
+        prefix = f"{brand} MTK" if brand else "MEDIATEK"
+        return (f"{prefix} MODE (VID 0x{d.get('vid', 0) & 0xFFFF:04X} "
+                f"PID 0x{d.get('pid', 0) & 0xFFFF:04X})")
     return "OTHER MODE"
 
 
@@ -1164,33 +1222,51 @@ def _metal_gradient(x0, y0, x1, y1):
 # Splash screen
 # ---------------------------------------------------------------------------
 _SPLASH_MESSAGES = [
-    "Loading Rust bridge...",
-    "Mounting USB subsystem...",
-    "Preparing protocol modules...",
-    "Warming the console...",
-    "Nearly there...",
+    "Starting up…",
+    "Building device pages…",
+    "Preparing operation panels…",
+    "Laying out the workspace…",
+    "Almost ready…",
 ]
 
 
+# Build progress is reported through `python/gui/startup.py`; `main()` installs
+# the hook there and page builders call `stage()` at natural boundaries.
+
+
 class SplashScreen(QWidget):
-    """Frameless splash with the classic badge logo, an animated progress bar
-    and cycling status lines; pulses then fades out before the main window."""
+    """Frameless splash with the badge logo, a live progress bar and a fade.
+
+    The bar follows the window build through ``set_progress`` and keeps
+    creeping on a time curve between reports, so it never looks hung while a
+    single page takes a while to construct. The whole card (background
+    included) fades in and out through the ``fade`` property.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._alpha = 1.0
+        self._fade = 0.0
+        self._closing = False
+        self._fade_out_started = False
         self._pulse = 0.0
         self._progress = 0.0
-        self._msg_idx = 0
+        self._reported = 0.0
+        self._clock = _time.monotonic()
 
         logo_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "..", "docs", "logo_256.png",
         )
-        if os.path.exists(logo_path):
-            self._logo = QPixmap(logo_path)
-        else:
-            self._logo = _draw_logo(256)
+        src = QPixmap(logo_path) if os.path.exists(logo_path) else QPixmap()
+        if src.isNull():
+            src = _draw_logo(256)
+        # Decode + scale once: regenerating the vector logo every frame made
+        # the splash expensive to paint.
+        self._logo = src.scaled(
+            128, 128,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -1206,96 +1282,176 @@ class SplashScreen(QWidget):
             screen.center().y() - self.height() // 2,
         )
 
+        # Static artwork is rendered once; only the pulse, logo, text and bar
+        # are repainted per frame.
+        self._static = self._render_static()
+
+        self._font_title = QFont("Inter", 22, QFont.Weight.ExtraBold)
+        self._font_sub = QFont("Inter", 11, QFont.Weight.Medium)
+        self._font_tag = QFont("JetBrains Mono", 9, QFont.Weight.DemiBold)
+        self._font_status = QFont("Inter", 10, QFont.Weight.Medium)
+        self._font_footer = QFont("Inter", 9, QFont.Weight.DemiBold)
+        self._font_ver = QFont("JetBrains Mono", 8)
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(16)
 
-    def _tick(self):
-        self._pulse += 0.05
-        self._progress = min(1.0, self._progress + 0.006)
-        self._msg_idx = min(len(_SPLASH_MESSAGES) - 1,
-                            int(self._progress * len(_SPLASH_MESSAGES)))
+        self._fade_anim = QPropertyAnimation(self, b"fade", self)
+        self._fade_anim.setDuration(260)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    # -- animated opacity ---------------------------------------------------
+    def _get_fade(self):
+        return self._fade
+
+    def _set_fade(self, value):
+        try:
+            self._fade = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            self._fade = 0.0
         self.update()
-        if self._progress >= 1.0:
-            self._alpha = max(0.0, self._alpha - 0.025)
-            self.update()
-            if self._alpha <= 0.0:
-                self._timer.stop()
-                self.close()
 
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    fade = pyqtProperty(float, _get_fade, _set_fade)
 
+    # -- build progress -----------------------------------------------------
+    def set_progress(self, fraction):
+        """Report real construction progress (0..1); never moves backwards."""
+        try:
+            value = max(0.0, min(1.0, float(fraction)))
+        except (TypeError, ValueError):
+            return
+        self._reported = max(self._reported, value)
+        # Construction blocks the GUI thread, so ticks are sparse exactly when
+        # progress jumps. Keep the drawn bar close to the reported stage instead
+        # of lagging whole percent-points behind (it still eases the last bit).
+        if not self._closing:
+            self._progress = max(self._progress, self._reported - 0.12, 0.0)
+
+    def finish(self):
+        """Complete the bar, fade the card out and close (idempotent)."""
+        if self._closing:
+            return
+        self._closing = True
+        self._reported = 1.0
+        # Let the bar visibly complete first: fading straight from ~40% made
+        # the splash look like it gave up.
+        QTimer.singleShot(220, self._start_fade_out)
+
+    def _start_fade_out(self):
+        if self._fade_out_started:
+            return
+        self._fade_out_started = True
+        anim = QPropertyAnimation(self, b"fade", self)
+        anim.setDuration(320)
+        anim.setStartValue(float(self._fade))
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        anim.finished.connect(self._finish_done)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._fade_anim = anim
+
+    def _finish_done(self):
+        self._timer.stop()
+        self.close()
+
+    # -- animation ----------------------------------------------------------
+    def _tick(self):
+        self._pulse += 0.12
+        if self._closing:
+            # Finish the bar quickly while the card is still opaque.
+            target = 1.0
+            self._progress += (target - self._progress) * 0.35
+        else:
+            # Time-based creep: bar motion continues even while the GUI thread
+            # is busy inside a long page constructor between progress reports.
+            elapsed = _time.monotonic() - self._clock
+            creep = 0.96 * (1.0 - math.exp(-elapsed / 6.0))
+            target = min(0.96, max(self._reported, creep))
+            self._progress += (target - self._progress) * 0.16
+        self.update()
+
+    def _render_static(self):
         w, h = self.width(), self.height()
+        pm = QPixmap(self.size())
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Premium deep space background with rich gradient
         bg_grad = QLinearGradient(0, 0, w, h)
         bg_grad.setColorAt(0, QColor("#0f172a"))
         bg_grad.setColorAt(0.3, QColor("#1e293b"))
         bg_grad.setColorAt(0.7, QColor("#0f172a"))
         bg_grad.setColorAt(1, QColor("#020617"))
-        p.setBrush(bg_grad)
-        p.setPen(QPen(QColor(C["border_hi"]), 1.5))
-        p.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 16, 16)
+        q.setBrush(bg_grad)
+        q.setPen(QPen(QColor(C["border_hi"]), 1.5))
+        q.drawRoundedRect(QRectF(0, 0, w - 1, h - 1), 16, 16)
 
-        # Animated circuit grid with premium glow
         grid = QColor(C["accent"])
         grid.setAlpha(20)
-        p.setPen(QPen(grid, 1.2))
+        q.setPen(QPen(grid, 1.2))
         step = 28.0
         gx = 0.0
         while gx < w:
-            p.drawLine(QPointF(gx, 0), QPointF(gx, h))
+            q.drawLine(QPointF(gx, 0), QPointF(gx, h))
             gx += step
         gy = 0.0
         while gy < h:
-            p.drawLine(QPointF(0, gy), QPointF(w, gy))
+            q.drawLine(QPointF(0, gy), QPointF(w, gy))
             gy += step
 
-        # Premium radial glow with multiple layers
         glow1 = QRadialGradient(w / 2, 140, 250)
         glow1.setColorAt(0, QColor(99, 102, 241, 60))
         glow1.setColorAt(0.5, QColor(139, 92, 246, 30))
         glow1.setColorAt(1, QColor(139, 92, 246, 0))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(glow1)
-        p.drawRect(QRect(0, 0, w, h))
+        q.setPen(Qt.PenStyle.NoPen)
+        q.setBrush(glow1)
+        q.drawRect(QRect(0, 0, w, h))
 
-        # Secondary accent glow
         glow2 = QRadialGradient(w / 2, 180, 180)
         glow2.setColorAt(0, QColor(34, 211, 238, 35))
         glow2.setColorAt(1, QColor(34, 211, 238, 0))
-        p.setBrush(glow2)
-        p.drawRect(QRect(0, 0, w, h))
+        q.setBrush(glow2)
+        q.drawRect(QRect(0, 0, w, h))
 
-        # Premium top accent bar with enhanced pulse
+        q.end()
+        return pm
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Fade the entire card, not just the accent bar.
+        p.setOpacity(self._fade)
+
+        w, h = self.width(), self.height()
+        p.drawPixmap(0, 0, self._static)
+
+        # Pulsing top accent bar.
         pulse = 0.75 + 0.25 * math.sin(self._pulse)
         ag = QLinearGradient(0, 0, w, 0)
         ag.setColorAt(0, QColor("#6366f1"))
         ag.setColorAt(0.5, QColor("#8b5cf6"))
         ag.setColorAt(1, QColor("#22d3ee"))
         p.setBrush(ag)
-        p.setOpacity(pulse)
+        p.setOpacity(self._fade * pulse)
         p.drawRoundedRect(QRectF(24, 18, w - 48, 5), 2.5, 2.5)
-        p.setOpacity(self._alpha)
+        p.setOpacity(self._fade)
 
-        # Enhanced logo with glow effect
+        # Logo with a static glow behind it.
         logo_size = 128
         logo_rect = QRect((w - logo_size) // 2, 38, logo_size, logo_size)
-        
-        # Logo glow
         logo_glow = QRadialGradient(QPointF(logo_rect.center()), logo_size * 0.8)
         logo_glow.setColorAt(0, QColor(99, 102, 241, 50))
         logo_glow.setColorAt(1, QColor(99, 102, 241, 0))
-        p.setBrush(logo_glow)
         p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(logo_glow)
         p.drawEllipse(logo_rect)
-        
-        p.drawPixmap(logo_rect, _draw_logo(logo_size))
+        p.drawPixmap(logo_rect, self._logo)
 
-        # Premium title with gradient text effect
-        p.setFont(QFont("Inter", 22, QFont.Weight.ExtraBold))
+        p.setFont(self._font_title)
         p.setPen(QPen(QColor("#f8fafc")))
         p.drawText(
             QRectF(0, 178, w, 38),
@@ -1303,8 +1459,7 @@ class SplashScreen(QWidget):
             "FlashPilot",
         )
 
-        # Subtitle
-        p.setFont(QFont("Inter", 11, QFont.Weight.Medium))
+        p.setFont(self._font_sub)
         p.setPen(QPen(QColor(C["accent_hi"])))
         p.drawText(
             QRectF(0, 208, w, 24),
@@ -1312,8 +1467,7 @@ class SplashScreen(QWidget):
             "Professional Flashing Tool",
         )
 
-        # Premium tagline
-        p.setFont(QFont("JetBrains Mono", 9, QFont.Weight.DemiBold))
+        p.setFont(self._font_tag)
         p.setPen(QPen(QColor(C["accent"])))
         p.drawText(
             QRectF(0, 235, w, 22),
@@ -1321,23 +1475,22 @@ class SplashScreen(QWidget):
             "FRP  ·  FLASHING  ·  MTK  ·  QUALCOMM  ·  SPD",
         )
 
-        # Premium segmented progress bar with glow
+        # Segmented progress bar.
         bar_w, bar_h = w - 100, 12
         bx = (w - bar_w) / 2
         by = 272
         segs = 35
         seg_w = (bar_w - (segs - 1) * 3) / segs
         filled = int(segs * self._progress)
-        
-        # Progress bar background glow
+
         if filled > 0:
-            progress_glow = QRadialGradient(bx + bar_w/2, by + bar_h/2, bar_w)
+            progress_glow = QRadialGradient(bx + bar_w / 2, by + bar_h / 2, bar_w)
             progress_glow.setColorAt(0, QColor(99, 102, 241, 30))
             progress_glow.setColorAt(1, QColor(99, 102, 241, 0))
             p.setBrush(progress_glow)
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRect(QRectF(bx - 20, by - 10, bar_w + 40, bar_h + 20))
-        
+
         for i in range(segs):
             sx = bx + i * (seg_w + 3)
             if i < filled:
@@ -1351,22 +1504,24 @@ class SplashScreen(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(QRectF(sx, by, seg_w, bar_h), 2, 2)
 
-        # Premium status line with accent
-        p.setFont(QFont("Inter", 10, QFont.Weight.Medium))
+        msg_idx = min(
+            len(_SPLASH_MESSAGES) - 1,
+            int(self._progress * len(_SPLASH_MESSAGES)),
+        )
+        p.setFont(self._font_status)
         p.setPen(QPen(QColor(C["text"])))
         p.drawText(
             QRectF(0, 298, w, 22),
             Qt.AlignmentFlag.AlignCenter,
-            _SPLASH_MESSAGES[self._msg_idx],
+            _SPLASH_MESSAGES[msg_idx],
         )
 
-        # Premium footer with enhanced styling
         footer_grad = QLinearGradient(0, 0, w, 0)
         footer_grad.setColorAt(0, QColor(C["accent"]))
         footer_grad.setColorAt(0.5, QColor(C["accent_hi"]))
         footer_grad.setColorAt(1, QColor(C["accent"]))
         chips = "SAMSUNG  /  MEDIATEK  /  QUALCOMM  /  UNISOC"
-        p.setFont(QFont("Inter", 9, QFont.Weight.DemiBold))
+        p.setFont(self._font_footer)
         text_pen = QPen()
         text_pen.setBrush(footer_grad)
         p.setPen(text_pen)
@@ -1376,8 +1531,7 @@ class SplashScreen(QWidget):
             chips,
         )
 
-        # Version info - beta shows beta tag + exact display version
-        p.setFont(QFont("JetBrains Mono", 8))
+        p.setFont(self._font_ver)
         p.setPen(QPen(QColor(C["mute"])))
         _ver_disp = _display_version(APP_VERSION)
         _beta_suffix = "  BETA" if _is_beta_version(APP_VERSION) else ""
@@ -1414,6 +1568,12 @@ class FlashPilotWindow(
         self._cached_build = None
         self._cached_android = None
         self._cached_serial = None
+        # Form factor (phone/tablet/tv/watch/automotive) — "" until a live
+        # probe reports one. Never guessed.
+        self._cached_device_type = ""
+        # Which device the cached form factor belongs to (a type never
+        # leaks from one phone to the next).
+        self._cached_type_serial = ""
         self._update_in_progress = False
         self._last_pid = None
         self._device_connected = False
@@ -1430,6 +1590,9 @@ class FlashPilotWindow(
         # synchronously, the rest flush on a single-shot timer / size cap.
         self._pending_console = []
         self._console_flush_timer = None
+        # A language chosen while an operation is running is applied by
+        # _on_finished(), after the worker no longer owns old widgets.
+        self._pending_ui_language = None
         self._filter = {"err": True, "warn": True, "ok": True, "info": True}
         self._console_search_text = ""
         self._console_regex = False
@@ -1486,26 +1649,13 @@ class FlashPilotWindow(
         self.setStyleSheet(_get_base_qss() + _console_qss())
 
         self._build_ui()
-        # Global fix: action buttons should not retain focus rect (was flashing red in Crimson)
-        for btn in self.findChildren(QPushButton):
-            if not btn.isCheckable():
-                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                btn.setAutoDefault(False)
-                btn.setDefault(False)
-        if hasattr(self, "oem_bar"): self.oem_bar.select("samsung")
-
-        # apply persisted effect settings to the freshly-built widgets
-        if not self.settings.value("animations", "true", type=bool):
-            self.scene.set_animations(False)
-            self.orb.set_animations(False)
-        if not self.settings.value("blur", "true", type=bool):
-            self._root_shadow.setEnabled(False)
 
         # toast overlay on top of everything (corner from toast/position)
         self._toasts = ToastHost(
             self,
             position=str(self.settings.value("toast/position", "top-right")),
         )
+        self._toasts.set_safe_top_provider(self._toast_safe_top)
         self._toasts.show()
 
         # thread -> UI bridge
@@ -1550,11 +1700,7 @@ class FlashPilotWindow(
             QApplication.instance().installEventFilter(self)
         except Exception:
             pass
-        self.refresh_device()
-        try:
-            self.update_device_strip()
-        except Exception:
-            pass
+        self._apply_built_widget_settings("samsung")
         self.log_line(
             f"FlashPilot — console ready "
             f"({_time.strftime('%Y-%m-%d %H:%M:%S')})"
@@ -1654,6 +1800,7 @@ class FlashPilotWindow(
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
+        _startup_stage(0.02)
         central = QWidget()
         central.setStyleSheet("background: transparent;")
         self.setCentralWidget(central)
@@ -1696,6 +1843,7 @@ class FlashPilotWindow(
         titlebar = DragBar(self)
         titlebar.setFixedHeight(46)
         titlebar.setObjectName("dragbar")
+        self._titlebar = titlebar
         titlebar.setStyleSheet(
             f"QWidget#dragbar {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             f" stop:0 rgba(20, 32, 50, 110), stop:0.5 rgba(10, 15, 23, 0),"
@@ -1909,39 +2057,55 @@ class FlashPilotWindow(
         self._device_stacks = {}
         self._stack = QStackedWidget()
         self._stack.setStyleSheet("QStackedWidget { background: transparent; }")
+        # Pages build on first visit: the eager build took ~16 s and froze the
+        # splash. `_section_index` is fixed at registration time, so navigation
+        # keeps stable indices even though a placeholder is swapped in place.
+        self._lazy_sections = {}
 
-        # Samsung hub page (operations/console panel).
+        # Samsung hub page (operations/console panel) — the landing page.
+        _startup_stage(0.04)
         dash = QWidget()
         dash_lay = QHBoxLayout(dash)
         dash_lay.setContentsMargins(0, 0, 0, 0)
         dash_lay.setSpacing(14)
         dash_lay.addWidget(self._build_right(), 1)
         self._stack.addWidget(dash)
+        _startup_stage(0.14)
+
+        def _defer(key, builder):
+            """Register a page to build on first visit, keeping its index."""
+            index = self._stack.count()
+            holder = QWidget()
+            holder.setStyleSheet("background: transparent;")
+            self._stack.addWidget(holder)
+            self._section_index[key] = index
+            self._lazy_sections[key] = (index, builder)
 
         # Brand drill-down pages (level 2/3 live inside each stack entry).
         # Samsung's Supported-Devices lives INSIDE the Samsung hub instead.
         self._device_stacks = getattr(self, "_device_stacks", {})
-        for b in device_pages.BRANDS:
-            if b["key"] == "samsung":
-                continue
-            self._stack.addWidget(device_pages.build_brand_page(self, b["key"]))
-            self._section_index[f"dev_{b['key']}"] = len(self._section_index)
+        brand_pages = [b for b in device_pages.BRANDS if b["key"] != "samsung"]
+        for b in brand_pages:
+            _defer(
+                f"dev_{b['key']}",
+                lambda k=b["key"]: device_pages.build_brand_page(self, k),
+            )
+        _startup_stage(0.36)
 
-        gen = self._build_general_page()
-
-        for key, widget in (
-            ("general", gen),
-            ("adb", device_pages.build_adb_hub_page(self)),
-            ("fastboot", device_pages.build_fastboot_hub_page(self)),
-            ("easylogin", device_pages.build_easylogin_hub_page(self)),
-            ("fus", self._build_fus_page()),
-            ("mtk", self._build_mtk_page()),
-            ("qc", self._build_qc_page()),
-            ("spd", self._build_spd_page()),
-            ("settings", self._build_settings_page()),
-        ):
-            self._stack.addWidget(widget)
-            self._section_index[key] = len(self._section_index)
+        hub_builders = (
+            ("general", lambda: self._build_general_page()),
+            ("adb", lambda: device_pages.build_adb_hub_page(self)),
+            ("fastboot", lambda: device_pages.build_fastboot_hub_page(self)),
+            ("easylogin", lambda: device_pages.build_easylogin_hub_page(self)),
+            ("fus", lambda: self._build_fus_page()),
+            ("mtk", lambda: self._build_mtk_page()),
+            ("qc", lambda: self._build_qc_page()),
+            ("spd", lambda: self._build_spd_page()),
+            ("settings", lambda: self._build_settings_page()),
+        )
+        for key, builder in hub_builders:
+            _defer(key, builder)
+        _startup_stage(0.6)
 
         # LEFT: connection scene (keeps its size) + state + compact metrics.
         left_panel = QFrame()
@@ -1995,14 +2159,21 @@ class FlashPilotWindow(
         mgrid = QGridLayout()
         mgrid.setSpacing(4)
         self.info = {}
+        # (English key, translated caption, accent). The caption is rendered by
+        # MetricCard; the key stays English because callers look the card up by
+        # it. Each caption is a literal tr() call so the extractor can see it.
         tiles = [
-            ("Device Model", C["grad_b"]), ("USB Mode", C["accent"]),
-            ("Interface", C["ok"]), ("ADB Status", C["warn"]),
-            ("Build Number", C["warn_dim"]), ("Android Ver", C["ok_dim"]),
-            ("Serial", C["err_dim"]), ("PIT Health", C["err_dim"]),
+            ("Device Model", self.tr("Device Model"), C["grad_b"]),
+            ("USB Mode", self.tr("USB Mode"), C["accent"]),
+            ("Interface", self.tr("Interface"), C["ok"]),
+            ("ADB Status", self.tr("ADB Status"), C["warn"]),
+            ("Build Number", self.tr("Build Number"), C["warn_dim"]),
+            ("Android Ver", self.tr("Android Ver"), C["ok_dim"]),
+            ("Serial", self.tr("Serial"), C["err_dim"]),
+            ("PIT Health", self.tr("PIT Health"), C["err_dim"]),
         ]
-        for i, (name, accent) in enumerate(tiles):
-            card = MetricCard(name, "--", accent)
+        for i, (name, caption, accent) in enumerate(tiles):
+            card = MetricCard(caption, "--", accent)
             self.info[name] = card
             mgrid.addWidget(card, i // 2, i % 2)
         for i in range(2):
@@ -2011,7 +2182,8 @@ class FlashPilotWindow(
             mgrid.setRowStretch(r, 1)
         ll.addLayout(mgrid)
         # Quick "Copy Info" helper for current device
-        self.info_copy_btn = QPushButton(self.tr("Copy Device Info"))
+        # ElidedButton: a long translation must never widen this column.
+        self.info_copy_btn = ElidedButton(self.tr("Copy Device Info"))
         self.info_copy_btn.setStyleSheet(_btn_ghost())
         self.info_copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.info_copy_btn.setToolTip(self.tr("Copy model / build / android / serial to clipboard"))
@@ -2063,7 +2235,9 @@ class FlashPilotWindow(
 
         # RIGHT dock: the shared console is resizable (horizontal splitter,
         # console on the right) + collapsible (header chevron).
+        _startup_stage(0.7)
         self._console_dock = self._build_console()
+        _startup_stage(0.8)
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setObjectName("consoleDock")
         self._splitter.setChildrenCollapsible(True)
@@ -2074,6 +2248,7 @@ class FlashPilotWindow(
         self._splitter.setStretchFactor(1, 0)
         self._splitter.splitterMoved.connect(self._on_dock_splitter_moved)
         self._style_console_splitter()
+        _startup_stage(0.94)
         self._apply_console_state_from_settings()
 
         root_lay.addWidget(self._splitter, 1)
@@ -2083,6 +2258,7 @@ class FlashPilotWindow(
         root_lay.addWidget(
             self._grip, 0, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight
         )
+        _startup_stage(0.99)
 
     def _set_conn_glow(self, color=None):
         accent = color or C["accent"]
@@ -2140,14 +2316,14 @@ class FlashPilotWindow(
         grid.setSpacing(6)
         self.info = {}
         tiles = [
-            ("Device Model", C["grad_b"]),
-            ("USB Mode", C["accent"]),
-            ("Interface", C["ok"]),
-            ("ADB Status", C["warn"]),
-            ("PIT Health", C["err_dim"]),
+            ("Device Model", self.tr("Device Model"), C["grad_b"]),
+            ("USB Mode", self.tr("USB Mode"), C["accent"]),
+            ("Interface", self.tr("Interface"), C["ok"]),
+            ("ADB Status", self.tr("ADB Status"), C["warn"]),
+            ("PIT Health", self.tr("PIT Health"), C["err_dim"]),
         ]
-        for i, (name, accent) in enumerate(tiles):
-            card = MetricCard(name, "--", accent)
+        for i, (name, caption, accent) in enumerate(tiles):
+            card = MetricCard(caption, "--", accent)
             self.info[name] = card
             grid.addWidget(card, 0, i)   # single horizontal row -> banner stays short
             grid.setColumnStretch(i, 1)
@@ -2290,26 +2466,33 @@ class FlashPilotWindow(
         body_lay.setSpacing(SPACE['sm'])
 
         # ---- advanced console toolbar ----
-        console_row = QHBoxLayout()
-        console_row.setSpacing(SPACE['sm'])
+        # Wrapping row: the console column can be dragged narrow and translated
+        # labels are often much wider than the English baseline ("Save" →
+        # "Enregistrer"), so a fixed-width button would truncate the text. The
+        # buttons keep the baseline as a *minimum* and flow onto a second row
+        # when a translation needs the space.
+        console_tools = FlowHost()
+        console_tools.setStyleSheet("background: transparent;")
+        console_row = FlowLayout(console_tools, spacing=SPACE['sm'])
+        console_row.setContentsMargins(0, 0, 0, 0)
 
         self.wrap_btn = self._tool_button(self.tr("Wrap"), self._toggle_wrap)
         self.wrap_btn.setToolTip(self.tr("Toggle line wrap"))
-        self.wrap_btn.setFixedWidth(52)
+        self.wrap_btn.setMinimumWidth(52)
         self.wrap_btn.setStyleSheet(self.wrap_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         console_row.addWidget(self.wrap_btn)
         self.clear_btn = self._tool_button(self.tr("Clear"), self._clear_console)
-        self.clear_btn.setFixedWidth(52)
+        self.clear_btn.setMinimumWidth(52)
         self.clear_btn.setStyleSheet(self.clear_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.clear_btn.setToolTip(self.tr("Clear console (Ctrl+L)"))
         console_row.addWidget(self.clear_btn)
         self.copy_btn = self._tool_button(self.tr("Copy"), self._copy_console)
-        self.copy_btn.setFixedWidth(52)
+        self.copy_btn.setMinimumWidth(52)
         self.copy_btn.setStyleSheet(self.copy_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.copy_btn.setToolTip(self.tr("Copy console to clipboard (Ctrl+Shift+C)"))
         console_row.addWidget(self.copy_btn)
         self.save_btn = self._tool_button(self.tr("Save"), self._save_console)
-        self.save_btn.setFixedWidth(52)
+        self.save_btn.setMinimumWidth(52)
         self.save_btn.setStyleSheet(self.save_btn.styleSheet().replace('font-size: 12px', 'font-size: 10px').replace('padding: 7px 14px', 'padding: 4px 8px'))
         self.save_btn.setToolTip(self.tr("Save console to a text file (Ctrl+S)"))
         console_row.addWidget(self.save_btn)
@@ -2320,8 +2503,8 @@ class FlashPilotWindow(
         # setChecked() can never desync the chip from the render mode.
         self.time_btn.toggled.connect(self._set_timestamps)
         console_row.addWidget(self.time_btn)
-        console_row.addStretch(1)
-        body_lay.addLayout(console_row)
+        body_lay.addWidget(console_tools)
+        self._console_tools = console_tools
 
         # Console | CMD tabs: the transcript lives on Console; the CMD tab
         # is created only when called (Transports ▸ CMD Console) and has
@@ -2361,7 +2544,11 @@ class FlashPilotWindow(
         self.find_edit = QLineEdit()
         self.find_edit.setPlaceholderText(self.tr("Search console...  (Ctrl+F)"))
         self.find_edit.setClearButtonEnabled(True)
-        self.find_edit.setMinimumWidth(80)  # yield space instead of clipping chips
+        # Yield space to the nav chips instead of clipping them: translated
+        # labels ("Next" → "Siguiente", "Далее") are wider than English, and a
+        # row minimum larger than the dock squeezes *every* child — the search
+        # box can shrink far further than the buttons before anything is lost.
+        self.find_edit.setMinimumWidth(40)
         self.find_edit.textChanged.connect(self._apply_console_search)
         self.find_edit.setStyleSheet(
             f"QLineEdit {{ background:{C['card']}; border:1px solid {C['border']};"
@@ -2406,8 +2593,10 @@ class FlashPilotWindow(
         self.clear_search_btn = self.search_clear_btn
         self.console_search_clear = self.search_clear_btn
 
-        flt_row = QHBoxLayout()
-        flt_row.setSpacing(6)
+        flt_row_host = FlowHost()
+        flt_row_host.setStyleSheet("background: transparent;")
+        flt_row = FlowLayout(flt_row_host, spacing=6)
+        flt_row.setContentsMargins(0, 0, 0, 0)
 
         self._filter_btns = {}
         for level, label, color, width, tip in (
@@ -2420,7 +2609,9 @@ class FlashPilotWindow(
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedWidth(width)
+            # Baseline width as a minimum only: "Warnings" needs 91 px in
+            # French, and the row now wraps instead of clipping.
+            btn.setMinimumWidth(width)
             btn.setToolTip(tip)
             btn.setStyleSheet(
                 f"QPushButton {{ background: transparent; border:1px solid {C['border']};"
@@ -2443,9 +2634,8 @@ class FlashPilotWindow(
             f" QCheckBox::indicator {{ width:14px; height:14px; }}"
         )
         flt_row.addWidget(self.clear_on_run)
-        flt_row.addStretch(1)
         cons_lay.addLayout(find_row)
-        cons_lay.addLayout(flt_row)
+        cons_lay.addWidget(flt_row_host)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -2695,6 +2885,7 @@ class FlashPilotWindow(
                         [max(self._DOCK_MIN_TOP, total - console), console])
         except Exception:
             pass
+        self._nudge_toasts()
         if persist:
             self._save_console_state()
 
@@ -2736,6 +2927,7 @@ class FlashPilotWindow(
                     self._set_console_collapsed(True, persist=False)
         except Exception:
             pass
+        self._nudge_toasts()
         if persist:
             self._save_console_state()
 
@@ -2812,7 +3004,7 @@ class FlashPilotWindow(
             self._cmd_mode = QComboBox()
             self._cmd_mode.addItems(["ADB", "Fastboot"])
             self._cmd_mode.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self._cmd_mode.setFixedWidth(110)
+            self._cmd_mode.setMinimumWidth(110)
             self._cmd_mode.setToolTip(self.tr("Which transport the custom command uses"))
             self._cmd_mode.setStyleSheet(
                 f"QComboBox {{ background:{C['card']}; border:1px solid {C['border']};"
@@ -2835,11 +3027,10 @@ class FlashPilotWindow(
             mode_row.addWidget(self._cmd_code, 1)
             lay.addLayout(mode_row)
 
-            adb_row = QHBoxLayout()
-            adb_row.setSpacing(6)
+            adb_host, adb_row = flow_row(spacing=6)
             adb_lbl = QLabel("ADB")
             adb_lbl.setStyleSheet("color:#34d399; font-size:10px; font-weight:800;")
-            adb_lbl.setFixedWidth(52)
+            adb_lbl.setMinimumWidth(52)
             adb_row.addWidget(adb_lbl)
             for label, shell_cmd in (
                 (self.tr("Reboot"), "reboot"),
@@ -2860,26 +3051,13 @@ class FlashPilotWindow(
                 )
                 b.clicked.connect(lambda _=False, c=shell_cmd: self._cmd_adb_preset(c))
                 adb_row.addWidget(b)
-            adb_row.addStretch(1)
-            lay.addLayout(adb_row)
+            lay.addWidget(adb_host)
 
-            fb_row = QHBoxLayout()
-            fb_row.setSpacing(6)
+            fb_host, fb_row = flow_row(spacing=6)
             fb_lbl = QLabel(self.tr("Fastboot"))
             fb_lbl.setStyleSheet("color:#fbbf24; font-size:10px; font-weight:800;")
-            fb_lbl.setFixedWidth(52)
+            fb_lbl.setMinimumWidth(52)
             fb_row.addWidget(fb_lbl)
-            fb_scroll = QScrollArea()
-            fb_scroll.setWidgetResizable(True)
-            fb_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            fb_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            fb_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            fb_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-            fb_inner = QWidget()
-            fb_inner.setStyleSheet("background: transparent;")
-            fb_btns = QHBoxLayout(fb_inner)
-            fb_btns.setContentsMargins(0, 0, 0, 0)
-            fb_btns.setSpacing(6)
             for label, fb_cmd, tip in (
                 (self.tr("Unlock BL"), None, self.tr("oem unlock <code> (two-step, uses the code above)")),
                 (self.tr("Relock BL"), "relock", self.tr("flashing lock (re-lock the bootloader)")),
@@ -2910,11 +3088,8 @@ class FlashPilotWindow(
                 else:
                     b.clicked.connect(lambda _=False, c=fb_cmd: self._cmd_fb_preset(c))
                 b.setFixedHeight(30)
-                fb_btns.addWidget(b)
-            fb_scroll.setWidget(fb_inner)
-            fb_scroll.setFixedHeight(36)
-            fb_row.addWidget(fb_scroll, 1)
-            lay.addLayout(fb_row)
+                fb_row.addWidget(b)
+            lay.addWidget(fb_host)
 
             custom_row = QHBoxLayout()
             custom_row.setSpacing(6)
@@ -3150,10 +3325,21 @@ class FlashPilotWindow(
                 mode = r.get("mode") or "phone"
                 self._dev_dot.setText("●")
                 self._dev_dot.setStyleSheet("color:#34d399; font-size:15px; font-weight:800;")
-                self._dev_title.setText(f"{r.get('label', mode)[:60]}")
-                self._dev_text.setText(
-                    self.tr("{mode} · [{transports}] — only matching actions are lit")
-                    .format(mode=mode, transports=transports))
+                # Brand · model when the merged row knows them (ADB `model:`
+                # extra / USB strings); otherwise the honest USB label.
+                row_model = (r.get("model") or "").strip()
+                row_brand = (r.get("brand") or "").strip()
+                title = r.get("label", mode)
+                if row_model:
+                    title = f"{row_brand} · {row_model}" if row_brand else row_model
+                self._dev_title.setText(f"{title[:60]}")
+                dtype = (getattr(self, "_cached_device_type", "") or "").strip().upper()
+                mode_line = self.tr(
+                    "{mode} · [{transports}] — only matching actions are lit"
+                ).format(mode=mode, transports=transports)
+                if dtype:
+                    mode_line = f"{dtype} · {mode_line}"
+                self._dev_text.setText(mode_line)
                 try:
                     ports = device_pages.usb_serial_ports(
                         int(r.get("bus", 0) or 0), int(r.get("address", 0) or 0))
@@ -3299,10 +3485,50 @@ class FlashPilotWindow(
         elif index == 4:
             self._open_cmd_tab()
 
+    # --------------------- deferred page construction ----------------------
+    def _build_section(self, key):
+        """Materialise a deferred stack page in place (no-op when already built).
+
+        The placeholder is replaced at the page's registered index, so
+        `_section_index` and every later index stay valid.
+        """
+        entry = getattr(self, "_lazy_sections", {}).pop(key, None)
+        if entry is None:
+            return False
+        index, builder = entry
+        try:
+            page = builder()
+        except Exception:
+            # Keep the deferred entry so a later visit can retry instead of
+            # leaving the placeholder permanently unusable.
+            self._lazy_sections[key] = entry
+            raise
+        holder = self._stack.widget(index)
+        self._stack.insertWidget(index, page)
+        if holder is not None and holder is not page:
+            self._stack.removeWidget(holder)
+            holder.deleteLater()
+        return True
+
+    def _ensure_all_pages(self):
+        """Build every deferred page.
+
+        Production builds pages on first visit; tests and the inventory call
+        this so a single pass still sees every page, gated button and action.
+        """
+        for key in list(getattr(self, "_lazy_sections", {})):
+            self._build_section(key)
+
     def _on_section(self, key):
         self._current_section = key
         idx = getattr(self, "_section_index", {}).get(key, 0)
+        # Build on first visit, then show it.
+        self._build_section(key)
         self._stack.setCurrentIndex(idx)
+        try:
+            self._refresh_gates()
+        except Exception:
+            pass
         if hasattr(self, "oem_bar"):
             self.oem_bar.select(key)
         self.set_status(f"Section: {key.upper()}")
@@ -6251,7 +6477,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
 
         ok = QPushButton(confirm_label)
         # Chip-colored confirm button (high-risk = red/orange, flash = blue)
@@ -6261,7 +6487,7 @@ class FlashPilotWindow(
             f"QPushButton:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {grad[1]}, stop:1 {grad[0]}); }}"
         )
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(180)
+        ok.setMinimumWidth(180)
         ok.setFocus()
 
         def close():
@@ -6415,7 +6641,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Cancel"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
 
         ok = QPushButton(confirm_label)
         ok.setStyleSheet(
@@ -6425,7 +6651,7 @@ class FlashPilotWindow(
             "QPushButton:disabled { background: #334155; color: #94a3b8; }"
         )
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(180)
+        ok.setMinimumWidth(180)
         ok.setEnabled(False)
 
         def _recheck(*_):
@@ -6708,7 +6934,7 @@ class FlashPilotWindow(
         cancel = QPushButton(self.tr("Exit"))
         cancel.setStyleSheet(_btn_ghost())
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel.setFixedWidth(120)
+        cancel.setMinimumWidth(120)
         cancel.setToolTip(self.tr("Close the application"))
         accept = QPushButton(self.tr("OK — I Accept"))
         accept.setEnabled(False)
@@ -6719,7 +6945,7 @@ class FlashPilotWindow(
             "QPushButton:hover:!disabled { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #fbbf24, stop:1 #f59e0b); }"
         )
         accept.setCursor(Qt.CursorShape.PointingHandCursor)
-        accept.setFixedWidth(190)
+        accept.setMinimumWidth(190)
         btns.addStretch(1)
         btns.addWidget(cancel)
         btns.addWidget(accept)
@@ -6880,7 +7106,7 @@ class FlashPilotWindow(
         if secondary_label and secondary_callback:
             sec_btn = QPushButton(secondary_label)
             sec_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            sec_btn.setFixedWidth(160)
+            sec_btn.setMinimumWidth(160)
             sec_btn.setStyleSheet(
                 "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #10b981, stop:1 #06b6d4); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
                 "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #34d399, stop:1 #06b6d4); }"
@@ -6893,7 +7119,7 @@ class FlashPilotWindow(
 
         ok = QPushButton(ok_label)
         ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        ok.setFixedWidth(160)
+        ok.setMinimumWidth(160)
         ok.setStyleSheet(
             "QPushButton { color: #ffffff; background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0ea5e9, stop:1 #22d3ee); border: none; border-radius: 9px; padding: 10px 18px; font-weight: 900; font-size: 13px; }"
             "QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #38bdf8, stop:1 #22d3ee); }"
@@ -7940,6 +8166,10 @@ class FlashPilotWindow(
         col.setSpacing(2)
         lab = QLabel(text)
         lab.setStyleSheet(f"color:{C['text']}; font-size:13px; font-weight:700;")
+        # Wraps like the detail line: a translated row title ("Автоматическая
+        # проверка обновлений") is much longer than the English one and used to
+        # raise the whole settings page minimum past the viewport.
+        lab.setWordWrap(True)
         col.addWidget(lab)
         if detail:
             d = QLabel(detail)
@@ -7996,6 +8226,187 @@ class FlashPilotWindow(
         mode = "every_boot" if on else "first_install"
         self.settings.setValue("beta_warning_mode", mode)
         self._ui.line.emit(f"[settings] beta warning mode -> {mode}")
+
+    def _apply_built_widget_settings(self, section="samsung"):
+        """Post-build wiring that depends on freshly built widgets."""
+        # Global fix: action buttons should not retain focus rect (was
+        # flashing red in Crimson).
+        for btn in self.findChildren(QPushButton):
+            if not btn.isCheckable():
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setAutoDefault(False)
+                btn.setDefault(False)
+        if hasattr(self, "oem_bar"):
+            self.oem_bar.select(section)
+
+        # Apply persisted effect settings to the freshly-built widgets.
+        if not self.settings.value("animations", "true", type=bool):
+            self.scene.set_animations(False)
+            self.orb.set_animations(False)
+        if not self.settings.value("blur", "true", type=bool):
+            self._root_shadow.setEnabled(False)
+
+        self.refresh_device()
+        try:
+            self.update_device_strip()
+        except Exception:
+            pass
+
+    def _switch_ui_language(self, code):
+        """Apply `code` to the UI immediately, without restarting FlashPilot."""
+        code = str(code or "en")
+        if code == current_language():
+            return False
+
+        # A running flow worker captured stop/progress widgets from the
+        # current tree. Destroying those widgets mid-run is a crash risk, so
+        # remember the choice and apply it when the operation finishes.
+        if _flows_running() > 0:
+            self._pending_ui_language = code
+            self._toasts.show_info(
+                self.tr("Language change will apply when the current operation finishes.")
+            )
+            return False
+
+        try:
+            # Capture all window-owned state whose widgets are about to be
+            # recreated by _build_ui().
+            section = getattr(self, "_current_section", "samsung")
+            device_key = getattr(self, "_display_key", None)
+            filter_state = dict(getattr(self, "_filter", {}) or {})
+            search_text = getattr(self, "_console_search_text", "") or ""
+            regex_enabled = bool(getattr(self, "_console_regex", False))
+            timestamps_enabled = bool(getattr(self, "_show_timestamps", True))
+            old_central = self.centralWidget()
+
+            # _build_console() restores these values from QSettings. Persist
+            # the live geometry first so collapsing/maximising/dock width are
+            # not lost during the rebuild.
+            self._save_console_state()
+
+            # Flush coalesced lines while the old transcript widget still
+            # exists. log_line(), _start_flush_timer(), and _flush_console()
+            # all tolerate a None flush timer; the new console creates a
+            # fresh timer before any further logging.
+            try:
+                self._flush_console()
+            except Exception:
+                pass
+            for attr in (
+                "_global_stop_timer",
+                "_row_state_timer",
+                "_console_flush_timer",
+            ):
+                timer = getattr(self, attr, None)
+                if timer is not None:
+                    try:
+                        timer.stop()
+                    except Exception:
+                        pass
+                    try:
+                        timer.deleteLater()
+                    except Exception:
+                        pass
+                setattr(self, attr, None)
+
+            # These registries contain references to widgets in the old tree.
+            # The newly built pages repopulate them as they are constructed.
+            self._gated_buttons = []
+            self._stop_job = {}
+            self._flow_browsers = []
+
+            # Install the translator before constructing any widgets so every
+            # new label resolves in the requested language. set_language()
+            # also applies the app-level LTR/RTL direction.
+            app = QApplication.instance()
+            if app is None:
+                raise RuntimeError("QApplication is not available")
+            active = set_language(app, code)
+            if not active:
+                raise RuntimeError(f"could not activate UI language {code!r}")
+
+            self._build_ui()
+            if old_central is not None and old_central is not self.centralWidget():
+                try:
+                    old_central.hide()
+                    old_central.setParent(None)
+                    old_central.deleteLater()
+                except Exception:
+                    pass
+
+            self._apply_built_widget_settings(section)
+
+            # Restore the current section; this materialises its deferred
+            # page in the new language and refreshes gates/device state.
+            self._on_section(section)
+
+            # Restore the console's live filter/search/timestamp state on
+            # the newly-created controls.
+            self._filter = filter_state
+            for level, btn in (getattr(self, "_filter_btns", {}) or {}).items():
+                try:
+                    btn.blockSignals(True)
+                    btn.setChecked(bool(self._filter.get(level, True)))
+                finally:
+                    btn.blockSignals(False)
+            self._show_timestamps = timestamps_enabled
+            self._console_regex = regex_enabled
+            self._console_regex_obj = None
+            self._sync_console_chip("time_btn", timestamps_enabled)
+            self._sync_console_chip("regex_btn", regex_enabled)
+            try:
+                self.find_edit.blockSignals(True)
+                self.find_edit.setText(search_text)
+            finally:
+                self.find_edit.blockSignals(False)
+            self._console_search_text = search_text
+            self._refresh_search_regex()
+            self._rebuild_console()
+            if not self._log_buffer:
+                self.log.setPlainText(self.tr("Ready. Connect a device to begin."))
+            self._apply_find()
+
+            # Refresh the device list, then reuse _on_device_picked() so the
+            # selected row, tiles, scene, badge, and gates follow one path.
+            try:
+                self._refresh_device_list()
+            except Exception:
+                pass
+            self._display_key = device_key
+            if device_key is not None:
+                for row in range(self.device_list.count()):
+                    item = self.device_list.item(row)
+                    if item.data(Qt.ItemDataRole.UserRole) == device_key:
+                        self._on_device_picked(item)
+                        break
+
+            self.setWindowTitle(self.tr("FlashPilot"))
+            self._pending_ui_language = None
+            try:
+                self._nudge_toasts()
+            except Exception:
+                pass
+            self._toasts.show_ok(self.tr("Language changed."))
+            return True
+        except Exception as exc:  # noqa: BLE001
+            # A language switch must never take down the main window.
+            try:
+                self._toasts.show_error(self.tr("Operation failed"), str(exc))
+            except Exception:
+                pass
+            try:
+                self.log_line(f"[error] UI language switch failed: {exc}")
+            except Exception:
+                pass
+            return False
+
+    def _apply_pending_ui_language(self):
+        """Apply a language change deferred until the running operation ends."""
+        code = getattr(self, "_pending_ui_language", None)
+        if not code:
+            return False
+        self._pending_ui_language = None
+        return self._switch_ui_language(code)
 
     def _apply_theme(self, name):
         self.settings.setValue("theme", name)
@@ -8823,13 +9234,19 @@ class FlashPilotWindow(
         return btn
 
     def _console_chip(self, text, tip, checked=False, width=48):
-        """Compact checkable console chip (theme tokens only)."""
+        """Compact checkable console chip (theme tokens only).
+
+        ``width`` is the English design baseline used as a *minimum*: a chip
+        never shrinks below it, but it grows to fit a longer translated label
+        (``Time`` → ``Heure`` is shorter, other locales are not) instead of
+        clipping the text.
+        """
         btn = QPushButton(text)
         btn.setCheckable(True)
         btn.setChecked(bool(checked))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setFixedWidth(width)
+        btn.setMinimumWidth(width)
         btn.setToolTip(tip)
         btn.setStyleSheet(
             f"QPushButton {{ background: transparent; border:1px solid {C['border']};"
@@ -9896,6 +10313,12 @@ class FlashPilotWindow(
         show(sel.currentIndex() if sel else 0)
 
     def _on_finished(self):
+        # Apply a language change requested while this operation was running
+        # before touching any progress widgets from the rebuilt tree.
+        try:
+            self._apply_pending_ui_language()
+        except Exception:
+            pass
         self.stop_btn.setEnabled(False)
         self.shimmer.set_active(False)
         self.shimmer.setVisible(False)
@@ -10505,7 +10928,21 @@ class FlashPilotWindow(
             usb = row.get("usb") or {}
             adb = row.get("adb") or {}
             serial = (usb.get("serial") or adb.get("serial") or "--").strip() or "--"
-            model = (usb.get("product") or usb.get("manufacturer") or "--").strip() or "--"
+            # The form factor belongs to ONE device: drop the previous
+            # device's type when the selection changes (the live probe
+            # fills the new one in). The row key is the device identity.
+            scope_key = (row.get("key") or serial or "").strip()
+            if getattr(self, "_cached_type_serial", "") != scope_key:
+                self._cached_type_serial = scope_key
+                self._cached_device_type = ""
+            # Brand + model come from the Rust merged row (ADB `model:`
+            # extra + USB strings) — the real identity, not the generic
+            # USB product string.
+            row_model = (row.get("model") or usb.get("model") or "").strip()
+            row_brand = (row.get("brand") or usb.get("brand") or "").strip()
+            model = row_model or (usb.get("product") or usb.get("manufacturer") or "--").strip() or "--"
+            if row_brand and row_model:
+                model = f"{row_brand} · {row_model}"
             try:
                 self.info["Serial"].set(serial)
                 self.info["Device Model"].set(model)
@@ -10524,6 +10961,9 @@ class FlashPilotWindow(
             self._cached_build = None
             self._cached_android = None
             self._cached_serial = None
+            # Form factor of the previous device must not leak into the next.
+            self._cached_device_type = ""
+            self._cached_type_serial = ""
             self._model_refresh_in_progress = False
             self._last_pid = None
             self._device_connected = False
@@ -10992,8 +11432,22 @@ class FlashPilotWindow(
                         # Update mfr for vendor badge if live has it
                         if live.get("mfr") and not mfr:
                             mfr = live["mfr"]
+                    # Form factor (phone/tablet/tv/watch/automotive) — only a
+                    # live getprop can answer it. Unknown stays empty; never
+                    # guess a type for a device that did not report one.
+                    live_type = (live.get("device_type") or "").strip().lower()
+                    if live_type and live_type != getattr(self, "_cached_device_type", ""):
+                        self._cached_device_type = live_type
+                        self._ui.line.emit(f"Device Type: {live_type}")
+                        try:
+                            # Re-render the strip so the type shows up there.
+                            self.update_device_strip()
+                        except Exception:
+                            pass
+                    # Brand family (ro.product.brand) for the model tile.
+                    live_brand = (live.get("brand") or "").strip()
                 except Exception:
-                    pass
+                    live_brand = ""
                 # Never emit a hard-coded "adb" as model - use real product/model or placeholder
                 fallback = f"0x{pid:04x}" if pid is not None else "--"
                 # If we still have no model, keep previous cached or show fallback
@@ -11001,6 +11455,10 @@ class FlashPilotWindow(
                 # Guard against the literal "adb" sneaking in as model (bridge bug)
                 if isinstance(emit_model, str) and emit_model.strip().lower() == "adb":
                     emit_model = fallback if fallback != "--" else "--"
+                # Brand · model when both are known (SAMSUNG · SM-G973F).
+                if (live_brand and " · " not in emit_model
+                        and not emit_model.upper().startswith(live_brand.upper())):
+                    emit_model = f"{live_brand} · {emit_model}"
                 self._ui.metric.emit("Device Model", emit_model)
                 self._ui.metric.emit("ADB Status", adb_status)
                 # Extended info: build, android, serial (cached) — filtered fake serial
@@ -11183,10 +11641,82 @@ class FlashPilotWindow(
             pass
         super().closeEvent(event)
 
+    def _toast_safe_top(self):
+        """Top of the window's content area, in window coordinates.
+
+        A 340 px toast occupies the top-right corner, which is exactly where
+        the OEM tool chips (FUS / MTK / Qualcomm / SPD) and the console's
+        header / toolbar chips (Copy, Save, Clear, Wrap, Find…) sit. Clearing
+        only the title bar still laid the toast over them, so the anchor goes
+        below all of that chrome — at the console transcript's top edge, which
+        is the first pixel of the window with no buttons in it.
+        """
+        bottom = 0
+
+        def _bottom(widget):
+            try:
+                if widget is None or not widget.isVisible() or widget.height() <= 0:
+                    return 0
+                return max(0, widget.mapTo(self, QPoint(0, widget.height())).y())
+            except Exception:
+                return 0
+
+        def _top(widget):
+            try:
+                if widget is None or not widget.isVisible() or widget.height() <= 0:
+                    return 0
+                return max(0, widget.mapTo(self, QPoint(0, 0)).y())
+            except Exception:
+                return 0
+
+        for name in ("_titlebar", "oem_bar", "_dev_strip"):
+            bottom = max(bottom, _bottom(getattr(self, name, None)))
+        dock = getattr(self, "_console_dock", None)
+        header = getattr(self, "_console_header", None)
+        try:
+            if dock is not None and dock.isVisible():
+                rect = header.geometry() if header is not None else None
+                if rect is not None and rect.height() > 0:
+                    bottom = max(
+                        bottom,
+                        dock.mapTo(self, QPoint(0, rect.bottom())).y(),
+                    )
+                log_top = _top(getattr(self, "log", None))
+                if log_top > 0:
+                    # The transcript starts below the toolbar/find rows:
+                    # anchor there so no console button can sit under a toast.
+                    bottom = max(bottom, log_top)
+                else:
+                    # Transcript hidden (CMD tab selected) but the console
+                    # toolbar and tab bar are still visible. Anchor below
+                    # them so no console control sits under a toast.
+                    tab_bar = None
+                    try:
+                        tab_bar = self.console_tabs.tabBar()
+                    except Exception:
+                        pass
+                    for widget in (getattr(self, "_console_tools", None), tab_bar):
+                        bottom = max(bottom, _bottom(widget))
+        except Exception:
+            pass
+        return max(0, bottom)
+
+    def _nudge_toasts(self):
+        """Re-anchor the toast overlay after the top chrome moves."""
+        toasts = getattr(self, "_toasts", None)
+        if toasts is None:
+            return
+        toasts._relayout()
+        # Geometry settles after the state change; anchor again once it has.
+        QTimer.singleShot(0, toasts._relayout)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_toasts"):
             self._toasts._relayout()
+            # Child geometry settles after the resize event is delivered, so
+            # re-anchor once more to pick up the title bar's final position.
+            QTimer.singleShot(0, self._toasts._relayout)
         if hasattr(self, "_splitter"):
             self._apply_default_dock_split()
         if hasattr(self, "_body_splitter"):
@@ -13107,6 +13637,15 @@ def _app_icon():
 
 
 def main():
+    # Qt logs a benign "OpenType support missing" notice for every fallback
+    # candidate when a label uses a script the UI font cannot shape (the
+    # language picker's native names, or a Hindi/Arabic/CJK interface).
+    # Rendering is correct — Qt falls back per glyph — so drop just that
+    # notice and let every other Qt message through.
+    from .qt_logging import install as _install_qt_logging
+
+    _install_qt_logging()
+
     app = QApplication([])
     QApplication.setDesktopFileName("flashpilot")
     app.setWindowIcon(_app_icon())
@@ -13128,22 +13667,58 @@ def main():
     splash = SplashScreen()
     splash.show()
 
-    def _boot():
-        win = FrpWindow()
-        win.setWindowIcon(_app_icon())
-        # Window memory: restore size/position/maximized from the last
-        # session (saved in closeEvent).
-        try:
-            st = win.settings
-            if st.value("win_maximized", False, type=bool):
-                win.showMaximized()
-            else:
-                geo = st.value("win_geometry")
-                if geo is not None:
-                    win.restoreGeometry(geo)
-                win.show()
-        except Exception:
-            win.show()
+    # Lets the window build keep the splash animating (and report real
+    # progress) instead of freezing the GUI thread for the whole page build.
+    last_pump = [0.0]
 
-    QTimer.singleShot(2500, _boot)
+    def _pump(fraction=None):
+        if fraction is not None:
+            splash.set_progress(fraction)
+        now = _time.monotonic()
+        if now - last_pump[0] >= 0.04:
+            last_pump[0] = now
+            app.processEvents()
+
+    _set_startup_hook(_pump)
+
+    def _boot():
+        try:
+            win = FrpWindow()
+            win.setWindowIcon(_app_icon())
+            # Window memory: restore size/position/maximized from the last
+            # session (saved in closeEvent).
+            try:
+                st = win.settings
+                if st.value("win_maximized", False, type=bool):
+                    win.showMaximized()
+                else:
+                    geo = st.value("win_geometry")
+                    if geo is not None:
+                        win.restoreGeometry(geo)
+                    win.show()
+            except Exception:
+                win.show()
+        except Exception as exc:
+            # Never leave a dead event loop behind: report the failure and
+            # quit instead of finishing the splash on a window that does not
+            # exist (the app would look hung/blank).
+            _set_startup_hook(None)
+            splash.finish()
+            try:
+                QMessageBox.critical(
+                    None,
+                    "FlashPilot failed to start",
+                    "The main window could not be built:\n\n"
+                    f"{exc}\n\n"
+                    "Restart the application. If this repeats, run it from a "
+                    "terminal to see the full traceback.",
+                )
+            except Exception:
+                print(f"FlashPilot failed to start: {exc}")
+            app.quit()
+        else:
+            _set_startup_hook(None)
+            splash.finish()
+
+    QTimer.singleShot(800, _boot)
     app.exec()

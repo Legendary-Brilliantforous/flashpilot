@@ -1511,16 +1511,24 @@ pub fn shell_via_host(serial: &str, timeout_ms: u64, cmd: &str) -> Result<String
         let _ = stdout.read_to_string(&mut out);
     }
 
-    if !status.success() && out.trim().is_empty() {
-        // Try to surface stderr.
+    if !status.success() {
+        // A rejected remote command can still print to stdout (e.g. a
+        // settings/pm error message), so the exit status decides — never the
+        // presence of output.
+        let mut err = String::new();
         if let Some(mut se) = child.stderr.take() {
-            let mut err = String::new();
             let _ = se.read_to_string(&mut err);
-            if !err.trim().is_empty() {
-                return Err(BridgeError::Io(format!("host adb failed: {}", err.trim())));
-            }
         }
-        return Err(BridgeError::Io(format!("host adb exited with {status}")));
+        let detail = if !err.trim().is_empty() {
+            err.trim().to_string()
+        } else if !out.trim().is_empty() {
+            out.trim().to_string()
+        } else {
+            status.to_string()
+        };
+        return Err(BridgeError::Io(format!(
+            "host adb exited with {status}: {detail}"
+        )));
     }
     Ok(out)
 }

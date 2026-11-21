@@ -77,9 +77,9 @@ Mode labels emitted by `mode_hint` / `classify_mode`:
 | Label | Condition |
 |---|---|
 | `mediatek-brom` | `0x0E8D:0x0003` |
-| `mediatek-preloader` | `0x0E8D:0x2000` |
-| `mediatek-da` | `0x0E8D:0x0004` / `0x1004` |
-| `mediatek` | other `0x0E8D`, or any MTK OEM VID |
+| `mediatek-preloader` | `0x0E8D:0x2000`, `0x0E8D:0x2001` (preloader USB-VCOM), OEM preloader family (`0x0E8D:0xF200`, `0xD1E9`, ...) |
+| `mediatek-da` | `0x0E8D:0x0004` / `0x1004`, plus full-partition-access emergency/factory variants (`0x0001` / `0x0002`) |
+| `mediatek` | normal-boot MTK ADB composites (`0x0A0A`, `0x2008`, `0x2010`, `0x201C`) and any other / MTK OEM VID |
 | `qualcomm-edl` | `0x05C6` + EDL PID |
 | `qualcomm-diag` | `0x05C6` + DIAG PID |
 | `qualcomm` | other `0x05C6` |

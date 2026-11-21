@@ -378,6 +378,38 @@ class ToastHost(QWidget):
         self._progress = None
         self._progress_slot = None
         self._overflow = None
+        # Reserved top inset: the window's title bar holds STOP / settings /
+        # window buttons, and a toast must never be laid on top of them.
+        self._safe_top = 0
+        self._safe_top_provider = None
+
+    # -- safe area ----------------------------------------------------------
+    def set_safe_top(self, px):
+        """Reserve `px` pixels at the top for the window's title-bar controls."""
+        try:
+            self._safe_top = max(0, int(px))
+        except (TypeError, ValueError):
+            self._safe_top = 0
+        self._relayout()
+
+    def set_safe_top_provider(self, provider):
+        """Reserve the top inset reported by `provider()` on every relayout.
+
+        A provider rather than a number: the title bar only gets its final
+        geometry after the parent has been laid out, so re-reading it here
+        keeps the anchors correct across resizes and theme changes.
+        """
+        self._safe_top_provider = provider
+        self._relayout()
+
+    def safe_top(self):
+        """Current reserved inset, refreshed from the provider when present."""
+        if self._safe_top_provider is not None:
+            try:
+                self._safe_top = max(0, int(self._safe_top_provider() or 0))
+            except Exception:
+                pass
+        return self._safe_top
 
     # -- position -----------------------------------------------------------
     def position(self):
@@ -460,7 +492,9 @@ class ToastHost(QWidget):
             if y < self._MARGIN:
                 y = self._MARGIN
         else:
-            y = self._MARGIN
+            # Keep clear of the title bar: its STOP / settings / window buttons
+            # live in the top-right corner a toast would otherwise cover.
+            y = max(self._MARGIN, self.safe_top() + self._MARGIN)
         right = w - self._MARGIN
 
         region = QRegion()

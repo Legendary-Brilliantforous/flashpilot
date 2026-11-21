@@ -148,7 +148,7 @@ class QuickPageMixin:
         nf_browse = QPushButton(self.tr("Browse..."))
         nf_browse.setStyleSheet(_btn_ghost())
         nf_browse.setCursor(Qt.CursorShape.PointingHandCursor)
-        nf_browse.setFixedWidth(90)
+        nf_browse.setMinimumWidth(90)
         nf_browse.clicked.connect(self._nf_pick_tar)
         nf_row.addWidget(nf_browse)
         hv.addLayout(nf_row)

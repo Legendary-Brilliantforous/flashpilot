@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use crate::error::{BridgeError, Result};
 use crate::mtk::{
-    boot_stage_for, brom_handshake, detect_mtk as mtk_detect_mtk, find_bulk, BromSession, MTK_VID,
+    boot_stage_for, brom_handshake, detect_mtk as mtk_detect_mtk, find_bulk, is_mtk_vid,
+    BromSession,
 };
 use crate::usb;
 use crate::util::{
@@ -1776,7 +1777,7 @@ impl DaSession {
 pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
     let devices = usb::collect_devices(None)?;
     if target == "auto" {
-        let mut mtk = devices.iter().filter(|d| d.vid == MTK_VID);
+        let mut mtk = devices.iter().filter(|d| is_mtk_vid(d.vid));
         let first = mtk
             .next()
             .cloned()
@@ -1784,7 +1785,7 @@ pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
         if mtk.next().is_some() {
             return Err(BridgeError::DeviceState(
                 crate::error::DeviceStateError::AmbiguousTarget {
-                    count: devices.iter().filter(|d| d.vid == MTK_VID).count(),
+                    count: devices.iter().filter(|d| is_mtk_vid(d.vid)).count(),
                 },
             ));
         }
@@ -1792,7 +1793,7 @@ pub fn find_mtk_dev(target: &str) -> Result<usb::UsbDeviceInfo> {
     }
     devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .cloned()
         .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))
 }
@@ -1801,7 +1802,7 @@ pub fn mtk_da_upload(target: &str, da_path: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
@@ -2701,7 +2702,7 @@ pub fn mtk_reboot(target: &str, da_path: &str, mode: u8) -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
@@ -2764,7 +2765,7 @@ pub fn mtk_enter_factory_mode(target: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     // Factory mode often uses specific PID (0x0001, 0x0003, or 0x0004)
@@ -2808,12 +2809,13 @@ pub fn mtk_detect_emergency_mode() -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let mut emergency_devices = Vec::new();
 
-    for d in devices.iter().filter(|d| d.vid == MTK_VID) {
+    for d in devices.iter().filter(|d| is_mtk_vid(d.vid)) {
         let (stage, _) = boot_stage_for(d.pid);
-        // Emergency mode PIDs: 0x0003 (BROM), 0x2000 (preloader) — plus
-        // 0x0001/0x0002 variants on some boards.
+        // Emergency mode PIDs: 0x0003 (BROM), 0x2000/0x2001 (preloader) — plus
+        // 0x0001/0x0002 full-access variants on some boards.
         // Some devices show 0x0001, 0x0002 in emergency mode
-        let is_emergency = matches!(d.pid, 0x2000 | 0x0001 | 0x0002 | 0x0003);
+        let is_emergency = crate::mtk::is_mtk_flashing_stage(d.pid)
+            || matches!(d.pid, 0x0001 | 0x0002);
 
         if is_emergency
             || d.product.as_ref().map_or(false, |p| {
@@ -2882,7 +2884,7 @@ pub fn mtk_brom_exploit(
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(dev).ok_or("no bulk endpoints")?;
@@ -2999,7 +3001,7 @@ pub fn mtk_dealer_mode(target: &str, da_path: &str) -> Result<String> {
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (iface, in_ep, out_ep) = find_bulk(&dev).ok_or("no bulk endpoints")?;
@@ -3168,7 +3170,7 @@ pub fn mtk_flash_flow(
     let devices = usb::collect_devices(None)?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or("MTK device not found")?;
 
     let (stage, _) = boot_stage_for(dev.pid);

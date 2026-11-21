@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .i18n import tr
+from .startup import stage as _stage
 from .widgets.action_row import ActionRow
 
 
@@ -310,6 +311,7 @@ def build_brand_page(win, key):
         mb.setProperty("researched", researched)
         model_buttons.append(mb)
         lv2.addWidget(mb)
+        _stage()
     lv2.addStretch(1)
     lscroll.setWidget(lhost)
     lv.addWidget(lscroll, 1)
@@ -328,6 +330,7 @@ def build_brand_page(win, key):
     # that used to sit here competed with the split's stretch 1, so the two
     # panes were handed only ~half the page and a dead band was left below.
     outer.addLayout(split, 1)
+    _stage()
 
     win._device_stacks[key] = page
     return page
@@ -360,7 +363,7 @@ def _build_model_page(win, brand, m, back):
         back_btn = QPushButton(tr("← Back"))
         back_btn.setStyleSheet(_btn_ghost())
         back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        back_btn.setFixedWidth(90)
+        back_btn.setMinimumWidth(90)
         back_btn.clicked.connect(lambda: back())
         top.addWidget(back_btn)
     title = _Lbl(f"{brand['label']} · {m['model']}")
@@ -561,6 +564,7 @@ def _build_model_page(win, brand, m, back):
         for act_key, sub_label, glyph in sub_actions:
             cl.addWidget(_row(act_key, sub_label, glyph, card))
         v.addWidget(card)
+        _stage()
 
     # Flash is special: only routes to the SPD/MTK tab for firmware work.
     # We DO NOT execute flash here; we just open the tab and instruct the user.
@@ -883,6 +887,7 @@ _ENGINE_CHIPS = [
     ("apple", "Apple", "🍎", "dev_apple"),
     ("motorola", "Motorola", "📱", "dev_motorola"),
     ("kirin", "Kirin", "🐉", None),
+    ("rockchip", "Rockchip", "🌐", None),
 ]
 
 

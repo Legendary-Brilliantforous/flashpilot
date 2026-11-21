@@ -294,7 +294,7 @@ pub fn unified_flash(target: &str, image: &str) -> Result<String> {
     let vid = u16::from_str_radix(vid_str, 16).unwrap_or(0);
     match vid {
         0x04e8 => Ok(format!("{{\"chip\":\"samsung\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use odin-flash\"}}")),
-        0x0e8d => Ok(format!("{{\"chip\":\"mtk\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use mtk-flash-part\"}}")),
+        vid if crate::mtk::is_mtk_vid(vid) => Ok(format!("{{\"chip\":\"mtk\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use mtk-flash-part\"}}")),
         0x05c6 | 0x9008 => Ok(format!("{{\"chip\":\"qualcomm\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use qcom-flash-one\"}}")),
         0x1782 => Ok(format!("{{\"chip\":\"spd\",\"target\":\"{target}\",\"image\":\"{image}\",\"hint\":\"use spd-flash\"}}")),
         _ => Err(BridgeError::InvalidArgument(format!("unknown VID {vid:04x} for unified flash"))),
@@ -344,7 +344,7 @@ pub fn ai_fingerprint(target: &str) -> Result<String> {
     if let Some((d, score)) = best {
         let chip = match d.vid {
             0x04e8 => "samsung",
-            0x0e8d => "mtk",
+            vid if crate::mtk::is_mtk_vid(vid) => "mtk",
             0x05c6 => "qualcomm",
             0x1782 => "spd",
             _ => "unknown",

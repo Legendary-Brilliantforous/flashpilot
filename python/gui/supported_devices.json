@@ -10034,6 +10034,169 @@
           "codes": "Tommy3 Plus"
         }
       ]
+    },
+    {
+      "key": "rockchip",
+      "label": "Rockchip",
+      "icon": "🌐",
+      "models": [
+        {
+          "model": "RK2818",
+          "chip": "RK2818",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK2918A",
+          "chip": "RK2918A",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3026",
+          "chip": "RK3026",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3066",
+          "chip": "RK3066",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3288",
+          "chip": "RK3288",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3528",
+          "chip": "RK3528",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3562",
+          "chip": "RK3562",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3566",
+          "chip": "RK3566",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3568",
+          "chip": "RK3568",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3576",
+          "chip": "RK3576",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3588",
+          "chip": "RK3588",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3580",
+          "chip": "RK3580",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        },
+        {
+          "model": "RK3399",
+          "chip": "RK3399",
+          "vid": "2207",
+          "engine": "rockchip",
+          "status": "planned",
+          "actions": [
+            "info",
+            "flash"
+          ],
+          "notes": "Rockchip fastboot mode (U-Boot gadget; `fastboot devices` shows 2207:<pid>). Planned: readback/info via the `fastboot` path — verify VID/PID and speeds on hardware; status flips to 'researched' only after a real device dump."
+        }
+      ]
     }
   ]
 }

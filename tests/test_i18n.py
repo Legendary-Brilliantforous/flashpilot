@@ -496,3 +496,113 @@ def test_install_strict_mode_reports_a_missing_catalog(tmp_path, monkeypatch):
     monkeypatch.setenv(i18n.STRICT_ENV, "1")
     with pytest.raises(FileNotFoundError):
         i18n.install(app, "fr")
+
+
+def test_set_language_switches_and_restores_english(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.delenv(i18n.CATALOG_ENV, raising=False)
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        assert i18n.set_language(app, "fr") == "fr"
+        assert i18n.current_language() == "fr"
+        assert i18n.tr("Interface language") == "Langue de l'interface"
+
+        assert i18n.set_language(app, "en") == "en"
+        assert i18n.current_language() == "en"
+        assert i18n.tr("Interface language") == "Interface language"
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))
+
+
+def test_set_language_replaces_the_previous_translator(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.delenv(i18n.CATALOG_ENV, raising=False)
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        assert i18n.set_language(app, "fr") == "fr"
+        assert i18n.set_language(app, "de") == "de"
+        assert i18n.tr("Interface language") == "Oberflächensprache"
+        assert i18n.tr("Flash Firmware") == "Firmware flashen"
+        assert len(i18n._INSTALLED) == 1
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))
+
+
+def test_current_language_tracks_the_active_code(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.delenv(i18n.CATALOG_ENV, raising=False)
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        translator = i18n.install(app, "ar")
+        assert translator is not None
+        assert i18n.current_language() == "ar"
+
+        assert i18n.install(app, "en") is None
+        assert i18n.current_language() == "en"
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))
+
+
+def test_set_language_missing_catalog_falls_back_to_english(tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.setenv(i18n.CATALOG_ENV, str(tmp_path))
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        assert i18n.set_language(app, "fr") == "en"
+        assert i18n.current_language() == "en"
+        assert not i18n._INSTALLED
+        assert i18n.tr("Interface language") == "Interface language"
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))
+
+
+def test_reset_for_tests_removes_the_translator_from_the_app(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.delenv(i18n.CATALOG_ENV, raising=False)
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        translator = i18n.install(app, "fr")
+        assert translator is not None
+        i18n.reset_for_tests()
+        assert i18n.tr("Interface language") == "Interface language"
+        assert i18n.current_language() == "en"
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))
+
+
+def test_set_language_applies_rtl_for_arabic(monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+
+    monkeypatch.delenv(i18n.CATALOG_ENV, raising=False)
+    monkeypatch.delenv(i18n.STRICT_ENV, raising=False)
+    app = QApplication.instance() or QApplication([])
+    i18n.reset_for_tests()
+    try:
+        assert i18n.set_language(app, "ar") == "ar"
+        assert app.layoutDirection() == i18n.layout_direction("ar")
+
+        assert i18n.set_language(app, "en") == "en"
+        assert app.layoutDirection() == i18n.layout_direction("en")
+    finally:
+        i18n.reset_for_tests()
+        app.setLayoutDirection(i18n.layout_direction("en"))

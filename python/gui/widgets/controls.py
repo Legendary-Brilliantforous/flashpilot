@@ -16,6 +16,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QFontMetricsF,
     QLinearGradient,
     QPainter,
@@ -29,9 +30,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionButton,
     QStyleOptionViewItem,
+    QStylePainter,
     QWidget,
 )
 
@@ -300,6 +304,51 @@ class DragBar(QWidget):
 
     def mouseReleaseEvent(self, e):
         self._offset = None
+
+class ElidedButton(QPushButton):
+    """A push button whose label ellipsises instead of widening its parent.
+
+    ``QPushButton`` reports its full text width as ``minimumSizeHint``, so a
+    long translated label (``Copy Device Info`` -> ``Копировать информацию об
+    устройстве``) widened a fixed-width column and pushed the page behind a
+    horizontal scrollbar. This button reports a zero-width minimum, caps its
+    preferred hint and paints the elided text over the normally styled button,
+    so any QSS (``_btn_ghost()`` and friends) still draws the frame.
+    """
+
+    _MAX_HINT = 240
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A QPushButton's default size policy is Minimum, which makes the
+        # layout treat ``sizeHint`` (the full label width) as the minimum and
+        # ignore ``minimumSizeHint``. Ignored lets the button shrink; the
+        # reported hint below still keeps it from asking for more than 240px.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt override)
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self):  # noqa: N802 (Qt override)
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), self._MAX_HINT), hint.height())
+
+    def paintEvent(self, event):  # noqa: N802 (Qt override)
+        painter = QStylePainter(self)
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        text = option.text
+        option.text = ""
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        rect = self.style().subElementRect(
+            QStyle.SubElement.SE_PushButtonContents, option, self
+        )
+        metrics = QFontMetrics(self.font())
+        elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight,
+                                    max(0, rect.width()))
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), elided)
+
 
 class _SettingsCatButton(QPushButton):
     """Premium Windows-11 style settings category button with enhanced gradients and effects."""

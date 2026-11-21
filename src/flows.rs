@@ -1766,42 +1766,313 @@ fn authorized_adb_serial_or_none(
     wait_authorized_adb_result(serial_want, timeout, out).map(Some)
 }
 
-/// Run one `adb shell` step over the native transport. Returns true only when
-/// the command actually succeeded (native or host-adb fallback). A failure is
-/// logged as `ERROR: ...`; callers must aggregate it instead of claiming
-/// success.
-pub(crate) fn adb_step(serial: &str, cmd: &str, timeout: Duration, out: &mut Vec<String>) -> bool {
+/// Run one `adb shell` step over the native transport, returning the command's
+/// output. The host-`adb` fallback is used when the native transport is busy,
+/// preserving the behaviour of `adb_step`.
+/// Android's `shell:CMD` v1 transport carries no exit code, so shell commands
+/// echo `$?` after themselves through this marker; the caller strips it before
+/// showing output. Host `adb shell` also propagates the remote exit status, so
+/// either path can be checked the same way.
+const ADB_EXIT_MARKER: &str = "__FLASHPILOT_EXIT__";
+
+/// Split the trailing exit-status marker from command output.
+fn split_exit_marker(text: &str) -> (String, Option<i32>) {
+    let mut code = None;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        match line.trim().strip_prefix(ADB_EXIT_MARKER) {
+            Some(rest) => code = rest.trim().parse::<i32>().ok(),
+            None => kept.push(line),
+        }
+    }
+    (kept.join("\n"), code)
+}
+
+/// Run a shell command, retrying through the host `adb` binary when the native
+/// transport is busy (the system adb server or another process holds the
+/// interface). Writes and FRP read-backs share this so they fall back alike.
+fn adb_shell_text(serial: &str, timeout_ms: u64, cmd: &str) -> Result<String> {
+    match adb::shell_cli(serial, timeout_ms, &[cmd.to_string()]) {
+        Ok(text) => Ok(text),
+        Err(e) if e.to_string().to_lowercase().contains("busy") => {
+            adb::shell_via_host(serial, timeout_ms, cmd)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn adb_step_detail(
+    serial: &str,
+    cmd: &str,
+    timeout: Duration,
+    out: &mut Vec<String>,
+) -> Result<String> {
     out.push(format!("  > adb shell {cmd}"));
     let timeout_ms = timeout.as_millis() as u64;
-    match adb::shell_cli(serial, timeout_ms, &[cmd.to_string()]) {
-        Ok(text) => {
+    // Append the exit marker so a remote rejection is detected even when the
+    // command prints an error message to stdout (shell v1 has no status).
+    let probed = format!("{cmd}; echo {ADB_EXIT_MARKER}$?");
+    match adb_shell_text(serial, timeout_ms, &probed) {
+        Ok(raw) => {
+            let (text, code) = split_exit_marker(&raw);
             if !text.trim().is_empty() {
                 let first = text.lines().next().unwrap_or("");
                 out.push(format!("      {}", &first[..first.len().min(120)]));
             }
-            true
+            match code {
+                Some(0) | None => Ok(text),
+                Some(c) => {
+                    let detail = if text.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", text.trim())
+                    };
+                    out.push(format!("      ERROR: exit {c}{detail}"));
+                    Err(BridgeError::Io(format!("adb shell exit {c}{detail}")))
+                }
+            }
         }
         Err(e) => {
             let err = e.to_string();
             if err.to_lowercase().contains("busy") {
                 out.push("      native busy; trying host adb...".to_string());
-                match adb::shell_via_host(serial, timeout_ms, cmd) {
-                    Ok(text) => {
-                        if !text.trim().is_empty() {
-                            let first = text.lines().next().unwrap_or("");
-                            out.push(format!("      {}", &first[..first.len().min(120)]));
-                        }
-                        true
-                    }
-                    Err(e2) => {
-                        out.push(format!("      ERROR: {e2}"));
-                        false
-                    }
-                }
-            } else {
-                out.push(format!("      ERROR: {e}"));
-                false
             }
+            out.push(format!("      ERROR: {e}"));
+            Err(e)
+        }
+    }
+}
+
+/// Boolean wrapper for callers that only need pass/fail.
+pub(crate) fn adb_step(serial: &str, cmd: &str, timeout: Duration, out: &mut Vec<String>) -> bool {
+    adb_step_detail(serial, cmd, timeout, out).is_ok()
+}
+
+/// `adb_frp` steps: `(label, command, required)`.
+///
+/// The three `settings put` writes are what gate the setup wizard and FRP.
+/// Disabling a wizard package or starting HOME is clean-up: on many builds the
+/// package is absent or already disabled, or the screen is locked, so those
+/// commands return non-zero without meaning the clear failed.
+const FRP_STEPS: &[(&str, &str, bool)] = &[
+    (
+        "mark setup wizard run",
+        "settings put global setup_wizard_has_run 1",
+        true,
+    ),
+    (
+        "mark user setup complete",
+        "settings put secure user_setup_complete 1",
+        true,
+    ),
+    (
+        "mark device provisioned",
+        "settings put global device_provisioned 1",
+        true,
+    ),
+    (
+        "allow non-market apps",
+        "settings put secure install_non_market_apps 1",
+        false,
+    ),
+    (
+        "disable Google setup wizard",
+        "pm disable-user --user 0 com.google.android.setupwizard",
+        false,
+    ),
+    (
+        "disable Samsung setup wizard",
+        "pm disable-user --user 0 com.sec.android.app.SecSetupWizard",
+        false,
+    ),
+    (
+        "back to home",
+        "am start -c android.intent.category.HOME -a android.intent.action.MAIN",
+        false,
+    ),
+];
+
+/// Read-backs that prove the FRP-gating flags are set: `(key, command,
+/// expected value)`. A successful clear requires every one to answer with its
+/// expected value — no partial credit.
+const FRP_CHECKS: &[(&str, &str, &str)] = &[
+    (
+        "setup_wizard_has_run",
+        "settings get global setup_wizard_has_run",
+        "1",
+    ),
+    (
+        "user_setup_complete",
+        "settings get secure user_setup_complete",
+        "1",
+    ),
+    (
+        "device_provisioned",
+        "settings get global device_provisioned",
+        "1",
+    ),
+];
+
+/// Motorola adds its own FRP flags: `secure frp` must read `0` and
+/// `secure frp_done` must read `1`. They are verified together with the
+/// generic three so a Moto-specific flag can never stay uncleared while the
+/// flow reports success.
+const MOTO_FRP_CHECKS: &[(&str, &str, &str)] = &[
+    (
+        "setup_wizard_has_run",
+        "settings get global setup_wizard_has_run",
+        "1",
+    ),
+    (
+        "user_setup_complete",
+        "settings get secure user_setup_complete",
+        "1",
+    ),
+    (
+        "device_provisioned",
+        "settings get global device_provisioned",
+        "1",
+    ),
+    ("frp", "settings get secure frp", "0"),
+    ("frp_done", "settings get secure frp_done", "1"),
+];
+
+/// Decide whether an `adb_frp` run actually cleared FRP.
+///
+/// Success is decided by what the phone reports, not by the write commands'
+/// exit codes: a write can return non-zero and still apply, and the optional
+/// clean-up commands fail harmlessly on builds that lack the package.
+///
+/// `readbacks` holds one entry per required check: `Some(value)` when the phone
+/// answered, `None` when the read itself failed. Every check must answer with
+/// its expected value — a flag that could not be read is *unverified*, and an
+/// unverified clear is never reported as success.
+pub(crate) fn frp_clear_verdict(
+    required_failed: &[&str],
+    readbacks: &[(&str, Option<String>, &str)],
+) -> std::result::Result<(), String> {
+    let mut wrong = Vec::new();
+    let mut unverified = Vec::new();
+    for (key, value, expected) in readbacks {
+        match value.as_deref().map(str::trim) {
+            Some(v) if v == *expected => {}
+            Some(other) => wrong.push(format!(
+                "{key}={}",
+                if other.is_empty() { "<empty>" } else { other }
+            )),
+            None => unverified.push(*key),
+        }
+    }
+    if wrong.is_empty() && unverified.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::new();
+    if !wrong.is_empty() {
+        message.push_str(&format!(
+            "the phone did not accept these FRP flags: {}",
+            wrong.join(", ")
+        ));
+    }
+    if !unverified.is_empty() {
+        if !message.is_empty() {
+            message.push_str("; ");
+        }
+        message.push_str(&format!(
+            "the phone could not be read back for {} so FRP is not verified",
+            unverified.join(", ")
+        ));
+        if !required_failed.is_empty() {
+            message.push_str(&format!(
+                "; required write(s) also failed: {}",
+                required_failed.join(", ")
+            ));
+        }
+    }
+    Err(message)
+}
+
+/// Read the FRP-gating flags back from the phone.
+///
+/// `Some(value)` means the phone answered (whatever the value), `None` means
+/// the read itself failed — unverified, and therefore a failed clear. Reads
+/// retry through host ADB when the native transport is busy, exactly like
+/// the writes in `adb_step_detail`.
+fn frp_readbacks(
+    serial: &str,
+    out: &mut Vec<String>,
+    checks: &[(&'static str, &'static str, &'static str)],
+) -> Vec<(&'static str, Option<String>, &'static str)> {
+    let mut readbacks: Vec<(&'static str, Option<String>, &'static str)> =
+        Vec::with_capacity(checks.len());
+    for &(key, cmd, expected) in checks {
+        match adb_shell_text(serial, 10_000, cmd) {
+            Ok(text) => {
+                let value = text.trim().to_string();
+                let shown = if value.is_empty() {
+                    "<empty>"
+                } else {
+                    value.as_str()
+                };
+                out.push(format!("  verify {key}: {shown} (want {expected})"));
+                readbacks.push((key, Some(value), expected));
+            }
+            Err(e) => {
+                out.push(format!("  verify {key}: could not read ({e})"));
+                readbacks.push((key, None, expected));
+            }
+        }
+    }
+    readbacks
+}
+
+/// Print the honest outcome of an ADB FRP attempt and return the flow result.
+///
+/// Shared by `adb_frp` and `moto_frp_adb`: both clear FRP by the same flags,
+/// so both decide success the same way and word it the same way.
+fn frp_report(
+    out: &mut Vec<String>,
+    required_failed: &[&str],
+    optional_skipped: &[&str],
+    readbacks: &[(&'static str, Option<String>, &'static str)],
+    reboot_hint: &str,
+) -> Result<()> {
+    match frp_clear_verdict(required_failed, readbacks) {
+        Ok(()) => {
+            // Ok() means every required flag answered with its expected value.
+            let confirmed: Vec<String> = readbacks
+                .iter()
+                .map(|(key, _, expected)| format!("{key}={expected}"))
+                .collect();
+            out.push(format!(
+                "Done. Verified on the phone: {}.",
+                confirmed.join(", ")
+            ));
+            if !optional_skipped.is_empty() {
+                out.push(format!(
+                    "  Note: {} optional clean-up step(s) skipped ({}). \
+                     The flags that gate FRP above are set.",
+                    optional_skipped.len(),
+                    optional_skipped.join(", ")
+                ));
+            }
+            out.push(reboot_hint.to_string());
+            Ok(())
+        }
+        Err(reason) => {
+            out.push(format!("[error] FRP is NOT cleared: {reason}."));
+            if !required_failed.is_empty() {
+                out.push(format!(
+                    "  required write(s) that did not succeed: {}.",
+                    required_failed.join(", ")
+                ));
+            }
+            out.push(
+                "  Re-run once the phone is authorized and unlocked; nothing was lost."
+                    .to_string(),
+            );
+            Err(BridgeError::Io(format!(
+                "ADB FRP did not take effect: {reason}"
+            )))
         }
     }
 }
@@ -1812,57 +2083,31 @@ pub fn flow_adb_frp(serial_want: &str, out: &mut Vec<String>) -> Result<()> {
     out.push("PHONE: USB debugging must be on and this PC authorized".to_string());
     out.push("  (plug in, tap 'Always allow' on the 'Allow USB debugging' dialog).".to_string());
     let serial = wait_authorized_adb_result(serial_want, Duration::from_secs(30), out)?;
-    let steps: &[(&str, &str)] = &[
-        (
-            "mark setup wizard run",
-            "settings put global setup_wizard_has_run 1",
-        ),
-        (
-            "mark user setup complete",
-            "settings put secure user_setup_complete 1",
-        ),
-        (
-            "mark device provisioned",
-            "settings put global device_provisioned 1",
-        ),
-        (
-            "allow non-market apps",
-            "settings put secure install_non_market_apps 1",
-        ),
-        (
-            "disable Google setup wizard",
-            "pm disable-user --user 0 com.google.android.setupwizard",
-        ),
-        (
-            "disable Samsung setup wizard",
-            "pm disable-user --user 0 com.sec.android.app.SecSetupWizard",
-        ),
-        (
-            "back to home",
-            "am start -c android.intent.category.HOME -a android.intent.action.MAIN",
-        ),
-    ];
-    let mut failed = 0usize;
-    for (_, cmd) in steps {
-        if !adb_step(&serial, cmd, Duration::from_secs(10), out) {
-            failed += 1;
+    out.push("  Writing the flags that gate FRP ...".to_string());
+
+    let mut required_failed: Vec<&str> = Vec::new();
+    let mut optional_skipped: Vec<&str> = Vec::new();
+    for &(label, cmd, required) in FRP_STEPS {
+        if adb_step_detail(&serial, cmd, Duration::from_secs(10), out).is_err() {
+            if required {
+                required_failed.push(label);
+            } else {
+                optional_skipped.push(label);
+                out.push(format!("      note: skipped (optional): {label}"));
+            }
         }
         thread::sleep(Duration::from_millis(1200));
     }
-    if failed > 0 {
-        out.push(format!(
-            "FRP is NOT fully cleared: {failed} of {} ADB step(s) failed (see ERROR lines above).",
-            steps.len()
-        ));
-        return Err(BridgeError::Io(format!(
-            "{failed} ADB FRP step(s) failed; re-run after fixing ADB authorization"
-        )));
-    }
-    out.push(
-        "Done. Reboot the phone (adb reboot) - it should go straight to the launcher, FRP gone."
-            .to_string(),
-    );
-    Ok(())
+
+    out.push("  Checking the flags on the phone ...".to_string());
+    let readbacks = frp_readbacks(&serial, out, FRP_CHECKS);
+    frp_report(
+        out,
+        required_failed.as_slice(),
+        optional_skipped.as_slice(),
+        readbacks.as_slice(),
+        "Reboot the phone (adb reboot) - it should go straight to the launcher.",
+    )
 }
 
 /// `setup_wizard` — classic ADB bypass for older Samsung setups + verify.
@@ -3098,7 +3343,10 @@ pub fn flow_download_mode_info(target: &str, out: &mut Vec<String>) -> Result<()
 pub fn flow_mtk_download_info(out: &mut Vec<String>) -> Result<()> {
     out.push("MEDIATEK DOWNLOAD MODE (A05 / A06 family)".to_string());
     let devices = crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
-    let mtk: Vec<_> = devices.iter().filter(|d| d.vid == 0x0E8D).collect();
+    let mtk: Vec<_> = devices
+        .iter()
+        .filter(|d| crate::mtk::is_mtk_vid(d.vid))
+        .collect();
     if mtk.is_empty() {
         out.push("  no MediaTek device on the bus.".to_string());
         return Ok(());
@@ -3164,52 +3412,79 @@ pub fn flow_qcom_detect_info(out: &mut Vec<String>) -> Result<()> {
 /// Shared Motorola ADB FRP wipe steps (settings flags + persisted stores +
 /// setup-wizard disable). Used by `moto_frp_adb` and the EDL staged flow —
 /// one definition so the two paths can never drift apart.
-pub(crate) fn moto_adb_frp_wipe(serial: &str, out: &mut Vec<String>) -> usize {
-    let steps: &[(&str, &str)] = &[
-        ("zero FRP secure flag", "settings put secure frp 0"),
-        ("mark frp done", "settings put secure frp_done 1"),
-        (
-            "mark user setup complete",
-            "settings put secure user_setup_complete 1",
-        ),
-        (
-            "mark device provisioned",
-            "settings put global device_provisioned 1",
-        ),
-        (
-            "mark setup wizard run",
-            "settings put global setup_wizard_has_run 1",
-        ),
-        ("persisted FRP store", "rm -rf /data/system/frp"),
-        (
-            "persisted accounts (ce)",
-            "rm -rf /data/system/accounts_ce.db",
-        ),
-        (
-            "persisted accounts (de)",
-            "rm -rf /data/system/accounts_de.db",
-        ),
-        (
-            "disable Google setup wizard",
-            "pm disable-user --user 0 com.google.android.setupwizard",
-        ),
-        (
-            "disable Moto setup wizard",
-            "pm disable-user --user 0 com.motorola.setupwizard",
-        ),
-        (
-            "back to home",
-            "am start -c android.intent.category.HOME -a android.intent.action.MAIN",
-        ),
-    ];
-    let mut failed = 0usize;
-    for (_, cmd) in steps {
+/// `moto_frp_adb` steps: `(label, command, required)`.
+///
+/// Only the settings writes that gate FRP are required. Zeroing the (often
+/// absent) `secure frp` flag, deleting `/data/system` files (root-only),
+/// disabling wizard packages and starting HOME can all fail on an unrooted or
+/// already-provisioned phone without meaning the clear failed.
+pub(crate) const MOTO_FRP_STEPS: &[(&str, &str, bool)] = &[
+    ("zero FRP secure flag", "settings put secure frp 0", true),
+    ("mark frp done", "settings put secure frp_done 1", true),
+    (
+        "mark user setup complete",
+        "settings put secure user_setup_complete 1",
+        true,
+    ),
+    (
+        "mark device provisioned",
+        "settings put global device_provisioned 1",
+        true,
+    ),
+    (
+        "mark setup wizard run",
+        "settings put global setup_wizard_has_run 1",
+        true,
+    ),
+    ("persisted FRP store", "rm -rf /data/system/frp", false),
+    (
+        "persisted accounts (ce)",
+        "rm -rf /data/system/accounts_ce.db",
+        false,
+    ),
+    (
+        "persisted accounts (de)",
+        "rm -rf /data/system/accounts_de.db",
+        false,
+    ),
+    (
+        "disable Google setup wizard",
+        "pm disable-user --user 0 com.google.android.setupwizard",
+        false,
+    ),
+    (
+        "disable Moto setup wizard",
+        "pm disable-user --user 0 com.motorola.setupwizard",
+        false,
+    ),
+    (
+        "back to home",
+        "am start -c android.intent.category.HOME -a android.intent.action.MAIN",
+        false,
+    ),
+];
+
+/// Run the Motorola FRP flag writes. Returns the labels of the *required*
+/// writes that failed and of the optional clean-up steps that were skipped;
+/// optional failures never decide the outcome.
+pub(crate) fn moto_adb_frp_wipe(
+    serial: &str,
+    out: &mut Vec<String>,
+) -> (Vec<&'static str>, Vec<&'static str>) {
+    let mut required_failed: Vec<&'static str> = Vec::new();
+    let mut optional_skipped: Vec<&'static str> = Vec::new();
+    for &(label, cmd, required) in MOTO_FRP_STEPS {
         if !adb_step(serial, cmd, Duration::from_secs(30), out) {
-            failed += 1;
+            if required {
+                required_failed.push(label);
+            } else {
+                optional_skipped.push(label);
+                out.push(format!("      note: skipped (optional): {label}"));
+            }
         }
         thread::sleep(Duration::from_millis(1000));
     }
-    failed
+    (required_failed, optional_skipped)
 }
 
 pub fn flow_moto_frp_adb(serial_want: &str, out: &mut Vec<String>) -> Result<()> {
@@ -3217,16 +3492,29 @@ pub fn flow_moto_frp_adb(serial_want: &str, out: &mut Vec<String>) -> Result<()>
     out.push("  Requires an AUTHORIZED ADB shell. USB debugging must be on and".to_string());
     out.push("  this PC allowed.".to_string());
     let serial = wait_authorized_adb_result(serial_want, Duration::from_secs(60), out)?;
-    let failed = moto_adb_frp_wipe(&serial, out);
-    if failed > 0 {
+    let (required_failed, optional_skipped) = moto_adb_frp_wipe(&serial, out);
+    out.push("  Checking the FRP flags on the phone ...".to_string());
+    let readbacks = frp_readbacks(&serial, out, MOTO_FRP_CHECKS);
+    let report = frp_report(
+        out,
+        required_failed.as_slice(),
+        optional_skipped.as_slice(),
+        readbacks.as_slice(),
+        "Reboot the phone - it should boot past FRP as a fresh device.",
+    );
+    // Moto-specific flags are required: a failed write can never be reported
+    // as a successful clear, even if the generic flags happen to read back.
+    report?;
+    if !required_failed.is_empty() {
         out.push(format!(
-            "FRP is NOT fully cleared: {failed} ADB step(s) failed (see ERROR lines above)."
+            "[error] Moto FRP required write(s) failed: {}.",
+            required_failed.join(", ")
         ));
         return Err(BridgeError::Io(format!(
-            "{failed} Motorola FRP ADB step(s) failed"
+            "Moto ADB FRP required write(s) failed: {}",
+            required_failed.join(", ")
         )));
     }
-    out.push("Done. Reboot the phone - it should boot past FRP as a fresh device.".to_string());
     Ok(())
 }
 
@@ -3871,7 +4159,7 @@ pub fn flow_mtk_verify(
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let mtk: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x0E8D && (d.pid == 0x0003 || d.pid == 0x2000))
+            .filter(|d| crate::mtk::is_mtk_vid(d.vid) && crate::mtk::is_mtk_flashing_stage(d.pid))
             .collect();
         if mtk.is_empty() {
             out.push("  no MediaTek device in BROM/preloader on the bus.".to_string());
@@ -3970,7 +4258,10 @@ pub fn flow_mtk_crash_brom(target: &str, out: &mut Vec<String>) -> Result<()> {
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let pre: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x0E8D && d.pid == 0x2000)
+            .filter(|d| {
+                crate::mtk::is_mtk_vid(d.vid)
+                    && crate::mtk::boot_stage_for(d.pid).0 == "preloader"
+            })
             .collect();
         if pre.is_empty() {
             out.push("  no preloader (0e8d:2000) on the bus - boot the phone with".to_string());
@@ -4026,7 +4317,7 @@ pub fn flow_qcom_verify(target: &str, parts_spec: &str, out: &mut Vec<String>) -
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let edl: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+            .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
             .collect();
         if edl.is_empty() {
             out.push("  no EDL device (05c6:9008) on the bus.".to_string());
@@ -4061,7 +4352,7 @@ pub fn flow_edl_detect(out: &mut Vec<String>) -> Result<()> {
     while Instant::now() < deadline {
         if let Ok(devices) = crate::usb::collect_devices(None) {
             for d in &devices {
-                if d.vid == 0x05C6 && d.pid == 0x9008 {
+                if d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid) {
                     out.push(format!(
                         "  EDL device: {:04x}:{:04x} bus={} addr={}",
                         d.vid, d.pid, d.bus, d.address
@@ -4190,7 +4481,7 @@ pub fn flow_qcn_backup(
             crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
         let edl: Vec<_> = devices
             .iter()
-            .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+            .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
             .collect();
         if edl.is_empty() {
             out.push("  no EDL device (05c6:9008) on the bus - test-point EDL first.".to_string());
@@ -6118,6 +6409,155 @@ mod tests {
     }
 
     #[test]
+    fn adb_frp_flags_are_required_and_cleanup_is_optional() {
+        let required: Vec<&str> = FRP_STEPS
+            .iter()
+            .filter(|(_, _, required)| *required)
+            .map(|(label, _, _)| *label)
+            .collect();
+        assert_eq!(
+            required,
+            vec![
+                "mark setup wizard run",
+                "mark user setup complete",
+                "mark device provisioned",
+            ],
+            "only the settings writes that gate FRP may be required"
+        );
+        for cleanup in [
+            "allow non-market apps",
+            "disable Google setup wizard",
+            "disable Samsung setup wizard",
+            "back to home",
+        ] {
+            assert!(
+                FRP_STEPS
+                    .iter()
+                    .any(|(label, _, required)| *label == cleanup && !*required),
+                "{cleanup} must be optional"
+            );
+        }
+        assert_eq!(FRP_CHECKS.len(), 3);
+    }
+
+    #[test]
+    fn moto_frp_requires_its_specific_flags() {
+        let required: Vec<&str> = MOTO_FRP_STEPS
+            .iter()
+            .filter(|(_, _, required)| *required)
+            .map(|(label, _, _)| *label)
+            .collect();
+        assert_eq!(
+            required,
+            vec![
+                "zero FRP secure flag",
+                "mark frp done",
+                "mark user setup complete",
+                "mark device provisioned",
+                "mark setup wizard run",
+            ],
+            "the settings writes that gate FRP (incl. Moto's frp/frp_done) are required"
+        );
+        for cleanup in [
+            "persisted FRP store",
+            "persisted accounts (ce)",
+            "persisted accounts (de)",
+            "disable Google setup wizard",
+            "disable Moto setup wizard",
+            "back to home",
+        ] {
+            assert!(
+                MOTO_FRP_STEPS
+                    .iter()
+                    .any(|(label, _, required)| *label == cleanup && !*required),
+                "{cleanup} must be optional"
+            );
+        }
+        assert_eq!(MOTO_FRP_CHECKS.len(), 5);
+    }
+
+    #[test]
+    fn exit_marker_is_split_and_stripped() {
+        let (text, code) = split_exit_marker("ok\n__FLASHPILOT_EXIT__0\n");
+        assert_eq!((text.as_str(), code), ("ok", Some(0)));
+        let (text, code) = split_exit_marker("__FLASHPILOT_EXIT__1");
+        assert_eq!((text.as_str(), code), ("", Some(1)));
+        let (text, code) = split_exit_marker("plain output");
+        assert_eq!((text.as_str(), code), ("plain output", None));
+    }
+
+    #[test]
+    fn frp_verdict_ignores_optional_failures_when_flags_are_set() {        // The reported bug: the wizard packages are absent, so pm disable-user
+        // fails, yet every FRP flag reads 1. That is a successful clear.
+        let readbacks = [
+            ("setup_wizard_has_run", Some("1".to_string()), "1"),
+            ("user_setup_complete", Some("1".to_string()), "1"),
+            ("device_provisioned", Some("1".to_string()), "1"),
+        ];
+        assert!(frp_clear_verdict(&[], &readbacks).is_ok());
+        // A required write can also report failure after applying the value.
+        assert!(frp_clear_verdict(&["mark setup wizard run"], &readbacks).is_ok());
+    }
+
+    #[test]
+    fn frp_verdict_rejects_flags_that_did_not_stick() {
+        let readbacks = [
+            ("setup_wizard_has_run", Some("1".to_string()), "1"),
+            ("user_setup_complete", Some("0".to_string()), "1"),
+            ("device_provisioned", Some("null".to_string()), "1"),
+        ];
+        let err = frp_clear_verdict(&[], &readbacks).unwrap_err();
+        assert!(err.contains("user_setup_complete=0"), "{err}");
+        assert!(err.contains("device_provisioned=null"), "{err}");
+    }
+
+    #[test]
+    fn frp_verdict_rejects_an_unverified_readback() {
+        // A single flag reading 1 is not enough: an unreadable required flag
+        // means the clear is unproven, even when the writes reported success.
+        let unreadable = [
+            ("setup_wizard_has_run", Some("1".to_string()), "1"),
+            ("user_setup_complete", None, "1"),
+            ("device_provisioned", Some("1".to_string()), "1"),
+        ];
+        let err = frp_clear_verdict(&[], &unreadable).unwrap_err();
+        assert!(err.contains("user_setup_complete"), "{err}");
+
+        let all_unreadable = [
+            ("setup_wizard_has_run", None, "1"),
+            ("user_setup_complete", None, "1"),
+            ("device_provisioned", None, "1"),
+        ];
+        let err = frp_clear_verdict(&["mark device provisioned"], &all_unreadable).unwrap_err();
+        assert!(err.contains("could not be read back"), "{err}");
+    }
+
+    #[test]
+    fn moto_verdict_requires_frp_zero_and_frp_done_one() {
+        // Moto's own flags have different expected values: frp must be 0,
+        // frp_done must be 1. A 1 in `frp` is a failed clear.
+        let ok = [
+            ("setup_wizard_has_run", Some("1".to_string()), "1"),
+            ("user_setup_complete", Some("1".to_string()), "1"),
+            ("device_provisioned", Some("1".to_string()), "1"),
+            ("frp", Some("0".to_string()), "0"),
+            ("frp_done", Some("1".to_string()), "1"),
+        ];
+        assert!(frp_clear_verdict(&[], &ok).is_ok());
+
+        let still_locked = [
+            ("setup_wizard_has_run", Some("1".to_string()), "1"),
+            ("user_setup_complete", Some("1".to_string()), "1"),
+            ("device_provisioned", Some("1".to_string()), "1"),
+            ("frp", Some("1".to_string()), "0"),
+            ("frp_done", None, "1"),
+        ];
+        let err = frp_clear_verdict(&[], &still_locked).unwrap_err();
+        assert!(err.contains("frp=1"), "{err}");
+        assert!(err.contains("frp_done"), "{err}");
+    }
+
+    #[test]
     fn locked_state_prefers_securestate() {
         let t = "(bootloader) securestate: oem_locked\n(bootloader) unlocked: no\n";
         assert_eq!(locked_state(t), "oem_locked");
@@ -6683,13 +7123,13 @@ fn wait_mtk_brom(timeout: Duration, out: &mut Vec<String>) -> Option<(String, St
     while Instant::now() < deadline {
         if let Ok(devices) = crate::usb::collect_devices(None) {
             for d in &devices {
-                if d.vid == 0x0E8D {
-                    if d.pid == 0x0003 {
+                if crate::mtk::is_mtk_vid(d.vid) {
+                    if crate::mtk::boot_stage_for(d.pid).0 == "brom" {
                         let t = format!("{:04x}:{:04x}@{}:{}", d.vid, d.pid, d.bus, d.address);
                         out.push(format!("  caught BROM: {t}"));
                         return Some((t, "brom".to_string()));
                     }
-                    if d.pid == 0x2000 {
+                    if crate::mtk::boot_stage_for(d.pid).0 == "preloader" {
                         let t = format!("{:04x}:{:04x}@{}:{}", d.vid, d.pid, d.bus, d.address);
                         out.push(format!(
                             "  caught preloader: {t} (crashing to held BROM ...)"
@@ -6703,7 +7143,9 @@ fn wait_mtk_brom(timeout: Duration, out: &mut Vec<String>) -> Option<(String, St
                                 // Re-enumerate as BROM
                                 if let Ok(devs2) = crate::usb::collect_devices(None) {
                                     for d2 in &devs2 {
-                                        if d2.vid == 0x0E8D && d2.pid == 0x0003 {
+                                        if crate::mtk::is_mtk_vid(d2.vid)
+                                            && crate::mtk::boot_stage_for(d2.pid).0 == "brom"
+                                        {
                                             let t2 = format!(
                                                 "{:04x}:{:04x}@{}:{}",
                                                 d2.vid, d2.pid, d2.bus, d2.address
@@ -6927,7 +7369,7 @@ pub fn flow_edl(action: &str, out: &mut Vec<String>) -> Result<()> {
     let devices = crate::usb::collect_devices(None).map_err(|e| BridgeError::Io(e.to_string()))?;
     let edl: Vec<_> = devices
         .iter()
-        .filter(|d| d.vid == 0x05C6 && d.pid == 0x9008)
+        .filter(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid))
         .collect();
     if edl.is_empty() {
         out.push(
@@ -6937,7 +7379,7 @@ pub fn flow_edl(action: &str, out: &mut Vec<String>) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Ok(devs) = crate::usb::collect_devices(None) {
-                if devs.iter().any(|d| d.vid == 0x05C6 && d.pid == 0x9008) {
+                if devs.iter().any(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid)) {
                     out.push("  EDL device detected!".to_string());
                     break;
                 }
@@ -7195,7 +7637,7 @@ pub fn flow_screen_lock_edl(out: &mut Vec<String>) -> Result<()> {
     out.push(String::new());
     // Check if EDL device is present
     if let Ok(devices) = crate::usb::collect_devices(None) {
-        if devices.iter().any(|d| d.vid == 0x05C6 && d.pid == 0x9008) {
+        if devices.iter().any(|d| d.vid == 0x05C6 && crate::qualcomm::sahara::QCOM_EDL_PIDS.contains(&d.pid)) {
             out.push("  EDL device detected! Use 'edl_frp' to clear FRP (the lock".to_string());
             out.push("  lives in /data which the Firehose wipe clears).".to_string());
             return Ok(());

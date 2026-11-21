@@ -7,35 +7,79 @@ use rusb::{Context, UsbContext};
 
 pub const MTK_VID: u16 = 0x0e8d;
 
-/// MediaTek boot-stage USB PIDs seen on Samsung A05/A06 (Helio G85).
+/// MediaTek vendor IDs: the main `0x0E8D` plus the OEM VIDs under which an MTK
+/// preloader/BROM re-enumerates (Sony `0x0FCE`, LG `0x1004`, OPPO `0x22D9`,
+/// InFocus `0x9BB5`). One list for filtering, mode classification, transport
+/// mapping and capabilities — a bare flashing stage on any of these is still
+/// a MediaTek device, never a generic Android peripheral.
+pub const MTK_OEM_VIDS: &[u16] = &[0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5];
+
+/// True when `vid` is the main MediaTek VID or one of its OEM re-enumeration
+/// VIDs.
+pub fn is_mtk_vid(vid: u16) -> bool {
+    MTK_OEM_VIDS.contains(&vid)
+}
+
+/// MediaTek BootROM held-state PIDs (mtkclient convention: 0x0003).
+pub const MTK_BROM_PIDS: &[u16] = &[0x0003];
+
+/// MediaTek preloader PIDs — the first bootloader stage plus the preloader
+/// USB-VCOM / OEM-variant family that echoes the sync sequence without the
+/// leading wake byte (mtkclient `SYNC_NO_EXTRA_BYTE`).
+pub const MTK_PRELOADER_PIDS: &[u16] = &[
+    0x2000, 0x2001, 0xf200, 0xd1e9, 0xd1e2, 0xd1ec, 0xd1dd,
+];
+
+/// MediaTek Download Agent (DA) PIDs — the flashing stage, plus the
+/// full-partition-access emergency/factory variants seen on some boards.
+pub const MTK_DA_PIDS: &[u16] = &[0x0004, 0x1004, 0x0001, 0x0002];
+
+/// MediaTek normal-boot ADB composites (phone booted to Android — not a
+/// low-level flashing stage; ADB/MTP transports surface via interface class).
+pub const MTK_ADB_COMPOSITE_PIDS: &[u16] = &[0x0a0a, 0x2008, 0x2010, 0x201C];
+
+/// MediaTek boot-stage USB PIDs seen on the download-mode family.
 /// Follows mtkclient convention: 0x0003 = BootROM ("MediaTek USB Port",
 /// held state), 0x2000 = preloader ("MT65xx Preloader", first bootloader
 /// stage), 0x0004 = Download Agent (DA) after the DA handshake.
 pub fn boot_stage_for(pid: u16) -> (&'static str, &'static str) {
-    match pid {
-        0x0003 => (
+    if MTK_BROM_PIDS.contains(&pid) {
+        return (
             "brom",
             "MediaTek BootROM (held state) - the very first code that runs. \
              This is the state used for low-level chip unlock, preloader and \
              partition reads via mtkclient.",
-        ),
-        0x2000 => (
+        );
+    }
+    if MTK_PRELOADER_PIDS.contains(&pid) {
+        return (
             "preloader",
             "MediaTek Preloader - first bootloader stage. It waits for the \
              Download Agent (DA) handshake before flashing anything.",
-        ),
-        0x0004 | 0x1004 => (
+        );
+    }
+    if MTK_DA_PIDS.contains(&pid) {
+        return (
             "da",
             "MediaTek Download Agent (DA) - the flashing stage is already \
              running (e.g. after mtkclient sent the DA).",
-        ),
-        0x0a0a => (
+        );
+    }
+    if MTK_ADB_COMPOSITE_PIDS.contains(&pid) {
+        return (
             "mtk-adb",
             "MediaTek ADB/Android composite - the phone is booted to Android, \
              not in a low-level mode.",
-        ),
-        _ => ("other", "MediaTek USB device (unspecified boot stage)"),
+        );
     }
+    ("other", "MediaTek USB device (unspecified boot stage)")
+}
+
+/// True for low-level MTK flashing stages (BROM / preloader) — the states a
+/// BROM-flashing flow (frp / backup / flash) may act on.
+pub fn is_mtk_flashing_stage(pid: u16) -> bool {
+    let (stage, _) = boot_stage_for(pid);
+    stage == "brom" || stage == "preloader"
 }
 
 /// PIDs for which mtkclient's `run_handshake` starts WITHOUT the extra leading
@@ -628,7 +672,7 @@ pub fn brom_handshake(
         .find(|d| {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
-                desc.vendor_id() == MTK_VID && desc.product_id() == dev.pid
+                desc.vendor_id() == dev.vid && desc.product_id() == dev.pid
             }) && d.bus_number() == dev.bus
                 && d.address() == dev.address
         })
@@ -820,7 +864,7 @@ pub fn read_report(session: &BromSession) -> MtkChip {
 pub fn detect_mtk() -> Result<String> {
     let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for d in devices.iter().filter(|d| d.vid == MTK_VID) {
+    for d in devices.iter().filter(|d| is_mtk_vid(d.vid)) {
         let (stage, stage_note) = boot_stage_for(d.pid);
         let mut info = MtkDeviceInfo {
             bus: d.bus,
@@ -833,7 +877,7 @@ pub fn detect_mtk() -> Result<String> {
             chip: None,
             note: stage_note.to_string(),
         };
-        if d.pid == 0x2000 || d.pid == 0x0003 {
+        if crate::mtk::is_mtk_flashing_stage(d.pid) {
             if let Some((iface, in_ep, out_ep)) = find_bulk(d) {
                 match brom_handshake(d, iface, in_ep, out_ep) {
                     Ok(session) => info.chip = Some(read_report(&session)),
@@ -890,7 +934,7 @@ pub fn mtk_reset_device_cli(target: &str) -> Result<String> {
     let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))?;
     if let Some((iface, in_ep, out_ep)) = find_bulk(dev) {
         let sess = brom_handshake(dev, iface, in_ep, out_ep)?;
@@ -913,10 +957,32 @@ mod tests {
         // 0x2000 = preloader ("MT65xx Preloader").
         assert_eq!(boot_stage_for(0x0003).0, "brom");
         assert_eq!(boot_stage_for(0x2000).0, "preloader");
+        // Preloader USB-VCOM variant + OEM preloader family.
+        assert_eq!(boot_stage_for(0x2001).0, "preloader");
+        assert_eq!(boot_stage_for(0xf200).0, "preloader");
+        assert_eq!(boot_stage_for(0xd1e9).0, "preloader");
+        assert_eq!(boot_stage_for(0xd1e2).0, "preloader");
+        assert_eq!(boot_stage_for(0xd1ec).0, "preloader");
+        assert_eq!(boot_stage_for(0xd1dd).0, "preloader");
         assert_eq!(boot_stage_for(0x0004).0, "da");
         assert_eq!(boot_stage_for(0x1004).0, "da");
         assert_eq!(boot_stage_for(0x0a0a).0, "mtk-adb");
+        assert_eq!(boot_stage_for(0x2008).0, "mtk-adb");
+        assert_eq!(boot_stage_for(0x0001).0, "da");
         assert_eq!(boot_stage_for(0xffff).0, "other");
+    }
+
+    #[test]
+    fn is_mtk_flashing_stage_covers_brom_and_preloader_variants() {
+        // Low-level flashing stages: BROM + every preloader/VCOM variant.
+        assert!(is_mtk_flashing_stage(0x0003));
+        assert!(is_mtk_flashing_stage(0x2000));
+        assert!(is_mtk_flashing_stage(0x2001));
+        assert!(is_mtk_flashing_stage(0xf200));
+        // DA / emergency / normal-boot composites are NOT low-level BROM ops.
+        assert!(!is_mtk_flashing_stage(0x0004));
+        assert!(!is_mtk_flashing_stage(0x0a0a));
+        assert!(!is_mtk_flashing_stage(0xffff));
     }
 
     #[test]

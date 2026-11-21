@@ -109,6 +109,25 @@ chrome, the flow browser rows (label, job header, mode heading) and
 `i18n.tr()`. It catches strings that never reach the translator, and proves
 the layouts survive visibly longer labels.
 
+#### Qt's font-fallback notice
+
+Inter, the UI typeface, covers Latin, Greek and Cyrillic only. When a label
+uses another script — the language picker's native names (`हिन्दी`,
+`العربية`, `日本語`), or a Hindi/Arabic/CJK interface — Qt renders it through
+per-glyph fallback and logs one line per candidate it skipped:
+
+```
+qt.text.font.db: OpenType support missing for "Inter", script 11
+```
+
+`script 11` is Devanagari. The text renders correctly; the line is a
+diagnostic about the fallback, not an error, and it is not actionable.
+`python/gui/qt_logging.py` drops exactly that message and forwards every other
+Qt message unchanged (a real plugin or bridge warning still prints). Set
+`FLASHPILOT_SHOW_FONT_WARNINGS=1` to see the notices again when debugging
+font selection. `tests/test_qt_logging.py` proves the filter end to end in a
+fresh interpreter.
+
 ### Workflow
 
 1. Wrap user-facing text in `self.tr("...")` / `tr("...")` in the GUI code.
@@ -133,7 +152,8 @@ the layouts survive visibly longer labels.
    .venv/bin/pytest tests/test_i18n.py tests/test_i18n_pseudo.py -q
    ```
 
-5. Test the switch in **Settings → Language & region** (applies on restart).
+5. Test the switch in **Settings → Language & region** (applies immediately,
+   no restart needed).
 
 Only run `--prune` when you intend to delete keys that no longer exist in the
 source; it drops them from every catalog.

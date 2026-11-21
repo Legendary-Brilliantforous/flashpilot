@@ -173,6 +173,12 @@ def build_test_window(settings_clear=()):
 
     clear_live_cache()
     window = _qt.FlashPilotWindow()
+    # Production builds deferred pages on first visit; the harness builds them
+    # all so tests see the complete UI (gated buttons, inventory, routing).
+    try:
+        window._ensure_all_pages()
+    except Exception:
+        pass
     with _WINDOWS_LOCK:
         _WINDOWS.append(window)  # module-scope strong ref: Qt must not GC it
     _quiesce_window(window)

@@ -36,6 +36,15 @@ contains `0E8D`, then diff the set on a short poll interval so that a
 
 - A port that is not PID `0x0003` is assumed to be preloader. Any `0E8D` device
   with an unexpected PID is therefore misclassified.
+
+FlashPilot no longer relies on that default alone. The engine now carries the
+full MediaTek stage table in `src/mtk.rs` (`MTK_BROM_PIDS`, `MTK_PRELOADER_PIDS`
+(incl. the USB-VCOM / OEM preloader family), `MTK_DA_PIDS`, `MTK_ADB_COMPOSITE_PIDS`)
+and resolves every low-level flow through `boot_stage_for()` /
+`is_mtk_flashing_stage()` — so known-but-unlisted variants (preloader VCOM
+`0x2001`, OEM preloader family `0xF200`/`0xD1E9`/…, emergency/factory full-access
+`0x0001`/`0x0002`, normal-boot ADB composites) are classified instead of falling
+through to "other".
 - A device must be pinned explicitly when several are attached; there is no
   ambiguity resolution.
 
@@ -239,7 +248,7 @@ must not be mixed.
 
 | Stage | FlashPilot | Location |
 |---|---|---|
-| Discovery | libusb enumeration by VID `0x0e8d`, PID→stage map (`0x0003` brom, `0x2000` preloader, `0x0004/0x1004` DA, `0x0a0a` adb) | `src/mtk.rs:8-42`, `src/mtk.rs:803-837` |
+| Discovery | libusb enumeration by VID `0x0e8d`, PID→stage map (`0x0003` brom, `0x2000`/`0x2001`/preloader-VCOM-family preloader, `0x0004`/`0x1004`/full-access DA, `0x0a0a`/ADB-composites mtk-adb) | `src/mtk.rs:8-42`, `src/mtk.rs:803-837` |
 | Handshake | `a0 0a 50 05` one byte at a time, expects complement echo, 5 retries, extra wake byte only for non-BROM PIDs | `src/mtk.rs:44-52`, `src/mtk.rs:599-681` |
 | Identity | `0xFD` hw code, `0xD8` target config (10 bits), `0xFE` BL ver, `0xFF` BROM ver, `0xFC` hw/sw ver, `0xE1` ME_ID, `0xE7` SOC_ID | `src/mtk.rs:737-801`, `src/mtk_exploit.rs:393-437` |
 | Preloader crash | 2 attempts, both `ldr r0,[pc]; bx r0`: target `0x0`, then `0x0020_0d00` | `src/mtk_exploit.rs:751-824` |
