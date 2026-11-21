@@ -25,10 +25,8 @@ const KNOWN_PHONE_VIDS: &[u16] = &[
 ];
 
 /// MTK vendor IDs: the main 0x0E8D plus the OEM VIDs under which an MTK
-/// preloader/BROM re-enumerates (Sony 0x0FCE, LG 0x1004, OPPO 0x22D9,
-/// InFocus 0x9BB5). A bare stage (no interfaces, no strings) on any of
-/// these is still a phone flashing stage — never dropped.
-const MTK_OEM_VIDS: &[u16] = &[0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5];
+/// preloader/BROM re-enumerates. Defined once in `crate::mtk::MTK_OEM_VIDS`
+/// so filtering, classification and transport mapping cannot drift apart.
 
 /// Generic Android vendor IDs (mirrors `ANDROID_GENERIC_VIDS`)
 const ANDROID_GENERIC_VIDS: &[u16] = &[
@@ -147,7 +145,7 @@ pub fn is_phone(d: &DeviceInfo) -> bool {
 
     // MTK OEM VIDs (plus the main 0x0E8D): a bare preloader/BROM stage
     // (no interfaces, no strings) is still captured.
-    if MTK_OEM_VIDS.contains(&d.vid) {
+    if crate::mtk::is_mtk_vid(d.vid) {
         return true;
     }
 
@@ -260,11 +258,12 @@ pub fn compute_transports(usb: &DeviceInfo, adb_serials: &HashSet<String>) -> Ve
                 transports.push("ADB".to_string());
             }
         }
-    } else if vid == 0x0E8D {
+    } else if crate::mtk::is_mtk_vid(vid) {
         // Stage comes from the MTK PID table (BROM / preloader / DA /
         // mtk-adb), not from a hardcoded pid list — one source of truth in
         // `crate::mtk::boot_stage_for`, which also covers the preloader VCOM
-        // and OEM-variant family.
+        // and OEM-variant family. OEM VIDs (0x0FCE/0x1004/0x22D9/0x9BB5)
+        // are treated exactly like 0x0E8D here.
         let stage = crate::mtk::boot_stage_for(pid).0;
         if stage == "brom" {
             transports.push("MTK BROM".to_string());
@@ -471,6 +470,21 @@ pub fn classify_mode(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String
             }
             "samsung".to_string()
         }
+        vid if vid != crate::mtk::MTK_VID
+            && crate::mtk::is_mtk_vid(vid)
+            && crate::mtk::boot_stage_for(pid).0 != "other" =>
+        {
+            // OEM-VID MediaTek stage (0x0FCE / 0x1004 / 0x22D9 / 0x9BB5):
+            // classify via the same PID table as 0x0E8D, but only claim MTK
+            // when the PID proves a stage — an OEM VID in normal Android mode
+            // must still fall through to the generic ADB/MTP arms below.
+            match crate::mtk::boot_stage_for(pid).0 {
+                "brom" => "mediatek-brom".to_string(),
+                "preloader" => "mediatek-preloader".to_string(),
+                "da" => "mediatek-da".to_string(),
+                _ => "mediatek".to_string(),
+            }
+        }
         0x0E8D => {
             // Stage-aware MTK classification via the single PID table in
             // `crate::mtk::boot_stage_for` (BROM / preloader / DA / mtk-adb).
@@ -609,6 +623,18 @@ mod tests {
         // Normal-boot MTK ADB composites stay coarse mediatek.
         assert_eq!(classify_mode(0x0E8D, 0x0a0a, &[]), "mediatek");
         assert_eq!(classify_mode(0x05C6, 0x9008, &[]), "qualcomm-edl");
+    }
+
+    #[test]
+    fn classify_mode_oem_vid_mtk_stages() {
+        // OEM VIDs classify through the same MTK PID table as 0x0E8D.
+        assert_eq!(classify_mode(0x1004, 0x0003, &[]), "mediatek-brom");
+        assert_eq!(classify_mode(0x0FCE, 0x2000, &[]), "mediatek-preloader");
+        assert_eq!(classify_mode(0x22D9, 0x0004, &[]), "mediatek-da");
+        assert_eq!(classify_mode(0x9BB5, 0x2001, &[]), "mediatek-preloader");
+        // An OEM VID in normal Android mode must not be claimed as MTK:
+        // it falls through to the generic classifier.
+        assert_eq!(classify_mode(0x22D9, 0x1234, &[]), "other");
     }
 
     #[test]
@@ -830,6 +856,35 @@ mod tests {
         assert_eq!(
             compute_transports(&preloader_oem, &serials),
             vec!["MTK".to_string()]
+        );
+    }
+
+    #[test]
+    fn compute_transports_oem_vid_mtk_stage_matches_main_vid() {
+        // An OEM-VID preloader/BROM must get the same MTK transport as the
+        // main 0x0E8D table entry — otherwise the row is listed without the
+        // MTK transport and the flashing UI never lights up.
+        let serials: HashSet<String> = HashSet::new();
+        for vid in [0x0FCE, 0x1004, 0x22D9, 0x9BB5] {
+            let brom = dev(vid, 0x0003, None, vec![]);
+            assert_eq!(
+                compute_transports(&brom, &serials),
+                vec!["MTK BROM".to_string()],
+                "vid {vid:#06x} BROM"
+            );
+            let preloader = dev(vid, 0x2000, None, vec![]);
+            assert_eq!(
+                compute_transports(&preloader, &serials),
+                vec!["MTK".to_string()],
+                "vid {vid:#06x} preloader"
+            );
+        }
+
+        // An OEM VID in normal Android mode stays a generic USB device.
+        let normal = dev(0x22D9, 0x1234, None, vec![]);
+        assert_eq!(
+            compute_transports(&normal, &serials),
+            vec!["USB".to_string()]
         );
     }
 }

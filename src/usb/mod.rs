@@ -40,8 +40,7 @@ pub fn mode_hint(vid: u16, pid: u16, interfaces: &[InterfaceInfo]) -> String {
                 "qualcomm".to_string()
             }
         }
-        0x0e8d => "mediatek".to_string(),
-        0x0fce | 0x1004 | 0x22d9 | 0x9bb5 => "mediatek".to_string(),
+        vid if crate::mtk::is_mtk_vid(vid) => "mediatek".to_string(),
         0x1782 => "spd".to_string(),
         0x05ac => "apple".to_string(),
         0x22b8 => {
@@ -960,6 +959,9 @@ mod tests {
         assert_eq!(mode_hint(0x05ac, 0x1222, &[]), "apple");
         assert_eq!(mode_hint(0x22b8, 0x2e80, &[]), "motorola");
         assert_eq!(mode_hint(0x1004, 0x2000, &[]), "mediatek");
+        assert_eq!(mode_hint(0x22d9, 0x0003, &[]), "mediatek");
+        assert_eq!(mode_hint(0x0fce, 0x2000, &[]), "mediatek");
+        assert_eq!(mode_hint(0x9bb5, 0xf200, &[]), "mediatek");
         // MediaTek BROM / preloader / DA
         assert_eq!(mode_hint(0x0e8d, 0x2000, &[]), "mediatek");
         // Samsung download-mode PIDs

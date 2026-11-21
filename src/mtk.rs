@@ -7,6 +7,19 @@ use rusb::{Context, UsbContext};
 
 pub const MTK_VID: u16 = 0x0e8d;
 
+/// MediaTek vendor IDs: the main `0x0E8D` plus the OEM VIDs under which an MTK
+/// preloader/BROM re-enumerates (Sony `0x0FCE`, LG `0x1004`, OPPO `0x22D9`,
+/// InFocus `0x9BB5`). One list for filtering, mode classification, transport
+/// mapping and capabilities — a bare flashing stage on any of these is still
+/// a MediaTek device, never a generic Android peripheral.
+pub const MTK_OEM_VIDS: &[u16] = &[0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5];
+
+/// True when `vid` is the main MediaTek VID or one of its OEM re-enumeration
+/// VIDs.
+pub fn is_mtk_vid(vid: u16) -> bool {
+    MTK_OEM_VIDS.contains(&vid)
+}
+
 /// MediaTek BootROM held-state PIDs (mtkclient convention: 0x0003).
 pub const MTK_BROM_PIDS: &[u16] = &[0x0003];
 
@@ -659,7 +672,7 @@ pub fn brom_handshake(
         .find(|d| {
             let desc = d.device_descriptor().ok();
             desc.as_ref().map_or(false, |desc| {
-                desc.vendor_id() == MTK_VID && desc.product_id() == dev.pid
+                desc.vendor_id() == dev.vid && desc.product_id() == dev.pid
             }) && d.bus_number() == dev.bus
                 && d.address() == dev.address
         })
@@ -851,7 +864,7 @@ pub fn read_report(session: &BromSession) -> MtkChip {
 pub fn detect_mtk() -> Result<String> {
     let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for d in devices.iter().filter(|d| d.vid == MTK_VID) {
+    for d in devices.iter().filter(|d| is_mtk_vid(d.vid)) {
         let (stage, stage_note) = boot_stage_for(d.pid);
         let mut info = MtkDeviceInfo {
             bus: d.bus,
@@ -921,7 +934,7 @@ pub fn mtk_reset_device_cli(target: &str) -> Result<String> {
     let devices = usb::collect_devices(None).map_err(|e| e.to_string())?;
     let dev = devices
         .iter()
-        .find(|d| d.vid == MTK_VID && format!("{}:{}", d.bus, d.address) == target)
+        .find(|d| is_mtk_vid(d.vid) && format!("{}:{}", d.bus, d.address) == target)
         .ok_or_else(|| BridgeError::InvalidArgument(format!("MTK device {target} not found")))?;
     if let Some((iface, in_ep, out_ep)) = find_bulk(dev) {
         let sess = brom_handshake(dev, iface, in_ep, out_ep)?;

@@ -680,3 +680,35 @@ def test_detect_mode_spd_download_pids_0001_0002_and_4d00():
     d = {"vid": 0x1782, "pid": 0x1234, "bus": 2, "address": 7,
          "interfaces": []}
     assert _spd_mode(d) == "SPREADTRUM DEVICE (normal / other)"
+
+
+def test_detect_mode_mtk_prefix_is_brand_aware():
+    """Chip detection knows the model brand: a TECNO/Samsung/LG MediaTek
+    stage is labelled with its brand, not as a generic MEDIATEK device."""
+    from python.gui.qt_app import _detect_mode
+
+    tecno = {"vid": 0x0E8D, "pid": 0x2000, "bus": 2, "address": 9,
+             "manufacturer": "TECNO", "product": "MT65xx Preloader",
+             "interfaces": []}
+    assert _detect_mode([], [tecno], [], []) == \
+        "TECNO MTK PRELOADER (first bootloader stage)"
+
+    samsung = {"vid": 0x0E8D, "pid": 0x2001, "bus": 2, "address": 9,
+               "manufacturer": "SAMSUNG", "product": "MT65xx Preloader",
+               "interfaces": []}
+    assert _detect_mode([], [samsung], [], []) == \
+        "SAMSUNG MTK PRELOADER (first bootloader stage)"
+
+    # OEM VID BROM (LG 0x1004) names both the chip and the brand.
+    lg = {"vid": 0x1004, "pid": 0x0003, "bus": 2, "address": 9,
+          "manufacturer": "LG Electronics", "product": "",
+          "interfaces": []}
+    assert _detect_mode([], [lg], [], []) == "LG MTK BROM (held state)"
+
+
+def test_spd_mode_is_brand_aware():
+    from python.gui.qt_app import _spd_mode
+
+    d = {"vid": 0x1782, "pid": 0x4D00, "bus": 2, "address": 7,
+         "manufacturer": "itel", "product": "", "interfaces": []}
+    assert _spd_mode(d) == "ITEL SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"

@@ -834,6 +834,42 @@ _ANDROID_GENERIC_VIDS = {0x18D1, 0x0BB4, 0x2717, 0x2A70, 0x12D1, 0x22D9, 0x2AE5}
 _MTK_VIDS = (0x0E8D, 0x0FCE, 0x1004, 0x22D9, 0x9BB5)
 _MOTOROLA_VID = 0x22B8
 
+# Brand tokens derived from USB manufacturer/product strings. Chip detection
+# is brand-aware: a Tecno/Infinix/itel/Samsung MTK stage is reported as such,
+# not as a generic "MEDIATEK" — the same chip has model-specific flashing
+# paths (Samsung Odin vs Transsion ADB/BROM recipes).
+_USB_BRAND_TOKENS = (
+    ("samsung", "SAMSUNG"),
+    ("tecno", "TECNO"),
+    ("infinix", "INFINIX"),
+    ("itel", "ITEL"),
+    ("oppo", "OPPO"),
+    ("vivo", "VIVO"),
+    ("redmi", "REDMI"),
+    ("xiaomi", "XIAOMI"),
+    ("realme", "REALME"),
+    ("oneplus", "ONEPLUS"),
+    ("motorola", "MOTOROLA"),
+    ("nokia", "NOKIA"),
+    ("honor", "HONOR"),
+    ("huawei", "HUAWEI"),
+    ("google", "GOOGLE"),
+    ("lg electronics", "LG"),
+    ("sony", "SONY"),
+)
+
+
+def _usb_brand(d):
+    """Best-effort brand token from a device row's USB strings, or None."""
+    if not isinstance(d, dict):
+        return None
+    text = f"{d.get('manufacturer') or ''} {d.get('product') or ''}".lower()
+    for token, label in _USB_BRAND_TOKENS:
+        if token in text:
+            return label
+    return None
+
+
 
 def _is_apple(d):
     """Apple devices enumerate under VID 0x05ac (iPhone/iPad/iPod)."""
@@ -862,7 +898,7 @@ def _is_generic_android(d):
     if not isinstance(d, dict):
         return False
     vid = d.get("vid", 0)
-    if vid in (0x04E8, 0x05C6, 0x0E8D, 0x1782, _APPLE_VID):
+    if vid in (0x04E8, 0x05C6, 0x1782, _APPLE_VID) or vid in _MTK_VIDS:
         return False
     if _has_adb_iface(d):
         return True
@@ -913,9 +949,11 @@ def _spd_mode(d):
     if d.get("vid") != 0x1782:
         return None
     pid = d.get("pid")
+    brand = _usb_brand(d)
+    prefix = f"{brand} " if brand else ""
     if pid in _SPD_DOWNLOAD_PIDS:
-        return "SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
-    return "SPREADTRUM DEVICE (normal / other)"
+        return f"{prefix}SPD DOWNLOAD MODE (Spreadtrum FDL / BROM)"
+    return f"{prefix}SPREADTRUM DEVICE (normal / other)"
 
 
 _IFACE_CLASS = {
@@ -1103,10 +1141,8 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # low-level modes appear as their own USB vendor, not under 04e8.
     for d in (mtk_devs or []):
         pid = d.get("pid")
-        mfr = (d.get("manufacturer") or "").lower()
-        prod = (d.get("product") or "").lower()
-        is_samsung_mtk = "samsung" in mfr or "samsung" in prod
-        prefix = "SAMSUNG MTK" if is_samsung_mtk else "MEDIATEK"
+        brand = _usb_brand(d)
+        prefix = f"{brand} MTK" if brand else "MEDIATEK"
         # Only flashing-mode PIDs claim the low-level label. Any other PID
         # (e.g. a normal-boot Tecno in PTP/MTP: 0e8d:2008, product string
         # "Android ADB Interface") must fall through to interface-based
@@ -1148,7 +1184,10 @@ def _detect_mode(samsung, mtk_devs=None, adb_devs=None, fastboot=None, edl_devs=
     # interface (vendor-specific modem port): name the vendor + PID
     # instead of a bare OTHER.
     for d in (mtk_devs or []):
-        return f"MEDIATEK MODE (VID 0x0E8D PID 0x{d.get('pid', 0) & 0xFFFF:04X})"
+        brand = _usb_brand(d)
+        prefix = f"{brand} MTK" if brand else "MEDIATEK"
+        return (f"{prefix} MODE (VID 0x{d.get('vid', 0) & 0xFFFF:04X} "
+                f"PID 0x{d.get('pid', 0) & 0xFFFF:04X})")
     return "OTHER MODE"
 
 

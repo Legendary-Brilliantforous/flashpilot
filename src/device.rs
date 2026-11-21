@@ -398,7 +398,7 @@ pub fn detect_capabilities(
                 push_cap(&mut caps, Capability::DeviceInfo);
             }
         }
-        0x0E8D => {
+        vid if crate::mtk::is_mtk_vid(vid) => {
             // Stage-aware MTK capability matrix via the shared PID table in
             // `crate::mtk::boot_stage_for` (BROM / preloader / DA / mtk-adb).
             let stage = crate::mtk::boot_stage_for(t.pid).0;
@@ -982,6 +982,25 @@ mod tests {
         assert!(ids.contains(&"mtk_crash_to_brom"));
         assert!(!ids.contains(&"mtk_brom_flash"));
         assert!(!ids.contains(&"frp_workflow"));
+    }
+
+    #[test]
+    fn mtk_oem_vid_stages_use_the_same_capability_matrix() {
+        // OEM VIDs (Sony/LG/OPPO/InFocus) re-enumerate MTK preloaders and
+        // BROMs. They must expose exactly the same MTK actions as 0x0E8D.
+        for vid in [0x0FCE, 0x1004, 0x22D9, 0x9BB5] {
+            let brom = profile_for(vid, 0x0003, vec![]);
+            let ids = action_ids(&brom);
+            assert!(ids.contains(&"mtk_brom_flash"), "vid {vid:#06x} BROM");
+
+            let preloader = profile_for(vid, 0x2000, vec![]);
+            let ids = action_ids(&preloader);
+            assert!(
+                ids.contains(&"mtk_crash_to_brom"),
+                "vid {vid:#06x} preloader"
+            );
+            assert!(!ids.contains(&"mtk_brom_flash"), "vid {vid:#06x} preloader");
+        }
     }
 
     // -- matrix: Qualcomm / SPD / fastboot ------------------------------------
