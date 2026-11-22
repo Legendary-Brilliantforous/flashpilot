@@ -113,6 +113,7 @@ def test_show_new_version_window_opens(win):
         for ov in win.findChildren(QFrame):
             if ov.objectName() == "centeredOverlay":
                 ov.hide()
+        win._centered_open = False
 
 
 def test_auto_install_switch_default_is_on(win):
@@ -173,6 +174,7 @@ def test_manual_install_prompt_passes_the_tag(win, monkeypatch, tmp_path):
     win._prompt_install_update("9.9.9", str(dest))
     _settle()
 
+    win._centered_open = False
     buttons = [b for b in win.findChildren(QPushButton)
                if b.text() == "Install Now" and b.isVisible()]
     assert buttons, "the Update Downloaded notice has an 'Install Now' button"
