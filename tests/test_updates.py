@@ -14,6 +14,7 @@ Now" prompt:
   switch is on and keeps the old prompt when it is off.
 """
 import os
+import time
 
 import pytest
 from PyQt6.QtWidgets import QApplication
@@ -35,6 +36,7 @@ def win():
 def _settle(rounds=30):
     for _ in range(rounds):
         QApplication.processEvents()
+        time.sleep(0.02)
 
 
 CHANGELOG = """# Changelog
