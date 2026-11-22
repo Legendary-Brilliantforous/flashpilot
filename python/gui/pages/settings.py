@@ -235,6 +235,17 @@ class SettingsPageMixin:
             self._auto_download_cb,
         )
 
+        self._auto_install_cb = self._settings_switch()
+        self._auto_install_cb.setChecked(
+            self.settings.value("auto_install_update", True, type=bool)
+        )
+        self._auto_install_cb.toggled.connect(lambda on: self.settings.setValue("auto_install_update", on))
+        self._settings_row(
+            bl, self.tr("Automatically install updates"),
+            self.tr("Install a downloaded update automatically when the download finishes (still asks for sudo)."),
+            self._auto_install_cb,
+        )
+
         # Manual check button
         self._check_updates_btn = QPushButton(self.tr("Check for Updates Now"))
         self._check_updates_btn.setStyleSheet(

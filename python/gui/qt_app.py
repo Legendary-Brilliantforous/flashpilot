@@ -1714,6 +1714,9 @@ class FlashPilotWindow(
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, "_first_show_done", False):
+            self._first_show_done = True
+            QTimer.singleShot(900, self._maybe_show_new_version_window)
         if not self._combo_styled:
             self._combo_styled = True
             self._restyle_combos()
@@ -8654,7 +8657,13 @@ class FlashPilotWindow(
                             self._ui.line.emit(f"[check] Downloaded {tag} to {dest}")
                         except Exception:
                             pass
-                        self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
+                    if self.settings.value("auto_install_update", True, type=bool):
+                        self._ui.ui.emit(lambda t=tag, fp=dest: self._execute_sudo_install(fp, tag=t))
+                    else:
+                        if self.settings.value("auto_install_update", True, type=bool):
+                            self._ui.ui.emit(lambda t=tag, fp=dest: self._execute_sudo_install(fp, tag=t))
+                        else:
+                            self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
                 else:
                     self._ui.ui.emit(lambda: self.show_toast(self.tr("Download failed"), self.tr("File missing after download."), "error"))
             except Exception as e:
@@ -8680,7 +8689,7 @@ class FlashPilotWindow(
             secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
         )
 
-    def _execute_sudo_install(self, fpath):
+    def _execute_sudo_install(self, fpath, tag=""):
         import threading
 
         if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
@@ -8724,6 +8733,11 @@ class FlashPilotWindow(
                         self._ui.line.emit("[check] Update installed - restarting into the new version ...")
                     except Exception:
                         pass
+                # Remember the freshly installed version so the first window
+                # after the restart can show a "what was added or changed"
+                # notice (_maybe_show_new_version_window).
+                if tag:
+                    self.settings.setValue("pending_new_version", tag)
                 self._ui.ui.emit(lambda: self.show_toast(self.tr("Update Installed"), self.tr("Restarting FlashPilot..."), "success"))
                 QTimer.singleShot(1500, self._restart_application)
             else:
@@ -8737,6 +8751,74 @@ class FlashPilotWindow(
                         pass
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # --- New version: post-install changelog window ------------------------------
+
+    def _changelog_path(self):
+        """Locate CHANGELOG.md — repo root in dev, /usr/share/flashpilot when installed."""
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        for cand in (os.path.join(root, "CHANGELOG.md"),
+                     "/usr/share/flashpilot/CHANGELOG.md"):
+            if os.path.isfile(cand):
+                return cand
+        return ""
+
+    def _changelog_section_for(self, version, path=None):
+        """The ``(title, bullets)`` of the CHANGELOG section for *version*.
+
+        Sections start with ``## <version>`` lines and run to the next one.
+        Returns ``None`` when the file is missing or no section matches the
+        version. ``path`` defaults to ``self._changelog_path()``.
+        """
+        path = self._changelog_path() if path is None else path
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            return None
+        sections = []
+        for line in lines:
+            if line.startswith("## "):
+                sections.append((line[3:].strip(), []))
+            elif sections and line.startswith("- "):
+                sections[-1][1].append(line[2:].strip())
+        for title, bullets in sections:
+            if title.split("(")[0].strip() == version:
+                return title, bullets[:30]
+        return sections[0] if sections else None
+
+    def _show_new_version_window(self, version):
+        """One-shot "what was added or changed" window after a version install."""
+        section = self._changelog_section_for(version) if version else None
+        bullets = section[1] if section else []
+        body = "\n".join(f"  • {b}" for b in bullets) if bullets else self.tr("No detailed change list was found.")
+        self._show_centered_notice(
+            self.tr("FlashPilot {version} — what was added or changed").format(version=version or "installed"),
+            body,
+            pill=self.tr("WHAT'S NEW"),
+            pill_grad=("#f59e0b", "#f97316"),
+        )
+
+    def _maybe_show_new_version_window(self):
+        """On startup, show the changelog window if an update installed since the last run."""
+        version = self.settings.value("pending_new_version", "", type=str)
+        if not version:
+            return
+        self.settings.remove("pending_new_version")
+        if getattr(self, "_new_version_window_open", False):
+            return
+        self._new_version_window_open = True
+
+        def _show():
+            self._new_version_window_open = False
+            try:
+                self._show_new_version_window(version)
+            except Exception:
+                pass
+
+        QTimer.singleShot(500, _show)
 
     def _restart_application(self):
         import os
@@ -8804,7 +8886,10 @@ class FlashPilotWindow(
                             self._ui.line.emit(f"[check] Downloaded {tag} to {dest}")
                         except Exception:
                             pass
-                        self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
+                        if self.settings.value("auto_install_update", True, type=bool):
+                            self._ui.ui.emit(lambda t=tag, fp=dest: self._execute_sudo_install(fp, tag=t))
+                        else:
+                            self._ui.ui.emit(lambda t=tag, fp=dest: self._prompt_install_update(t, fp))
                 else:
                     self._ui.ui.emit(lambda: self.show_toast(self.tr("Download failed"), self.tr("File missing after download."), "error"))
             except Exception as e:
@@ -8830,7 +8915,7 @@ class FlashPilotWindow(
             secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
         )
 
-    def _execute_sudo_install(self, fpath):
+    def _execute_sudo_install(self, fpath, tag=""):
         import threading
 
         if not fpath or not os.path.exists(fpath) or not fpath.endswith(".deb"):
@@ -8874,6 +8959,11 @@ class FlashPilotWindow(
                         self._ui.line.emit("[check] Update installed - restarting into the new version ...")
                     except Exception:
                         pass
+                # Remember the freshly installed version so the first window
+                # after the restart can show a "what was added or changed"
+                # notice (_maybe_show_new_version_window).
+                if tag:
+                    self.settings.setValue("pending_new_version", tag)
                 self._ui.ui.emit(lambda: self.show_toast(self.tr("Update Installed"), self.tr("Restarting FlashPilot..."), "success"))
                 QTimer.singleShot(1500, self._restart_application)
             else:
@@ -9094,7 +9184,10 @@ class FlashPilotWindow(
                             if os.path.exists(fpath) and hasattr(self, "_ui") and self._ui:
                                 try:
                                     self._ui.line.emit(f"[check] Automatically downloaded {stable_tag} to {fpath}")
-                                    self._ui.ui.emit(lambda tag=stable_tag, fp=fpath: self._prompt_install_update(tag, fp))
+                                    if self.settings.value("auto_install_update", True, type=bool):
+                                        self._ui.ui.emit(lambda t=stable_tag, fp=fpath: self._execute_sudo_install(fp, tag=t))
+                                    else:
+                                        self._ui.ui.emit(lambda tag=stable_tag, fp=fpath: self._prompt_install_update(tag, fp))
                                 except Exception:
                                     pass
                         except Exception as dl_err:

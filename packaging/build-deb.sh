@@ -163,6 +163,7 @@ echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 
 # 5. Application (python + assets).
 cp main.py "$STAGE/usr/share/flashpilot/"
+cp CHANGELOG.md "$STAGE/usr/share/flashpilot/"
 cp -r python "$STAGE/usr/share/flashpilot/"
 cp -r scripts "$STAGE/usr/share/flashpilot/"
 # root/ is copied as-is (the proprietary odin4 path is gone - the native Odin
