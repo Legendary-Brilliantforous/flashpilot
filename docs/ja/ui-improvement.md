@@ -29,6 +29,7 @@ Language switcher: [English](../../ui-improvement.md) · [Français](../fr/ui-im
 - スムーズネス: Qt `AA_UseHighDpiPixmaps` を有効化、surface format を設定（OpenGL/RGBA）、vsync-friendly な animation、layout thrash の削減。target 60fps interactions。
 - ブランディング: title bar、taskbar、about dialog、installer で一貫したロゴ。
 - 調整可能なシェル列: **device panel | page** の境界は、ドラッグ可能な水平 splitter（デフォルト 232px、ドラッグ範囲 228–420px、`layout/device_panel_width` に記憶）。ページは自然幅を保ち、frame-less scroll area に置かれるため、圧縮してもタブ/グリッドを reflow するのではなく横スクロールする。user がドラッグするまで panel 幅は window resize 跨いで保持される。_Decision (user): 従来はハードコードの `setFixedWidth(232)`。_
+- **ページは自分の viewport に収まらなければならない — console dock の下へ回り込まない。** _決定（ユーザー、2026-11）:「中央パネルの端が console パネルの下には回らないこと。すべてのパネルは辺と辺を接して並列にすること。」_ ページは自然幅 **802px** を保ったまま、最小ウィンドウ幅でのページ領域（約 515px）より広かったため、console の縁で切れて console の下へ回っているように見えていた。二つの変更: 幅の広い行は幅を強制せず折り返すようになった（sub-tab ストリップ、ブランドページの engine チップ、ADB hub のタイルが共有 `FlowLayout` を使う: Samsung hub 802→372px、ブランドページ 767→337px、ADB hub 554→231px）。長い settings 値も折り返す。また console dock は中央パネルに余地を残す: **既定**の分割はページ領域用に `_DOCK_DEFAULT_TOP`（794px）を確保し、狭いウィンドウでのみ console を下限 360px まで縮める。
 
 ## Phase 1 — アーキテクチャ分割（視覚変更なし）
 - ページ builder を `python/gui/pages/` に抽出:

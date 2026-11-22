@@ -60,7 +60,11 @@ class SettingsPageMixin:
             f" border-right: 1px solid {C['border_hi']}; border-top-left-radius: 14px;"
             f" border-bottom-left-radius: 14px; }}"
         )
-        cat.setFixedWidth(180)
+        # The rail keeps its 180px look while there is room and gives some of
+        # it back when the page area is tight — a squeezed settings page used
+        # to push its content past the console dock edge.
+        cat.setMinimumWidth(140)
+        cat.setMaximumWidth(180)
         cat_lay = QVBoxLayout(cat)
         cat_lay.setContentsMargins(12, 20, 12, 16)
         cat_lay.setSpacing(6)
@@ -582,6 +586,10 @@ class SettingsPageMixin:
             lab.setStyleSheet(f"color:{C['dim']}; font-weight:600; min-width:110px;")
             val = QLabel(value)
             val.setStyleSheet(f"color:{C['text']}; font-size:12px;")
+            # Wrap instead of forcing the row wider than the page viewport:
+            # a long value ("Rust core (flashpilot-bridge) + PyQt6 shell")
+            # used to push the whole settings page past the console edge.
+            val.setWordWrap(True)
             val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             row.addWidget(lab)
             row.addWidget(val, 1)

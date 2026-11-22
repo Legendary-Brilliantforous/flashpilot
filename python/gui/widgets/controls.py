@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 
 from ..common import _mode_chip
 from ..theme import C
+from .flow_layout import FlowHost, FlowLayout
 
 
 class BeautifulToggle(QCheckBox):
@@ -154,7 +155,7 @@ class BeautifulToggle(QCheckBox):
     def sizeHint(self):
         return QSize(48, 26)
 
-class SamsungSubTabs(QFrame):
+class SamsungSubTabs(FlowHost):
     """Pill sub-tab strip: hairline chips, gradient fill when active."""
     tab_selected = pyqtSignal(str)
 
@@ -162,9 +163,8 @@ class SamsungSubTabs(QFrame):
         super().__init__()
         self.setObjectName("subtabs")
         self.setStyleSheet("QFrame#subtabs { background: transparent; }")
-        lay = QHBoxLayout(self)
+        lay = FlowLayout(self, spacing=6)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons = {}
@@ -194,7 +194,16 @@ class SamsungSubTabs(QFrame):
             self._group.addButton(b)
             lay.addWidget(b)
             self._buttons[key] = b
-        lay.addStretch(1)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # FlowHost reports the wrapped height, but a parent QVBoxLayout can
+        # keep the host at its previous one-row height.  Make the required
+        # height an explicit minimum so every wrapped row remains visible.
+        needed = self.layout().heightForWidth(self.width())
+        if self.minimumHeight() != needed:
+            self.setMinimumHeight(needed)
+            self.updateGeometry()
 
     def set_active(self, key):
         if hasattr(self, "_buttons"):

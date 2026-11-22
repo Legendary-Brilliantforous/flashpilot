@@ -40,7 +40,7 @@
  "action_meta": 62,
  "pages": {
   "samsung": {
-   "widgets": 487,
+   "widgets": 488,
    "buttons": 226,
    "acts": [
     "_qr_generator",
@@ -57,7 +57,7 @@
    "btn_sha": "2907dbbaecccb92b"
   },
   "dev_apple": {
-   "widgets": 64,
+   "widgets": 65,
    "buttons": 15,
    "acts": [
     "apple_icloud_add",
@@ -68,7 +68,7 @@
    "btn_sha": "5bc76f3e0c665036"
   },
   "dev_tecno": {
-   "widgets": 162,
+   "widgets": 163,
    "buttons": 75,
    "acts": [
     "_qr_generator",
@@ -84,13 +84,13 @@
    "btn_sha": "3d76d4abe3ca364c"
   },
   "dev_infinix": {
-   "widgets": 77,
+   "widgets": 78,
    "buttons": 55,
    "acts": [],
    "btn_sha": "4fe925f5a78802f1"
   },
   "dev_itel": {
-   "widgets": 116,
+   "widgets": 117,
    "buttons": 33,
    "acts": [
     "adb_enable",
@@ -106,43 +106,43 @@
    "btn_sha": "8a1f18004b9c1fde"
   },
   "dev_xiaomi": {
-   "widgets": 142,
+   "widgets": 143,
    "buttons": 120,
    "acts": [],
    "btn_sha": "10d6a94bbb2e4ea2"
   },
   "dev_oppo": {
-   "widgets": 110,
+   "widgets": 111,
    "buttons": 88,
    "acts": [],
    "btn_sha": "ecf1d02a670e64c5"
   },
   "dev_realme": {
-   "widgets": 98,
+   "widgets": 99,
    "buttons": 76,
    "acts": [],
    "btn_sha": "6fce1bcea17b2d77"
   },
   "dev_oneplus": {
-   "widgets": 37,
+   "widgets": 38,
    "buttons": 15,
    "acts": [],
    "btn_sha": "49f36baea361b804"
   },
   "dev_vivo": {
-   "widgets": 100,
+   "widgets": 101,
    "buttons": 78,
    "acts": [],
    "btn_sha": "eeb882488d43fda5"
   },
   "dev_huawei": {
-   "widgets": 70,
+   "widgets": 71,
    "buttons": 48,
    "acts": [],
    "btn_sha": "560ef23569ccd483"
   },
   "dev_motorola": {
-   "widgets": 110,
+   "widgets": 111,
    "buttons": 26,
    "acts": [
     "_qr_generator",
@@ -158,7 +158,7 @@
    "btn_sha": "fe26d3f712220724"
   },
   "dev_nokia": {
-   "widgets": 108,
+   "widgets": 109,
    "buttons": 24,
    "acts": [
     "adb_enable",
@@ -174,19 +174,19 @@
    "btn_sha": "fbb83eb97479c2b1"
   },
   "dev_tcl_zte": {
-   "widgets": 64,
+   "widgets": 65,
    "buttons": 42,
    "acts": [],
    "btn_sha": "f7dd1ff62cee18c7"
   },
   "dev_asus_sharp": {
-   "widgets": 33,
+   "widgets": 34,
    "buttons": 11,
    "acts": [],
    "btn_sha": "c4152edb9a46e4af"
   },
   "dev_blu": {
-   "widgets": 103,
+   "widgets": 104,
    "buttons": 19,
    "acts": [
     "adb_enable",
@@ -202,7 +202,7 @@
    "btn_sha": "fc57b3f846319daa"
   },
   "dev_lava": {
-   "widgets": 108,
+   "widgets": 109,
    "buttons": 24,
    "acts": [
     "adb_enable",
@@ -218,7 +218,7 @@
    "btn_sha": "bf7a438aab30e077"
   },
   "dev_lenovo": {
-   "widgets": 106,
+   "widgets": 107,
    "buttons": 22,
    "acts": [
     "adb_enable",
@@ -234,7 +234,7 @@
    "btn_sha": "eec47da44f6bbba9"
   },
   "dev_meizu": {
-   "widgets": 97,
+   "widgets": 98,
    "buttons": 13,
    "acts": [
     "adb_enable",
@@ -250,7 +250,7 @@
    "btn_sha": "06089396e219e989"
   },
   "dev_others": {
-   "widgets": 103,
+   "widgets": 104,
    "buttons": 19,
    "acts": [
     "adb_enable",
@@ -266,7 +266,7 @@
    "btn_sha": "7471c985f9bdf1ca"
   },
   "dev_wiko": {
-   "widgets": 100,
+   "widgets": 101,
    "buttons": 16,
    "acts": [
     "adb_enable",
@@ -282,7 +282,7 @@
    "btn_sha": "2914fc1f3a8ea38c"
   },
   "dev_rockchip": {
-   "widgets": 44,
+   "widgets": 45,
    "buttons": 21,
    "acts": [],
    "btn_sha": "525e9df7bccdf0aa"
@@ -294,7 +294,7 @@
    "btn_sha": "a325154e1f9e6a87"
   },
   "adb": {
-   "widgets": 20,
+   "widgets": 21,
    "buttons": 0,
    "acts": [
     "_qr_generator",

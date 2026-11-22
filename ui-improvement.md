@@ -30,6 +30,22 @@ Transform the PyQt6 GUI from a functional monolith into a polished, maintainable
   in a frame-less scroll area, so squeezing it scrolls sideways instead of
   reflowing its tabs/grid; the panel width is held across window resizes until
   the user drags it. _Decision (user): previously a hard `setFixedWidth(232)`._
+- **The page must fit its viewport — no content under the console dock.**
+  _Decision (user, 2026-11): "the middle panel's edge should not be under the
+  console panel; all panels should be side by side, edge to edge."_ The page
+  content used to keep a natural width of **802px** (Samsung hub) while the
+  page area is ~515px at the minimum window width, so the page was cut off at
+  the console edge and looked like it ran under the console. Two changes:
+  - the wide rows wrap instead of forcing a width — the sub-tab strip
+    (`SamsungSubTabs`) and the brand-page engine chips / ADB hub tiles use the
+    shared `FlowLayout`, so a row's minimum width is its widest item, not the
+    sum of the row (Samsung hub 802→372px, brand pages 767→337px, ADB hub
+    554→231px); long settings values wrap instead of widening the page;
+  - the console dock gives the middle panel room: the **default** split keeps
+    `_DOCK_DEFAULT_TOP` (794px) for the page area and only shrinks the console
+    towards its 360px floor on a narrow window. The hard `_DOCK_MIN_TOP`
+    (474px) floor is unchanged — that is what the user may drag down to, and
+    below the page's own width the page still scrolls sideways.
 
 ## Phase 1 — Architecture split (no visual change)
 - Extract page builders into `python/gui/pages/`:

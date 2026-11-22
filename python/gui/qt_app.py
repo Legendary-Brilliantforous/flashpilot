@@ -2346,6 +2346,12 @@ class FlashPilotWindow(
     # *content* floor is higher (`_PAGE_MIN_W`) — below it the page scrolls
     # sideways instead of clipping, so the window can stay reasonably narrow.
     _DOCK_MIN_TOP = 228 + 240 + 6   # px — page area minimum width
+    # The DEFAULT split keeps more room for the page than the hard floor
+    # above: the floor is what the user may drag down to, the default is
+    # what the app hands out on its own. Without it a narrow window let the
+    # console take its full default width and squeezed the middle page so
+    # far that the page content ran under the console edge.
+    _DOCK_DEFAULT_TOP = 228 + 560 + 6   # px — page area width kept by default
     _DOCK_DEFAULT_WIDTH = 420    # px — default console width (right dock)
     _DOCK_COLLAPSED_W = 44       # px — thin bar width when collapsed
 
@@ -2799,14 +2805,19 @@ class FlashPilotWindow(
         self._apply_default_body_split()
 
     def _desired_dock_console_width(self, total):
-        """Console width for `total` px: persisted width if sane, else default."""
+        """Console width for `total` px: persisted width if sane, else default.
+
+        The console never grows past what is left over for the page area's
+        default width (`_DOCK_DEFAULT_TOP`), so the middle panel keeps room
+        for its content instead of being squeezed under the console edge.
+        """
         if getattr(self, "_console_maximised", False):
             return total
         try:
             w = int(getattr(self, "_console_dock_width", None) or 0)
         except (TypeError, ValueError):
             w = 0
-        room = max(self._DOCK_MIN_CONSOLE, total - self._DOCK_MIN_TOP)
+        room = max(self._DOCK_MIN_CONSOLE, total - self._DOCK_DEFAULT_TOP)
         if w > 0:
             return max(self._DOCK_MIN_CONSOLE, min(w, room))
         return max(self._DOCK_MIN_CONSOLE,
@@ -8686,7 +8697,7 @@ class FlashPilotWindow(
             pill_grad=("#10b981", "#06b6d4"),
             ok_label="Later",
             secondary_label="Install Now",
-            secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
+            secondary_callback=lambda fp=fpath, t=stable_tag: self._execute_sudo_install(fp, tag=t)
         )
 
     def _execute_sudo_install(self, fpath, tag=""):
@@ -8912,7 +8923,7 @@ class FlashPilotWindow(
             pill_grad=("#10b981", "#06b6d4"),
             ok_label="Later",
             secondary_label="Install Now",
-            secondary_callback=lambda fp=fpath: self._execute_sudo_install(fp)
+            secondary_callback=lambda fp=fpath, t=stable_tag: self._execute_sudo_install(fp, tag=t)
         )
 
     def _execute_sudo_install(self, fpath, tag=""):

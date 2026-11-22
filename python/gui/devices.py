@@ -198,6 +198,7 @@ def build_brand_page(win, key):
     supported-devices list LEFT, selected model's actions RIGHT."""
     from PyQt6.QtWidgets import QHBoxLayout as _HL, QVBoxLayout as _VL, \
         QScrollArea as _SA, QSizePolicy as _SP
+    from .widgets.flow_layout import flow_row
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
     brand = BRAND_BY_KEY[key]
     models = brand.get("models", [])
@@ -212,8 +213,7 @@ def build_brand_page(win, key):
     # Supported chip -> clickable, navigates to its tool section; the
     # rest are grey + disabled with a reason tooltip — never dead popups.
     engines = set((m.get("engine") or "").lower() for m in models)
-    chips_row = _HL()
-    chips_row.setSpacing(6)
+    chips_host, chips_row = flow_row(spacing=6)
     for eng, clabel, glyph, section in _ENGINE_CHIPS:
         cb = QPushButton(f"{glyph}  {clabel}")
         cb.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -247,8 +247,7 @@ def build_brand_page(win, key):
                 " QPushButton:focus { outline:none; }"
             )
         chips_row.addWidget(cb)
-    chips_row.addStretch(1)
-    outer.addLayout(chips_row)
+    outer.addWidget(chips_host)
 
     # --- split view: vertical supported-devices list LEFT, selected
     # model's actions RIGHT. ---
@@ -900,6 +899,7 @@ def build_adb_hub_page(win):
                                  QLabel as _Lbl, QWidget as _W,
                                  QFrame as _Fr,
                                  QGraphicsOpacityEffect as _OPE)
+    from .widgets.flow_layout import flow_row
     C, _btn_ghost, _btn_primary, _btn_danger = _tok()
     page = _W()
     page.setStyleSheet("background: transparent;")
@@ -914,8 +914,7 @@ def build_adb_hub_page(win):
     sub.setWordWrap(True)
     v.addWidget(sub)
 
-    row = _HL()
-    row.setSpacing(12)
+    tiles_host, tiles_row = flow_row(spacing=12)
     for act_key, glyph, title, sub_label in (
         ("adb_frp", "⚡", "ADB Remove FRP", "Zero frp flag\n+ wizards"),
         ("mdm_unlock", "🔓", "ADB Remove MDM", "Remove device\nowner"),
@@ -962,9 +961,8 @@ def build_adb_hub_page(win):
                 return
             _dispatch(win, a, "ADB", {})
         tile.mousePressEvent = _go
-        row.addWidget(tile)
-    row.addStretch(1)
-    v.addLayout(row)
+        tiles_row.addWidget(tile)
+    v.addWidget(tiles_host)
 
     # QR provisioning row: a single "QR Provision" entry that opens the QR
     # window (TestDPC by default; Google Device Policy + FlashPilot are the

@@ -159,3 +159,23 @@ def test_download_routes_to_prompt_when_auto_install_disabled(win, monkeypatch, 
     win.settings.remove("auto_install_update")
 
     assert calls == [("prompt", "9.9.9")]
+
+
+def test_manual_install_prompt_passes_the_tag(win, monkeypatch, tmp_path):
+    """Clicking 'Install Now' stamps the tag so What's New also shows on manual installs."""
+    from PyQt6.QtWidgets import QPushButton
+
+    calls = []
+    dest = tmp_path / "update.deb"
+    dest.write_bytes(b"")
+    monkeypatch.setattr(win, "_execute_sudo_install",
+                        lambda fpath, tag="": calls.append((fpath, tag)))
+    win._prompt_install_update("9.9.9", str(dest))
+    _settle()
+
+    buttons = [b for b in win.findChildren(QPushButton)
+               if b.text() == "Install Now" and b.isVisible()]
+    assert buttons, "the Update Downloaded notice has an 'Install Now' button"
+    buttons[0].click()
+    _settle()
+    assert calls == [(str(dest), "9.9.9")]

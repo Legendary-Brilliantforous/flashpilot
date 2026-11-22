@@ -229,10 +229,18 @@ def test_squeezed_page_scrolls_instead_of_clipping(win):
     splitter.setSizes([win._BODY_PANEL_MAX_W, splitter.width() - win._BODY_PANEL_MAX_W])
     _pump()
 
-    viewport = win._page_scroll.viewport()
-    natural = win._stack.minimumSizeHint().width()
     assert splitter.sizes()[0] == win._BODY_PANEL_MAX_W, (
         f"panel did not reach its cap: {splitter.sizes()}")
+    # The pages wrap instead of forcing a width, so the page is now much
+    # narrower than the panel cap alone can squeeze it. Push the page to its
+    # own floor to reach the "squeezed" state this test is about.
+    natural = win._stack.minimumSizeHint().width()
+    if win._page_scroll.viewport().width() >= natural:
+        floor = win._PAGE_VIEW_MIN_W
+        splitter.setSizes([splitter.width() - floor, floor])
+        _pump()
+
+    viewport = win._page_scroll.viewport()
     assert viewport.width() < natural, "the probe needs a squeezed viewport"
     # The page keeps its own natural width (no reflow, no clipped controls) and
     # the scroll area exposes it instead.
