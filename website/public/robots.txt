@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://legendary-brilliantforous.github.io/flashpilot/sitemap.xml

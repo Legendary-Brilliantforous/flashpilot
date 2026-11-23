@@ -784,7 +784,7 @@ code,
 }
 
 .cell-no {
-  color: rgba(110, 131, 158, 0.5);
+  color: var(--mute);
   font-family: var(--font-mono);
   font-size: 0.75rem;
 }

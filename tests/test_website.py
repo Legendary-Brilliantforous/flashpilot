@@ -113,6 +113,25 @@ class TestWebsiteContent:
             assert match, f"theme.py has no {token} token"
             assert match.group(1) in tokens, f"{token} {match.group(1)} is missing from the site"
 
+    def test_crawler_files_are_shipped(self) -> None:
+        robots = WEBSITE / "public" / "robots.txt"
+        sitemap = WEBSITE / "public" / "sitemap.xml"
+        assert robots.exists(), "robots.txt must ship with the site"
+        assert sitemap.exists(), "sitemap.xml must ship with the site"
+        text = _read(robots)
+        assert "User-agent: *" in text
+        assert "Allow: /" in text
+        assert "Sitemap:" in text
+
+    def test_page_carries_search_metadata(self) -> None:
+        html = _read(WEBSITE / "index.html")
+        assert '<meta charset="UTF-8" />' in html
+        assert 'name="viewport"' in html
+        assert 'name="description"' in html
+        assert 'property="og:title"' in html
+        assert 'property="og:image"' in html
+        assert "<title>" in html
+
 
 @pytest.mark.skipif(not WEBSITE.exists(), reason="website/ is not present")
 class TestPagesWorkflow:
