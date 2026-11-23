@@ -15,6 +15,8 @@
 [![Good First Issues](https://img.shields.io/github/issues/Legendary-Brilliantforous/flashpilot/good%20first%20issue)](https://github.com/Legendary-Brilliantforous/flashpilot/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 [![Contributors](https://img.shields.io/github/contributors/Legendary-Brilliantforous/flashpilot)](https://github.com/Legendary-Brilliantforous/flashpilot/graphs/contributors)
 
+**Website:** [flashpilot on GitHub Pages](https://legendary-brilliantforous.github.io/flashpilot/) — source in [`website/`](website/README.md).
+
 **What is this?** A Linux-native equivalent of the paid Windows flashing suites — one unified tool that talks straight to the bootloader of **Samsung, MediaTek, Qualcomm and Spreadtrum/UNISOC devices**. Reverse-engineered protocols + native Rust performance + a beautiful PyQt6 GUI = the open alternative to Odin, Heimdall, and expensive commercial tools.
 
 ---

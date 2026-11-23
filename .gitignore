@@ -47,6 +47,10 @@ __pycache__/
 # Built packages (local `packaging/build-deb.sh` output)
 /dist/
 
+# Website (Vite/React static site)
+/website/node_modules/
+/website/dist/
+
 # OpenCode local configuration (do not commit — contains API keys)
 .opencode/
 opencode.jsonc

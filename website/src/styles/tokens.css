@@ -1,0 +1,66 @@
+/*
+ * FlashPilot web tokens.
+ *
+ * The palette is the app's live "Eloquent Slate" theme, copied from
+ * python/gui/theme.py (C) so the site and the desktop studio are the same
+ * product rather than two projects that happen to share a name.
+ * Spacing and radius follow the scale in design.md.
+ */
+
+:root {
+  /* Surfaces */
+  --ink: #080c1a;
+  --panel: #0f1e35;
+  --card: #122a4a;
+  --card-hi: #1a365f;
+  --inset: #0a1529;
+
+  /* Lines */
+  --line: #1c3052;
+  --line-hi: #2e4a7a;
+
+  /* Text */
+  --text: #eef1f8;
+  --text-hi: #f5f7fb;
+  --dim: #8ea6c6;
+  --mute: #6e839e;
+
+  /* Accent — champagne gold, same as the app's default theme */
+  --gold: #d4b78f;
+  --gold-hi: #f0d9b5;
+  --gold-dim: #2a2114;
+
+  /* Semantics */
+  --ok: #3dd9a0;
+  --warn: #f0c24a;
+  --err: #ff7a86;
+  --amber: #f59e0b;
+
+  /* Focus / selection — never accent tinted */
+  --focus: rgba(141, 168, 200, 0.45);
+  --sel: rgba(255, 255, 255, 0.18);
+
+  /* Spacing scale (design.md) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s6: 24px;
+
+  /* Radius scale (design.md) */
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-xl: 14px;
+  --r-xxl: 16px;
+
+  /* Type */
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+
+  /* Layout */
+  --maxw: 1180px;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+  --shadow-lift: 0 18px 44px rgba(0, 0, 0, 0.46);
+}
