@@ -2,6 +2,7 @@ import threading
 import time as _time
 import math
 import os
+import re
 import shutil
 import subprocess
 import weakref
@@ -1545,6 +1546,89 @@ class SplashScreen(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# Network report helpers (pure — unit-testable without a device)
+# ---------------------------------------------------------------------------
+# LTE level thresholds Android prints in the signal dump when it has none.
+_LTE_LEVEL_THRESHOLDS = (-128, -118, -108, -98)
+# 99 / -1 / 0 / INT_MAX are Android's "unknown" sentinels for signal fields.
+_SIGNAL_UNKNOWN = (99, -1, 0, 2147483647)
+
+
+def _format_signal(raw):
+    """Parse 'mSignalStrength=SignalStrength: ...' into a human summary."""
+    # 'SignalStrength: 99 99 -120 -160 -120 -160 -1 99 -113 -14 115 0 0 ... gsm|lte [-128, -118, -108, -98] [-115, -105, -95, -85]'
+    # LTE RSRP is field 8; 99/-1/0 are unknown sentinels. Level comes from the
+    # bracket thresholds Android prints (default -128/-118/-108/-98).
+    # Return e.g. 'RSRP -113 dBm (level 2/4)'; for GSM-only dumps use
+    # 'RSSI 18/31 (level 4/4)'; return '' when the value is unknown.
+    text = str(raw or "")
+    start = text.find("SignalStrength:")
+    if start < 0:
+        return ""
+    body = text[start + len("SignalStrength:"):]
+    # The bracket threshold lists trail the numeric fields; split them off so
+    # the integer walk below does not trip over '[-128,'.
+    thresholds = []
+    bracket = re.search(r"\[(-?\d+(?:\s*,\s*-?\d+)+)\]", body)
+    if bracket:
+        try:
+            thresholds = [int(part) for part in bracket.group(1).split(",")]
+        except ValueError:
+            thresholds = []
+        body = body[:bracket.start()]
+    fields = []
+    for token in body.split():
+        try:
+            fields.append(int(token))
+        except ValueError:
+            break  # 'gsm|lte' / flag names end the numeric run
+    if len(fields) > 8:
+        rsrp = fields[8]
+        if rsrp not in _SIGNAL_UNKNOWN and rsrp < 0:
+            levels = thresholds if len(thresholds) == 4 else list(_LTE_LEVEL_THRESHOLDS)
+            level = sum(1 for edge in levels if rsrp >= edge)
+            return f"RSRP {rsrp} dBm (level {level}/4)"
+    if fields:
+        # GSM ASU (0-31, 99 = unknown) — the only usable value on 2G-only dumps.
+        rssi = fields[0]
+        if 1 <= rssi <= 31:
+            if rssi >= 12:
+                level = 4
+            elif rssi >= 8:
+                level = 3
+            elif rssi >= 5:
+                level = 2
+            else:
+                level = 1
+            return f"RSSI {rssi}/31 (level {level}/4)"
+    return ""
+
+
+def _data_state_name(value):
+    """mDataConnectionState int → 'disconnected'/'connecting'/'connected'/'suspended'."""
+    try:
+        state = int(str(value).strip())
+    except (TypeError, ValueError):
+        return ""
+    return {
+        0: "disconnected",
+        1: "connecting",
+        2: "connected",
+        3: "suspended",
+    }.get(state, "unknown")
+
+
+def _reg_state(raw, kind):
+    """'mVoiceRegState=0(IN_SERVICE)' → 'IN_SERVICE'; '' when absent."""
+    text = str(raw or "")
+    if not text:
+        return ""
+    field = "mDataRegState" if str(kind or "").lower().startswith("data") else "mVoiceRegState"
+    match = re.search(field + r"\s*=\s*-?\d+\s*\(([^)]*)\)", text)
+    return match.group(1).strip() if match else ""
+
+
+# ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
 class FlashPilotWindow(
@@ -1564,6 +1648,10 @@ class FlashPilotWindow(
         self.setWindowTitle(self.tr("FlashPilot"))
 
         self._cached_model = None
+        # Decorated "Brand · Model" shown in the tiles/scene. Kept separate
+        # from _cached_model, which must stay the RAW getprop value: mixing
+        # them made the raw model look "new" on every 3 s poll (model flap).
+        self._cached_model_display = None
         self._cached_adb_status = None
         self._cached_build = None
         self._cached_android = None
@@ -11176,9 +11264,25 @@ class FlashPilotWindow(
         except Exception:
             pass
 
+    def _publish_model(self, model, serial=None, suffix=""):
+        """Cache the RAW model and log it once per (serial, model).
+
+        The display name may be decorated later ("Brand · Model"); caching that
+        decorated string here made the raw getprop value look "new" on the next
+        3 s poll, so the console re-logged the same device forever.
+        """
+        if not model:
+            return
+        self._cached_model = model
+        key = (serial or "", model)
+        if key != getattr(self, "_last_logged_model", None):
+            self._last_logged_model = key
+            self._ui.line.emit(f"Device Model: {model}{suffix}")
+
     def _update_device_info(self, connected, pid, mode, fallback_model=None):
         if not connected:
             self._cached_model = None
+            self._cached_model_display = None
             self._cached_adb_status = None
             self._cached_build = None
             self._cached_android = None
@@ -11207,7 +11311,9 @@ class FlashPilotWindow(
             self._last_usb_product = fallback_model
         # Show known model immediately from USB/MTP without waiting for
         # background ADB/AT probe - avoids "--" flash and hard-coded "adb".
-        immediate = self._cached_model or fallback_model
+        # Prefer the decorated "Brand · Model" when we already resolved it.
+        immediate = (getattr(self, "_cached_model_display", None)
+                     or self._cached_model or fallback_model)
         if immediate is None:
             immediate = f"0x{pid:04x}" if pid is not None else "--"
         # Guard: never show literal "adb" as model
@@ -11416,9 +11522,7 @@ class FlashPilotWindow(
                                     serial_prop = _ser
                         except Exception:
                             pass
-                    if model and model != self._cached_model:
-                        self._cached_model = model
-                        self._ui.line.emit(f"Device Model: {model}")
+                    self._publish_model(model, serial)
                     # Update vendor badge with model name (e.g., "TECNO KG6")
                     display_name = model or (mfr or brand)
                     if display_name and display_name.lower() != "samsung":
@@ -11524,12 +11628,13 @@ class FlashPilotWindow(
                                         model = self._last_usb_product
                                 except Exception:
                                     pass
-                            if model and model != self._cached_model:
-                                self._cached_model = model
-                                self._ui.line.emit(f"Device Model: {model} (via USB/MTP while ADB unauthorized)")
-                                # Keep phone image vendor in sync with Device Model
-                                if hasattr(self, "scene") and self.scene and model.lower() != "samsung":
-                                    self.scene.set_vendor(model.upper(), C["ok"])
+                            self._publish_model(
+                                model, serial_prop or _unauth_serial,
+                                suffix=" (via USB/MTP while ADB unauthorized)",
+                            )
+                            # Keep phone image vendor in sync with Device Model
+                            if hasattr(self, "scene") and self.scene and model.lower() != "samsung":
+                                self.scene.set_vendor(model.upper(), C["ok"])
                         except Exception:
                             pass
                 elif any(d["state"] == "offline" for d in adb_devs):
@@ -11545,10 +11650,9 @@ class FlashPilotWindow(
                                 _ser_off = (_sam_off.get("serial") or "").strip()
                                 if _cand_off and _cand_off.lower() != "adb" and not model:
                                     model = _cand_off
-                                    if model and model != self._cached_model:
-                                        self._cached_model = model
-                                        if hasattr(self, "scene") and self.scene:
-                                            self.scene.set_vendor(model.upper(), C["warn"])
+                                    self._publish_model(model, serial_prop)
+                                    if hasattr(self, "scene") and self.scene:
+                                        self.scene.set_vendor(model.upper(), C["warn"])
                                 if _ser_off and not serial_prop:
                                     serial_prop = _ser_off
                         except Exception:
@@ -11568,9 +11672,9 @@ class FlashPilotWindow(
                                             cand = info["model"].strip()
                                             if cand and cand.lower() != "adb":
                                                 model = cand
-                                                if model and model != self._cached_model:
-                                                    self._cached_model = model
-                                                    self._ui.line.emit(f"Device Model: {model} (via MTP)")
+                                                self._publish_model(
+                                                    model, serial_prop,
+                                                    suffix=" (via MTP)")
                                         if info.get("device_version") and not build_id:
                                             build_id = info["device_version"].strip()
                                         if info.get("serial_number") and not serial_prop:
@@ -11595,11 +11699,9 @@ class FlashPilotWindow(
                                 or _sam.get("mode") == "samsung-odin"
                             if not _is_dl and mtp.is_diag_config(_sam):
                                 model = mtp.read_model_via_at(timeout_ms=5000)
-                                if model and model != self._cached_model:
-                                    self._cached_model = model
-                                    self._ui.line.emit(
-                                        f"Device Model: {model} (via AT channel)"
-                                    )
+                                self._publish_model(
+                                    model, serial_prop,
+                                    suffix=" (via AT channel)")
                         except Exception:  # noqa: BLE001
                             pass
                     # No automatic Odin model probe here - by design. Probing
@@ -11712,11 +11814,14 @@ class FlashPilotWindow(
                 # Log detailed info once per connection (throttled)
                 try:
                     if emit_model not in ("--",) and not emit_model.startswith("0x"):
-                        should_log = not getattr(self, "_detailed_logged", False) or emit_model != getattr(self, "_last_logged_model", None)
+                        # Compare against the DISPLAY name, not _last_logged_model:
+                        # that attribute holds _publish_model's (serial, raw-model)
+                        # key, and mixing the two made every 3 s poll re-log.
+                        should_log = not getattr(self, "_detailed_logged", False) or emit_model != getattr(self, "_cached_model_display", None)
                         if should_log and (build_id or android_ver or serial_prop):
                             self._ui.line.emit(f"Device Info: Model {emit_model} | Build {build_id or self._cached_build or 'unknown'} | Android {android_ver or self._cached_android or 'unknown'} | Serial {serial_prop or self._cached_serial or 'unknown'}")
                             self._detailed_logged = True
-                            self._last_logged_model = emit_model
+                            self._cached_model_display = emit_model
                 except Exception:
                     pass
                 # Deep USB/MTP dump when Build/Android still unknown (dig deeper — no hardcoded text)
@@ -11778,9 +11883,11 @@ class FlashPilotWindow(
                     if emit_model not in ("--",) and not emit_model.startswith("0x"):
                         lower_em = emit_model.strip().lower()
                         if lower_em not in ("samsung", "mediatek", "qualcomm", "adb", "samsung_android"):
-                            # Update cached model for immediate vendor display next time
-                            if emit_model != self._cached_model:
-                                self._cached_model = emit_model
+                            # Remember the decorated name for immediate display
+                            # next tick; _cached_model stays the RAW getprop
+                            # model or the raw value looks "new" every poll.
+                            if emit_model != self._cached_model_display:
+                                self._cached_model_display = emit_model
                             # Use ui signal to touch widgets on main thread
                             self._ui.ui.emit(lambda em=emit_model: self.scene.set_vendor(em.upper(), C["ok"]) if hasattr(self, "scene") and self.scene else None)
                 except Exception:
@@ -12704,46 +12811,143 @@ class FlashPilotWindow(
                     pass
                 self._ui.line.emit(line)
 
-            try:
-                lines = [f"=== Network Report ({serial}) ==="]
-                probes = [
-                    ("SIM state", "getprop gsm.sim.state"),
-                    ("Network type", "getprop gsm.network.type"),
-                    ("Preferred mode", "settings get global preferred_network_mode"),
-                    ("Mobile data", "settings get global mobile_data"),
-                    ("Wi-Fi on", "settings get global wifi_on"),
-                    ("Wi-Fi scan always", "settings get global wifi_scan_always_enabled"),
-                    ("Private DNS", "settings get global private_dns_mode"),
-                    ("Airplane mode", "settings get global airplane_mode_on"),
-                    ("WLAN IP", "ip addr show wlan0 2>/dev/null | grep 'inet '"),
-                    ("Radio version", "getprop gsm.version.baseband"),
-                ]
-                for label, cmd in probes:
+            def probe(cmd, timeout=12):
+                """One read-only shell probe — empty string on any failure."""
+                try:
+                    return bridge.adb_shell(
+                        cmd, timeout=timeout, serial=serial, rescue=False).strip()
+                except (bridge.BridgeError, ValueError):
+                    return ""
+
+            def operator():
+                alpha = probe("getprop gsm.operator.alpha")
+                numeric = probe("getprop gsm.operator.numeric")
+                if alpha and numeric:
+                    return f"{alpha} ({numeric})"
+                return alpha or numeric
+
+            def network_type():
+                net = probe("getprop gsm.network.type")
+                if net and net.lower() not in ("unknown", "---"):
+                    return net
+                # gsm.network.type is empty/"Unknown" for a few seconds after a
+                # modem reset — derive the RAT from the RIL registry instead.
+                raw = probe("dumpsys telephony.registry 2>/dev/null | grep -m1 "
+                            "'mRilDataRadioTechnology'")
+                m = re.search(r"mRilDataRadioTechnology=\d+\(([^)]+)\)", raw)
+                return m.group(1) if m else net
+
+            def registration():
+                voice = _reg_state(
+                    probe("dumpsys telephony.registry 2>/dev/null | grep -m1 'mVoiceRegState'"),
+                    "voice")
+                data = _reg_state(
+                    probe("dumpsys telephony.registry 2>/dev/null | grep -m1 'mDataRegState'"),
+                    "data")
+                if not (voice or data):
+                    return ""
+                return f"voice {voice or 'unknown'}, data {data or 'unknown'}"
+
+            def signal():
+                return _format_signal(
+                    probe("dumpsys telephony.registry 2>/dev/null | grep -m1 'mSignalStrength'"))
+
+            def data_state():
+                return _data_state_name(
+                    probe("dumpsys telephony.registry 2>/dev/null | grep -m1 "
+                          "'mDataConnectionState' | cut -d= -f2"))
+
+            def data_ip():
+                for line in probe("ip -4 addr show").splitlines():
+                    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", line)
+                    if m and not m.group(1).startswith("127."):
+                        return m.group(1)
+                return ""
+
+            def active_net():
+                head = probe("dumpsys connectivity 2>/dev/null | grep -i "
+                             "'Active default network' | head -1", timeout=15)
+                if not head:
+                    return ""
+                m = re.search(r":\s*(\d+)", head)
+                net_id = m.group(1) if m else head.split(":")[-1].strip()
+                transports = probe("dumpsys connectivity 2>/dev/null | grep -m1 'Transports:'",
+                                   timeout=15)
+                tm = re.search(r"Transports:\s*([A-Z_,]+)", transports)
+                bits = []
+                if tm:
+                    bits.append(tm.group(1).strip())
+                if probe("dumpsys connectivity 2>/dev/null | grep -m1 'VALIDATED'",
+                         timeout=15):
+                    bits.append("validated")
+                return f"{net_id} ({', '.join(bits)})" if bits else net_id
+
+            # Static settings — legitimately empty sometimes, never retried.
+            static = [
+                ("Preferred mode", "settings get global preferred_network_mode"),
+                ("Mobile data", "settings get global mobile_data"),
+                ("Wi-Fi on", "settings get global wifi_on"),
+                ("Wi-Fi scan always", "settings get global wifi_scan_always_enabled"),
+                ("Private DNS", "settings get global private_dns_mode"),
+                ("Airplane mode", "settings get global airplane_mode_on"),
+                ("WLAN IP", "ip addr show wlan0 2>/dev/null | grep 'inet '"),
+                ("Radio version", "getprop gsm.version.baseband"),
+            ]
+            # Volatile radio state — a modem reset leaves these blank for a few
+            # seconds, so they get ONE delayed re-probe instead of printing
+            # "Unknown" in the report.
+            volatile = {
+                "SIM state": lambda: probe("getprop gsm.sim.state"),
+                "Operator": operator,
+                "Network type": network_type,
+                "Registration": registration,
+                "Signal": signal,
+                "Data state": data_state,
+                "Data IP": data_ip,
+                "Active net": active_net,
+            }
+            order = (
+                "SIM state", "Operator", "Registration", "Network type",
+                "Signal", "Data state", "Data IP",
+                "Preferred mode", "Mobile data", "Wi-Fi on",
+                "Wi-Fi scan always", "Private DNS", "Airplane mode",
+                "WLAN IP", "Radio version", "Wi-Fi status", "Active net",
+            )
+
+            def sweep(labels):
+                out = {}
+                for label in labels:
                     try:
-                        v = bridge.adb_shell(cmd, timeout=12, serial=serial, rescue=False).strip()
-                        if v:
-                            lines.append(f"   {label:16}: {v}")
-                    except (bridge.BridgeError, ValueError):
-                        pass
-                try:
-                    w = bridge.adb_shell(
-                        "dumpsys wifi 2>/dev/null | grep -i 'Wi-Fi is' | head -1",
-                        timeout=15, serial=serial, rescue=False
-                    ).strip()
-                    if w:
-                        lines.append(f"   {'Wi-Fi status':16}: {w}")
-                except bridge.BridgeError:
-                    pass
-                try:
-                    c = bridge.adb_shell(
-                        "dumpsys connectivity 2>/dev/null | grep -i "
-                        "'Active default network' | head -1",
-                        timeout=15, serial=serial, rescue=False
-                    ).strip()
-                    if c:
-                        lines.append(f"   {'Active net':16}: {c}")
-                except bridge.BridgeError:
-                    pass
+                        v = volatile[label]()
+                    except Exception:  # noqa: BLE001
+                        v = ""
+                    if v:
+                        out[label] = v
+                return out
+
+            try:
+                vals = {}
+                for label, cmd in static:
+                    v = probe(cmd, timeout=15 if cmd.startswith("dumpsys") else 12)
+                    if v:
+                        vals[label] = v
+                w = probe("dumpsys wifi 2>/dev/null | grep -i 'Wi-Fi is' | head -1",
+                          timeout=15)
+                if w:
+                    vals["Wi-Fi status"] = w
+                vals.update(sweep(list(volatile)))
+                missing = [label for label in volatile if not vals.get(label)]
+                if missing:
+                    # One sweep after a short settle, and ONLY the empty ones:
+                    # the static settings above are legitimately empty.
+                    _time.sleep(2.0)
+                    vals.update(sweep(missing))
+
+                lines = [f"=== Network Report ({serial}) ==="]
+                for label in order:
+                    v = vals.get(label)
+                    if v:
+                        lines.append(f"   {label:16}: {v}")
                 emit("\n".join(lines))
                 self._ui.ui.emit(lambda: self.net_status.setText(
                     self.tr("Report printed to console")))
