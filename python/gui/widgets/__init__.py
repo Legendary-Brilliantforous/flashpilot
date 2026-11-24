@@ -4,6 +4,7 @@ Every name here is re-exported into :mod:`python.gui.qt_app` for
 backwards compatibility with existing imports.
 """
 from .action_row import ActionRow
+from .card_row import CardRow
 from .collapsible import CollapsibleSection, SectionTitle
 from .console import (
     ANSI_FG,
@@ -31,6 +32,7 @@ __all__ = [
     "ANSI_FG",
     "ActionRow",
     "BeautifulToggle",
+    "CardRow",
     "CollapsibleSection",
     "ConsoleHighlighter",
     "DragBar",

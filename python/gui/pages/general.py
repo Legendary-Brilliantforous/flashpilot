@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import C, _btn_ghost, _btn_primary, _card_qss
-from ..widgets import CollapsibleSection, MetricCard, SamsungSubTabs, SectionTitle
+from ..widgets import CardRow, CollapsibleSection, MetricCard, SamsungSubTabs, SectionTitle
 
 
 class GeneralPageMixin:
@@ -42,9 +42,11 @@ class GeneralPageMixin:
         status_row.addWidget(self.batt_status, 1)
         lay.addLayout(status_row)
 
-        # three big action cards
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
+        # three big action cards. A plain horizontal row grows to the sum of
+        # its cards' minimum widths (set by the button labels), which made the
+        # page wider than the middle panel on machines whose UI font falls back
+        # to a wider face — CardRow wraps the cards instead.
+        cards = CardRow(spacing=12)
 
         def action_card(title, desc, btn_label, slot, primary=False):
             c = QFrame()
@@ -88,7 +90,6 @@ class GeneralPageMixin:
                 "Run Report",
                 self._battery_report,
             ),
-            1,
         )
         cards.addWidget(
             action_card(
@@ -100,7 +101,6 @@ class GeneralPageMixin:
                 self._battery_repair,
                 primary=True,
             ),
-            1,
         )
         cards.addWidget(
             action_card(
@@ -110,9 +110,8 @@ class GeneralPageMixin:
                 "Start Load Test",
                 self._battery_load_test,
             ),
-            1,
         )
-        lay.addLayout(cards, 1)
+        lay.addWidget(cards, 1)
 
         tip = QLabel(
             self.tr("Tip: for accurate battery health the device must expose the "
