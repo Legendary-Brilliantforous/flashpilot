@@ -37,7 +37,7 @@ Android 修复的世界运行在封闭、仅 Windows 的商业工具之上。它
 
 ---
 
-## 🚀 亮点 — 1.2.1 Stable（0 警告）
+## 🚀 亮点 — 1.2.2 Stable（0 警告）
 
 - **9 种传输模式** —— ADB、MTP、Samsung Download 模式、Samsung BROM、MTK、MTK BROM、Fastboot、Qualcomm EDL、SPD。
 - **13 个任务类别** —— Flash Firmware（刷写固件）、Remove FRP（移除 FRP）、Remove Screen Lock（移除屏幕锁）、Remove MDM（移除 MDM）、Unlock Carrier（运营商解锁）、Read Device Info（读取设备信息）、Detect Devices（检测设备）、Reboot（重启）、Repair Settings（修复设置），以及按芯片的 EXPERIMENTAL（实验性）：Knox / Warranty（Samsung）、QCN / Modem（Qualcomm）、IMEI Repair / Change（MTK/SPD/Qualcomm）、eMMC / UFS。

@@ -4,63 +4,53 @@ Language switcher: [English](../../CHANGELOG.md) · [Français](../fr/CHANGELOG.
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 
-## 1.3.2（badge 以 USB 协议命名）
+## 1.2.2（自动更新、10 种语言、Rockchip + 调制解调器安全多设备）
 
-- 模式 badge 不再对已连接设备显示 OTHER：'MEDIATEK' 不包含子串 'MTK'，因此一个通用 MTK 模式标签（'MEDIATEK MODE (VID 0x0E8D PID 0x2008)'）一路掉落到 OTHER。
-- 一个正常启动的 MediaTek/Tecno 手机若 PID 不匹配（0e8d:2008，静态图像/MTP 接口，无 ADB 行）不再被认作 low-level MediaTek：只有刷机 PID（BROM/preloader/DA）认领 low-level 标签，其余全部掉落到基于接口的协议命名（ADB/MTP/PTP/DIAG/storage/RNDIS）覆盖 *所有* 设备列表 —— 此前仅 Samsung 设备做协议扫描。
-- Rust 传输层：一个不匹配但仍然暴露静态图像（class 6）接口的 PID 报告 MTP 而非 USB；没有 MTP 接口的硬件保留诚实的 USB 标签。
-- 连接标签对非刷机 PID 显示 'MediaTek device (normal boot)' 而非 'MediaTek low-level'。
-- Qualcomm EDL 保留自己的 badge chip：'EDL MODE (Qualcomm Emergency Download)' 包含子串 'download'，此前会掉落到 DOWNLOAD chip。
-- Qualcomm HS-USB Diagnostics（05c6:9006，如 Diag 模式下的 Moto）被命名为 'QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)'，而非折叠进通用 'QUALCOMM DEVICE' 标签。
+*合并 1.2.2 → 1.3.2 开发周期笔记 —— 自 1.2.1 以来发布的所有内容。*
 
-## 1.3.1（ModeBadge 修复）
+### 自动更新与 What's New（新增）
+- 更新自动安装：下载的 `.deb` 在后台经 sudo 安装，应用重启，并在首次启动时显示一个一次性的"新增或变更了什么"窗口展示新版本的 changelog（当设置 → 更新中关闭自动安装时，手动 "Install Now" 提示仍然保留）。
 
-- 设备模式 badge（顶栏，靠近 Stop）跟随 *选中* 设备，不再对 Qualcomm 正常设置读作 MTP（子串 'normal' 掉落到 MTP chip）。
+### 10 语言 UI + 实时语言切换（新增）
+- 整个 UI 以 10 种附加语言发布（Français、Español、Deutsch、简体中文、Русский、Português、日本語、العربية、हिन्दी、Türkçe）：设置、设备磁贴、页面与控制台字符串。
+- 切换 UI 语言即时生效 —— 无需重启；布局按真实字体度量收缩，长翻译换行而不是裁剪控件。
+- 基于键的 JSON 翻译目录带覆盖率验证；CI 对已安装目录做冒烟测试。
 
-## 1.3.0（设备分类 + 选择器）
+### Rockchip + 更智能的检测（新增）
+- 新 Rockchip 品牌页：经 fastboot 模式覆盖 RK28xx–RK35xx 家族。
+- 检测识别型号、品牌与形态因子 —— 不只是芯片。
+- 每个刷机阶段都被捕获（TFT 对等）：MediaTek BROM/preloader/DA 覆盖完整阶段 PID 集与 OEM VID（含 preloader VCOM 0x2000/0x2001）、扩展的 Qualcomm EDL download-PID 家族、SPD download-PID 并集，以及作为独立模式命名的 Qualcomm HS-USB Diagnostics。
+- 模式 badge 跟随 *选中* 的设备并命名实际 USB 协议（ADB/MTP/PTP/DIAG/storage/RNDIS）而非 OTHER：只有刷机 PID 认领 low-level MediaTek 标签，Qualcomm EDL 保留自己的 badge chip，'MEDIATEK'/'download' 子串掉落问题已修复。
 
-- 不匹配的设备（厂商专属/diag 复合设备）报告 'USB' 而非错误的 'MTP' 标签。
-- 当 USB 选择在 flap 上未命中时，ADB 工具展示 daemon-row 选择器而非拒绝：选择 op 目标设备。
+### Motorola FRP（新增）
+- CVE-2016-10277 fastboot FRP 链、own-DPC 假登录 QR 配置（TestDPC / Device Policy / Adobe）、带刷写 + 重启循环的分阶段 fastboot FRP，以及 factory-bootmode ADB 循环。
 
-## 1.2.9（显示设备身份）
+### 真实引擎路径（新增）
+- Rust 核心中的真实 MTK/QCOM/Unisoc/Samsung 刷机、FRP 与锁路径。
+- odin4 移除：原生 Rust Odin 引擎处理完整 tar 流水线、PIT 与每一类已知 odin4 问题；Apple usbmuxd/lockdown 迁移到 Rust；核心仅 Rust（所有 Python 设备/协议回退已移除）。
 
-- 切换设备不再回退到第一台手机：3 秒刷新、live-identity resolver 及所有回退都按显示设备加键；absence 路径保留行的静态磁贴。
+### 调制解调器安全 ADB（已修复）
+- 轮询/监视/显示路径为 zero-touch（`adb-devices --no-probe`）：循环中无 open/claim/handshake —— USB 调制解调器不再每周期重新枚举（实测：MSM8916 调制解调器上 114 个安静轮询周期）。
+- claim 争用走委派阶梯：原生 → Rust 服务器传输（显式 serial）→ 主机二进制 → 救援 kill（最后手段），因此在系统服务器持有接口时 ADB 操作也能成功。
+- USB-ADB 合并修复（行字符串被解析，所以行真正携带 ADB 状态）、busy 持有者救援 + 瞬态重试 + 诚实的 busy 状态、babble/overflow 守卫、claim 测试隔离命令、现代 adb CNXN 值，且 QCOM/MTK 角落像兄弟分支一样显示 ADB 遮罩。
 
-## 1.2.8（设备列表切换修复）
+### 多设备可靠性（已修复）
+- Device pick 带 settle-retry：当扫描瞬态未命中正在重新枚举的设备时，每个工具 runner 在 2.5 秒后重试一次，而非在 GUI 显示 connected 时以 "no device" 拒绝。
+- ADB AUTH 在 token 轮次中保持 SHA-256 在场（奇数轮 SHA-256，偶数 SHA-1），丢失 round-1 签名不再筑成假 "not authorized" 之墙；`_wait_for_adb` 容忍瞬态扫描失败。
+- 目标身份绑定：占用已复用 bus:addr 的被替换设备被拒绝（zero-touch serial 检查）—— 传输绝不跟随到不同手机。
+- 设备列表切换：第二次扫描丢掉设备时连接栏重建会重试，切换设备不再回退到第一台手机，USB 选择未命中时 ADB 工具回退到 ADB daemon row（"显示 connected 但 actions 说 no adb"）。
+- 设备分类 + 选择器：不匹配的设备报告 USB 而非错误的 MTP 标签，未命中的 USB 选择提供 daemon-row 选择器（"Run on this device" / "Cancel"）而非拒绝。
 
-- 连接栏重建在第二次扫描丢掉监视器刚看到的设备（re-enumeration 窗口）时重试：两台设备都渲染，flapping 链路上切换正常工作。
+### 诚实结果与 GUI 打磨（已修复）
+- FRP 流程要求经过验证的 flags 与真实 shell 退出状态；非零 bridge 退出以日志尾部抛出失败 —— 不再有假的 "completed" toast。
+- GUI：每行任务 chip、窗口记忆、toast 上限、键盘导航、设备感知 STOP（一个任务取消该设备）、kg_unlock 移到工作线程（30 秒链条不再冻结窗口）、splash 跟踪真实构建、延迟页面保持可重试、toast 清出顶栏。
 
-## 1.2.7（目标身份绑定）
-
-- 占用已复用 bus:addr 的被替换设备被拒绝（目标处的 zero-touch serial 检查；open 按 vid/pid/bus/addr 匹配，不按 serial）。关闭设备替换场景：传输绝不会跟随到不同设备。
-
-## 1.2.6（daemon-row 回退）
-
-- ADB 工具在 flapping bus 上 USB 扫描 selection 未命中时回退到 ADB daemon row（daemon 基于 TCP，保持 presence 权威）。修复 '显示 connected 但 actions 说 no adb'。
-
-## 1.2.5（MTK 角落 ADB 遮罩）
-
-- `mtk_devs` 角落分支现在像兄弟分支一样显示 ADB 遮罩：一台带已授权 ADB 的 Tecno/MTK 设备在右上角命名传输（此前只显示 'MediaTek low-level' 而 ADB Status 显示 connected）。
-
-## 1.2.4（ADB AUTH 修复）
-
-- AUTH 哈希交替修正：SHA-256 在 token 轮次中保持在场（奇数轮 SHA-256，偶数 SHA-1）。此前在噪声链路上丢失 round-1 签名会重新 token 化成一堆 SHA-1 → 设备已授权却假报 'not authorized'。
-- `_wait_for_adb` 容忍等待中途的瞬态扫描失败。
-
-## 1.2.3（selection 弹性）
-
-- Device pick 带 settle-retry：每个工具 runner 在扫描瞬态未命中正在重新枚举的设备时重试一次（等待 2.5 秒），而非在 GUI 显示 connected 时就以 "no device" 拒绝。用户取消的选择器绝不重试。
-
-## 1.2.2（modem-safe ADB + 显示修复）
-
-### ADB 传输（已修复）
-- 轮询/监视/显示路径为 zero-touch（`adb-devices --no-probe`、`adb_presence`）：循环中无 open/claim/handshake。修复 USB 调制解调器每周期重新枚举（实测：约 1 Hz 风暴后 MSM8916 调制解调器上 114 个安静轮询周期）。
-- claim 争用时的委派阶梯：原生 → Rust 服务器传输（`adb-shell-server`，仅显式 serial）→ 主机二进制 → 救援 kill（最后手段）。ADB op 现在在系统服务器持有接口时也能成功，而非驱逐它。
-- USB-ADB 合并修复：解析行字符串（结构反序列化曾静默产出零个 ADB 条目，所以行永远没有 ADB 状态）。
-- QCOM 角落现在像兄弟分支一样显示 ADB 遮罩。
-
-### 健壮性（已修复）
-- 瞬态 gate 拒绝时的单次 settle-retry（re-enumeration 窗口），带准确消息；所有诊断/工具 shell 使用 `rescue=False` + serial pinning；Firehose FAIL 检测；CLI 输入 panic；分配 clamp；tar 遍历守卫；严格 XML 数值。
+### 安全与健壮性
+- 默认私有输出、防符号链接的临时名、symlink 检查。
+- 固件默认写后校验 + 型号门控 + 数值修复。
+- FRP：DPC 签名证书原生读取，provisioning 校验和已修复。
+- HIL 硬件测试套件：真实硬件上的多设备 / 设备替换 / USB 风暴回归；ADB 监视退避测试变得确定。
+- 公开着陆页（`website/`），带能力矩阵与协议控制台。
 
 ## 1.2.1（稳定版发布）
 
