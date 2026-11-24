@@ -4,117 +4,62 @@ Language switcher: [English](../../CHANGELOG.md) · [Français](../fr/CHANGELOG.
 
 > English kanonik kaynaktır. Bu sayfa bir çeviridir; katkı memnuniyetle karşılanır — bkz. [`../TRANSLATION.md`](../TRANSLATION.md).
 
-## 1.3.2 (rozet USB protokolünü adlandırır)
+## 1.2.2 (otomatik güncellemeler, 10 dil, Rockchip + modem-güvenli çoklu cihaz)
 
-- Bağlı bir cihazda mod rozeti artık OTHER göstermiyor:
-  'MEDIATEK' alt dize olarak 'MTK' içermiyor, bu yüzden genel bir
-  MTK mod etiketi ('MEDIATEK MODE (VID 0x0E8D PID 0x2008)') tamamen
-  OTHER'a düştü.
-- Eşleşmemiş bir PID'li (0e8d:2008, still-image/MTP arayüzü, ADB satırı
-  olmayan) normal önyükleme MediaTek/Tecno telefonu artık düşük seviyeli
-  MediaTek olarak iddia edilmiyor: yalnızca flashing PID'leri (BROM/preloader/DA)
-  düşük seviyeli etiketini sahipleniyor, geri kalan her şey arayüz tabanlı
-  protokol adlandırmaya (ADB/MTP/PTP/DIAG/storage/RNDIS) düşüyor ve bu TÜM
-  cihaz listelerinde geçerli - daha önce yalnızca Samsung cihazları protokol
-  taramasından geçiyordu.
-- Rust taşımları: yine de still-image (sınıf 6) arayüzü sunan eşleşmemiş bir
-  PID, USB yerine MTP raporlar; MTP arayüzü olmayan donanım dürüst USB
-  etiketini korur.
-- Bağlantı etiketi, non-flashing PID'ler için 'MediaTek low-level' yerine
-  'MediaTek device (normal boot)' gösterir.
-- Qualcomm EDL kendi rozet çipini korur: 'EDL MODE (Qualcomm Emergency
-  Download)' alt dize olarak 'download' içerir ve eskiden DOWNLOAD çipine
-  düşüyordu.
-- Qualcomm HS-USB Diagnostics (05c6:9006, örn. Diag'da Moto) genel
-  'QUALCOMM DEVICE' etiketine katılmak yerine 'QUALCOMM DIAG MODE (HS-USB
-  Diagnostics 9006)' olarak adlandırılır.
+*1.2.2 → 1.3.2 geliştirme döngüsü notlarını birleştirir — 1.2.1'den bu yana çıkan her şey.*
 
-## 1.3.1 (ModeBadge düzeltmesi)
+### Otomatik güncellemeler ve What's New (yeni)
 
-- Cihaz modu rozeti (üst çubuk, Stop yakın) SEÇİLİ cihazı takip eder ve
-  artık Qualcomm-normal kurulumlarda MTP okumaz ('normal' alt dizesi MTP
-  çipine düşüyordu).
+- Güncellemeler otomatik kurulur: indirilen `.deb` arka planda sudo ile kurulur, uygulama yeniden başlar ve ilk açılışta tek seferlik bir "neler eklendi veya değişti" penceresi yeni sürümün değişiklik günlüğünü gösterir (Ayarlar → Güncellemeler'de otomatik kurulum kapalıyken manuel "Install Now" istemi kalır).
 
-## 1.3.0 (cihaz sınıflandırması + seçici)
+### 10 dilli arayüz + canlı dil değişimi (yeni)
 
-- Eşleşmemiş cihazlar (vendor-specific/diag bileşikleri) yanlış 'MTP'
-  etiketi yerine 'USB' raporlar.
-- USB seçimi bir flap üzerinde ıskaladığında ADB araçları reddetmek yerine
-  daemon-satır seçiciyi gösterir: işlemin hangi cihazı hedeflediğini seçin.
+- Arayüzün tamamı 10 ek dilde gelir (Français, Español, Deutsch, 简体中文, Русский, Português, 日本語, العربية, हिन्दी, Türkçe): ayarlar, cihaz kutucukları, sayfalar ve konsol dizeleri.
+- Arayüz dilini değiştirmek anlıktır — yeniden başlatma yok; düzenler gerçek yazı tipi metriklerine uyarlanır, böylece uzun çeviriler kontrolleri kırpmadan satır sonuna iner.
+- Anahtar tabanlı JSON çeviri katalogları kapsam doğrulamasıyla; CI kurulu katalogları smoke-test eder.
 
-## 1.2.9 (görüntülenen cihaz kimliği)
+### Rockchip + daha akıllı algılama (yeni)
 
-- Cihaz değiştirmek artık ilk telefona geri düşmüyor: 3s yenileme, canlı
-  kimlik çözücü ve tüm geri dönüşler görüntülenen cihaza dayanır; yokluk
-  yolu satırın statik kutucuklarını korur.
+- Yeni Rockchip marka sayfası: fastboot modu üzerinden RK28xx–RK35xx ailesi.
+- Algılama yalnızca çipi değil, modeli, markayı ve form faktörünü tanımlar.
+- Her flash aşaması yakalanır (TFT paritesi): MediaTek BROM/preloader/DA tüm aşama PID kümesi ve OEM VID'ler (preloader VCOM 0x2000/0x2001 dahil), genişletilmiş Qualcomm EDL download-PID ailesi, SPD download-PID birleşimi ve kendi modu olarak adlandırılan Qualcomm HS-USB Diagnostics boyunca.
+- Mod rozeti SEÇİLEN cihazı takip eder ve OTHER yerine gerçek USB protokolünü adlandırır (ADB/MTP/PTP/DIAG/storage/RNDIS): düşük seviyeli MediaTek etiketini yalnızca flashing PID'leri sahiplenir, Qualcomm EDL kendi rozet çipini korur ve 'MEDIATEK'/'download' alt dize düşüşleri düzeltildi.
 
-## 1.2.8 (cihaz listesi geçiş düzeltmesi)
+### Motorola FRP (yeni)
 
-- Bağlantı çubuğu yeniden oluşturması, ikinci taraması monitörün az önce
-  gördüğü bir cihazı düşürdüğünde (re-enumeration penceresi) yeniden dener:
-  her iki cihaz da render edilir ve flapping bağlantılarda geçiş çalışır.
+- CVE-2016-10277 fastboot FRP zinciri, own-DPC sahte-giriş QR sağlama (TestDPC / Device Policy / Adobe), flash + yeniden başlatma döngülerini içeren kademeli fastboot FRP ve factory-bootmode ADB döngüsü.
 
-## 1.2.7 (hedef kimlik bağlama)
+### Gerçek motor yolları (yeni)
 
-- Yeniden kullanılan bir bus:addr'ı işgal eden değiştirilmiş bir cihaz
-  reddedilir (hedefte zero-touch seri kontrolü; open eşleşmesi
-  vid/pid/bus/addr, seri numarası değil). Cihaz değiştirme senaryosunu
-  kapatır: taşıma asla farklı bir cihaza takip edilmez.
+- Rust çekirdeğinde gerçek MTK/QCOM/Unisoc/Samsung flash, FRP ve kilit yolları.
+- odin4 gitti: yerel Rust Odin motoru tüm tar hattını, PIT'yi ve bilinen her odin4 sorun sınıfını işler; Apple usbmuxd/lockdown Rust'a taşındı; çekirdek Rust-özel (tüm Python cihaz/protokol geri dönüşleri kaldırıldı).
 
-## 1.2.6 (daemon-satır geri dönüşü)
+### Modem-güvenli ADB (düzeltildi)
 
-- USB tarama seçimi flapping bir bus üzerinde ıskaladığında ADB araçları
-  ADB daemon satırına geri düşer (daemon TCP tabanlıdır ve varlık için
-  yetkili kalır). 'shows connected but actions say no adb' sorununu
-  düzeltir.
+- Poll/monitor/display yolları zero-touch (`adb-devices --no-probe`): döngülerden open/claim/handshake yok — USB modemler her döngüde yeniden numaralandırmayı bırakır (canlı doğrulandı: bir MSM8916 modemde 114 sessiz poll döngüsü).
+- Claim çatışmaları merdivenle devredilir: native → Rust server transport (explicit serial) → host binary → rescue kill (son çare); böylece sistem sunucusu arayüzü elinde tutarken ADB işlemleri başarılı olur.
+- USB-ADB birleştirme düzeltmesi (satır dizeleri ayrıştırılır, böylece satırlar gerçekten ADB durumu taşır), busy tutucusu kurtarma + geçici yeniden deneme + dürüst busy durumu, babble/overflow koruması, claim-test izolasyon komutu, modern adb CNXN değerleri ve QCOM/MTK köşeleri sibling dallar gibi ADB yer paylaşımını gösterir.
 
-## 1.2.5 (MTK köşe ADB yer paylaşımı)
+### Çoklu cihaz güvenilirliği (düzeltildi)
 
-- mtk_devs köşe dalı artık sibling dallar gibi ADB yer paylaşımını
-  gösterir: authorized ADB'li bir Tecno/MTK cihazı taşımayı sağ üst köşede
-  adlandırır (daha önce ADB Status connected gösterirken yalnızca
-  'MediaTek low-level' gösteriyordu).
+- Settle-retry ile seçim: bir tarama yeniden numaralandırılan bir cihazı geçici olarak ıskaladığında her araç çalıştırıcısı 2,5 s sonra bir kez yeniden dener; GUI onu connected gösterirken "no device" ile reddetmek yerine.
+- ADB AUTH, token turları boyunca SHA-256'yı oyunda tutar (tek turlar SHA-256, çift turlar SHA-1); kaybedilen bir round-1 imzası artık yanlış bir "not authorized" duvarına dönüşmez; `_wait_for_adb` geçici tarama hatalarına tolerans gösterir.
+- Hedef kimlik bağlama: yeniden kullanılan bir bus:addr'ı işgal eden değiştirilmiş cihaz reddedilir (zero-touch seri kontrolü) — taşıma asla farklı bir telefonu takip etmez.
+- Cihaz listesi geçişi: ikinci tarama bir cihazı düşürdüğünde bağlantı çubuğu yeniden oluşturma yeniden dener, cihaz değiştirmek artık ilk telefona geri düşmez ve USB seçimi ıskalanınca ADB araçları ADB daemon satırına geri düşer ("connected görünüyor ama actions no adb diyor").
+- Cihaz sınıflandırma + seçici: eşleşmeyen cihazlar yanlış MTP etiketi yerine USB rapor eder ve kaçırılan USB seçimi reddetmek yerine daemon-satır seçiciyi sunar ("Run on this device" / "Cancel").
 
-## 1.2.4 (ADB AUTH düzeltmesi)
+### Dürüst sonuçlar ve GUI cila (düzeltildi)
 
-- AUTH hash alternasyonu düzeltildi: SHA-256 token turları boyunca oyunda
-  kalır (tek turlar SHA-256, çift turlar SHA-1). Daha önce gürültülü bir
-  bağlantıda kaybedilmiş round-1 imzası bir SHA-1 duvarına yeniden
-  token'lanıyordu -> cihaz yetkiliyken false 'not authorized'.
-- `_wait_for_adb` bekleme ortasında geçici tarama hatalarına tolerans gösterir.
+- FRP akışları doğrulanmış bayraklar ve gerçek kabuk çıkış durumu ister; sıfır olmayan bridge çıkışı günlük kuyruğuyla bir hata yükseltir — bir daha sahte "completed" toast yok.
+- GUI: satır başına iş rozetleri, pencere belleği, toast üst sınırı, klavye gezinme, cihaz-farkında STOP (bir iş o cihazı iptal eder), kg_unlock bir worker thread'e taşındı (30 saniyelik zincirler pencereyi dondurmuyor), splash gerçek derlemeyi izler, ertelenmiş sayfalar yeniden denenebilir kalır, toast'lar üst çubuğu temizler.
 
-## 1.2.3 (seçim dayanıklılığı)
+### Güvenlik ve sağlamlık
 
-- Settle-retry ile cihaz seçimi: bir tarama yeniden numaralandırılan bir
-  cihazı geçici olarak ıskaladığında her araç çalıştırıcısı 2,5 s sonra
-  bir kez yeniden dener, GUI onu connected gösterirken "no device" ile
-  reddetmek yerine. Kullanıcı tarafından iptal edilen seçiciler asla
-  yeniden denenmez.
-
-## 1.2.2 (modem-güvenli ADB + görünüm düzeltmeleri)
-
-### ADB taşıma (düzeltildi)
-
-- Poll/monitor/display yolları zero-touch (`adb-devices --no-probe`,
-  `adb_presence`): döngülerden open/claim/handshake yok. Her döngüde
-  yeniden numaralandırılan USB modemleri düzeltir (canlı doğrulandı:
-  ~1 Hz fırtınalarından sonra bir MSM8916 modemde 114 sessiz poll
-  döngüsü).
-- Claim çatışmalarında delegasyon merdiveni: native -> Rust server transport
-  (`adb-shell-server`, yalnızca explicit serial) -> host binary -> rescue
-  kill (son çare). ADB ops artık arayüzü tahliye etmek yerine tutan sistem
-  sunucusuyla başarılı olur.
-- USB-ADB birleştirme düzeltmesi: satır dizeleri ayrıştırılır (struct
-  deserialization sessizce sıfır ADB girdisi üretiyordu, böylece satırlar
-  asla ADB durumu taşımıyordu).
-- QCOM köşesi artık sibling dallar gibi ADB yer paylaşımını gösterir.
-
-### Sağlamlık (düzeltildi)
-
-- Doğru mesajlarla geçici kapı reddetmelerinde (re-enumeration
-  pencereleri) tek settle-retry; `rescue=False` + tüm diagnostic/tool
-  shell'lerinde serial pinning; Firehose FAIL tespiti; CLI giriş panikleri;
-  allocation clamps; tar traversal guards; strict XML numerics.
+- Varsayılan olarak özel çıktılar, symlink'e dayanıklı geçici adlar, symlink kontrolleri.
+- Firmware için varsayılan yaz-sonra-doğrula + model kapısı + sayısal düzeltmeler.
+- FRP: DPC imza sertifikası yerel olarak okunur ve provisioning checksum'ı düzeltildi.
+- HIL donanım test düzeneği: gerçek donanımda çoklu cihaz / cihaz-değişimi / USB-fırtınası gerileme testleri; ADB-izleyici backoff testleri deterministik yapıldı.
+- Yetenek matrisi ve protokol konsoluyla genel açılış sayfası (`website/`).
 
 ## 1.2.1 (stabil sürüm)
 

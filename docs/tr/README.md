@@ -37,7 +37,7 @@ Android onarım dünyası kapalı, yalnızca Windows'ta çalışan ticari araçl
 
 ---
 
-## 🚀 Öne çıkanlar — 1.2.1 Stabil (0 uyarı)
+## 🚀 Öne çıkanlar — 1.2.2 Stabil (0 uyarı)
 
 - **9 taşıma modu** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
 - **13 iş kategorisi** — Flash Firmware, Remove FRP, Remove Screen Lock, Remove MDM, Unlock Carrier, Read Device Info, Detect Devices, Reboot, Repair Settings, ayrıca çip başına DENEYSEL: Knox / Garanti (Samsung), QCN / Modem (Qualcomm), IMEI Repair / Change (MTK/SPD/Qualcomm), eMMC / UFS.

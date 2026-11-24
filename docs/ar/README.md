@@ -37,7 +37,7 @@ Language switcher: [English](../../README.md) · [Français](../fr/README.md) ·
 
 ---
 
-## 🚀 أبرز الميزات — 1.2.1 Stable (0 warnings)
+## 🚀 أبرز الميزات — 1.2.2 Stable (0 warnings)
 
 - **9 أوضاع نقل** — ADB، MTP، وضع Download Samsung، Samsung BROM، MTK، MTK BROM، Fastboot، Qualcomm EDL، SPD.
 - **13 فئة jobs** — Flash Firmware، Remove FRP، Remove Screen Lock، Remove MDM، Unlock Carrier، Read Device Info، Detect Devices، Reboot، Repair Settings، بالإضافة إلى EXPERIMENTAL حسب Chip: Knox / Warranty (Samsung)، QCN / Modem (Qualcomm)، IMEI Repair / Change (MTK/SPD/Qualcomm)، eMMC / UFS.

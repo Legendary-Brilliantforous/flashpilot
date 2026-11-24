@@ -37,7 +37,7 @@ Le monde de la réparation Android repose sur des outils commerciaux fermés, r�
 
 ---
 
-## 🚀 Points forts — 1.2.1 Stable (0 avertissement)
+## 🚀 Points forts — 1.2.2 Stable (0 avertissement)
 
 - **9 modes de transport** — ADB, MTP, mode Download Samsung, BROM Samsung, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
 - **13 catégories de jobs** — Flasher le firmware, Supprimer FRP, Supprimer le verrou d'écran, Supprimer MDM, Déverrouiller l'opérateur, Lire les infos de l'appareil, Détecter les appareils, Redémarrer, Réparer les paramètres, plus par puce en EXPERIMENTAL : Knox / Garantie (Samsung), QCN / Modem (Qualcomm), Réparation / changement d'IMEI (MTK/SPD/Qualcomm), eMMC / UFS.

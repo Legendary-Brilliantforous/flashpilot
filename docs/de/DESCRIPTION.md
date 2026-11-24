@@ -1,14 +1,14 @@
-# FlashPilot 1.2.1 — Stabil
+# FlashPilot 1.2.2 — Stabil
 
 Language switcher: [English](../../DESCRIPTION.md) · [Français](../fr/DESCRIPTION.md) · [Español](../es/DESCRIPTION.md) · **Deutsch**
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 
 Open-Source-Linux-Workbench zum Flashen und Reparieren von Android-Geräten — das
-kostenlose Äquivalent zu kommerziellen Windows-Flash-Suiten. **1.2.0 ist ein
-Stabilitäts- + Fortschritts-Release: `cargo check` 0 Warnungen, `cargo test` 60 +
-`pytest` 149 bestanden, live GitHub-Release-Kanal und nachvollziehbare
-Historie.**
+kostenlose Äquivalent zu kommerziellen Windows-Flash-Suiten. **1.2.2 ist ein
+Stabilitäts- + Fortschritts-Release: `cargo check` 0 Warnungen, die
+vollständigen `cargo test`- + `pytest`-Suiten bestehen, live
+GitHub-Release-Kanal und nachvollziehbare Historie.**
 
 Ein nativer **Rust**-Kern (`flashpilot-bridge`, ~9.300 LOC, vendored libusb)
 spricht direkt mit Bootloader-Protokollen — Samsung Odin/HID, MediaTek
@@ -18,7 +18,20 @@ Operationen präsentiert: Flashen, FRP-Bypass, Bildschirmsperre entfernen,
 MDM-Entsperrung, Partitionstools, Geräteinfo, Neustart sowie Akku-/Netzwerk-
 Reparatur an jedem ADB-Gerät.
 
-**Neu in 1.2.0 stabil:**
+**Neu in 1.2.2 stabil:**
+- **Auto-Updates + What's New** — das heruntergeladene `.deb` installiert per
+  sudo im Hintergrund, die App startet neu, und ein Einmal-Fenster zeigt,
+  was hinzugekam oder geändert wurde.
+- **10-Sprachen-UI mit Live-Wechsel** — Français, Español, Deutsch, 简体中文,
+  Русский, Português, 日本語, العربية, हिन्दी, Türkçe; der Wechsel ist sofort
+  (kein Neustart) und Layouts klemmen an Font-Metriken, sodass Übersetzungen
+  umbrechen.
+- **Rockchip-Marke + schlauere Erkennung** — RK28xx–RK35xx-Familie via
+  Fastboot; Modell, Marke und Formfaktor identifiziert; jede Flash-Stage
+  erwischt (TFT-Parität) über MTK-OEM-VIDs, EDL- und SPD-Download-PIDs.
+- **Modemsicheres Multi-Device-ADB** — Zero-Touch-Polls, Delegationsleiter
+  bei Claim-Kämpfen, Settle-Retry-Picks, Ziel-Identitätsbindung, ehrliche
+  FRP-Ergebnisse.
 - **Bridge 0 Warnungen** — 18 tote Pfade verdrahtet: AT-`Context`-Retention
   und `vid`-Validierung (`AT/control`-Re-Enumeration nach `+DEBUGLVC`),
   USB-`EndpointConfig.max_packet_size`-Chunking & `open_target/read_exact/info`,
@@ -27,7 +40,7 @@ Reparatur an jedem ADB-Gerät.
   `FirehosePacket`, MTK `read16/write16` — `-80KB` `lto`, keine Handle-Lecks.
 - **Dynamische Version** — `APP_VERSION` aus installiertem
   `importlib.metadata` (deb-`pyproject.toml` ist Truth), `_display_version`
-  `1.2.0→1.2` / `1.2.1→1.2.1`, live GitHub `latest stable` (niemals
+  `1.2.0→1.2` / `1.2.2→1.2.2`, live GitHub `latest stable` (niemals
   händisch codiert), BETA-Pille auf Logo/Titelbar.
 - **Einheitliche große Dialoge** — 620 px zentrierte ziehbare Karten (vs.
   320 px Toast) mit hochkontrastierendem `#e2e8f0`-Text, `✕` + `X`-Drag,
@@ -47,6 +60,6 @@ Reparatur an jedem ADB-Gerät.
 - **Plattform:** Linux
 - **Sprache:** Rust (Kern) + Python 3.10+ / PyQt6 (UI)
 - **Lizenz:** MIT
-- **Status:** stabil 1.2.0 — Mitwirkende willkommen
+- **Status:** stabil 1.2.2 — Mitwirkende willkommen
 
 Verwende es nur an Geräten, die dir gehören oder die du reparieren darfst.

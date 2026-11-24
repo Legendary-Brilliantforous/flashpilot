@@ -43,8 +43,8 @@ def test_version_constants_match_pyproject():
 def test_version_is_a_plain_release_triple():
     """BETA builds append a suffix, but the package version stays numeric.
 
-    ``_display_version``/``_is_beta_version`` understand ``1.2.1`` and
-    ``1.2.1-beta.1``; anything else (e.g. a stray ``v``) renders oddly.
+    ``_display_version``/``_is_beta_version`` understand ``1.2.2`` and
+    ``1.2.2-beta.1``; anything else (e.g. a stray ``v``) renders oddly.
     """
     version = _pyproject_version()
     assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?", version), version

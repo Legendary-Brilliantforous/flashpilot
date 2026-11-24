@@ -4,65 +4,62 @@ Language switcher: [English](../../CHANGELOG.md) · [Français](../fr/CHANGELOG.
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 
-## 1.3.2（badge が USB プロトコルに名前を付ける）
+## 1.2.2（自動更新、10言語、Rockchip + モデムセーフなマルチデバイス）
 
-- モード badge は、接続済みデバイスに OTHER を表示しなくなりました：'MEDIATEK' は部分文字列 'MTK' を含まないため、汎用 MTK モードラベル（'MEDIATEK MODE (VID 0x0E8D PID 0x2008)'）がすべての判定を越えて OTHER に落ちていました。
-- 不一致 PID の通常起動 MediaTek/Tecno 端末（0e8d:2008、スチル画像/MTP インターフェース、ADB 行なし）は low-level MediaTek として主張されなくなりました：low-level ラベルを名乗るのは刷機 PID（BROM/preloader/DA）のみで、それ以外は全デバイスリストにわたってインターフェースベースのプロトコル命名（ADB/MTP/PTP/DIAG/storage/RNDIS）に落ちます — 以前は Samsung デバイスのみがプロトコルスキャンを受けました。
-- Rust トランスポート：不一致 PID でもスチル画像（class 6）インターフェースを公開していれば MTP を報告し、MTP インターフェースを持たないハードウェアは正直な USB ラベルを維持します。
-- 接続ラベルは、非刷機 PID に対し 'MediaTek low-level' の代わりに 'MediaTek device (normal boot)' を表示します。
-- Qualcomm EDL は独自 badge chip を維持します：'EDL MODE (Qualcomm Emergency Download)' は部分文字列 'download' を含み、DOWNLOAD chip に落ちていました。
-- Qualcomm HS-USB Diagnostics（05c6:9006、Diag モードの Moto など）は、汎用 'QUALCOMM DEVICE' ラベルに畳まれるのではなく 'QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)' と名付けられます。
+*1.2.2 → 1.3.2 の開発サイクルノートを統合したもの — 1.2.1 以降にリリースされたすべての内容。*
 
-## 1.3.1（ModeBadge 修正）
+### 自動更新と What's New（新機能）
 
-- デバイスモード badge（トップバー、Stop 近傍）は *選択された* デバイスに従い、Qualcomm の通常セットアップで MTP と読まれなくなります（部分文字列 'normal' が MTP chip に落ちていました）。
+- 更新の自動インストール：ダウンロードした `.deb` がバックグラウンドで sudo によりインストールされ、アプリが再起動し、初回起動時に 1 回限りの「何が追加・変更されたか」ウィンドウが新バージョンの changelog を表示します（Settings → Updates で自動インストールがオフの場合は、従来の手動 "Install Now" プロンプトがそのまま残ります）。
 
-## 1.3.0（デバイス分類 + 選択）
+### 10言語 UI + リアルタイム言語切り替え（新機能）
 
-- 不一致デバイス（ベンダー専用/diag 複合）は、誤った 'MTP' ではなく 'USB' を報告します。
-- flap 上で USB pick が外れたとき、ADB ツールは拒否せずに daemon-row 選択を示します：op 対象デバイスを選択できます。
+- UI 全体が 10 の追加言語（Français、Español、Deutsch、简体中文、Русский、Português、日本語、العربية、हिन्दी、Türkçe）で提供されます：設定、デバイスタイル、ページ、コンソール文字列。
+- UI 言語の切り替えは即時 — 再起動不要。レイアウトは実際のフォントメトリクスに合わせて調整されるため、長い翻訳でもコントロールを切り取らずに折り返します。
+- キーベースの JSON 翻訳カタログにカバレッジ検証付き。CI はインストールされたカタログをスモークテストします。
 
-## 1.2.9（表示デバイスのアイデンティティ）
+### Rockchip + より賢い検出（新機能）
 
-- デバイス切り替え時に最初の電話へフォールバックしなくなりました：3秒のリフレッシュ、live-identity resolver、すべてのフォールバックが表示デバイスにキー付けされ、absence パスは行の静的タイルを保持します。
+- 新しい Rockchip ブランドページ：fastboot モード経由で RK28xx–RK35xx ファミリーに対応。
+- 検出はチップだけでなく、モデル・ブランド・フォームファクターを識別します。
+- すべてのフラッシュ段階を捕捉（TFT パリティ）：MediaTek BROM/preloader/DA が全段階 PID セットと OEM VID（preloader VCOM 0x2000/0x2001 を含む）を網羅し、拡張された Qualcomm EDL download-PID ファミリー、SPD download-PID の和集合、そして固有のモードとして名付けられる Qualcomm HS-USB Diagnostics を扱います。
+- モード badge は*選択された*デバイスに従い、OTHER の代わりに実際の USB プロトコル（ADB/MTP/PTP/DIAG/storage/RNDIS）を名付けます：low-level MediaTek ラベルを名乗るのはフラッシュ PID のみ、Qualcomm EDL は独自の badge chip を維持し、'MEDIATEK'/'download' 部分文字列のフォールスルーは修正済みです。
 
-## 1.2.8（デバイスリスト切り替え修正）
+### Motorola FRP（新機能）
 
-- 接続バーのリビルドは、監視器がちょうど見たデバイスを第二次スキャンが落とす場合（re-enumeration 窓）にリトライします：両方のデバイスがレンダリングされ、flapping な接続でも切り替えが動作します。
+- CVE-2016-10277 fastboot FRP チェーン、own-DPC 偽ログイン QR プロビジョニング（TestDPC / Device Policy / Adobe）、フラッシュ + 再起動サイクルを伴う段階的 fastboot FRP、factory-bootmode ADB サイクル。
 
-## 1.2.7（ターゲットアイデンティティ束縛）
+### 実エンジンパス（新機能）
 
-- 再利用された bus:addr を占有する置換デバイスは拒否されます（ターゲットでの zero-touch serial チェック；open は vid/pid/bus/addr で一致し、serial ではありません）。デバイス置換シナリオを閉じます：トランスポートは別のデバイスへは追跡されません。
+- Rust コアに実 MTK/QCOM/Unisoc/Samsung のフラッシュ・FRP・ロックパス。
+- odin4 は廃止：ネイティブ Rust Odin エンジンが tar パイプライン全体、PIT、既知の odin4 問題クラスすべてを処理します。Apple usbmuxd/lockdown は Rust へ移行。コアは Rust のみ（Python デバイス/プロトコルフォールバックは全廃）。
 
-## 1.2.6（daemon-row フォールバック）
+### モデムセーフ ADB（修正）
 
-- ADB ツールは、flapping bus 上で USB スキャンの選択が外れたときに ADB daemon row へフォールバックします（daemon は TCP ベースで presence の正本を保ちます）。'connected と表示されるが actions は no adb' を修正します。
+- poll/monitor/display パスは zero-touch（`adb-devices --no-probe`）：ループからの open/claim/handshake なし — USB モデムが毎サイクル再列挙するのを止めます（実測：MSM8916 モデムで 114 サイクルの静かな poll）。
+- claim 争奪はラダーで委譲：ネイティブ → Rust サーバートランスポート（明示的 serial）→ ホストバイナリ → 救援 kill（最終手段）。システムサーバーがインターフェースを保持していても ADB op は成功します。
+- USB-ADB マージ修正（行文字列を解析するため、行が実際に ADB 状態を持つ）、busy 保持者への救済 + 瞬時リトライ + 正直な busy 状態、babble/overflow ガード、claim テスト分離コマンド、現代的な adb CNXN 値、そして QCOM/MTK 角も兄弟分岐と同様に ADB オーバーレイを表示します。
 
-## 1.2.5（MTK 角 ADB オーバーレイ）
+### マルチデバイス信頼性（修正）
 
-- `mtk_devs` 角の分岐は、兄弟分岐と同様に ADB オーバーレイを表示するようになりました：認可された ADB を持つ Tecno/MTK デバイスが右上角でトランスポート名を出します（以前は 'MediaTek low-level' のみで、ADB Status は connected を表示していました）。
+- settle-retry 付き pick：スキャンが再列挙中のデバイスを瞬時に取り逃したとき、すべてのツール runner は 2.5 秒後に一度リトライし、GUI が connected と表示しているのに "no device" で拒否することがなくなります。
+- ADB AUTH は token ラウンドを通じて SHA-256 を維持します（奇数ラウンド SHA-256、偶数 SHA-1）。round-1 署名を失っても偽の "not authorized" に壁で塞がれなくなります。`_wait_for_adb` は瞬時のスキャン失敗に耐えます。
+- ターゲットアイデンティティ束縛：再利用された bus:addr を占有する置換デバイスは拒否されます（zero-touch serial チェック）— トランスポートは別の電話を追跡しません。
+- デバイスリスト切り替え：第二次スキャンがデバイスを落としたとき接続バーのリビルドがリトライし、デバイス切り替えが最初の電話へフォールバックしなくなり、USB pick が外れたとき ADB ツールは ADB daemon row にフォールバックします（"connected 表示なのに actions は no adb"）。
+- デバイス分類 + 選択：不一致デバイスは誤った MTP ラベルではなく USB を報告し、外れた USB pick は拒否の代わりに daemon-row 選択を提示します（"Run on this device" / "Cancel"）。
 
-## 1.2.4（ADB AUTH 修正）
+### 正直な結果と GUI 磨き（修正）
 
-- AUTH ハッシュ交互が修正されました：SHA-256 は token ラウンドを通じて参加し続けます（奇数ラウンド SHA-256、偶数 SHA-1）。以前は、ノイズの多いリンクで round-1 署名を失うと token 再発行して SHA-1 だらけになり、デバイスが認可済みのまま 'not authorized' と誤報していました。
-- `_wait_for_adb` は待機途中の瞬間的なスキャン失敗を許容します。
+- FRP フローは検証済みフラグと実際のシェル終了ステータスを要求します。非ゼロ bridge 終了はログ末尾付きで失敗を通知 — もう偽の "completed" toast はありません。
+- GUI：行ごとのジョブ chip、ウィンドウ記憶、toast 上限、キーボードナビゲーション、デバイス認識 STOP（1 ジョブがそのデバイスをキャンセル）、kg_unlock をワーカースレッドへ移動（30 秒チェーンがウィンドウを凍結しなくなる）、splash が実際のビルドを追跡、延期ページはリトライ可能のまま、toast はトップバーをクリアします。
 
-## 1.2.3（選択のレジリエンス）
+### セキュリティと堅牢性
 
-- settle-retry を伴う Device pick：すべてのツール runner は、再列挙中のデバイスにスキャンが瞬間的に外れたときに 2.5 秒後に一度リトライし、GUI が connected と表示しているのに "no device" で拒否するのではなくなります。ユーザーがキャンセルした選択器はリトライされません。
-
-## 1.2.2（modem-safe ADB + 表示修正）
-
-### ADB 転送（修正）
-
-- poll/monitor/display パスは zero-touch です（`adb-devices --no-probe`、`adb_presence`）：ループから open/claim/handshake はありません。USB モデムが毎サイクル再列挙する問題を修正（実測：約 1 Hz の嵐後、MSM8916 モデムで 114 の静かな poll サイクル）。
-- claim 争奪時の委譲ラダー：ネイティブ → Rust サーバートランスポート（`adb-shell-server`、明示的 serial のみ）→ ホストバイナリ → 救援 kill（最後の手段）。ADB op は、システムサーバーがインターフェースを保持している状態でも成功し、それを追い出さなくなります。
-- USB-ADB マージ修正：行文字列を解析します（構造化デシリアライズは静かに 0 個の ADB エントリを生み、行は ADB 状態を保持しませんでした）。
-- QCOM 角は兄弟分岐と同様に ADB オーバーレイを表示します。
-
-### 堅牢性（修正）
-
-- 瞬間的な gate 拒否の単一 settle-retry（re-enumeration 窓）、正確なメッセージ付き；すべての診断/ツールシェルに `rescue=False` + serial pinning；Firehose FAIL 検出；CLI 入力 panic；配分 clamp；tar 走査ガード；厳格 XML 数値。
+- デフォルトでプライベートな出力、symlink 耐性のある一時名、symlink チェック。
+- ファームウェアはデフォルトで書き込み後検証 + モデルゲート + 数値修正。
+- FRP：DPC 署名証明書をネイティブに読み取り、provisioning チェックサムを修正。
+- HIL ハードウェアテストハーネス：実ハードウェアでの multi-device / device-replacement / USB-storm 回帰。ADB モニターバックオフテストを決定論化。
+- 公開ランディングページ（`website/`）：ケイパビリティマトリクスとプロトコルコンソール付き。
 
 ## 1.2.1（安定版リリース）
 

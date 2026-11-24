@@ -4,63 +4,53 @@ Language switcher: [English](../../CHANGELOG.md) · [Français](../fr/CHANGELOG.
 
 > English is the canonical source. This page is a translation; help wanted — see [`../TRANSLATION.md`](../TRANSLATION.md).
 
-## 1.3.2 (der Badge nennt das USB-Protokoll)
+## 1.2.2 (Auto-Updates, 10 Sprachen, Rockchip + modemsicheres Multi-Device)
 
-- Der Modus-Badge zeigt nicht mehr OTHER für ein verbundenes Gerät: "MEDIATEK" enthält die Teilzeichenkette "MTK" nicht, daher fiel ein generisches MTK-Modus-Label ('MEDIATEK MODE (VID 0x0E8D PID 0x2008)') ganz bis OTHER durch.
-- Ein normal gebootetes MediaTek/Tecno-Telefon mit unpassender PID (0e8d:2008, Still-Image-/MTP-Schnittstelle, keine ADB-Reihe) wird nicht mehr als Low-Level-MediaTek in Anspruch genommen: nur Flash-PIDs (BROM/Preloader/DA) beanspruchen das Low-Level-Label, alles andere fällt durch auf schnittstellenbasierte Protokollbenennung (ADB/MTP/PTP/DIAG/storage/RNDIS) über ALLE Gerätelisten — zuvor wurden nur Samsung-Geräte protokollgescannt.
-- Rust-Transporte: eine unpassende PID, die noch eine Still-Image-Schnittstelle (Klasse 6) exponiert, meldet MTP statt USB; Hardware ohne MTP-Schnittstelle behält das ehrliche USB-Label.
-- Das Verbindungs-Label zeigt "MediaTek device (normal boot)" statt "MediaTek low-level" bei Nicht-Flash-PIDs.
-- Qualcomm-EDL behält seinen eigenen Badge-Chip: "EDL MODE (Qualcomm Emergency Download)" enthält die Teilzeichenkette "download" und fiel zuvor auf den DOWNLOAD-Chip durch.
-- Qualcomm-HS-USB-Diagnosen (05c6:9006, z. B. Moto in Diag) werden als "QUALCOMM DIAG MODE (HS-USB Diagnostics 9006)" benannt statt in das generische "QUALCOMM DEVICE"-Label zu verschmelzen.
+*Konsolidiert die Entwicklungszyklus-Notizen 1.2.2 → 1.3.2 — alles, was seit 1.2.1 ausgeliefert wurde.*
 
-## 1.3.1 (ModeBadge-Korrektur)
+### Auto-Updates & What's New (neu)
+- Updates installieren sich automatisch: das heruntergeladene `.deb` installiert sich per sudo im Hintergrund, die App startet neu, und ein Einmal-Fenster "was hinzugekam oder geändert wurde" zeigt das Changelog der neuen Version beim ersten Start (die manuelle "Install Now"-Aufforderung bleibt, wenn Auto-Install in Einstellungen → Updates ausgeschaltet ist).
 
-- Der Gerätemodus-Badge (oberste Leiste, bei Stop) folgt dem AUSGEWÄHLTEN Gerät und liest nicht mehr MTP für Qualcomm-normal-Konfigurationen (die Teilzeichenkette "normal" fiel auf den MTP-Chip durch).
+### 10-Sprachen-UI + Live-Sprachwechsel (neu)
+- Die ganze UI kommt in 10 zusätzlichen Sprachen (Français, Español, Deutsch, 简体中文, Русский, Português, 日本語, العربية, हिन्दी, Türkçe): Einstellungen, Geräte-Kacheln, Seiten und Konsolen-Strings.
+- Der UI-Sprachwechsel ist sofort — kein Neustart; Layouts klemmen an echten Font-Metriken, sodass lange Übersetzungen umbrechen statt Controls abzuschneiden.
+- Key-basierte JSON-Übersetzungskataloge mit Coverage-Verifikation; die CI smoke-testet die installierten Kataloge.
 
-## 1.3.0 (Geräteklassifizierung + Picker)
+### Rockchip + schlauere Erkennung (neu)
+- Neue Rockchip-Marken-Seite: RK28xx–RK35xx-Familie über den Fastboot-Modus.
+- Die Erkennung identifiziert Modell, Marke und Formfaktor — nicht nur den Chip.
+- Jede Flash-Stage wird erwischt (TFT-Parität): MediaTek BROM/Preloader/DA über den vollen Stage-PID-Satz und OEM-VIDs (inkl. Preloader-VCOM 0x2000/0x2001), die erweiterte Qualcomm-EDL-Download-PID-Familie, die Vereinigung der SPD-Download-PIDs, und Qualcomm HS-USB-Diagnostics als eigener Modus benannt.
+- Der Modus-Badge folgt dem AUSGEWÄHLTEN Gerät und nennt das tatsächliche USB-Protokoll (ADB/MTP/PTP/DIAG/storage/RNDIS) statt OTHER: nur Flash-PIDs beanspruchen das Low-Level-MediaTek-Label, Qualcomm-EDL behält seinen Badge-Chip, und die 'MEDIATEK'/'download'-Teilzeichenketten-Durchfälle sind behoben.
 
-- Nicht zugeordnete Geräte (vendor-spezifische/diag-Komposite) melden "USB" statt des falschen "MTP"-Labels.
-- Wenn der USB-Pick bei einem Flap verfehlt, zeigen ADB-Tools den Daemon-Reihen-Picker statt abzulehnen: wähle, auf welches Gerät die Operation zielt.
+### Motorola-FRP (neu)
+- CVE-2016-10277-Fastboot-FRP-Kette, Fake-Login-QR-Provisionierung mit eigenem DPC (TestDPC / Device Policy / Adobe), gestuftes Fastboot-FRP mit Flash- + Reboot-Zyklen, und ein ADB-Zyklus im Factory-Bootmode.
 
-## 1.2.9 (Anzeige-Geräteidentität)
+### Echte Engine-Pfade (neu)
+- Echte MTK/QCOM/Unisoc/Samsung-Flash-, FRP- und Lock-Pfade im Rust-Kern.
+- odin4 ist weg: die native Rust-Odin-Engine bewältigt die komplette tar-Pipeline, PIT und jede bekannte odin4-Problemklasse; Apple usbmuxd/lockdown zog nach Rust; der Kern ist Rust-only (alle Python-Geräte-/Protokoll-Fallbacks entfernt).
 
-- Geräte zu wechseln fällt nicht mehr auf das erste Telefon zurück: die 3-s-Aktualisierung, der Live-Identitäts-Resolver und alle Fallbacks richten sich nach dem angezeigten Gerät; der Pfad bei Abwesenheit behält die statischen Kacheln der Reihe.
+### Modemsicheres ADB (behoben)
+- Poll-/Monitor-/Anzeige-Pfade sind zero-touch (`adb-devices --no-probe`): kein open/claim/handshake aus Schleifen — USB-Modems enumerieren sich nicht mehr jeden Zyklus neu (live verifiziert: 114 ruhige Poll-Zyklen auf einem MSM8916-Modem).
+- Bei Claim-Kämpfen wird eine Leiter hinunter delegiert: nativ → Rust-Server-Transport (explizite Seriennummer) → Host-Binary → Rettungs-kill (letzter Ausweg), sodass ADB-Ops gelingen, während der System-Server die Schnittstelle hält.
+- USB-ADB-Merge-Korrektur (Reihenzeichenketten werden geparst, sodass Reihen tatsächlich ADB-Zustand tragen), Busy-Halter-Rettung + transientes Retry + ehrlicher Busy-Zustand, Babble/Overflow-Guard, Claim-Test-Isolationsbefehl, moderne adb-CNXN-Werte, und die QCOM-/MTK-Ecken zeigen das ADB-Overlay wie Geschwister-Zweige.
 
-## 1.2.8 (Gerätelisten-Wechsel-Korrektur)
+### Multi-Device-Zuverlässigkeit (behoben)
+- Pick mit Settle-Retry: jeder Tool-Runner wiederholt einmal nach 2,5 s, wenn ein Scan ein re-enumerierendes Gerät transient verfehlt, statt mit "no device" abzulehnen, während die GUI es verbunden anzeigt.
+- ADB-AUTH hält SHA-256 über Token-Runden im Spiel (ungerade Runden SHA-256, gerade SHA-1), sodass eine verlorene Runde-1-Signatur nicht mehr in ein falsches "not authorized" mauert; `_wait_for_adb` toleriert transiente Scan-Fehler.
+- Ziel-Identitätsbindung: ein ersetztes Gerät, das einen wiederverwendeten bus:addr besetzt, wird abgelehnt (Zero-Touch-Serienprüfung) — der Transport verfolgt nie ein anderes Telefon.
+- Gerätelisten-Wechsel: der Neuaufbau der Verbindungsleiste wiederholt sich, wenn der zweite Scan ein Gerät verliert, der Gerätewechsel fällt nicht mehr auf das erste Telefon zurück, und ADB-Tools fallen auf die ADB-Daemon-Reihe zurück, wenn der USB-Pick verfehlt ("zeigt verbunden, aber Aktionen sagen kein adb").
+- Geräte-Klassifizierung + Picker: nicht zugeordnete Geräte melden USB statt eines falschen MTP-Labels, und ein verpasster USB-Pick bietet den Daemon-Reihen-Picker ("Run on this device" / "Cancel") statt abzulehnen.
 
-- Der Neuaufbau der Verbindungsleiste wiederholt sich, wenn der zweite Scan in einem Zeitfenster der Re-Enumeration ein vom Monitor gerade gesehenes Gerät verliert: beide Geräte werden gerendert und das Wechseln funktioniert auf flatternden Links.
+### Ehrliche Ergebnisse & GUI-Politur (behoben)
+- FRP-Flows verlangen verifizierte Flags und einen echten Shell-Exit-Status; ein nicht-null Bridge-Exit wirft einen Fehler mit dem Log-Tail — keine falschen "completed"-Toasts mehr.
+- GUI: Job-Chips pro Reihe, Fenster-Gedächtnis, Toast-Obergrenze, Tastaturnavigation, gerätebewusstes STOP (ein Job bricht dieses Gerät ab), kg_unlock in einen Worker-Thread verschoben (30-Sekunden-Ketten frieren das Fenster nicht mehr ein), Splash folgt dem echten Build, verschobene Seiten bleiben wiederholbar, Toasts räumen die oberste Leiste.
 
-## 1.2.7 (Ziel-Identitätsbindung)
-
-- Ein ersetztes Gerät, das einen wiederverwendeten bus:addr besetzt, wird abgelehnt (Zero-Touch-Serienprüfung am Ziel; das Öffnen gleicht vid/pid/bus/addr ab, nicht die Seriennummer). Schließt das Szenario des Geräteersatzes: Der Transport wird nie zu einem anderen Gerät verfolgt.
-
-## 1.2.6 (Daemon-Reihen-Fallback)
-
-- ADB-Tools fallen auf die ADB-Daemon-Reihe zurück, wenn der USB-Scan-Pick auf einem flatternden Bus verfehlt (der Daemon ist TCP-basiert und bleibt autoritativ für Präsenz). Behebt "zeigt verbunden, aber Aktionen sagen kein adb".
-
-## 1.2.5 (MTK-Ecken-ADB-Overlay)
-
-- Der mtk_devs-Ecken-Zweig zeigt jetzt das ADB-Overlay wie Geschwister-Zweige: ein Tecno-/MTK-Gerät mit autorisiertem ADB benennt den Transport oben rechts (zuvor nur "MediaTek low-level", während ADB Status verbunden zeigte).
-
-## 1.2.4 (ADB-AUTH-Korrektur)
-
-- AUTH-Hash-Alternation korrigiert: SHA-256 bleibt über Token-Runden in Spiel (ungerade Runden SHA-256, gerade SHA-1). Zuvor re-tokenierte ein verlorener Runde-1-Signatur auf einer rauschigen Verbindung in eine Wand aus SHA-1 -> falsches "not authorized", obwohl das Gerät autorisiert war.
-- `_wait_for_adb` toleriert transiente Scan-Fehler während des Wartens.
-
-## 1.2.3 (Pick-Resilienz)
-
-- Geräte-Pick mit Settle-Retry: jeder Tool-Runner wiederholt einmal nach 2,5 s, wenn ein Scan ein re-enumerierendes Gerät transient verfehlt, statt mit "no device" abzulehnen, während die GUI es verbunden anzeigt. Vom Benutzer abgebrochene Auswahlen werden nie wiederholt.
-
-## 1.2.2 (modemsicheres ADB + Anzeigekorrekturen)
-
-### ADB-Transport (behoben)
-- Poll-/Monitor-/Anzeige-Pfade sind zero-touch (`adb-devices --no-probe`, `adb_presence`): keine open/claim/handshake aus Schleifen. Behebt USB-Modems, die jeden Zyklus re-enumerieren (live verifiziert: 114 ruhige Poll-Zyklen auf einem MSM8916-Modem nach ~1 Hz-Stürmen).
-- Delegationsleiter bei Claim-Kämpfen: nativ -> Rust-Server-Transport (`adb-shell-server`, explizit nur Seriennummer) -> Host-Binary -> Rettungs-kill (letzter Ausweg). ADB-Ops gelingen jetzt mit dem System-Server, der die Schnittstelle hält, statt diese zu verdrängen.
-- USB-ADB-Merge-Korrektur: Reihenzeichenketten werden geparst (Strukt-Deserialisierung hatte stillschweigend null ADB-Einträge geliefert, sodass Reihen nie ADB-Zustand trugen).
-- QCOM-Ecke zeigt jetzt das ADB-Overlay wie Geschwister-Zweige.
-
-### Robustheit (behoben)
-- Einzelnes Settle-Retry bei transienten Gate-Ablehnungen (Re-Enumerations-Fenster) mit genauen Meldungen; `rescue=False` + Serien-Pinning über alle Diagnose-/Tool-Shells; Firehose-FAIL-Erkennung; CLI-Eingabe-Panics; Allokations-Klemmen; tar-Traversal-Guards; strenge XML-Numerik.
+### Sicherheit & Robustheit
+- Private-by-default-Ausgaben, symlink-sichere temporäre Namen, Symlink-Prüfungen.
+- Firmware-Verify-after-Write standardmäßig + Modell-Gate + numerische Korrekturen.
+- FRP: das DPC-Signaturzertifikat wird nativ gelesen und die Provisionierungs-Prüfsumme ist korrigiert.
+- HIL-Hardware-Test-Harness: Multi-Device-/Geräteersatz-/USB-Sturm-Regressionen auf echter Hardware; ADB-Monitor-Backoff-Tests deterministisch gemacht.
+- Öffentliche Landing-Page (`website/`) mit Capability-Matrix und Protokoll-Konsole.
 
 ## 1.2.1 (Stabile Release)
 

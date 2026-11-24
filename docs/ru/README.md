@@ -37,7 +37,7 @@ Language switcher: [English](../../README.md) · [Français](../fr/README.md) ·
 
 ---
 
-## 🚀 Особенности — 1.2.1 Stable (0 предупреждений)
+## 🚀 Особенности — 1.2.2 Stable (0 предупреждений)
 
 - **9 режимов транспорта** — ADB, MTP, режим Samsung Download, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
 - **13 категорий job'ов** — Прошивка firmware, Удаление FRP, Снятие блокировки экрана, Снятие MDM, Разблокировка оператора, Чтение информации об устройстве, Обнаружение устройств, Перезагрузка, Ремонт настроек, плюс per-chip EXPERIMENTAL: Knox / гарантия (Samsung), QCN / модем (Qualcomm), ремонт/смена IMEI (MTK/SPD/Qualcomm), eMMC / UFS.

@@ -363,7 +363,7 @@ def _parse_version(tag):
 
 def _display_version(tag):
     """Display version: strips trailing '.0' patches.
-    1.2.0 -> 1.2, 1.2.1 -> 1.2.1, 1.2.0-beta -> 1.2-beta, 2.0.0 -> 2.0.
+    1.2.0 -> 1.2, 1.2.2 -> 1.2.2, 1.2.0-beta -> 1.2-beta, 2.0.0 -> 2.0.
     Preserves prerelease suffix (-beta, -rc1, etc.) exactly."""
     if not tag:
         return ""

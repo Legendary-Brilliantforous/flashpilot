@@ -1,9 +1,9 @@
-# FlashPilot 1.2.1 — Stable
+# FlashPilot 1.2.2 — Stable
 
 Open-source Linux flashing & repair workbench for Android devices — the free
-equivalent of commercial Windows flashing suites. **1.2.0 is a stability +
-advancement release: `cargo check` 0 warnings, `cargo test` 60 + `pytest` 149
-pass, live GitHub release channel, and auditable history.**
+equivalent of commercial Windows flashing suites. **1.2.2 is a stability +
+advancement release: `cargo check` 0 warnings, the full `cargo test` +
+`pytest` suites pass, live GitHub release channel, and auditable history.**
 
 A native **Rust** core (`flashpilot-bridge`, ~9,300 LOC, vendored libusb)
 speaks bootloader protocols directly — Samsung Odin/HID, MediaTek BROM/DA,
@@ -12,7 +12,17 @@ studio presents 9 transports, 13 job categories and ~120 operations: flashing,
 FRP bypass, screen-lock removal, MDM unlock, partition tools, device info,
 reboot, and battery/network repair on any ADB device.
 
-**What's new in 1.2.0 stable:**
+**What's new in 1.2.2 stable:**
+- **Auto-updates + What's New** — the downloaded `.deb` installs via sudo in
+  the background, the app restarts, and a one-shot window shows what changed.
+- **10-language UI with a live switch** — Français, Español, Deutsch, 简体中文,
+  Русский, Português, 日本語, العربية, हिन्दी, Türkçe; switching is immediate
+  (no restart) and layouts clamp to font metrics so translations wrap.
+- **Rockchip brand + smarter detection** — RK28xx–RK35xx family via fastboot;
+  model, brand and form factor identified; every flashing stage caught
+  (TFT parity) across MTK OEM VIDs, EDL and SPD download PIDs.
+- **Modem-safe multi-device ADB** — zero-touch polls, delegate ladder on claim
+  fights, settle-retry picks, target-identity binding, honest FRP results.
 - **Bridge 0 warnings** — wired 18 dead-paths: AT `Context` retention & `vid`
   validation (`AT/control` re-enumeration after `+DEBUGLVC`), USB
   `EndpointConfig.max_packet_size` chunking & `open_target/read_exact/info`,
@@ -20,7 +30,7 @@ reboot, and battery/network repair on any ADB device.
   `ProgressReporter` → real flash %, Qualcomm `QcomDeviceInfo`/`FirehosePacket`,
   MTK `read16/write16` — `-80KB` `lto`, no handle leaks.
 - **Dynamic version** — `APP_VERSION` from installed `importlib.metadata`
-  (deb `pyproject.toml` is truth), ` _display_version` `1.2.0→1.2` / `1.2.1→1.2.1`,
+  (deb `pyproject.toml` is truth), `_display_version` `1.2.0→1.2` / `1.2.2→1.2.2`,
   live GitHub `latest stable` (never hand-coded), BETA pill on logo/titlebar.
 - **Unified big dialogs** — 620px centered draggable cards (vs 320px toast) with
   high-contrast `#e2e8f0` text, `✕` + `X` drag, chip colors: `MTK amber`,
@@ -39,6 +49,6 @@ reboot, and battery/network repair on any ADB device.
 - **Platform:** Linux
 - **Language:** Rust (core) + Python 3.10+ / PyQt6 (UI)
 - **License:** MIT
-- **Status:** stable 1.2.0 — contributors welcome
+- **Status:** stable 1.2.2 — contributors welcome
 
 Use it on devices you own or are authorized to service.

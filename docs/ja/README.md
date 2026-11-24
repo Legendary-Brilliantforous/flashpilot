@@ -37,7 +37,7 @@ Android 修復の世界は、クローズドで Windows 限定の商用ツール
 
 ---
 
-## 🚀 ハイライト — 1.2.1 Stable（0 warnings）
+## 🚀 ハイライト — 1.2.2 Stable（0 warnings）
 
 - **9 つのトランスポートモード** — ADB、MTP、Samsung Download モード、Samsung BROM、MTK、MTK BROM、Fastboot、Qualcomm EDL、SPD。
 - **13 のジョブカテゴリ** — Flash Firmware、Remove FRP、Remove Screen Lock、Remove MDM、Unlock Carrier、Read Device Info、Detect Devices、Reboot、Repair Settings、およびチップ別 EXPERIMENTAL：Knox / Warranty（Samsung）、QCN / Modem（Qualcomm）、IMEI Repair / Change（MTK/SPD/Qualcomm）、eMMC / UFS。

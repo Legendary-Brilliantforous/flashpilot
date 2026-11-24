@@ -761,10 +761,10 @@ def _draw_phone(s, connected=False):
 
 
 def _draw_logo(size, version=None):
-    """Draw the FlashPilot hex logo. When *version* is a beta (e.g. 1.2.1-beta)
+    """Draw the FlashPilot hex logo. When *version* is a beta (e.g. 1.2.2-beta)
     a 'BETA' pill + the display version is painted onto the pixmap so the
     launcher / window icon itself advertises the channel. Display version
-    strips trailing .0 -> 1.2.0 shows as 1.2, 1.2.1 stays 1.2.1."""
+    strips trailing .0 -> 1.2.0 shows as 1.2, 1.2.2 stays 1.2.2."""
     # Resolve version to show on the logo: explicit arg else current app version
     try:
         _ver = version if version is not None else APP_VERSION
@@ -910,7 +910,7 @@ def _draw_logo(size, version=None):
             p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
                        Qt.AlignmentFlag.AlignCenter, "BETA")
         else:
-            # Larger logo: pill at bottom with "BETA  •  v1.2" (or v1.2.1)
+            # Larger logo: pill at bottom with "BETA  •  v1.2" (or v1.2.2)
             vlabel = ver_text if ver_text else _ver
             # Ensure v prefix for version
             if vlabel and not vlabel.lower().startswith("v"):

@@ -37,7 +37,7 @@ Android रिपेयर की दुनिया बंद, केवल Win
 
 ---
 
-## 🚀 हाइलाइट्स — 1.2.1 Stable (0 warnings)
+## 🚀 हाइलाइट्स — 1.2.2 Stable (0 warnings)
 
 - **9 transport modes** — ADB, MTP, Samsung Download mode, Samsung BROM, MTK, MTK BROM, Fastboot, Qualcomm EDL, SPD.
 - **13 job categories** — Flash Firmware, Remove FRP, Remove Screen Lock, Remove MDM, Unlock Carrier, Read Device Info, Detect Devices, Reboot, Repair Settings, और per-chip EXPERIMENTAL: Knox / Warranty (Samsung), QCN / Modem (Qualcomm), IMEI Repair / Change (MTK/SPD/Qualcomm), eMMC / UFS.

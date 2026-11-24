@@ -9238,7 +9238,7 @@ class FlashPilotWindow(
             )
             ahead_of_stable = bool(stable_tag) and stable_tuple < current_tuple and not promote_to_stable
             # Beta upgrade only when numerically higher than what we run
-            # (1.2.1-beta does not beat running 1.2.1; it beats 1.2.0).
+            # (1.2.2-beta does not beat running 1.2.2; it beats 1.2.1).
             # Also treat same numeric but beta alpha newer (beta.1 -> beta.2) as update.
             newer_beta = False
             if beta_tag:
@@ -9250,7 +9250,7 @@ class FlashPilotWindow(
                     newer_beta = beta_tag != current
 
             # Check if user is running a beta version – always warn and show
-            # the real latest stable (1.2.0) vs beta (1.2.1-beta.1) distinction.
+            # the real latest stable (1.2.2) vs beta (1.2.2-beta.1) distinction.
             if current_alpha:
                 # User is on beta - warn them and show stable version
                 if hasattr(self, "_ui") and self._ui:
