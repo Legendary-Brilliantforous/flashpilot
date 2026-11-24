@@ -8,7 +8,7 @@
 
 - [ ] `cargo build --release` passes.
 - [ ] `cargo test --release` passes (or note why not runnable).
-- [ ] `pytest tests/ -q` passes (or the 5 pre-existing failures are unchanged).
+- [ ] `pytest tests/ -q` passes (or note any failure and why it is unrelated).
 - [ ] New flow wired into `JOBS` so it appears in the GUI.
 - [ ] New Rust command: usage text in `main.rs` + `bridge.py` wrapper.
 - [ ] GUI: themed colors (`C[...]`), signal-based updates, scroll-safe layout.
