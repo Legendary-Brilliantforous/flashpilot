@@ -121,44 +121,13 @@ rm -rf "$SP"/*.dist-info
 find "$V" -name "__pycache__" -type d -prune -exec rm -rf {} +
 find "$V" -name "*.pyc" -delete
 
-# 4b. Remove Qt components the widgets-only app never imports (Qt QML / Quick,
-#     Multimedia, PDF, Designer, DB drivers, ...). Keeps QtCore/Gui/Widgets/
-#     Network/Svg/OpenGL + the platform plugins intact. Verified below by
-#     constructing the real main window with QT_QPA_PLATFORM=offscreen.
-rm -rf "$QT6/Qt6/qml" "$QT6/Qt6/translations" "$QT6/Qt6/qsci"
-rm -rf "$QT6/bindings/QtDesigner" "$QT6/uic"
-rm -f "$QT6"/QtQuick.abi3.so "$QT6"/QtQuickWidgets.abi3.so \
-      "$QT6"/QtQml.abi3.so "$QT6"/QtQmlModels.abi3.so \
-      "$QT6"/QtMultimedia.abi3.so "$QT6"/QtMultimediaWidgets.abi3.so \
-      "$QT6"/QtPdf.abi3.so "$QT6"/QtPdfWidgets.abi3.so \
-      "$QT6"/QtDesigner.abi3.so "$QT6"/QtTest.abi3.so \
-      "$QT6"/QtSql.abi3.so "$QT6"/QtBluetooth.abi3.so "$QT6"/QtNfc.abi3.so \
-      "$QT6"/QtPositioning.abi3.so "$QT6"/QtWebSockets.abi3.so \
-      "$QT6"/QtWebChannel.abi3.so "$QT6"/QtSensors.abi3.so \
-      "$QT6"/QtGamepad.abi3.so "$QT6"/QtRemoteObjects.abi3.so \
-      "$QT6"/QtSerialPort.abi3.so "$QT6"/QtSerialBus.abi3.so \
-      "$QT6"/QtTextToSpeech.abi3.so "$QT6"/QtCharts.abi3.so \
-      "$QT6"/QtDataVisualization.abi3.so "$QT6"/QtSpatialAudio.abi3.so \
-      "$QT6"/QtLocation.abi3.so "$QT6"/QtScxml.abi3.so
-QLIB="$QT6/Qt6/lib"
-rm -f "$QLIB"/libQt6Quick*.so* "$QLIB"/libQt6Qml*.so* \
-      "$QLIB"/libQt6Quick3D*.so* "$QLIB"/libQt6ShaderTools*.so* \
-      "$QLIB"/libQt6Multimedia*.so* "$QLIB"/libQt6Pdf*.so* \
-      "$QLIB"/libQt6Designer*.so* "$QLIB"/libQt6Sql*.so* \
-      "$QLIB"/libQt6Test*.so* "$QLIB"/libQt6Bluetooth*.so* \
-      "$QLIB"/libQt6Nfc*.so* "$QLIB"/libQt6Positioning*.so* \
-      "$QLIB"/libQt6Sensors*.so* "$QLIB"/libQt6Gamepad*.so* \
-      "$QLIB"/libQt6RemoteObjects*.so* "$QLIB"/libQt6WebChannel*.so* \
-      "$QLIB"/libQt6WebSockets*.so* "$QLIB"/libQt6SerialPort*.so* \
-      "$QLIB"/libQt6SerialBus*.so* "$QLIB"/libQt6TextToSpeech*.so* \
-      "$QLIB"/libQt6Charts*.so* "$QLIB"/libQt6DataVisualization*.so* \
-      "$QLIB"/libQt6SpatialAudio*.so* "$QLIB"/libQt6Location*.so* \
-      "$QLIB"/libQt6Scxml*.so* "$QLIB"/libQt6StateMachine*.so* \
-      "$QLIB"/libQt6HttpServer*.so* "$QLIB"/libQt6OpenGLWidgets*.so* \
-      "$QLIB"/libavcodec*.so* "$QLIB"/libavformat*.so* "$QLIB"/libavutil*.so* \
-      "$QLIB"/libswscale*.so* "$QLIB"/libswresample*.so*
-rm -rf "$QT6/Qt6/plugins/qmltooling" "$QT6/Qt6/plugins/sqldrivers" \
-       "$QT6/Qt6/plugins/sceneparsers"
+# 4b. Remove Qt components the widgets-only app never imports. Detected
+#     automatically from the shipped source tree (packaging/strip_pyqt.py)
+#     instead of a hardcoded list: scan python/ + main.py for PyQt6.<Module>
+#     references, keep only those (plus a small baseline) and their transitive
+#     Qt library dependencies, drop the rest. Verified below by constructing
+#     the real main window with QT_QPA_PLATFORM=offscreen.
+"$PYBIN" "$ROOT/packaging/strip_pyqt.py" "$V" "$ROOT"
 echo "   venv after strip: $(du -sh "$V" | cut -f1)"
 
 # 5. Application (python + assets).
