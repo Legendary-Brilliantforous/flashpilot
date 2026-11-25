@@ -188,14 +188,13 @@ class AiPageMixin:
         head.addWidget(float_btn, 0)
         lay.addLayout(head)
 
-        sess_row = QHBoxLayout()
-        sess_row.setSpacing(6)
+        sess_row = FlowLayout(margin=2, spacing=8)
         sess_label = QLabel(self.tr("Session:"))
         sess_label.setStyleSheet(f"color:{C['dim']}; font-size:10px; font-weight:700;")
         sess_row.addWidget(sess_label)
         self._ai_session_combo = QComboBox()
         self._ai_session_combo.setMinimumWidth(160)
-        sess_row.addWidget(self._ai_session_combo, 1)
+        sess_row.addWidget(self._ai_session_combo)
         for label, handler in (
             (self.tr("New"), self._ai_session_new),
             (self.tr("Rename"), self._ai_session_rename),
