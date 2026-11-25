@@ -357,7 +357,7 @@ def test_device_panel_does_not_squeeze_the_page_in_french(fr_win):
     )
 
 def test_settings_category_labels_are_translated(fr_win):
-    """The five settings categories are looked up in the catalog, not hard-coded."""
+    """Every settings category is looked up in the catalog, not hard-coded."""
     fr_win._on_section("settings")
     _settle(fr_win, 12)
     labels = {key: btn._label for key, btn in fr_win._settings_cats.items()}
@@ -366,6 +366,7 @@ def test_settings_category_labels_are_translated(fr_win):
         "updates": "Mises à jour",
         "appearance": "Apparence",
         "tools": "Outils",
+        "ai": "AI",
         "about": "À propos",
     }
 

@@ -38,6 +38,7 @@ from ..theme import (
 )
 from ..widgets import FlowHost, FlowLayout, _SettingsCatButton, flow_row
 from ...core import APP_VERSION, bridge
+from ...core.ai import keys as ai_keys, provider as ai_provider
 
 
 class SettingsPageMixin:
@@ -86,6 +87,8 @@ class SettingsPageMixin:
              self._build_settings_appearance),
             ("tools", "▤", self.tr("Tools"),
              self._build_settings_tools),
+            ("ai", "✧", self.tr("AI"),
+             self._build_settings_ai),
             ("about", "ℹ", self.tr("About"),
              self._build_settings_about),
         ]
@@ -104,7 +107,8 @@ class SettingsPageMixin:
         return panel
 
     def _switch_settings(self, key):
-        order = {"general": 0, "updates": 1, "appearance": 2, "tools": 3, "about": 4}
+        order = {"general": 0, "updates": 1, "appearance": 2, "tools": 3,
+                 "ai": 4, "about": 5}
         idx = order.get(key, 0)
         self._settings_pages.setCurrentIndex(idx)
         for k, btn in self._settings_cats.items():
@@ -616,6 +620,237 @@ class SettingsPageMixin:
 
         lay.addStretch(1)
         return page
+
+    # --- AI -----------------------------------------------------------------
+    def _build_settings_ai(self):
+        """Provider, keyring-backed API key, context switches, transcript."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(18, 18, 18, 18)
+        lay.setSpacing(12)
+
+        usable, reason = ai_keys.available()
+        bl = self._settings_box(self.tr("ADVISOR (BETA)"), lay)
+        intro = QLabel(
+            self.tr(
+                "Read-only assistant for flashing and lock-removal questions. "
+                "It explains failures from the console tail, the selected device "
+                "and FlashPilot's operation notes. It cannot run a flow."
+            )
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        bl.addWidget(intro)
+        backend = QLabel(
+            self.tr("Keyring: {backend}").format(backend=ai_keys.backend_name())
+            if usable
+            else self.tr("Keyring unavailable: {reason}").format(reason=reason)
+        )
+        backend.setWordWrap(True)
+        backend.setStyleSheet(
+            f"color:{C['ok'] if usable else C['err']}; font-size:11px;"
+        )
+        bl.addWidget(backend)
+
+        # -- provider -----------------------------------------------------
+        bl = self._settings_box(self.tr("PROVIDER"), lay)
+        self._ai_preset = QComboBox()
+        for preset_id, preset in ai_provider.PRESETS.items():
+            self._ai_preset.addItem(preset.label, preset_id)
+        current = str(self.settings.value("ai_preset", "openai") or "openai")
+        index = self._ai_preset.findData(current)
+        if index >= 0:
+            self._ai_preset.setCurrentIndex(index)
+        self._ai_preset.setMinimumWidth(240)
+        self._ai_preset.currentIndexChanged.connect(
+            lambda _i: self._ai_on_preset_changed(
+                str(self._ai_preset.currentData() or "custom")
+            )
+        )
+        self._settings_row(
+            bl, self.tr("Provider"),
+            self.tr("OpenAI-compatible endpoints and Google Gemini are supported."),
+            self._ai_preset,
+        )
+
+        self._ai_base_url = QLineEdit(
+            str(self.settings.value("ai_base_url", "")
+                or ai_provider.preset(current).base_url)
+        )
+        self._ai_base_url.setMinimumWidth(280)
+        self._ai_base_url.editingFinished.connect(
+            lambda: self.settings.setValue("ai_base_url", self._ai_base_url.text().strip())
+        )
+        self._settings_row(
+            bl, self.tr("Base URL"),
+            self.tr("For a local server use e.g. http://localhost:11434/v1"),
+            self._ai_base_url,
+        )
+
+        self._ai_model = QLineEdit(
+            str(self.settings.value("ai_model", "")
+                or ai_provider.preset(current).model)
+        )
+        self._ai_model.setMinimumWidth(280)
+        self._ai_model.editingFinished.connect(
+            lambda: self.settings.setValue("ai_model", self._ai_model.text().strip())
+        )
+        self._settings_row(
+            bl, self.tr("Model"), self.tr("Exact model name the endpoint expects."),
+            self._ai_model,
+        )
+
+        self._ai_max_tokens = QSpinBox()
+        self._ai_max_tokens.setRange(256, 8192)
+        self._ai_max_tokens.setSingleStep(64)
+        self._ai_max_tokens.setValue(int(self.settings.value("ai_max_tokens", 1200)))
+        self._ai_max_tokens.valueChanged.connect(
+            lambda v: self.settings.setValue("ai_max_tokens", int(v))
+        )
+        self._settings_row(
+            bl, self.tr("Reply length"),
+            self.tr("Upper bound on tokens per answer."),
+            self._ai_max_tokens,
+        )
+
+        test_btn = QPushButton(self.tr("Test connection"))
+        test_btn.setStyleSheet(_btn_ghost())
+        test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        test_btn.setMinimumWidth(180)
+        test_btn.clicked.connect(self._ai_test_connection)
+        self._settings_row(
+            bl, self.tr("Verify the endpoint"),
+            self.tr("Sends one short request; nothing about the device is included."),
+            test_btn,
+        )
+
+        # -- key ----------------------------------------------------------
+        bl = self._settings_box(self.tr("API KEY"), lay)
+        key_row = QHBoxLayout()
+        key_row.setSpacing(6)
+        self._ai_key = QLineEdit()
+        self._ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._ai_key.setPlaceholderText(self.tr("Paste the key for this provider"))
+        self._ai_key.setMinimumWidth(240)
+        key_row.addWidget(self._ai_key, 1)
+        save_btn = QPushButton(self.tr("Save"))
+        save_btn.setStyleSheet(_btn_ghost())
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.clicked.connect(self._ai_save_key)
+        key_row.addWidget(save_btn)
+        clear_btn = QPushButton(self.tr("Remove"))
+        clear_btn.setStyleSheet(_btn_danger())
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.clicked.connect(self._ai_clear_key)
+        key_row.addWidget(clear_btn)
+        bl.addLayout(key_row)
+
+        self._ai_key_state = QLabel("")
+        self._ai_key_state.setWordWrap(True)
+        bl.addWidget(self._ai_key_state)
+        hint = QLabel(
+            self.tr(
+                "Keys live in the system keyring (gnome-keyring / KWallet). "
+                "They are never written to config.json, the console or the audit log."
+            )
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{C['mute']}; font-size:10px;")
+        bl.addWidget(hint)
+
+        # -- context ------------------------------------------------------
+        bl = self._settings_box(self.tr("CONTEXT SENT WITH EACH QUESTION"), lay)
+        self._ai_ctx_device = self._settings_switch()
+        self._ai_ctx_device.setChecked(
+            self.settings.value("ai_include_device", True, type=bool)
+        )
+        self._ai_ctx_device.toggled.connect(
+            lambda on: self.settings.setValue("ai_include_device", on)
+        )
+        self._settings_row(
+            bl, self.tr("Selected device"),
+            self.tr("Model, chip, mode and ADB state. The serial is masked."),
+            self._ai_ctx_device,
+        )
+        self._ai_ctx_log = self._settings_switch()
+        self._ai_ctx_log.setChecked(
+            self.settings.value("ai_include_log", True, type=bool)
+        )
+        self._ai_ctx_log.toggled.connect(
+            lambda on: self.settings.setValue("ai_include_log", on)
+        )
+        self._settings_row(
+            bl, self.tr("Console tail"),
+            self.tr("Recent console lines so the answer can cite the failure."),
+            self._ai_ctx_log,
+        )
+        self._ai_ctx_docs = self._settings_switch()
+        self._ai_ctx_docs.setChecked(
+            self.settings.value("ai_include_docs", True, type=bool)
+        )
+        self._ai_ctx_docs.toggled.connect(
+            lambda on: self.settings.setValue("ai_include_docs", on)
+        )
+        self._settings_row(
+            bl, self.tr("Operation notes"),
+            self.tr("Matching sections from operations/ are quoted as evidence."),
+            self._ai_ctx_docs,
+        )
+        self._ai_log_lines = QSpinBox()
+        self._ai_log_lines.setRange(20, 500)
+        self._ai_log_lines.setSingleStep(20)
+        self._ai_log_lines.setValue(int(self.settings.value("ai_log_lines", 120)))
+        self._ai_log_lines.valueChanged.connect(
+            lambda v: self.settings.setValue("ai_log_lines", int(v))
+        )
+        self._settings_row(
+            bl, self.tr("Console lines to include"),
+            self.tr("Newest lines are kept when the budget is tight."),
+            self._ai_log_lines,
+        )
+
+        # -- transcript ---------------------------------------------------
+        bl = self._settings_box(self.tr("TRANSCRIPT"), lay)
+        self._ai_history_note = QLabel("")
+        self._ai_history_note.setWordWrap(True)
+        self._ai_history_note.setStyleSheet(f"color:{C['dim']}; font-size:11px;")
+        bl.addWidget(self._ai_history_note)
+        del_btn = QPushButton(self.tr("Delete chat history"))
+        del_btn.setStyleSheet(_btn_danger())
+        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.setMinimumWidth(200)
+        del_btn.clicked.connect(self._ai_clear_history)
+        self._settings_row(
+            bl, self.tr("Stored transcript"),
+            self.tr("Saved under ~/.local/share/flashpilot and deletable here."),
+            del_btn,
+        )
+
+        self._ai_refresh_key_state()
+        self._ai_refresh_history_note()
+        lay.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        return page
+
+    def _ai_refresh_history_note(self):
+        label = getattr(self, "_ai_history_note", None)
+        if label is None:
+            return
+        count = len(self._ai_chat())
+        label.setText(
+            self.tr("Messages stored: {count}").format(count=count)
+            if count
+            else self.tr("No conversation stored yet.")
+        )
 
     # --- About --------------------------------------------------------------
     def _build_settings_about(self):

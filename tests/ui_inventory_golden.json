@@ -1,6 +1,7 @@
 {
  "section_keys": [
   "adb",
+  "ai",
   "dev_apple",
   "dev_asus_sharp",
   "dev_blu",
@@ -32,7 +33,7 @@
   "settings",
   "spd"
  ],
- "stack_count": 31,
+ "stack_count": 32,
  "gated_count": 418,
  "gated_triples_sha256": "c89accef0ab188c339ca32c5a494e8d20d456d83b57c448639d8b9d665637d75",
  "gated_unique_triples": 61,
@@ -357,11 +358,17 @@
    ],
    "btn_sha": "fe40b48df3ac24b2"
   },
-  "settings": {
-   "widgets": 225,
-   "buttons": 12,
+  "ai": {
+   "widgets": 30,
+   "buttons": 7,
    "acts": [],
-   "btn_sha": "ecbd660ba835f9ac"
+   "btn_sha": "18b4daac05fdaee6"
+  },
+  "settings": {
+   "widgets": 293,
+   "buttons": 17,
+   "acts": [],
+   "btn_sha": "bd731fa808a61cb6"
   }
  }
 }

@@ -23,9 +23,15 @@ import threading
 _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="flashpilot-test-config-")
 os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
 
+# The advisor persists its transcript and audit log under XDG_DATA_HOME; tests
+# that build the real window must not write into the developer's data dir.
+_TEST_DATA_HOME = tempfile.mkdtemp(prefix="flashpilot-test-data-")
+os.environ["XDG_DATA_HOME"] = _TEST_DATA_HOME
+
 
 def _cleanup_test_config_home():
     shutil.rmtree(_TEST_CONFIG_HOME, ignore_errors=True)
+    shutil.rmtree(_TEST_DATA_HOME, ignore_errors=True)
 
 
 atexit.register(_cleanup_test_config_home)

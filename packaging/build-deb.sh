@@ -140,6 +140,10 @@ cp -r scripts "$STAGE/usr/share/flashpilot/"
 rsync -a root/ "$STAGE/usr/share/flashpilot/root/"
 [ -d pit ] && cp -r pit "$STAGE/usr/share/flashpilot/" || echo "   (no pit/ dir - skipping)"
 cp -r docs "$STAGE/usr/share/flashpilot/"
+# Operation notes: the AI advisor's retrieval corpus (BM25 over operations/*.md).
+# Small (~300 KB) and read-only; without it the advisor falls back to the
+# capability card alone.
+cp -r operations "$STAGE/usr/share/flashpilot/"
 # UI translation catalogs + manifest (runtime lookup expects them next to
 # python/, i.e. /usr/share/flashpilot/i18n/json/*.json).
 cp -r i18n "$STAGE/usr/share/flashpilot/"

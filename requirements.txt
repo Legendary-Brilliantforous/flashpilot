@@ -11,3 +11,7 @@ zstandard>=0.22
 # Samsung FUS firmware downloader & decryption
 git+https://github.com/nlscc/samloader.git
 requests>=2.28.0
+
+# AI advisor: API keys live in the OS keyring (Secret Service / KWallet).
+# Without a backend the advisor stays disabled instead of writing keys to disk.
+keyring>=24

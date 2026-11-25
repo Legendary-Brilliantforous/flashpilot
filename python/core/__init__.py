@@ -11,6 +11,6 @@ try:
     try:
         APP_VERSION = _pkg_version("flashpilot")
     except Exception:
-        APP_VERSION = "1.2.2"
+        APP_VERSION = "1.2.3"
 except Exception:
-    APP_VERSION = "1.2.2"
+    APP_VERSION = "1.2.3"

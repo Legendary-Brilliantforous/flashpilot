@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.2.3 (AI Advisor beta, read-only)
+
+*AI Advisor is a beta feature: it explains flashing and lock-removal failures
+from your own console tail, device state and FlashPilot's operation notes, and
+never executes a flow itself. Verify its suggestions before acting.*
+
+### AI Advisor (new, beta)
+- Read-only chat assistant grounded in FlashPilot's real flow registry, the
+  selected device (serial masked), the console tail and a BM25 index over
+  `operations/*.md` — no tool-calling, no execution path.
+- Explains failures with a fixed contract (What happened / Why / Evidence /
+  Fix / Risk) and refuses off-topic requests and anything that would change an
+  IMEI, bypass Knox or unlock a device you do not own.
+- Providers: OpenAI, OpenRouter, Groq, Google Gemini (native API), any
+  OpenAI-compatible endpoint and local servers (Ollama / llama.cpp).
+- Available both as a dedicated **Advisor** page and a draggable floating
+  panel (Ctrl+Shift+A); attach a text file (log/crash report) to a question.
+- API keys live in the system keyring only (gnome-keyring / KWallet); with no
+  backend the advisor stays disabled instead of writing keys to disk.
+- Transcript persists across restarts (`~/.local/share/flashpilot/ai_history.json`,
+  0600) and is deletable from the page or Settings; a hashed, secret-free
+  audit log records requests.
+- Settings → AI: provider, base URL, model, reply length, Test connection,
+  masked key, context switches, console-line budget, transcript management.
+- Rust core untouched; advisor is Python-side only over the existing bridge.
+
 ## 1.2.2 (auto-updates, 10 languages, Rockchip + modem-safe multi-device)
 
 *Consolidates the 1.2.2 → 1.3.2 development-cycle notes — everything shipped since 1.2.1.*

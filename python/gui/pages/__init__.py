@@ -7,6 +7,7 @@ methods so the window class stays a thin shell. Bodies are unchanged.
 inside the moved Samsung builders keeps resolving against the package.
 """
 from .. import devices  # noqa: F401
+from .ai import AiPageMixin
 from ._shared import FlowRenderMixin
 from .fus import FusPageMixin
 from .general import GeneralPageMixin
@@ -18,6 +19,7 @@ from .settings import SettingsPageMixin
 from .spd import SpdPageMixin
 
 __all__ = [
+    "AiPageMixin",
     "FlowRenderMixin",
     "FusPageMixin",
     "GeneralPageMixin",

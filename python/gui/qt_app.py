@@ -128,6 +128,7 @@ from .widgets import (  # noqa: F401
 from . import devices as device_pages
 from .nav import NavRail
 from .pages import (  # noqa: F401
+    AiPageMixin,
     FlowRenderMixin,
     FusPageMixin,
     GeneralPageMixin,
@@ -1640,6 +1641,7 @@ class FlashPilotWindow(
     QcPageMixin,
     SpdPageMixin,
     SettingsPageMixin,
+    AiPageMixin,
     FlowRenderMixin,
     QMainWindow,
 ):
@@ -1888,6 +1890,9 @@ class FlashPilotWindow(
         # F11 — console full-screen (terminal) mode; fully reversible.
         QShortcut(QKeySequence("F11"), self).activated.connect(
             self._toggle_console_maximised)
+        # Ctrl+Shift+A — the floating advisor, from anywhere.
+        QShortcut(QKeySequence("Ctrl+Shift+A"), self).activated.connect(
+            self._ai_toggle_panel)
 
     # ----------------------------- layout builders -------------------------
     def _build_ui(self):
@@ -2050,6 +2055,7 @@ class FlashPilotWindow(
             ("mtk", "▣", "MTK"),
             ("qc", "◈", "Qualcomm"),
             ("spd", "✦", "SPD"),
+            ("ai", "✧", self.tr("Advisor")),
         ]
         self.oem_bar = OemChipBar(oem_items, tools=tools)
         self.oem_bar.section_selected.connect(self._on_section)
@@ -2192,6 +2198,7 @@ class FlashPilotWindow(
             ("mtk", lambda: self._build_mtk_page()),
             ("qc", lambda: self._build_qc_page()),
             ("spd", lambda: self._build_spd_page()),
+            ("ai", lambda: self._build_ai_page()),
             ("settings", lambda: self._build_settings_page()),
         )
         for key, builder in hub_builders:
@@ -3493,7 +3500,7 @@ class FlashPilotWindow(
             section = getattr(self, "_current_section", "samsung")
             brand_key = section.removeprefix("dev_")
             if brand_key not in ("samsung", "mtk", "qc", "spd", "fus",
-                                 "general", "settings", "adb", "fastboot"):
+                                 "general", "settings", "adb", "fastboot", "ai"):
                 engines = set()
                 for b in device_pages.BRAND_BY_KEY.get(brand_key, {}).get("models", []):
                     e = (b.get("engine") or "").lower()
@@ -3650,6 +3657,13 @@ class FlashPilotWindow(
             pass
         if hasattr(self, "oem_bar"):
             self.oem_bar.select(key)
+        if key == "ai":
+            # The floating panel may have added turns while the page was hidden.
+            try:
+                self._ai_render_history()
+                self._ai_refresh_status()
+            except Exception:
+                pass
         self.set_status(f"Section: {key.upper()}")
         # Phase-1 device-first: the newly shown page gets the dimming pass,
         # and the tool chips re-grey for the brand now on screen.
@@ -12050,6 +12064,8 @@ class FlashPilotWindow(
             self._apply_default_dock_split()
         if hasattr(self, "_body_splitter"):
             self._apply_default_body_split()
+        if hasattr(self, "_ai_panel"):
+            self._ai_panel_keep_on_screen()
 
     # ----------------------------- device scan ----------------------------
     def refresh_device(self):

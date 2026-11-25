@@ -6,7 +6,7 @@ Architecture: @ARCH@
 Maintainer: FlashPilot <legendary-flashpilotforous@users.noreply.github.com>
 Homepage: https://github.com/Legendary-Brilliantforous/flashpilot
 Depends: @PYTHON_DEP@
-Recommends: adb, lz4
+Recommends: adb, lz4, gnome-keyring | kwalletmanager
 Description: Open-source FRP reset and firmware flashing toolbox
  A Linux-native equivalent of the paid Windows flashing suites: one tool that
  talks directly to the bootloader of Samsung, MediaTek, Qualcomm and
