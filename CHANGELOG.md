@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.4 (Advisor: Markdown, auto-suggest, named sessions, expanded RAG)
+
+### AI Advisor (beta) — more features
+- Answers now render as **Markdown**: headings, lists, links and fenced code blocks
+  (with monospace styling) instead of plain text.
+- **Failure classifier**: after each reply the advisor lists candidate
+  FlashPilot flows that match the console tail, as one-click chips that open
+  the relevant page (still read-only — nothing is run).
+- **Named sessions**: create, rename, switch, delete and export conversations;
+  each session is its own transcript file under
+  `~/.local/share/flashpilot/ai_sessions/`. The legacy single transcript is
+  migrated into a "Default" session on first run.
+- **Expanded retrieval**: the advisor now also indexes `docs/` and the flow
+  registry in `src/flows.rs`, so it can cite real flow keys and documentation,
+  not only `operations/`.
+
 ## 1.2.3 (AI Advisor beta, read-only)
 
 *AI Advisor is a beta feature: it explains flashing and lock-removal failures

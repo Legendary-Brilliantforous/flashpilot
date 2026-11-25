@@ -21,10 +21,11 @@ Public surface:
 
 from __future__ import annotations
 
-from . import audit, context, errors, guard, history, keys, provider, retrieval
+from . import audit, classify, context, errors, guard, history, keys, provider, retrieval
 
 __all__ = [
     "audit",
+    "classify",
     "context",
     "errors",
     "guard",

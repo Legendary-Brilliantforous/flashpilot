@@ -32,16 +32,18 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import C, _btn_ghost, _btn_primary, _card_qss
-from ..widgets import BeautifulToggle, SectionTitle
+from ..widgets import BeautifulToggle, FlowLayout, SectionTitle
 from ...core import bridge
 from ...core.ai import (
     audit as ai_audit,
+    classify as ai_classify,
     context as ai_context,
     guard as ai_guard,
     history as ai_history,
     keys as ai_keys,
     provider as ai_provider,
     retrieval as ai_retrieval,
+    sessions as ai_sessions,
 )
 
 _ASSISTANT_COLOR = "#22d3ee"
@@ -99,10 +101,15 @@ class AiPageMixin:
     # Chat state
     # ------------------------------------------------------------------
     def _ai_chat(self):
-        """The single persisted transcript shared by page and settings."""
-        if not hasattr(self, "_ai_chat_history"):
-            self._ai_chat_history = ai_history.ChatHistory()
-        return self._ai_chat_history
+        """The active persisted transcript (named session)."""
+        if not hasattr(self, "_ai_sessions"):
+            active = self.settings.value("ai_active_session", None)
+            self._ai_sessions = ai_sessions.SessionManager(active)
+        return self._ai_sessions.active
+
+    def _ai_session_manager(self):
+        self._ai_chat()  # ensure initialised
+        return self._ai_sessions
 
     def _ai_config(self):
         """Build a provider config from QSettings + the keyring."""
@@ -181,6 +188,29 @@ class AiPageMixin:
         head.addWidget(float_btn, 0)
         lay.addLayout(head)
 
+        sess_row = QHBoxLayout()
+        sess_row.setSpacing(6)
+        sess_label = QLabel(self.tr("Session:"))
+        sess_label.setStyleSheet(f"color:{C['dim']}; font-size:10px; font-weight:700;")
+        sess_row.addWidget(sess_label)
+        self._ai_session_combo = QComboBox()
+        self._ai_session_combo.setMinimumWidth(160)
+        sess_row.addWidget(self._ai_session_combo, 1)
+        for label, handler in (
+            (self.tr("New"), self._ai_session_new),
+            (self.tr("Rename"), self._ai_session_rename),
+            (self.tr("Delete"), self._ai_session_delete),
+            (self.tr("Export"), self._ai_session_export),
+        ):
+            btn = QPushButton(label)
+            btn.setStyleSheet(_btn_ghost())
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(handler)
+            sess_row.addWidget(btn)
+        lay.addLayout(sess_row)
+
+        self._ai_refresh_sessions()
+
         blurb = QLabel(
             self.tr(
                 "Beta feature: ask why a flash, FRP or lock-removal step failed. "
@@ -201,6 +231,20 @@ class AiPageMixin:
             f" padding:8px; font-size:12px; }}"
         )
         lay.addWidget(self._ai_view, 1)
+
+        suggest_row = FlowLayout()
+        suggest_row.setSpacing(6)
+        self._ai_suggest_label = QLabel(self.tr("Suggested flows:"))
+        self._ai_suggest_label.setStyleSheet(
+            f"color:{C['dim']}; font-size:10px; font-weight:700;"
+        )
+        suggest_row.addWidget(self._ai_suggest_label)
+        self._ai_suggest_box = suggest_row
+        self._ai_suggest_container = QWidget()
+        self._ai_suggest_container.setLayout(suggest_row)
+        lay.addWidget(self._ai_suggest_container)
+        self._ai_suggestions: list = []
+        self._ai_render_suggestions([])
 
         ctx_row = QHBoxLayout()
         ctx_row.setSpacing(14)
@@ -287,6 +331,7 @@ class AiPageMixin:
 
         self._ai_busy = False
         self._ai_cancel = threading.Event()
+        self._ai_refresh_sessions()
         self._ai_render_history()
         self._ai_refresh_status()
         return panel
@@ -500,56 +545,67 @@ class AiPageMixin:
 
     def _ai_render_history(self, view=None):
         targets = [view] if view is not None else self._ai_views()
+        md = self._ai_build_markdown(self._ai_chat().messages)
         for target in targets:
-            target.clear()
-            for message in self._ai_chat().messages:
-                if message["role"] == "user":
-                    self._ai_render_user(message["content"], target)
-                else:
-                    self._ai_render_assistant(message["content"], target)
+            if target is None:
+                continue
+            target.setMarkdown(md)
+            self._ai_scroll_bottom(target)
+
+    def _ai_build_markdown(self, messages, streaming=""):
+        parts: list[str] = []
+        for message in messages:
+            content = (message.get("content") or "").strip()
+            if not content:
+                continue
+            if message.get("role") == "user":
+                parts.append(f"**You**\n\n{content}")
+            else:
+                parts.append(f"**Advisor**\n\n{content}")
+        if streaming and streaming.strip():
+            parts.append(f"**Advisor**\n\n{streaming}")
+        return "\n\n---\n\n".join(parts)
+
+    def _ai_streaming_text(self):
+        if not hasattr(self, "_ai_streaming"):
+            self._ai_streaming = ""
+        return self._ai_streaming
 
     def _ai_render_user(self, text, view=None):
-        target = view if view is not None else getattr(self, "_ai_view", None)
-        if target is None:
-            return
-        body = escape(text).replace("\n", "<br>")
-        target.append(
-            f"<div style='color:{_USER_COLOR}; font-size:10px;'><b>You</b></div>"
-            f"<div style='color:{_BODY_COLOR}; font-size:12px;'>{body}</div>"
-        )
+        return
 
     def _ai_render_assistant(self, text, view=None):
-        target = view if view is not None else getattr(self, "_ai_view", None)
-        if target is None:
-            return
-        body = escape(text).replace("\n", "<br>")
-        target.append(
-            f"<div style='color:{_ASSISTANT_COLOR}; font-size:10px;'>"
-            f"<b>Advisor</b></div>"
-            f"<div style='color:{_BODY_COLOR}; font-size:12px;'>{body}</div>"
-        )
+        return
 
     def _ai_begin_reply(self, view=None):
-        target = view if view is not None else getattr(self, "_ai_view", None)
-        if target is None:
-            return
-        target.append(
-            f"<div style='color:{_ASSISTANT_COLOR}; font-size:10px;'>"
-            f"<b>Advisor</b></div>"
-        )
-        cursor = target.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        target.setTextCursor(cursor)
+        self._ai_streaming = ""
+        targets = [view] if view is not None else self._ai_views()
+        for target in targets:
+            if target is None:
+                continue
+            target.setMarkdown(
+                self._ai_build_markdown(self._ai_chat().messages, streaming="")
+            )
+            self._ai_scroll_bottom(target)
 
     def _ai_append_chunk(self, chunk, view=None):
-        target = view if view is not None else getattr(self, "_ai_view", None)
-        if not chunk or target is None:
+        if not chunk:
             return
-        cursor = target.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(chunk)
-        target.setTextCursor(cursor)
-        target.ensureCursorVisible()
+        self._ai_streaming = getattr(self, "_ai_streaming", "") + chunk
+        targets = [view] if view is not None else self._ai_views()
+        for target in targets:
+            if target is None:
+                continue
+            target.setMarkdown(
+                self._ai_build_markdown(
+                    self._ai_chat().messages, streaming=self._ai_streaming
+                )
+            )
+            self._ai_scroll_bottom(target)
+
+    def _ai_scroll_bottom(self, view):
+        bar = view.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def _ai_refresh_status(self):
         text, ready = self._ai_status_text()
@@ -651,9 +707,148 @@ class AiPageMixin:
             if btn is not None:
                 btn.setEnabled(False)
 
+    def _ai_refresh_sessions(self):
+        combo = getattr(self, "_ai_session_combo", None)
+        if combo is None:
+            return
+        manager = self._ai_session_manager()
+        combo.blockSignals(True)
+        combo.clear()
+        for name in manager.list_names():
+            combo.addItem(name)
+        idx = combo.findText(manager.active_name)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+        try:
+            combo.currentTextChanged.disconnect(self._ai_session_switched)
+        except TypeError:
+            pass
+        combo.currentTextChanged.connect(self._ai_session_switched)
+
+    def _ai_session_switched(self, name):
+        if not name:
+            return
+        manager = self._ai_session_manager()
+        if name == manager.active_name:
+            return
+        manager.switch(name)
+        self.settings.setValue("ai_active_session", manager.active_name)
+        self._ai_render_history()
+        self._ai_render_suggestions([])
+
+    def _ai_session_new(self):
+        manager = self._ai_session_manager()
+        name = manager.create(self.tr("New chat"))
+        self.settings.setValue("ai_active_session", name)
+        self._ai_refresh_sessions()
+        self._ai_render_history()
+        self._ai_render_suggestions([])
+
+    def _ai_session_rename(self):
+        from PyQt6.QtWidgets import QInputDialog
+
+        manager = self._ai_session_manager()
+        new_name, ok = QInputDialog.getText(
+            self, self.tr("Rename session"), self.tr("New name:"),
+            text=manager.active_name,
+        )
+        if not ok or not new_name.strip():
+            return
+        manager.rename(manager.active_name, new_name.strip())
+        self.settings.setValue("ai_active_session", manager.active_name)
+        self._ai_refresh_sessions()
+
+    def _ai_session_delete(self):
+        manager = self._ai_session_manager()
+        manager.delete(manager.active_name)
+        self.settings.setValue("ai_active_session", manager.active_name)
+        self._ai_refresh_sessions()
+        self._ai_render_history()
+        self._ai_render_suggestions([])
+
+    def _ai_session_export(self):
+        from PyQt6.QtWidgets import QFileDialog
+
+        manager = self._ai_session_manager()
+        path, _ = QFileDialog.getSaveFileName(
+            self, self.tr("Export session"), f"{manager.active_name}.md",
+            self.tr("Markdown (*.md)"),
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(manager.export_markdown())
+        except OSError as exc:
+            self.show_toast(self.tr("Export failed"), str(exc), "error")
+            return
+        self.show_toast(
+            self.tr("Session exported"), path, "success"
+        )
+
     def _ai_clear_history(self):
         self._ai_chat().clear()
         self._ai_render_history()
+        self._ai_render_suggestions([])
+        self._ai_refresh_history_note()
+        self.show_toast(
+            self.tr("Chat history deleted"),
+            self.tr("The advisor transcript was removed from this machine."),
+            "success",
+        )
+
+    def _ai_render_suggestions(self, suggestions=None):
+        box = getattr(self, "_ai_suggest_box", None)
+        if box is None:
+            return
+        if suggestions is not None:
+            self._ai_suggestions = list(suggestions or [])
+        suggestions = self._ai_suggestions
+        # Remove everything except the label (index 0).
+        while box.count() > 1:
+            item = box.takeAt(1)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        if not suggestions:
+            self._ai_suggest_label.setText(self.tr("Suggested flows: (none)"))
+            self._ai_suggest_label.setStyleSheet(
+                f"color:{C['mute']}; font-size:10px;"
+            )
+            return
+        self._ai_suggest_label.setText(self.tr("Suggested flows:"))
+        self._ai_suggest_label.setStyleSheet(
+            f"color:{C['dim']}; font-size:10px; font-weight:700;"
+        )
+        for suggestion in suggestions[:6]:
+            btn = QPushButton(suggestion.label)
+            btn.setStyleSheet(_btn_ghost())
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(
+                f"{suggestion.reason}\n\n"
+                f"Flow: {suggestion.key}  ·  {suggestion.mode}\n"
+                f"Read-only: opens the page, does not run anything."
+            )
+            btn.clicked.connect(
+                lambda _checked=False, s=suggestion: self._ai_open_suggestion(s)
+            )
+            box.addWidget(btn)
+
+    def _ai_open_suggestion(self, suggestion):
+        section = getattr(suggestion, "section", "") or "general"
+        if section not in getattr(self, "_section_index", {}):
+            section = "general"
+        self._on_section(section)
+        self.show_toast(
+            self.tr("Suggested flow"),
+            self.tr("Look for '{label}' ({key}) on this page.").format(
+                label=suggestion.label, key=suggestion.key
+            ),
+            "info",
+        )
+        self._ai_chat().clear()
+        self._ai_render_history()
+        self._ai_render_suggestions([])
         self._ai_refresh_history_note()
         self.show_toast(
             self.tr("Chat history deleted"),
@@ -738,6 +933,9 @@ class AiPageMixin:
                     include_docs=include_docs,
                     log_lines=log_lines,
                 )
+                suggestions = ai_classify.classify(
+                    log_tail, flows if isinstance(flows, list) else [], question
+                )
                 ai_audit.log_event(
                     "request",
                     question=question,
@@ -757,32 +955,27 @@ class AiPageMixin:
                     )
                 text = "".join(pieces).strip()
                 self._ui.ui.emit(
-                    lambda: self._ai_finish(text, usage, None, question, view)
+                    lambda: self._ai_finish(text, usage, None, question, view, suggestions)
                 )
             except Exception as exc:  # noqa: BLE001
                 message = str(exc)
                 self._ui.ui.emit(
                     lambda: self._ai_finish(
-                        "".join(pieces).strip(), usage, message, question, view
+                        "".join(pieces).strip(), usage, message, question, view, suggestions
                     )
                 )
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _ai_finish(self, text, usage, error, question, view=None):
+    def _ai_finish(self, text, usage, error, question, view=None, suggestions=None):
         self._ai_busy = False
+        self._ai_streaming = ""
         for btn in (getattr(self, "_ai_stop_btn", None),
                     getattr(self, "_ai_panel_stop_btn", None)):
             if btn is not None:
                 btn.setEnabled(False)
         if text:
             self._ai_chat().append("assistant", text)
-        target = view if view is not None else getattr(self, "_ai_view", None)
-        if error and target is not None:
-            target.append(
-                f"<div style='color:{C['err']}; font-size:11px;'>"
-                f"{escape(error)}</div>"
-            )
         if error:
             ai_audit.log_event(
                 "error", question=question, provider=self._ai_config().preset_id,
@@ -797,13 +990,16 @@ class AiPageMixin:
                 tokens_out=usage.get("out"),
                 chars=len(text),
             )
-        if target is not None:
-            target.append("")
-        # Keep the other surface (page ↔ floating panel) in step without
-        # replaying the stream into the view that already received it.
-        for other in self._ai_views():
-            if other is not target:
-                self._ai_render_history(other)
+        md = self._ai_build_markdown(self._ai_chat().messages)
+        if error:
+            md = (md + "\n\n---\n\n**Advisor**\n\n_Error: "
+                  + error.replace("\n", " ") + "_") if md else (
+                "**Advisor**\n\n_Error: " + error.replace("\n", " ") + "_"
+            )
+        for target in self._ai_views():
+            target.setMarkdown(md)
+            self._ai_scroll_bottom(target)
+        self._ai_render_suggestions(suggestions)
         self._ai_refresh_status()
 
     # ------------------------------------------------------------------

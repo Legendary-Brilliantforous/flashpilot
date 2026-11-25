@@ -168,37 +168,87 @@ def build_from_root(root: str) -> KnowledgeIndex | None:
     return KnowledgeIndex(chunks)
 
 
+def _flows_to_chunks(path: str) -> list[Chunk]:
+    """Turn src/flows.rs flow! lines into retrievable chunks."""
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return []
+    # flow!(\"key\", \"label\", \"Job\", \"MODE\")
+    pattern = re.compile(
+        r'flow!\(\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"'
+    )
+    grouped: dict[str, list[str]] = {}
+    for match in pattern.finditer(text):
+        key, label, job, mode = match.groups()
+        grouped.setdefault(job or "Other", []).append(
+            f"- `{key}` — {label} [{mode}]"
+        )
+    chunks: list[Chunk] = []
+    for job, lines in grouped.items():
+        body = "\n".join(lines)
+        chunks.append(
+            Chunk(path="src/flows.rs", heading=f"Flows: {job}", text=body)
+        )
+    return chunks
+
+
+def build_combined(roots: list[str], flows_path: str | None = None) -> KnowledgeIndex | None:
+    """Merge chunks from several corpora into one index."""
+    chunks: list[Chunk] = []
+    for root in roots:
+        idx = build_from_root(root)
+        if idx is not None:
+            chunks.extend(idx.chunks)
+    if flows_path:
+        chunks.extend(_flows_to_chunks(flows_path))
+    if not chunks:
+        return None
+    return KnowledgeIndex(chunks)
+
+
+_INDEX: KnowledgeIndex | None = None
+_INDEX_BUILT = False
+
+
 def candidate_roots() -> list[str]:
-    """Where the operation notes may live (repo checkout, then install)."""
+    """Where the corpora may live (repo checkout, then install)."""
     here = os.path.dirname(os.path.abspath(__file__))
     repo = os.path.dirname(os.path.dirname(os.path.dirname(here)))
     return [
         os.path.join(repo, "operations"),
+        os.path.join(repo, "docs"),
         "/usr/share/flashpilot/operations",
+        "/usr/share/flashpilot/docs",
     ]
 
 
-_INDEX: KnowledgeIndex | None = None
-_INDEX_ROOT: str | None = None
+def candidate_flows_path() -> str | None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+    for path in (
+        os.path.join(repo, "src", "flows.rs"),
+        "/usr/share/flashpilot/src/flows.rs",
+    ):
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def default_index() -> KnowledgeIndex | None:
     """The shared index for this process (built on first use, then cached)."""
-    global _INDEX, _INDEX_ROOT
-    if _INDEX is not None:
+    global _INDEX, _INDEX_BUILT
+    if _INDEX_BUILT:
         return _INDEX
-    for root in candidate_roots():
-        if _INDEX_ROOT is not None and root == _INDEX_ROOT:
-            continue
-        index = build_from_root(root)
-        if index is not None:
-            _INDEX, _INDEX_ROOT = index, root
-            return _INDEX
-        _INDEX_ROOT = root
-    return None
+    _INDEX = build_combined(candidate_roots(), candidate_flows_path())
+    _INDEX_BUILT = True
+    return _INDEX
 
 
 def reset_default_index() -> None:
     """Drop the cached index (tests, or after an install changes the corpus)."""
-    global _INDEX, _INDEX_ROOT
-    _INDEX, _INDEX_ROOT = None, None
+    global _INDEX, _INDEX_BUILT
+    _INDEX, _INDEX_BUILT = None, False
