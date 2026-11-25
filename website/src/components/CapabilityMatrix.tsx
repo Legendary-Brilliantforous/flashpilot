@@ -1,14 +1,15 @@
 import { CAPABILITIES } from '../data/site'
+import { t } from '../i18n'
 
 function Cell({ text, tone }: { text: string; tone: 'yes' | 'no' }) {
   if (tone === 'no') {
-    return <span className="cell-no">not supported</span>
+    return <span className="cell-no">{t('not supported')}</span>
   }
   return (
     <>
-      <span className="cell-yes">supported</span>
+      <span className="cell-yes">{t('supported')}</span>
       <br />
-      <b>{text}</b>
+      <b>{t(text)}</b>
     </>
   )
 }
@@ -18,10 +19,11 @@ export default function CapabilityMatrix() {
     <section className="section" id="capabilities">
       <div className="wrap">
         <div className="section__head">
-          <h2>What each chipset gets</h2>
+          <h2>{t('What each chipset gets')}</h2>
           <p>
-            The same work, four different wire protocols. Rows that touch Knox, QCN, IMEI or raw
-            eMMC and UFS access sit behind the experimental gate and are audit logged.
+            {t(
+              'The same work, four different wire protocols. Rows that touch Knox, QCN, IMEI or raw eMMC and UFS access sit behind the experimental gate and are audit logged.',
+            )}
           </p>
         </div>
 
@@ -29,18 +31,18 @@ export default function CapabilityMatrix() {
           <table className="matrix">
             <thead>
               <tr>
-                <th scope="col">Capability</th>
-                <th scope="col">Samsung</th>
-                <th scope="col">MediaTek</th>
-                <th scope="col">Qualcomm</th>
-                <th scope="col">UNISOC</th>
-                <th scope="col">Any ADB device</th>
+                <th scope="col">{t('Capability')}</th>
+                <th scope="col">{t('Samsung')}</th>
+                <th scope="col">{t('MediaTek')}</th>
+                <th scope="col">{t('Qualcomm')}</th>
+                <th scope="col">{t('UNISOC')}</th>
+                <th scope="col">{t('Any ADB device')}</th>
               </tr>
             </thead>
             <tbody>
               {CAPABILITIES.map((row) => (
                 <tr key={row.name}>
-                  <th scope="row">{row.name}</th>
+                  <th scope="row">{t(row.name)}</th>
                   <td>
                     <Cell {...row.samsung} />
                   </td>
@@ -63,8 +65,8 @@ export default function CapabilityMatrix() {
         </div>
 
         <div className="legend">
-          <span>supported — the flow is wired and tested</span>
-          <span>not supported — no implementation exists for that chipset</span>
+          <span>{t('supported — the flow is wired and tested')}</span>
+          <span>{t('not supported — no implementation exists for that chipset')}</span>
         </div>
       </div>
     </section>

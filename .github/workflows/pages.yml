@@ -36,9 +36,9 @@ jobs:
         working-directory: website
         run: npm ci
 
-      - name: Type check and build
+      - name: Type check and build all locales
         working-directory: website
-        run: npm run build
+        run: npm run build:all
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

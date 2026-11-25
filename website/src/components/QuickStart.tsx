@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { INSTALL } from '../data/site'
+import { t } from '../i18n'
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false)
@@ -17,7 +18,7 @@ function CopyButton({ value }: { value: string }) {
 
   return (
     <button type="button" className="copy" onClick={copy} data-state={copied ? 'copied' : 'idle'}>
-      {copied ? 'Copied' : 'Copy'}
+      {copied ? t('Copied') : t('Copy')}
     </button>
   )
 }
@@ -27,10 +28,11 @@ export default function QuickStart() {
     <section className="section" id="install">
       <div className="wrap">
         <div className="section__head">
-          <h2>Build it in four commands</h2>
+          <h2>{t('Build it in four commands')}</h2>
           <p>
-            A Rust toolchain, Python 3.10 and a Linux desktop. That is the whole dependency list —
-            libusb is vendored, so nothing has to be installed system-wide.
+            {t(
+              'A Rust toolchain, Python 3.10 and a Linux desktop. That is the whole dependency list — libusb is vendored, so nothing has to be installed system-wide.',
+            )}
           </p>
         </div>
 
@@ -39,7 +41,7 @@ export default function QuickStart() {
             <div className="install" key={step.command}>
               <span className="install__num">{String(index + 1).padStart(2, '0')}</span>
               <div className="install__body">
-                <p className="install__text">{step.text}</p>
+                <p className="install__text">{t(step.text)}</p>
                 <div className="codeblock">
                   <code>{step.command}</code>
                   <CopyButton value={step.command} />

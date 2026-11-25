@@ -2,12 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { PROTOCOLS } from '../data/protocols'
 import { useReducedMotion } from '../hooks/useReducedMotion'
+import { t } from '../i18n'
 
-/**
- * The handshake panel: pick a bootloader and watch the exchange this project
- * actually performs. Packet codes come from the Rust core, so the panel
- * doubles as a read-out of what the bridge does.
- */
 export default function ProtocolConsole() {
   const reduced = useReducedMotion()
   const [activeId, setActiveId] = useState(PROTOCOLS[0].id)
@@ -43,14 +39,14 @@ export default function ProtocolConsole() {
   return (
     <div className="panel console" id="protocols">
       <div className="console__bar">
-        <span className="console__title">handshake</span>
+        <span className="console__title">{t('handshake')}</span>
         <span className="console__status">
           <span className="console__dot" />
-          {finished ? 'session ready' : 'negotiating'}
+          {finished ? t('session ready') : t('negotiating')}
         </span>
       </div>
 
-      <div className="console__tabs" role="tablist" aria-label="Bootloader protocol">
+      <div className="console__tabs" role="tablist" aria-label={t('Bootloader protocol')}>
         {PROTOCOLS.map((protocol) => (
           <button
             key={protocol.id}
@@ -80,23 +76,23 @@ export default function ProtocolConsole() {
         </div>
 
         <div className="wire" aria-hidden="true">
-          <span className="wire__node">this linux host</span>
+          <span className="wire__node">{t('this linux host')}</span>
           <span className="wire__track">
             <i className="wire__pulse" />
           </span>
-          <span className="wire__node">phone in {active.vendor} mode</span>
+          <span className="wire__node">{t('phone in {vendor} mode', { vendor: active.vendor })}</span>
         </div>
 
-        <p className="console__entry">{active.entry}</p>
+        <p className="console__entry">{t(active.entry)}</p>
 
         <ol className="steps">
           {active.steps.map((step, index) => (
             <li className="step" key={step.title} data-state={stepState(index)}>
               <span className="step__idx">{String(index + 1).padStart(2, '0')}</span>
               <div>
-                <div className="step__title">{step.title}</div>
+                <div className="step__title">{t(step.title)}</div>
                 <code className="step__wire">{step.wire}</code>
-                <div className="step__note">{step.note}</div>
+                <div className="step__note">{t(step.note)}</div>
               </div>
             </li>
           ))}

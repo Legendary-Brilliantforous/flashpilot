@@ -1,4 +1,5 @@
 import { SAFETY } from '../data/site'
+import { t } from '../i18n'
 
 function WarningIcon() {
   return (
@@ -20,10 +21,11 @@ export default function Safety() {
     <section className="section section--tight" id="safety">
       <div className="wrap">
         <div className="safety">
-          <h3>Before you plug anything in</h3>
+          <h3>{t('Before you plug anything in')}</h3>
           <p style={{ marginTop: 'var(--s3)' }}>
-            FlashPilot writes to bootloaders. It can wipe a phone, and a wrong image can leave a
-            device that will not start. These are not formalities.
+            {t(
+              'FlashPilot writes to bootloaders. It can wipe a phone, and a wrong image can leave a device that will not start. These are not formalities.',
+            )}
           </p>
 
           <div className="safety__list">
@@ -31,8 +33,8 @@ export default function Safety() {
               <div className="safety__item" key={item.title}>
                 <WarningIcon />
                 <div>
-                  <b>{item.title}</b>
-                  <span>{item.text}</span>
+                  <b>{t(item.title)}</b>
+                  <span>{t(item.text)}</span>
                 </div>
               </div>
             ))}

@@ -1,12 +1,15 @@
 import Logo from './Logo'
 import { REPO } from '../data/site'
+import { LOCALES, LOCALE, t } from '../i18n'
 
 const LINKS = [
-  { href: '#protocols', label: 'Protocols' },
-  { href: '#capabilities', label: 'Capabilities' },
-  { href: '#devices', label: 'Devices' },
-  { href: '#studio', label: 'Studio' },
-  { href: '#install', label: 'Install' },
+  { href: '#protocols', label: t('Protocols') },
+  { href: '#capabilities', label: t('Capabilities') },
+  { href: '#devices', label: t('Devices') },
+  { href: '#studio', label: t('Studio') },
+  { href: '#install', label: t('Install') },
+  { href: '#releases', label: t('Releases') },
+  { href: '#contribute', label: t('Contribute') },
 ]
 
 export default function TopBar() {
@@ -18,7 +21,7 @@ export default function TopBar() {
           FlashPilot
         </a>
 
-        <nav className="nav" aria-label="Sections">
+        <nav className="nav" aria-label={t('Sections')}>
           <div className="nav__links">
             {LINKS.map((link) => (
               <a key={link.href} href={link.href}>
@@ -26,6 +29,25 @@ export default function TopBar() {
               </a>
             ))}
           </div>
+          <label className="lang-switch">
+            <span className="sr-only">{t('Language')}</span>
+            <select
+              value={LOCALE}
+              onChange={(e) => {
+                const next = e.target.value
+                if (next && next !== LOCALE) {
+                  window.location.href = `../${next}/`
+                }
+              }}
+              aria-label={t('Language')}
+            >
+              {LOCALES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <a className="nav__cta" href={REPO} target="_blank" rel="noreferrer">
             GitHub
           </a>

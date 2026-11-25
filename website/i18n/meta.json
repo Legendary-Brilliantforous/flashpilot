@@ -1,0 +1,57 @@
+{
+  "en": {
+    "title": "FlashPilot — open-source Android flashing for Linux",
+    "description": "FlashPilot is a Linux-native, open-source flashing and repair workbench. It speaks Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose and UNISOC BSL directly over USB.",
+    "ogDescription": "A Rust core that talks straight to Android bootloaders, and a PyQt6 studio to drive it. MIT licensed, Linux native, no Windows daemon."
+  },
+  "ar": {
+    "title": "FlashPilot — تفليش Android مفتوح المصدر على Linux",
+    "description": "FlashPilot هي منصة تفليش وإصلاح مفتوحة المصدر على Linux. تتواصل مباشرة مع Samsung Odin و MediaTek BROM/DA و Qualcomm Sahara/Firehose و UNISOC BSL عبر USB.",
+    "ogDescription": "نواة Rust تتحدث مباشرة إلى محملات Android، واستوديو PyQt6 للتحكم. مرخّص MIT، أصلي على Linux."
+  },
+  "de": {
+    "title": "FlashPilot — Open-Source Android-Flashing für Linux",
+    "description": "FlashPilot ist eine Linux-native, quelloffene Flashing- und Reparaturwerkbank. Sie spricht Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose und UNISOC BSL direkt über USB.",
+    "ogDescription": "Ein Rust-Kern, der direkt mit Android-Bootloadern spricht, und ein PyQt6-Studio zur Steuerung. MIT-lizenziert, Linux-nativ."
+  },
+  "es": {
+    "title": "FlashPilot — flasheo Android de código abierto para Linux",
+    "description": "FlashPilot es un banco de trabajo de flasheo y reparación de código abierto para Linux. Habla directamente con Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose y UNISOC BSL por USB.",
+    "ogDescription": "Un núcleo Rust que habla directamente con los bootloaders de Android y un estudio PyQt6 para controlarlo. Licencia MIT, nativo en Linux."
+  },
+  "fr": {
+    "title": "FlashPilot — flashage Android open source pour Linux",
+    "description": "FlashPilot est un atelier de flasheo et de réparation open source pour Linux. Il parle directement à Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose et UNISOC BSL via USB.",
+    "ogDescription": "Un cœur Rust qui parle directement aux bootloaders Android et un studio PyQt6 pour le piloter. Licence MIT, natif Linux."
+  },
+  "hi": {
+    "title": "FlashPilot — Linux के लिए ओपन-सोर्स Android फ्लैशिंग",
+    "description": "FlashPilot एक Linux-नेटिव, ओपन-सोर्स फ्लैशिंग और रिपेयर वर्कबेंच है। यह USB के ज़रिए सीधे Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose और UNISOC BSL से बात करता है।",
+    "ogDescription": "एक Rust कोर जो सीधे Android बूटलोडर से बात करता है, और उसे चलाने के लिए एक PyQt6 स्टूडियो। MIT लाइसेंस, Linux नेटिव।"
+  },
+  "ja": {
+    "title": "FlashPilot — Linux 向けオープンソース Android フラッシング",
+    "description": "FlashPilot は Linux ネイティブのオープンソース フラッシング・修復ワークベンチです。USB 経由で Samsung Odin、MediaTek BROM/DA、Qualcomm Sahara/Firehose、UNISOC BSL と直接通信します。",
+    "ogDescription": "Android ブートローダーと直接通信する Rust コアと、それを操作する PyQt6 スタジオ。MIT ライセンス、Linux ネイティブ。"
+  },
+  "pt": {
+    "title": "FlashPilot — flasheo Android de código aberto para Linux",
+    "description": "FlashPilot é uma bancada de flasheo e reparo de código aberto para Linux. Fala diretamente com Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose e UNISOC BSL via USB.",
+    "ogDescription": "Um núcleo Rust que fala diretamente com os bootloaders Android e um estúdio PyQt6 para controlá-lo. Licença MIT, nativo no Linux."
+  },
+  "ru": {
+    "title": "FlashPilot — прошивка Android с открытым кодом для Linux",
+    "description": "FlashPilot — рабочая станция прошивки и ремонта с открытым кодом для Linux. Общается напрямую с Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose и UNISOC BSL по USB.",
+    "ogDescription": "Ядро на Rust, говорящее напрямую с загрузчиками Android, и студия PyQt6 для управления. Лицензия MIT, нативный Linux."
+  },
+  "tr": {
+    "title": "FlashPilot — Linux için açık kaynak Android flashing",
+    "description": "FlashPilot, Linux için yerel, açık kaynak bir flashing ve onarım tezgahıdır. USB üzerinden doğrudan Samsung Odin, MediaTek BROM/DA, Qualcomm Sahara/Firehose ve UNISOC BSL ile konuşur.",
+    "ogDescription": "Android önyükleyicilerle doğrudan konuşan bir Rust çekirdeği ve onu yöneten bir PyQt6 stüdyosu. MIT lisanslı, Linux yerel."
+  },
+  "zh": {
+    "title": "FlashPilot — Linux 上的开源 Android 刷机工具",
+    "description": "FlashPilot 是一款 Linux 原生的开源刷机与修复工作台。它通过 USB 直接与 Samsung Odin、MediaTek BROM/DA、Qualcomm Sahara/Firehose 和 UNISOC BSL 通信。",
+    "ogDescription": "一个直接与 Android 引导程序对话的 Rust 核心，以及用于控制它的 PyQt6 工作室。MIT 许可，Linux 原生。"
+  }
+}

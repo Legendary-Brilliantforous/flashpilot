@@ -10,6 +10,41 @@
 export const REPO = 'https://github.com/Legendary-Brilliantforous/flashpilot'
 export const BRANCH = 'dev'
 
+export type Release = {
+  version: string
+  date: string
+  notes: string
+  asset: string
+  size: string
+}
+
+export const RELEASES: Release[] = [
+  {
+    version: 'v1.2.2',
+    date: '2026-11-24',
+    notes: 'Auto-updates, 10 languages, Rockchip and modem-safe multi-device.',
+    asset: 'flashpilot_1.2.2_amd64.deb',
+    size: '55.4 MB',
+  },
+  {
+    version: 'v1.2.1',
+    date: '2026-09-12',
+    notes: 'Stability and device-coverage improvements.',
+    asset: 'flashpilot_1.2.1_amd64.deb',
+    size: '40.7 MB',
+  },
+  {
+    version: 'v1.2.0',
+    date: '2026-08-23',
+    notes: 'First public FlashPilot release.',
+    asset: 'flashpilot_1.2.0_amd64.deb',
+    size: '39.0 MB',
+  },
+]
+
+export const releaseUrl = (version: string, asset: string) =>
+  `${REPO}/releases/download/${version}/${asset}`
+
 export const repoLink = (path = '') => `${REPO}/blob/${BRANCH}${path}`
 
 export const FIGURES = {
