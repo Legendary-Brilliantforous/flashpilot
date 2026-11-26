@@ -15,6 +15,9 @@
 - **Expanded retrieval**: the advisor now also indexes `docs/` and the flow
   registry in `src/flows.rs`, so it can cite real flow keys and documentation,
   not only `operations/`.
+- **Fixed**: the Advisor page now fits narrow viewports — the session row
+  wraps via a flow layout instead of forcing a wide minimum width, so the chat
+  page no longer overflows the middle panel.
 
 ## 1.2.3 (AI Advisor beta, read-only)
 
