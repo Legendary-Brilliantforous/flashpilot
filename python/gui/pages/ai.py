@@ -35,6 +35,7 @@ from ..theme import C, _btn_ghost, _btn_primary, _card_qss
 from ..widgets import BeautifulToggle, FlowLayout, SectionTitle
 from ...core import bridge
 from ...core.ai import (
+    assistant as ai_assistant,
     audit as ai_audit,
     classify as ai_classify,
     context as ai_context,
@@ -302,6 +303,14 @@ class AiPageMixin:
         )
         attach_btn.clicked.connect(self._ai_attach)
         buttons.addWidget(attach_btn)
+        ask_btn = QPushButton(self.tr("Ask Assistant"))
+        ask_btn.setStyleSheet(_btn_ghost())
+        ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ask_btn.setToolTip(
+            self.tr("Answer from FlashPilot's knowledge base (local, text-based)")
+        )
+        ask_btn.clicked.connect(self._ai_ask_local)
+        buttons.addWidget(ask_btn)
         input_row.addLayout(buttons)
         lay.addLayout(input_row)
 
@@ -665,6 +674,32 @@ class AiPageMixin:
             self._switch_settings("ai")
         except Exception:  # noqa: BLE001
             pass
+
+    def _ai_ask_local(self):
+        """Answer a question from the FlashPilot Assistant's text knowledge base."""
+        question = self._ai_input.toPlainText().strip()
+        if not question:
+            return
+        assistant = ai_assistant.FlashPilotAssistant.from_default()
+        result = assistant.ask(question)
+        if not result.complete:
+            self.show_toast(
+                self.tr("Assistant has no answer"),
+                self.tr("No matching FlashPilot knowledge yet."),
+                "warning",
+            )
+            return
+        text = result.answer
+        if result.sources:
+            text = (
+                text
+                + "\n\n"
+                + self.tr("Sources: {sources}").format(
+                    sources=", ".join(result.sources)
+                )
+            )
+        self._ai_chat().append("assistant", text)
+        self._ai_render_history()
 
     def _ai_diagnose(self):
         prompt = self.tr(

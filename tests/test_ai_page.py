@@ -123,6 +123,18 @@ def test_diagnose_button_fills_the_prompt(test_window):
     assert "Explain exactly why" in win._ai_input.toPlainText()
 
 
+def test_ask_local_answers_from_the_knowledge_base(test_window):
+    win = test_window()
+    win._on_section("ai")
+    win._ai_input.setPlainText("what is the odin frp flow")
+    win._ai_ask_local()
+    text = win._ai_view.toPlainText()
+    # The local assistant answered from the real corpus and cited sources.
+    assert "Sources:" in text
+    assert win._ai_chat().messages[-1]["role"] == "assistant"
+    assert win._ai_chat().messages[-1]["content"].strip()
+
+
 # --------------------------------------------------------------------------
 # Streaming
 # --------------------------------------------------------------------------
