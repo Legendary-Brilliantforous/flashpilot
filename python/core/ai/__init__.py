@@ -12,7 +12,8 @@ Public surface:
 * :mod:`python.core.ai.provider` — OpenAI-compatible + Gemini streaming calls
 * :mod:`python.core.ai.keys` — system-keyring API-key storage
 * :mod:`python.core.ai.context` — prompt/context assembly with a token budget
-* :mod:`python.core.ai.retrieval` — BM25-lite over ``operations/``
+* :mod:`python.core.ai.retrieval` — BM25-lite over ``operations/`` + docs + flows
+* :mod:`python.core.ai.assistant` — the text-based FlashPilot Assistant
 * :mod:`python.core.ai.guard` — domain policy, redaction, untrusted wrapping
 * :mod:`python.core.ai.errors` — known failure causes from real log strings
 * :mod:`python.core.ai.history` — persisted, deletable chat transcript
@@ -21,9 +22,21 @@ Public surface:
 
 from __future__ import annotations
 
-from . import audit, classify, context, errors, guard, history, keys, provider, retrieval
+from . import (
+    assistant,
+    audit,
+    classify,
+    context,
+    errors,
+    guard,
+    history,
+    keys,
+    provider,
+    retrieval,
+)
 
 __all__ = [
+    "assistant",
     "audit",
     "classify",
     "context",
