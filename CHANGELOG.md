@@ -47,8 +47,6 @@ never executes a flow itself. Verify its suggestions before acting.*
 
 ## 1.2.2 (auto-updates, 10 languages, Rockchip + modem-safe multi-device)
 
-*Consolidates the 1.2.2 → 1.3.2 development-cycle notes — everything shipped since 1.2.1.*
-
 ### Auto-updates & What's New (new)
 - Updates auto-install: the downloaded `.deb` installs via sudo in the background, the app restarts, and a one-shot "what was added or changed" window shows the new version's changelog on first launch (the manual "Install Now" prompt remains when auto-install is off in Settings → Updates).
 
