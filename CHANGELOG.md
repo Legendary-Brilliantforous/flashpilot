@@ -14,6 +14,12 @@
 - **Wiring**: the Ask Assistant action feeds the live console tail, selected
   device and flow registry into the local answer.
 
+### Battery & network diagnostics (read-only, ADB)
+- Battery report now prints an exact integer health percentage plus the current
+  battery level (%), with an honest note when a fuel-gauge estimate is unavailable.
+- Battery load test restores screen brightness on exit (the restore guard was
+  previously never armed).
+
 ### AI Advisor (beta) — more features
 - Answers now render as **Markdown**: headings, lists, links and fenced code blocks
   (with monospace styling) instead of plain text.

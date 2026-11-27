@@ -12266,7 +12266,7 @@ class FlashPilotWindow(
                         if best is not None:
                             health = best
                             lines.append(
-                                f"   Battery health : {health:.1f}%  "
+                                f"   Battery health : {int(round(health))}%  "
                                 f"({_health_desc(health)})"
                             )
                             lines.append(
@@ -12275,6 +12275,22 @@ class FlashPilotWindow(
                             )
                 except ValueError:
                     pass
+                # Current charge level as an exact percentage (distinct from
+                # the full-design-based health estimate). Falls back to the
+                # health ratio when the level sysfs is unreadable.
+                level_pct = None
+                cap_v = _sysfs("/sys/class/power_supply/battery/capacity")
+                if cap_v:
+                    try:
+                        level_pct = float(int(cap_v))
+                    except ValueError:
+                        level_pct = None
+                if level_pct is None and health is not None:
+                    level_pct = min(100.0, float(health))
+                if level_pct is not None:
+                    lines.append(
+                        f"   Battery level    : {int(round(min(100.0, max(0.0, level_pct))))}%"
+                    )
                 for key, path in (
                     ("Current level", "/sys/class/power_supply/battery/capacity"),
                     ("Current draw", "/sys/class/power_supply/battery/current_now"),
@@ -12385,6 +12401,11 @@ class FlashPilotWindow(
                 lines.append("")
                 lines.append("Health below 80% means noticeable runtime loss; below 60%")
                 lines.append("the battery should be replaced.")
+                lines.append(
+                    "Health is estimated from the fuel gauge (charge_full vs "
+                    "charge_full_design); when those sysfs are unreadable the "
+                    "report cannot estimate a truthful health percentage."
+                )
                 emit("\n".join(lines))
                 if flux:
                     jobs.finish_job(flux.job_id, "COMPLETED")
@@ -12627,7 +12648,7 @@ class FlashPilotWindow(
                         samples.append(v)
                     _time.sleep(0.8)
                 # loop done (not cancelled) - the full stress window ran
-                restored = True  # handled by finally below
+                # (the finally block restores brightness)
 
                 if not samples:
                     emit("[error] load test: no voltage samples read")
@@ -12641,6 +12662,10 @@ class FlashPilotWindow(
                 emit(
                     f"   idle voltage : {idle_v:.3f} V" if idle_v else "   idle voltage : n/a"
                 )
+                if samples:
+                    emit(f"   samples read      : {len(samples)}")
+                    emit(f"   min voltage       : {min(samples):.3f} V")
+                    emit(f"   max voltage       : {max(samples):.3f} V")
                 emit(
                     f"   min voltage under load: {load_v:.3f} V  "
                     f"temp {load_t:.1f} C" if load_t else
