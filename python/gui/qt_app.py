@@ -815,6 +815,9 @@ def _generic_android_mode(d):
         return "ANDROID DEVICE"
     pid = d.get("pid", 0)
     vid = d.get("vid", 0)
+    # Apple (VID 0x05ac) is never an Android device.
+    if vid == _APPLE_VID:
+        return False
     if _has_adb_iface(d):
         return "ANDROID DEVICE - ADB (debug composite)"
     if any(i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3
@@ -825,6 +828,10 @@ def _generic_android_mode(d):
     prod = (d.get("product") or "").strip()
     if prod:
         return f"ANDROID DEVICE - {prod.upper()}"
+    if vid in (0x04E8, 0x05C6, 0x1782, _MTK_VIDS):
+        # Vendor / chip-class devices with no recognized transport are not
+        # generic Android — keep them distinct instead of inventing a label.
+        return False
     return f"ANDROID DEVICE (VID 0x{vid:04X} PID 0x{pid:04X})"
 
 
@@ -932,25 +939,6 @@ def _is_generic_android(d):
         if kw in prod or kw in mfr:
             return True
     return False
-
-
-def _generic_android_mode(d):
-    """Human label for a generic (non-vendor) Android device."""
-    if not isinstance(d, dict):
-        return "ANDROID DEVICE"
-    pid = d.get("pid", 0)
-    vid = d.get("vid", 0)
-    if _has_adb_iface(d):
-        return "ANDROID DEVICE - ADB (debug composite)"
-    if any(i.get("class") == 255 and i.get("subclass") == 66 and i.get("protocol") == 3
-           for i in d.get("interfaces", [])):
-        return "ANDROID DEVICE - FASTBOOT (bootloader)"
-    if _has_mtp_iface(d):
-        return "ANDROID DEVICE - MTP (media transfer)"
-    prod = (d.get("product") or "").strip()
-    if prod:
-        return f"ANDROID DEVICE - {prod.upper()}"
-    return f"ANDROID DEVICE (VID 0x{vid:04X} PID 0x{pid:04X})"
 
 
 # Spreadtrum / UNISOC feature-phone download & engineering modes (VID 0x1782).

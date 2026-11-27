@@ -706,6 +706,33 @@ def test_detect_mode_mtk_prefix_is_brand_aware():
     assert _detect_mode([], [lg], [], []) == "LG MTK BROM (held state)"
 
 
+def test_apple_devices_are_detected_and_not_generic_android():
+    """Apple (iPhone/iPad) USB devices (VID 0x05ac) are detected as Apple and
+    never folded into the generic Android bucket."""
+    from python.gui.qt_app import (
+        _apple_mode, _detect_mode, _generic_android_mode, _is_apple,
+    )
+
+    apple = {
+        "vid": 0x05AC, "pid": 0x12A8, "bus": 2, "address": 11,
+        "manufacturer": "Apple Inc.", "product": "iPhone", "interfaces": [],
+    }
+    assert _is_apple(apple) is True
+    assert _is_apple({"vid": 0x04E8, "pid": 0x6860, "interfaces": []}) is False
+    assert _generic_android_mode(apple) is False
+
+    assert _apple_mode(apple) == "APPLE DEVICE (normal / other)"
+    assert _apple_mode(dict(apple, pid=0x1222)) == \
+        "APPLE DFU MODE (Device Firmware Update)"
+    assert _apple_mode(dict(apple, product="iPhone Recovery")) == \
+        "APPLE RECOVERY MODE (iTunes restore)"
+    assert _detect_mode([], [], [], None, None, None, None, [apple]) == \
+        "APPLE DEVICE (normal / other)"
+    assert _detect_mode([], [], [], None, None, None, None,
+                         [dict(apple, pid=0x1222)]) == \
+        "APPLE DFU MODE (Device Firmware Update)"
+
+
 def test_spd_mode_is_brand_aware():
     from python.gui.qt_app import _spd_mode
 
