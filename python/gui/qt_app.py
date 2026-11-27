@@ -13429,6 +13429,10 @@ class FlashPilotWindow(
         A re-enumerating device is invisible to a scan for 1-3 s while the
         daemon still reports it connected; without the retry, tools refuse
         with "no device" mid-flap while the GUI shows it connected.
+
+        Multi-phone resilience: when both scans come up empty, fall back to
+        the DeviceMonitor's cached rows for the requested transports before
+        giving up — a held daemon row must not be lost to a single bad scan.
         """
         picked = self._choose_device(label, modes)
         if picked is None:
@@ -13441,7 +13445,35 @@ class FlashPilotWindow(
                 pass
             _t.sleep(2.5)
             picked = self._choose_device(label, modes)
+        if not picked:
+            picked = self._monitor_fallback(modes)
         return picked
+
+    def _monitor_fallback(self, modes):
+        """Cached DeviceMonitor rows for ``modes`` (multi-phone safety net)."""
+        try:
+            mon = getattr(self, "_monitor", None)
+            state = getattr(mon, "_last_state", None)
+            if not isinstance(state, dict):
+                return None
+            raw_modes = modes or []
+            wanted = (
+                {str(modes).upper()}
+                if isinstance(modes, str)
+                else {str(m).upper() for m in raw_modes}
+            )
+            for transport, rows in sorted(state.items()):
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict) or not row.get("key"):
+                        continue
+                    if wanted and str(transport).upper() not in wanted:
+                        continue
+                    return row["key"]
+            return None
+        except Exception:
+            return None
 
     def _gate_job_action(self, job, mode, device_key):
         """Ask the backend whether this job may run on this device now.

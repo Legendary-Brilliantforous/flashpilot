@@ -240,6 +240,15 @@ def test_pick_device_empty_twice_gives_up(win, monkeypatch):
     assert _t.monotonic() - start >= 2.4
 
 
+def test_pick_device_falls_back_to_monitor_rows_when_scans_empty(win, monkeypatch):
+    """Multi-phone detection: when both scans come up empty, the
+    DeviceMonitor's cached row is used before giving up."""
+    monkeypatch.setattr(win, "_choose_device", lambda label, modes: None)
+    monitor = getattr(win, "_monitor", None)
+    monkeypatch.setattr(monitor, "_last_state", {"ADB": [{"key": "adb:FAKE1234", "label": "Fake"}]})
+    assert win._pick_device("Battery report", "ADB") == "adb:FAKE1234"
+
+
 def test_pick_device_cancel_never_retried(win, monkeypatch):
     calls = {"n": 0}
 
