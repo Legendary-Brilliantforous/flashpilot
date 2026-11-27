@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.5 (FlashPilot Assistant: error, device & command awareness)
+
+### AI — local FlashPilot Assistant (read-only)
+- **Error awareness**: the local assistant now grounds answers in the
+  expanded failure-cause catalogue (17 known causes) and surfaces the matched
+  cause — Why, Fix, Risk and the exact log line — alongside retrieved notes.
+- **Device awareness**: failure/connection questions fold in live device context
+  (ADB status, model, transport, mode) so "is the ADB connected?" gets a grounded reply.
+- **Command awareness**: flow keys mentioned in a question are resolved against
+  the real registry and near-miss commands are corrected (e.g. `frp_adb` →
+  `adb_frp`).
+
 ## 1.2.4 (Advisor: Markdown, auto-suggest, named sessions, expanded RAG)
 
 ### AI Advisor (beta) — more features
