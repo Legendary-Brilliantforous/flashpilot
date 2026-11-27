@@ -314,7 +314,14 @@ def _device_pick_wait_seconds(modes):
     """
     wanted = modes if isinstance(modes, (set, frozenset, list, tuple)) else {modes}
     keys = {str(m).strip().upper() for m in wanted if str(m).strip()}
-    if any("MTK" in k or "MEDIATEK" in k or k == "BROM" for k in keys):
+    if any(
+        ("MTK" in k) or ("MEDIATEK" in k) or ("BROM" in k)
+        or k in ("SPD", "UNISOC")
+        for k in keys
+    ):
+        # MTK / BROM / SPD download-mode entry can take 10-30 s to enumerate
+        # after a Vol-key (or Vol- + USB) power-cycle — poll well past the
+        # short generic settle window.
         return 25.0
     return 2.5
 
@@ -7546,8 +7553,20 @@ class FlashPilotWindow(
 
         def work():
             try:
-                devs = bridge._run(["spd-detect"])
+                # Same BROM/download-mode patience as the MTK picker: an SPD
+                # phone mid power-cycle into download mode (Vol- + USB plug)
+                # can take a while to enumerate before spd-detect sees it.
                 import json as _json
+                import time as _time
+
+                devs = ""
+                deadline = _time.monotonic() + _device_pick_wait_seconds({"SPD"})
+                while not devs and _time.monotonic() < deadline:
+                    _time.sleep(2.0)
+                    try:
+                        devs = bridge._run(["spd-detect"], timeout=5) or ""
+                    except Exception:  # noqa: BLE001
+                        devs = ""
                 parsed = _json.loads(devs or "[]")
                 if not parsed:
                     self._ui.ui.emit(lambda: self.spd_status.setText(

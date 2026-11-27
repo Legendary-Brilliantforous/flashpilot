@@ -271,6 +271,8 @@ def test_mtk_brom_pick_uses_longer_wait_budget():
     assert _device_pick_wait_seconds({"MTK"}) == 25.0
     assert _device_pick_wait_seconds("MTK BROM") == 25.0
     assert _device_pick_wait_seconds({"ADB"}) == 2.5
+    assert _device_pick_wait_seconds({"SPD"}) == 25.0
+    assert _device_pick_wait_seconds({"Samsung BROM"}) == 25.0
 
 
 def test_pick_device_mtk_brom_waits_then_gives_up(win, monkeypatch):

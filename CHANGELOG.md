@@ -15,6 +15,8 @@
   before tools refuse with "no device".
 - The MTK Detect scan now polls on the same budget before reporting
   "no device".
+- The same mode-aware budget is applied to SPD / UNISOC / Samsung-BROM picks
+  and the SPD Detect scan polls on it before reporting "no device".
 
 ### Battery & network diagnostics (read-only, ADB)
 
