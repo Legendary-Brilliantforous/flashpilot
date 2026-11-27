@@ -64,6 +64,52 @@ def test_assistant_answers_flow_key_mentions_via_flow_chunks(tmp_path):
     assert any(s.startswith("src/") for s in answer.sources)
 
 
+def test_assistant_corrects_a_wrong_flow_key_to_the_real_one(tmp_path):
+    flows = tmp_path / "flows.rs"
+    flows.write_text(
+        'flow!("adb_frp", "ADB FRP clear", "Remove FRP", "ADB")\n',
+        encoding="utf-8",
+    )
+    idx = retrieval.build_combined([str(tmp_path)], str(flows))
+    adv = assistant.FlashPilotAssistant(
+        index=idx,
+        flows=[{"key": "adb_frp", "label": "ADB FRP clear", "job": "Remove FRP", "mode": "ADB"}],
+    )
+    answer = adv.ask("what does frp_adb do?")
+    assert answer.complete is True
+    assert any("Command correction" in c for c in answer.corrections)
+    assert any("adb_frp" in c for c in answer.corrections)
+
+
+def test_assistant_grounds_the_answer_in_matched_failure_causes(tmp_path):
+    ops = tmp_path / "operations"
+    (ops / "adb").mkdir(parents=True)
+    (ops / "adb" / "index.md").write_text(
+        "# ADB setup\n\nAuthorize USB debugging before any ADB flow.\n", encoding="utf-8"
+    )
+    idx = retrieval.build_combined([str(tmp_path)], None)
+    adv = assistant.FlashPilotAssistant(index=idx)
+    answer = adv.ask("why did the adb frp flow fail?", log_tail="error: not authorized")
+    assert answer.complete is True
+    assert "ADB is not authorised on the device" in answer.answer
+    assert "Authorize USB debugging" in answer.answer
+
+
+def test_assistant_includes_device_context_for_connection_questions(tmp_path):
+    ops = tmp_path / "operations"
+    ops.mkdir()
+    (ops / "index.md").write_text("# Operations\n\nGeneral notes.\n", encoding="utf-8")
+    idx = retrieval.build_combined([str(tmp_path)], None)
+    adv = assistant.FlashPilotAssistant(index=idx)
+    answer = adv.ask(
+        "is adb connected to the phone?",
+        device={"adb": "connected", "model": "SM-S911B"},
+    )
+    assert answer.complete is True
+    assert "ADB status: connected" in answer.answer
+    assert "Model: SM-S911B" in answer.answer
+
+
 def test_assistant_from_default_uses_the_real_corpus():
     adv = assistant.FlashPilotAssistant.from_default()
     assert adv.index is not None

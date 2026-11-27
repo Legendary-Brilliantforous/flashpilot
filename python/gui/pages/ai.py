@@ -676,12 +676,23 @@ class AiPageMixin:
             pass
 
     def _ai_ask_local(self):
-        """Answer a question from the FlashPilot Assistant's text knowledge base."""
+        """Answer a question from the FlashPilot Assistant's text knowledge base.
+
+        Grounds the answer in the live console tail, the selected device (ADB
+        status and friends) and the flow registry — and corrects wrong flow-key
+        commands. Still read-only: nothing here executes a flow.
+        """
         question = self._ai_input.toPlainText().strip()
         if not question:
             return
-        assistant = ai_assistant.FlashPilotAssistant.from_default()
-        result = assistant.ask(question)
+        try:
+            flows = bridge.flow_list() or []
+        except Exception:  # noqa: BLE001
+            flows = []
+        assistant = ai_assistant.FlashPilotAssistant.from_default(flows=flows)
+        device = self.ai_device_state()
+        log_tail = self.ai_log_tail(60)
+        result = assistant.ask(question, log_tail=log_tail, device=device, flows=flows)
         if not result.complete:
             self.show_toast(
                 self.tr("Assistant has no answer"),
@@ -690,6 +701,8 @@ class AiPageMixin:
             )
             return
         text = result.answer
+        if result.corrections:
+            text = "\n\n".join(result.corrections) + "\n\n" + text
         if result.sources:
             text = (
                 text

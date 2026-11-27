@@ -147,6 +147,58 @@ CAUSES: tuple[Cause, ...] = (
         "Use the flow variant intended for this generation, or the ADB path "
         "when the device boots. Report the exact command from the log.",
     ),
+    Cause(
+        r"unknown (command|flow|job|operation|action)|command not found|no such "
+        r"(flow|command|job|operation)|invalid (command|flow|job|argument|action)",
+        "The command or flow key does not exist",
+        "FlashPilot flow keys are short snake_case identifiers declared in "
+        "src/flows.rs; a typo or invented key is rejected before any USB traffic "
+        "happens. The user-facing entry is `flashpilot-bridge flow-run <key>` and "
+        "the real keys print via `flashpilot-bridge flow-list`.",
+        "Run `flashpilot-bridge flow-list` (or open the matching GUI page) and use "
+        "the exact key from there. A wrong key never reaches the device, so this "
+        "cannot brick anything — just fix the key.",
+    ),
+    Cause(
+        r"model mismatch|region mismatch|csc mismatch|firmware mismatch|image "
+        r"mismatch|wrong (firmware|model|region|device|build|partition|firmware image)",
+        "The firmware package does not match this device",
+        "AP/BL/CP/CSC payloads and the scatter/PIT must match the exact model, region "
+        "and build; a package for another device or region names partitions this "
+        "device does not have, so the write is refused instead of riskily adapting.",
+        "Flash the firmware built for this exact model and region and verify the CSC "
+        "before writing.",
+        "Forcing a mismatched package can hard-brick the device.",
+    ),
+    Cause(
+        r"screen (is )?(locked|locked down)|frp (is )?(still )?active|factory reset "
+        r"protection|lockout",
+        "The device screen is locked / FRP protection is active",
+        "ADB and fastboot lock-removal methods need the bootloader reachable; with "
+        "FRP active the screen lock can block the ADB path even when the bootloader "
+        "state itself is removable.",
+        "Pick the flow for the current transport and mode — browser/settings bypass "
+        "methods avoid the locked-screen requirement, BROM/EDL methods target locked "
+        "bootloaders. Do not retry a method whose prerequisites are unmet.",
+    ),
+    Cause(
+        r"permission denied|operation not permitted|access is denied|denied by|usb "
+        r"(permission|access|driver)|udev",
+        "The USB device is not accessible (permissions / udev)",
+        "The user or the adb server could not claim the interface — on Linux this is "
+        "usually the missing FlashPilot root udev rules.",
+        "Install the FlashPilot udev rules and re-run Detect; ADB-only operations can "
+        "run through the ADB server without claiming the interface.",
+        "",
+    ),
+    Cause(
+        r"battery|low voltage|power level|power (draw|fail|drop)",
+        "Insufficient power for a write",
+        "Flash/write operations need a stable power rail; a low battery or brownout "
+        "during a write can corrupt the partition.",
+        "Charge above 50%, keep the screen awake, and retry the stage.",
+        "A partial write can leave the device unbootable until re-flashed.",
+    ),
 )
 
 
