@@ -261,6 +261,30 @@ def test_pick_device_cancel_never_retried(win, monkeypatch):
     assert calls["n"] == 1
 
 
+def test_mtk_brom_pick_uses_longer_wait_budget():
+    """MTK / BROM-targeted picks wait well past the short settle window —
+    a phone entering BROM via Vol-key + USB plug can take 10-30 s to
+    enumerate before the scan sees it."""
+    from python.gui.qt_app import _device_pick_wait_seconds
+
+    assert _device_pick_wait_seconds({"MTK BROM"}) == 25.0
+    assert _device_pick_wait_seconds({"MTK"}) == 25.0
+    assert _device_pick_wait_seconds("MTK BROM") == 25.0
+    assert _device_pick_wait_seconds({"ADB"}) == 2.5
+
+
+def test_pick_device_mtk_brom_waits_then_gives_up(win, monkeypatch):
+    """An MTK/BROM pick waits the mode-aware budget before giving up."""
+    monkeypatch.setattr("python.gui.qt_app._device_pick_wait_seconds", lambda modes: 0.2)
+    monkeypatch.setattr(win, "_choose_device", lambda label, modes: None)
+    monkeypatch.setattr(win, "_monitor_fallback", lambda modes: None)
+    import time as _t
+
+    start = _t.monotonic()
+    assert win._pick_device("Flash Firmware", {"MTK BROM"}) is None
+    assert _t.monotonic() - start < 2.0
+
+
 def _mtk_composite_state():
     """MediaTek 0e8d:201c with an ADB interface, server-authorized — the
     user's exact device shape."""

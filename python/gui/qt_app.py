@@ -305,6 +305,20 @@ class _AdbFlagModule(type(_sys.modules[__name__])):
 _sys.modules[__name__].__class__ = _AdbFlagModule
 
 
+def _device_pick_wait_seconds(modes):
+    """Bounded wait budget (seconds) before a device pick gives up.
+
+    MTK / BROM-mode operations (a phone mid power-cycle into BROM via a
+    Vol-key + USB plug can take 10-30 s to enumerate) poll well past the
+    short generic settle window; everything else keeps the short window.
+    """
+    wanted = modes if isinstance(modes, (set, frozenset, list, tuple)) else {modes}
+    keys = {str(m).strip().upper() for m in wanted if str(m).strip()}
+    if any("MTK" in k or "MEDIATEK" in k or k == "BROM" for k in keys):
+        return 25.0
+    return 2.5
+
+
 class DeviceMonitor(QObject):
     """Polls USB/ADB state in a background thread and emits results."""
 
@@ -13422,29 +13436,35 @@ class FlashPilotWindow(
         return checked.property("device_key") or "__cancelled__"
 
     def _pick_device(self, label, modes):
-        """Pick a device key, with one settle-retry on transient emptiness.
+        """Pick a device key, waiting out transient emptiness.
 
-        Returns the key, None (nothing detected twice), or "__cancelled__"
+        Returns the key, None (nothing detected), or "__cancelled__"
         (user dismissed the chooser — never retried, the dismissal stands).
         A re-enumerating device is invisible to a scan for 1-3 s while the
-        daemon still reports it connected; without the retry, tools refuse
+        daemon still reports it connected; without the wait, tools refuse
         with "no device" mid-flap while the GUI shows it connected.
 
         Multi-phone resilience: when both scans come up empty, fall back to
         the DeviceMonitor's cached rows for the requested transports before
         giving up — a held daemon row must not be lost to a single bad scan.
+
+        MTK / BROM-mode runs (phone mid power-cycle into BROM) poll for the
+        device up to the mode-aware budget before giving up — BROM entry
+        after a Vol-key + USB plug can take 10-30 s to enumerate.
         """
         picked = self._choose_device(label, modes)
         if picked is None:
-            import time as _t
-            try:
-                self._ui.line.emit(
-                    f"[info] {label}: no matching device this scan "
-                    "(re-enumerating?) — settling 2.5s and retrying ...")
-            except Exception:
-                pass
-            _t.sleep(2.5)
-            picked = self._choose_device(label, modes)
+            deadline = _time.monotonic() + _device_pick_wait_seconds(modes)
+            while picked is None and _time.monotonic() < deadline:
+                remaining = deadline - _time.monotonic()
+                try:
+                    self._ui.line.emit(
+                        f"[info] {label}: no matching device this scan "
+                        "(re-enumerating?) — waiting ...")
+                except Exception:
+                    pass
+                _time.sleep(min(2.5, max(0.2, remaining)))
+                picked = self._choose_device(label, modes)
         if not picked:
             picked = self._monitor_fallback(modes)
         return picked

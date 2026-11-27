@@ -2,6 +2,20 @@
 
 ## 1.2.4 (Advisor: Markdown, auto-suggest, named sessions, expanded RAG)
 
+### Device detection & battery/network diagnostics (read-only, ADB)
+- Apple (VID 0x05ac) devices are kept out of the generic-Android bucket, so the
+  USB mode badge no longer mislabels an iPhone as "ANDROID DEVICE - …".
+- Multi-phone: when both device scans come up empty, the device picker falls
+  back to the DeviceMonitor's cached rows before giving up.
+
+### MTK / BROM device wait
+- Device picking for MTK / BROM-targeted operations now polls on a longer
+  mode-aware budget (25 s) before giving up, so a phone that is mid
+  power-cycle into BROM (Vol-key + USB plug) is given time to enumerate
+  before tools refuse with "no device".
+
+### Battery & network diagnostics (read-only, ADB)
+
 ### AI — local FlashPilot Assistant (error, device & command awareness)
 - **Error awareness**: the local assistant now grounds answers in the expanded
   failure-cause catalogue (17 known causes) and surfaces the matched cause —
