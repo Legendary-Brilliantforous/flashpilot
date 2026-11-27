@@ -19,9 +19,14 @@ Nothing here calls an LLM and nothing here executes a flow.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from .retrieval import KnowledgeIndex
+
+# Snake-case identifiers are how FlashPilot names its flows (``frp_adb``,
+# ``mtk_frp``, ``odin_flash_tar`` …) — the shape the user/LLM chat would use.
+_FLOW_KEY_RE = re.compile(r"\b[a-z]+(?:_[a-z0-9]+)+\b")
 
 
 DEFAULT_TOP_K = 4
@@ -47,10 +52,12 @@ class FlashPilotAssistant:
         index: KnowledgeIndex | None = None,
         top_k: int = DEFAULT_TOP_K,
         max_answer_chars: int = DEFAULT_MAX_ANSWER_CHARS,
+        flows: list[dict] | None = None,
     ):
         self.index = index
         self.top_k = max(1, int(top_k))
         self.max_answer_chars = max(1, int(max_answer_chars))
+        self.flows = list(flows or [])
 
     @classmethod
     def from_default(cls) -> "FlashPilotAssistant":
@@ -62,20 +69,45 @@ class FlashPilotAssistant:
     # ------------------------------------------------------------------
     # Answering
     # ------------------------------------------------------------------
+    def _flow_key_mentions(self, question: str) -> list[str]:
+        """Snake-case flow identifiers mentioned in *question*, in order."""
+        found: list[str] = []
+        for match in _FLOW_KEY_RE.finditer(question or ""):
+            token = match.group(0)
+            if token not in found:
+                found.append(token)
+        return found
+
+    def _flow_hits(self, question: str, top_k: int) -> list[tuple]:
+        """Chunks describing flows explicitly named in *question*."""
+        hits: list[tuple] = []
+        if self.index is None:
+            return hits
+        for key in self._flow_key_mentions(question):
+            for chunk, score in self.index.search(key, k=top_k):
+                if chunk not in [h[0] for h in hits]:
+                    hits.append((chunk, score))
+        return hits
+
     def ask(self, question: str) -> AssistantAnswer:
         """Retrieve and return a text answer for *question*.
 
+        The answer is assembled from the best-matching knowledge-base chunks,
+        plus any flow chunks named by snake-case flow keys in the question.
         Returns an :class:`AssistantAnswer` with the retrieved text (or an
         explicit "not complete" marker when nothing could be retrieved). The
-        answer is assembled from the best-matching knowledge-base chunks and
-        cites its sources.
+        answer cites its sources.
         """
         question = (question or "").strip()
         if not question or self.index is None:
             return AssistantAnswer(
                 question=question, answer="", sources=[], confidence=0.0, complete=False
             )
-        hits = self.index.search(question, k=self.top_k)
+        hits = list(self.index.search(question, k=self.top_k))
+        flow_hits = self._flow_hits(question, self.top_k)
+        for chunk, score in flow_hits:
+            if chunk not in [h[0] for h in hits]:
+                hits.append((chunk, score))
         if not hits:
             return AssistantAnswer(
                 question=question, answer="", sources=[], confidence=0.0, complete=False

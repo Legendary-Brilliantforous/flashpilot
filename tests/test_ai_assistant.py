@@ -53,6 +53,17 @@ def test_assistant_empty_question_is_not_complete():
     assert answer.complete is False
 
 
+def test_assistant_answers_flow_key_mentions_via_flow_chunks(tmp_path):
+    flows = tmp_path / "flows.rs"
+    _flows_file(flows)
+    idx = retrieval.build_combined([str(tmp_path)], str(flows))
+    adv = assistant.FlashPilotAssistant(index=idx)
+    answer = adv.ask("what does frp_adb do?")
+    assert answer.complete is True
+    assert "src/flows.rs" in answer.answer
+    assert any(s.startswith("src/") for s in answer.sources)
+
+
 def test_assistant_from_default_uses_the_real_corpus():
     adv = assistant.FlashPilotAssistant.from_default()
     assert adv.index is not None
