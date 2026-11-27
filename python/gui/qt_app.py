@@ -5450,7 +5450,18 @@ class FlashPilotWindow(
 
         def work():
             try:
-                devs = bridge.detect_mtk()
+                # MediaTek BROM-mode phones can take a while to enumerate
+                # after a Vol-key + USB power-cycle — poll briefly (mode-aware
+                # budget) before declaring "no device".
+                devs = []
+                deadline = _time.monotonic() + _device_pick_wait_seconds(
+                    {"MTK", "MTK BROM"})
+                while not devs and _time.monotonic() < deadline:
+                    _time.sleep(2.0)
+                    try:
+                        devs = bridge.detect_mtk()
+                    except bridge.BridgeError:
+                        devs = []
                 if not devs:
                     self._ui.ui.emit(lambda: self.mtk_status.setText(
                         self.tr("No MediaTek device detected")))

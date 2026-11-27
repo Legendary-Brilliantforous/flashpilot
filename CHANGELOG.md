@@ -13,6 +13,8 @@
   mode-aware budget (25 s) before giving up, so a phone that is mid
   power-cycle into BROM (Vol-key + USB plug) is given time to enumerate
   before tools refuse with "no device".
+- The MTK Detect scan now polls on the same budget before reporting
+  "no device".
 
 ### Battery & network diagnostics (read-only, ADB)
 
